@@ -526,6 +526,7 @@ private fun XreaderNavHost(
     onAddBook: () -> Unit,
     onExport: (Book, String) -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     val coverFile: (String?) -> File? = { path ->
         path?.let { container.bookStorage.resolve(it) }
     }

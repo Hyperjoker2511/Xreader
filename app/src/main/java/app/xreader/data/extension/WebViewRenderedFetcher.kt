@@ -195,7 +195,7 @@ class WebViewRenderedFetcher(
                     request: WebResourceRequest?
                 ): Boolean {
                     val target = request?.url?.toString() ?: return false
-                    val targetHost = CookieParsing.hostOf(target)
+                    val targetHost = CookieParsing.hostOf(target).orEmpty()
                     if (targetHost.isNotEmpty() &&
                         !permissions.allows(targetHost)
                     ) {
@@ -271,7 +271,7 @@ class WebViewRenderedFetcher(
         with(view.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
-            blockNetworkImages = true
+            blockNetworkImage = true
             allowFileAccess = false
             allowContentAccess = false
             javaScriptCanOpenWindowsAutomatically = false
@@ -306,10 +306,11 @@ class WebViewRenderedFetcher(
         }.getOrNull() ?: return
         val cookies = CookieParsing.parseCookieHeader(header)
         if (cookies.isEmpty()) return
+        val cookieHost = CookieParsing.hostOf(finalUrl) ?: return
         runCatching {
             sessionStore.mergeCookies(
                 sessionKey,
-                CookieParsing.hostOf(finalUrl),
+                cookieHost,
                 cookies,
                 userAgent
             )
