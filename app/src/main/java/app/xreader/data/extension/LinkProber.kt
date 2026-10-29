@@ -8,6 +8,8 @@ import app.xreader.extensionapi.HostLog
 import app.xreader.extensionapi.HostStore
 import app.xreader.extensionapi.SourceBook
 import app.xreader.extensionapi.SourceContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.net.URI
@@ -93,7 +95,18 @@ class LinkProber(
     sealed interface Outcome {
         data class Ready(val draft: Draft) : Outcome
         data class LoginRequired(val loginUrl: String, val host: String) : Outcome
-        data class Failed(val message: String) : Outcome
+
+        /**
+         * A failed probe. [proposersTried] (v1.0.5.1) names the
+         * proposer stages that were actually evaluated, in plain
+         * words — empty when the probe refused before any stage
+         * ran (a bad link, an unreachable page, a JS shell), so a
+         * failure report starts from facts instead of guesses.
+         */
+        data class Failed(
+            val message: String,
+            val proposersTried: List<String> = emptyList()
+        ) : Outcome
     }
 
     /**
@@ -105,8 +118,25 @@ class LinkProber(
      * [tryAllProposers] (v1.0.5, A4 — Repair) test-drives every
      * automatic candidate, not just the first that analyses, and
      * keeps the best passing one.
+     *
+     * v1.0.5.1: the probe parses whole pages (jsoup over ~75 KB
+     * documents, selector synthesis across the DOM) — that is
+     * CPU work and must never run on the caller's thread, so
+     * every public entry point of this class hops to
+     * [Dispatchers.Default] first. Callers (view models, the
+     * heal sweep) stay responsive no matter what they launch on.
      */
     suspend fun probe(
+        rawUrl: String,
+        aiAvailable: Boolean = false,
+        tryAllProposers: Boolean = false
+    ): Outcome = withContext(Dispatchers.Default) {
+        probeImpl(rawUrl, aiAvailable, tryAllProposers)
+    }
+
+    /** The probe itself; see [probe] for the contract. Always
+     * entered on [Dispatchers.Default] via the public wrapper. */
+    private suspend fun probeImpl(
         rawUrl: String,
         aiAvailable: Boolean = false,
         tryAllProposers: Boolean = false
@@ -163,6 +193,14 @@ class LinkProber(
         var bestDraft: Draft? = null
         var bestRank: List<Int>? = null
         var bestFailure: Pair<Int, String>? = null
+        // v1.0.5.1: the proposer stages actually evaluated, in
+        // plain words and evaluation order — carried out on the
+        // failure so the next diagnosis (Repair's note, a
+        // support paste) starts from facts, not guesses.
+        val proposersTried = mutableListOf<String>()
+        fun tried(tag: String) {
+            if (tag !in proposersTried) proposersTried += tag
+        }
         fun consider(config: DeclarativeConfig, driveBookUrl: String, drive: ScoredDrive) {
             when (val result = drive.result) {
                 is AppResult.Ok -> {
@@ -203,7 +241,8 @@ class LinkProber(
         // its precise reason beats a vaguer local one.
         fun failOrDraft(message: String): Outcome =
             bestDraft?.let { Outcome.Ready(it) } ?: Outcome.Failed(
-                bestFailure?.takeIf { it.first >= 2 }?.second ?: message
+                bestFailure?.takeIf { it.first >= 2 }?.second ?: message,
+                proposersTried.toList()
             )
 
         // ── v1.0.5 (A11): the known-sites fast lane ─────────────
@@ -211,10 +250,24 @@ class LinkProber(
         // against the pasted book page (or the catalogue's first
         // book when another page of the site was pasted). A failed
         // lane drive never blocks the ordinary pipeline below.
+        //
+        // v1.0.5.1: the lane is UNCONDITIONAL for recognised
+        // domains. It used to be gated on the chapter-page
+        // analysis returning null — but that analysis fires on
+        // ANY page carrying a ≥300-char low-link prose block,
+        // and a normal book page's synopsis is exactly that. On
+        // real (untrimmed) pages the verified config was
+        // therefore silently skipped, the guessing proposers
+        // failed the drive, and Repair rolled back to whatever
+        // broken rules were already stored (the novelight
+        // 0-chapters device failure the trimmed fixtures never
+        // reproduced). A book page's synopsis must never veto
+        // curated rules: a recognised domain's known shape is
+        // driven first, full stop — the chapter-page analysis
+        // below keeps its one legitimate job (rescuing a pasted
+        // CHAPTER link for sites the lane doesn't know).
         val entry = KnownSites.entryFor(host)
-        if (entry != null &&
-            LinkInference.analyseChapterPage(bookDoc, bookUrl) == null
-        ) {
+        if (entry != null) {
             val laneConfig = KnownSites.fullConfig(
                 entry = entry,
                 id = sourceIdFor(host, bookUrl),
@@ -235,6 +288,7 @@ class LinkProber(
                         id = sourceIdFor(host, sample),
                         sampleBookUrl = sample
                     )
+                    tried("fast lane")
                     consider(
                         laneFull, sample,
                         testDriveScored(laneFull, sample, context)
@@ -247,6 +301,7 @@ class LinkProber(
         // compete on rank (A4).
         bestDraft?.let { if (!tryAllProposers) return Outcome.Ready(it) }
 
+        tried("inference")
         var analysis = LinkInference.analyseBookPage(bookDoc, bookUrl)
 
         // The pasted link may be a CHAPTER page: find its book page.
@@ -268,6 +323,7 @@ class LinkProber(
                     // The book page was found but the primary
                     // inference can't read it — the heuristic
                     // proposer (D15) reads it the second way.
+                    tried("heuristics")
                     analysis = HeuristicProposer.analyseBookPage(bookDoc, bookUrl)
                 }
                 if (analysis == null) {
@@ -282,6 +338,7 @@ class LinkProber(
                 // text density and link clustering, no AI, no key.
                 // Its candidate faces the very same mandatory
                 // test-drive below as every other proposer.
+                tried("heuristics")
                 analysis = HeuristicProposer.analyseBookPage(bookDoc, bookUrl)
                 if (analysis == null) {
                     return failOrDraft(
@@ -407,6 +464,7 @@ class LinkProber(
             }
         }
         if (LinkInference.isMadaraPage(bookDoc)) {
+            tried("templates")
             accept(
                 runCatching {
                     LinkInference.madaraSearchSpec(baseUrlEarly)
@@ -476,6 +534,7 @@ class LinkProber(
                 // provably filters wins.
                 for (candidateUrl in SearchCandidates.conventionUrls(baseUrlEarly, searchWord)) {
                     if (searchSpec != null) break
+                    tried("templates")
                     val spec = runCatching {
                         val listing = analyseResults {
                             val fetched = probeClient.get(candidateUrl)
@@ -550,6 +609,7 @@ class LinkProber(
         }.getOrNull()
         val candidates = listOfNotNull(book, heuristicAlt)
         for (candidate in candidates) {
+            if (candidate === heuristicAlt) tried("heuristics")
             var config = DeclarativeConfig(
                 id = sourceIdFor(host, bookUrl),
                 name = LinkInference.siteName(bookDoc) ?: host,
@@ -605,7 +665,8 @@ class LinkProber(
         bestDraft?.let { return Outcome.Ready(it) }
         return Outcome.Failed(
             bestFailure?.second
-                ?: "Xreader couldn't read that page well enough to build a source from it."
+                ?: "Xreader couldn't read that page well enough to build a source from it.",
+            proposersTried.toList()
         )
     }
 
@@ -630,6 +691,15 @@ class LinkProber(
     suspend fun testDrive(
         config: DeclarativeConfig,
         bookUrl: String
+    ): AppResult<TestDriveResult> = withContext(Dispatchers.Default) {
+        testDriveImpl(config, bookUrl)
+    }
+
+    /** The test-drive itself; see [testDrive]. Always entered
+     * on [Dispatchers.Default] via the public wrapper. */
+    private suspend fun testDriveImpl(
+        config: DeclarativeConfig,
+        bookUrl: String
     ): AppResult<TestDriveResult> {
         val host = CookieParsing.hostOf(bookUrl) ?: config.baseUrl.let { CookieParsing.hostOf(it) }
             ?: return AppResult.Err(AppError.BadFile("that page address doesn't look right"))
@@ -649,6 +719,15 @@ class LinkProber(
      * drive on it. Honest failure when the listing yields nothing.
      */
     suspend fun testDriveFromCatalogue(
+        config: DeclarativeConfig
+    ): AppResult<TestDriveResult> = withContext(Dispatchers.Default) {
+        testDriveFromCatalogueImpl(config)
+    }
+
+    /** The catalogue test-drive itself; see
+     * [testDriveFromCatalogue]. Always entered on
+     * [Dispatchers.Default] via the public wrapper. */
+    private suspend fun testDriveFromCatalogueImpl(
         config: DeclarativeConfig
     ): AppResult<TestDriveResult> {
         val host = CookieParsing.hostOf(config.baseUrl)

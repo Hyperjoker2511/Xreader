@@ -66,6 +66,23 @@ fun AboutScreen(onBack: () -> Unit) {
                     style = MaterialTheme.typography.titleMedium
                 )
                 listOf(
+                    // v1.0.5.1 (the hotfix).
+                    "Fixed: a known site's proven setup could be " +
+                        "silently skipped when its book page " +
+                        "carries a long synopsis — the known shape " +
+                        "is now always tried first, so Repair can " +
+                        "rebuild sites like Novelight the way it " +
+                        "was meant to.",
+                    "Fixed: checking and repairing sources no " +
+                        "longer stutters the app — that reading " +
+                        "now happens off the main screen thread, " +
+                        "and if the app is closed mid-check, the " +
+                        "check simply runs again on a later " +
+                        "launch instead of giving up for good.",
+                    "When Repair can't fix a source, it now says " +
+                        "what it tried — and if the AI detector " +
+                        "sat it out because there's no key yet, " +
+                        "it says that too, with where to add one.",
                     // v1.0.5 Stage 1 (the honest-engine round).
                     "Sources are proven honestly now: the test read " +
                         "fails when a book page lists no chapters, " +

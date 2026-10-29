@@ -2,6 +2,8 @@ package app.xreader.data.extension
 
 import app.xreader.core.error.AppResult
 import app.xreader.extensionapi.SourceBook
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The full-path test-drive for ANY installed source (v1.0.2, R10):
@@ -18,7 +20,19 @@ import app.xreader.extensionapi.SourceBook
  */
 class ContractTester(private val service: ExtensionService) {
 
-    suspend fun test(handle: SourceHandle): ContractVerdict {
+    /**
+     * v1.0.5.1: a full-path drive fetches and parses whole
+     * pages — CPU work that must never run on the caller's
+     * thread (Repair and the heal sweep both launch from
+     * main-confined scopes), so the drive hops to
+     * [Dispatchers.Default] first.
+     */
+    suspend fun test(handle: SourceHandle): ContractVerdict =
+        withContext(Dispatchers.Default) { testImpl(handle) }
+
+    /** The drive itself; see [test]. Always entered on
+     * [Dispatchers.Default] via the public wrapper. */
+    private suspend fun testImpl(handle: SourceHandle): ContractVerdict {
         val results = mutableListOf<CapabilityResult>()
         var proofBook = ""
         var proofChapter = ""

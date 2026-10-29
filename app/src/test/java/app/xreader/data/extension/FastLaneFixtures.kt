@@ -90,6 +90,31 @@ object NovelightSite {
         </body></html>
     """.trimIndent()
 
+    /** The same book page WITH the long prose synopsis real
+     * novelight pages carry (v1.0.5.1). The trimmed capture
+     * above kept only the short meta description — which is
+     * exactly why the v1.0.5 gate stayed green in CI while the
+     * device failed: this ≥300-char low-link prose block is
+     * what trips the chapter-page analysis on the live site. */
+    val BOOK_PAGE_LONG_SYNOPSIS: String = BOOK_PAGE.replace(
+        "<h2>Last chapters</h2>",
+        """
+        <div class="synopsis">
+          <p>The age of talents dawned without trumpets or portents. When the
+          first lord of Aldermere woke to find a quiet voice naming the gifts
+          of everyone he met, he did the sensible thing and told no one — in
+          the river town below his hill, a talent seen was a talent taxed, and
+          a talent taxed was a talent taken.</p>
+          <p>So he counted other men's gifts the way a miser counts coins: in
+          the dark, by touch, smiling at nothing. What he could not count was
+          the price. Every gift he read left a thread tied to his own name,
+          and threads, pulled patiently by patient enemies, have a way of
+          becoming ropes.</p>
+        </div>
+        <h2>Last chapters</h2>
+        """.trimIndent()
+    )
+
     /** The chapter page as the static engine sees it: the text
      * container holds only the loading placeholder (the real
      * text arrives by ajax — see KnownSites' family note). */
@@ -160,10 +185,18 @@ object NovelightSite {
         </body></html>
     """.trimIndent()
 
-    fun transport(): FakeTransport {
+    fun transport(): FakeTransport = transportServing(BOOK_PAGE)
+
+    /** The same site, but its book pages carry the long prose
+     * synopsis (v1.0.5.1): catalogue, search, chapter pages and
+     * the ajax text endpoint are all identical. */
+    fun transportLongSynopsis(): FakeTransport =
+        transportServing(BOOK_PAGE_LONG_SYNOPSIS)
+
+    private fun transportServing(bookPage: String): FakeTransport {
         val pages = mapOf(
-            BOOK_URL to BOOK_PAGE,
-            BOOK2_URL to BOOK_PAGE,
+            BOOK_URL to bookPage,
+            BOOK2_URL to bookPage,
             CHAPTER_101_URL to CHAPTER_PAGE,
             "$BASE/book/chapter/102" to CHAPTER_PAGE,
             "$BASE/book/chapter/103" to CHAPTER_PAGE,

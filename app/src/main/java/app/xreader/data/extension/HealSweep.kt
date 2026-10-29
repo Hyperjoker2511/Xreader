@@ -6,7 +6,10 @@ import app.xreader.data.db.InstalledExtension
 import app.xreader.data.db.InstalledExtensionDao
 import app.xreader.data.db.TrustState
 import app.xreader.data.prefs.SourcePrefs
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 /**
  * v1.0.5 (E1): the heal-my-library sweep. Link sources installed
@@ -133,6 +136,18 @@ class HealSweep(
      * sweep already ran for [currentVersionCode] or the run
      * conditions aren't met (the flag stays unburned then, so a
      * later launch can still sweep).
+     *
+     * v1.0.5.1, two honesty fixes. The one-time flag is written
+     * only AFTER the sweep has actually completed: v1.0.5
+     * burned it before the walk, so an app force-closed
+     * mid-sweep (which the lag below made likely) stranded its
+     * broken sources forever. And the walk itself runs on
+     * [Dispatchers.Default]: the drives parse whole pages, and
+     * v1.0.5 ran them on the caller's main-confined scope,
+     * stuttering the whole app on the first launch after an
+     * update. A run cancelled mid-walk propagates before the
+     * flag is reached, so it stays unburned and a later launch
+     * sweeps again.
      */
     suspend fun runIfNeeded(currentVersionCode: Int): Outcome? {
         if (sourcePrefs.healSweepDoneForCode.first() >= currentVersionCode) {
@@ -148,21 +163,31 @@ class HealSweep(
         ) {
             return null
         }
-        sourcePrefs.setHealSweepDoneForCode(currentVersionCode)
-
-        val eligible = extensionDao.allNow()
-            .filter { HealSweepLogic.isEligible(it) }
-        if (eligible.isEmpty()) return Outcome()
-        val health = sourcePrefs.sourceHealth.first()
-        var outcome = Outcome()
-        for (extension in eligible) {
-            outcome = try {
-                sweepSource(extension, health, outcome)
-            } catch (t: Throwable) {
-                // One bad source never stops the sweep.
-                outcome
+        val outcome = withContext(Dispatchers.Default) {
+            val eligible = extensionDao.allNow()
+                .filter { HealSweepLogic.isEligible(it) }
+            if (eligible.isEmpty()) {
+                Outcome()
+            } else {
+                val health = sourcePrefs.sourceHealth.first()
+                var result = Outcome()
+                for (extension in eligible) {
+                    result = try {
+                        sweepSource(extension, health, result)
+                    } catch (t: CancellationException) {
+                        // Not a bad source — the sweep itself
+                        // was cancelled. Propagate so the flag
+                        // below is never reached.
+                        throw t
+                    } catch (t: Throwable) {
+                        // One bad source never stops the sweep.
+                        result
+                    }
+                }
+                result
             }
         }
+        sourcePrefs.setHealSweepDoneForCode(currentVersionCode)
         outcome.summaryLine()?.let { sourcePrefs.setHealNote(it) }
         return outcome
     }

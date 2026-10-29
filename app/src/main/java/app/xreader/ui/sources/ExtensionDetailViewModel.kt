@@ -600,7 +600,33 @@ class ExtensionDetailViewModel(
                                     (if (aiOutcome != null) " and the AI detector" else "") +
                                     ", and none could read the site well enough. " +
                                     "The step that got furthest said: ${outcome.message} " +
-                                    "Your old rules were kept."
+                                    "Your old rules were kept." +
+                                    // v1.0.5.1: name the stages the
+                                    // probe actually evaluated, so
+                                    // the next diagnosis starts
+                                    // from facts, not guesses.
+                                    (if (outcome.proposersTried.isNotEmpty()) {
+                                        " Repair tried: " +
+                                            outcome.proposersTried
+                                                .joinToString(", ") + "."
+                                    } else {
+                                        ""
+                                    }) +
+                                    // v1.0.5.1: when the AI sat this
+                                    // repair out for want of a key
+                                    // (aiOutcome null means it was
+                                    // never called), say so out
+                                    // loud — the AI's existence
+                                    // must never be invisible (the
+                                    // D16 lesson, in reverse).
+                                    (if (aiOutcome == null) {
+                                        " The AI detector could also " +
+                                            "try — add a free Gemini key " +
+                                            "in Me → Providers & keys " +
+                                            "and run Repair again."
+                                    } else {
+                                        ""
+                                    })
                             )
                         }
                     }
