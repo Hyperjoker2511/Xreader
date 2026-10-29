@@ -1,0 +1,9 @@
+# Xreader startup profile (v1.0.2): only the classes needed before
+# the first frame — Application, DI container, shell, theme, and
+# the database open path. Everything else lives in baseline-prof.
+HSPLapp/xreader/XreaderApp;->**(**)
+HSPLapp/xreader/MainActivity;->**(**)
+HSPLapp/xreader/di/AppContainer;->**(**)
+HSPLapp/xreader/ui/shell/**->**(**)
+HSPLapp/xreader/ui/theme/**->**(**)
+HSPLapp/xreader/data/db/XreaderDatabase;->**(**)

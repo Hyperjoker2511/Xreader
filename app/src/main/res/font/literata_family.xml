@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Literata — reader body serif (variable font; the reader's typography
+     controls land in Phase 4, the family is bundled from Phase 1). -->
+<font-family xmlns:android="http://schemas.android.com/apk/res/android">
+    <font
+        android:fontStyle="normal"
+        android:fontWeight="400"
+        android:font="@font/literata" />
+    <font
+        android:fontStyle="italic"
+        android:fontWeight="400"
+        android:font="@font/literata_italic" />
+</font-family>

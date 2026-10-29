@@ -1,0 +1,9 @@
+<resources>
+    <!-- Pre-Compose splash theme: warm near-black (Ember Ink dark bg) so the
+         first frame already matches the app. Compose takes over immediately. -->
+    <style name="Theme.Xreader" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#12100E</item>
+        <item name="android:statusBarColor">#12100E</item>
+        <item name="android:navigationBarColor">#12100E</item>
+    </style>
+</resources>

@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Xreader</string>
+    <string name="widget_description">Your current book, progress, streak and level</string>
+</resources>
