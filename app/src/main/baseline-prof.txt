@@ -1,0 +1,45 @@
+# Xreader baseline profile (v1.0.2, GitHub-sweep gate item).
+#
+# Hand-maintained hot-path rules: app startup, the five-tab shell,
+# Library first composition, the reader's first frame, and the
+# database open path. Wildcard rules are deliberate — the profile
+# must survive refactors without silently going empty. A generated
+# profile (macrobenchmark on a real device) should REPLACE this
+# file when device time exists; until then these rules cover the
+# paths every session actually walks.
+#
+# Format: [flags]L<class>;->method(params)return
+# H = hot, S = startup, P = post-startup, L = layout (AOT all).
+
+# ── Application + DI startup ─────────────────────────────────────
+HSPLapp/xreader/XreaderApp;->**(**)
+HSPLapp/xreader/di/AppContainer;->**(**)
+HSPLapp/xreader/di/**->**(**)
+
+# ── Shell: five-tab scaffold + navigation ────────────────────────
+HSPLapp/xreader/ui/shell/**->**(**)
+HSPLapp/xreader/MainActivity;->**(**)
+
+# ── Library first screen (the app opens here) ────────────────────
+HSPLapp/xreader/ui/library/LibraryScreenKt;->**(**)
+HSPLapp/xreader/ui/library/LibraryViewModel;->**(**)
+HSPLapp/xreader/ui/library/**->**(**)
+HSPLapp/xreader/data/library/**->**(**)
+
+# ── Reader first frame + text layout ─────────────────────────────
+HSPLapp/xreader/ui/reader/ReaderScreenKt;->**(**)
+HSPLapp/xreader/ui/reader/ReaderViewModel;->**(**)
+HSPLapp/xreader/domain/reader/**->**(**)
+
+# ── Persistence open path (Room + DataStore) ─────────────────────
+HSPLapp/xreader/data/db/**->**(**)
+HSPLapp/xreader/data/prefs/**->**(**)
+
+# ── Theme (first composition colours every screen) ───────────────
+HSPLapp/xreader/ui/theme/**->**(**)
+
+# ── Compose runtime hot spots ────────────────────────────────────
+HSPLandroidx/compose/runtime/**->**(**)
+HSPLandroidx/compose/ui/**->**(**)
+HSPLandroidx/compose/foundation/**->**(**)
+HSPLandroidx/compose/material3/**->**(**)

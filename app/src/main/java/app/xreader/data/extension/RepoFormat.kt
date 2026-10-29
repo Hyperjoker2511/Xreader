@@ -1,0 +1,288 @@
+package app.xreader.data.extension
+
+import app.xreader.core.error.AppResult
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+
+/**
+ * Repo-format recognition (v1.0.1 hotfix): when the user points Xreader
+ * at a repository index that turns out to belong to ANOTHER reader
+ * app, the app should say so in plain words — naming the app and the
+ * sites it lists — instead of failing with a generic parse error.
+ *
+ * This file is the pure detector: raw fetched text in, a sealed
+ * [RepoFormat] out. It never throws; malformed input is
+ * [RepoFormat.Unknown] with a plain-words reason.
+ *
+ * Detection order matters, because the formats overlap:
+ * 1. Xreader's own shape (see [RepoIndex]) — an object carrying a
+ *    `packages` array the existing parser accepts, or a bare
+ *    declarative-config document/array.
+ * 2. Legado — entries carrying `bookSourceName` + `bookSourceUrl`.
+ * 3. Mihon / Tachiyomi — array entries carrying `pkg`/`apk` +
+ *    `sources` (each source has name/lang/id/baseUrl).
+ * 4. LNReader — entries carrying a site / plugin URL (`site`,
+ *    `siteUrl`, `plugin.url`, `source.site`, …) plus a name or id.
+ * 5. Generic — any entry exposing an http(s) URL in a field named
+ *    like `baseUrl` / `site` / `url` / `homepage`:
+ *    "another reader app".
+ */
+
+/** One site listed by a foreign repository index. */
+data class ForeignSite(
+    val name: String,
+    val lang: String = "",
+    val baseUrl: String
+)
+
+sealed interface RepoFormat {
+    /** The text is Xreader's own repository format. */
+    object XreaderIndex : RepoFormat
+
+    /** The text is another reader app's repository format. */
+    data class ForeignRepo(
+        val ecosystemName: String,
+        val sites: List<ForeignSite>
+    ) : RepoFormat
+
+    /** The text matches nothing we recognise. */
+    data class Unknown(val reason: String) : RepoFormat
+}
+
+/** Entry point: [RepoFormatDetector.detect]. */
+fun detectRepoFormat(text: String): RepoFormat = RepoFormatDetector.detect(text)
+
+object RepoFormatDetector {
+
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    fun detect(text: String): RepoFormat {
+        if (text.isBlank()) return RepoFormat.Unknown("the reply was empty")
+        val root = runCatching { json.parseToJsonElement(text) }.getOrElse {
+            return RepoFormat.Unknown("the reply wasn't JSON at all")
+        }
+        return try {
+            when (root) {
+                is JsonObject -> detectObject(root, text)
+                is JsonArray -> detectArray(root)
+                else -> RepoFormat.Unknown("the reply was JSON, but not a list or a catalogue")
+            }
+        } catch (e: Exception) {
+            RepoFormat.Unknown("the list couldn't be read (${e.message?.take(80) ?: "unknown error"})")
+        }
+    }
+
+    // ── top-level shapes ────────────────────────────────────────────
+
+    private fun detectObject(root: JsonObject, rawText: String): RepoFormat {
+        // Xreader's own index: an object whose `packages` is an array
+        // the existing parser accepts. Checked first so a Xreader
+        // index — whose sources carry baseUrl fields — is never
+        // misread as a foreign repo.
+        val packages = root["packages"]
+        if (packages is JsonArray) {
+            return if (parseRepoIndex(rawText) is AppResult.Ok) {
+                RepoFormat.XreaderIndex
+            } else {
+                RepoFormat.Unknown(
+                    "the list looked like an Xreader repository but couldn't be read"
+                )
+            }
+        }
+        // A single declarative config saved on its own.
+        if (looksLikeDeclarativeConfig(root)) return RepoFormat.XreaderIndex
+
+        // Entries nested under a collection key, or a dictionary of
+        // entry objects, or the object itself as a single entry.
+        val nested = entriesFromObject(root)
+        if (nested.isNotEmpty()) {
+            detectForeign(nested)?.let { return it }
+        }
+        detectForeign(listOf(root))?.let { return it }
+        return RepoFormat.Unknown(
+            "the JSON object didn't match any known repository format"
+        )
+    }
+
+    private fun detectArray(root: JsonArray): RepoFormat {
+        val entries = root.mapNotNull { it as? JsonObject }
+        if (entries.isEmpty()) {
+            return RepoFormat.Unknown("the JSON list held no readable entries")
+        }
+        // Legado and Mihon have unmistakable markers; they win over
+        // the Xreader-array fallback and the looser checks below.
+        detectLegado(entries)?.let { return it }
+        detectMihon(entries)?.let { return it }
+        // A bare list of Xreader declarative configs (the shape
+        // DeclarativeFingerprints.encode writes).
+        if (entries.all { looksLikeDeclarativeConfig(it) }) {
+            return RepoFormat.XreaderIndex
+        }
+        detectForeign(entries)?.let { return it }
+        return RepoFormat.Unknown(
+            "the JSON list didn't match any known repository format"
+        )
+    }
+
+    /** Foreign checks that apply to an object root (Legado/Mihon are
+     * array formats, but a single-object Legado file still counts). */
+    private fun detectForeign(entries: List<JsonObject>): RepoFormat.ForeignRepo? =
+        detectLegado(entries)
+            ?: detectMihon(entries)
+            ?: detectLnReader(entries)
+            ?: detectGeneric(entries)
+
+    // ── per-ecosystem detectors ─────────────────────────────────────
+
+    private fun detectLegado(entries: List<JsonObject>): RepoFormat.ForeignRepo? {
+        val sites = entries.mapNotNull { entry ->
+            val name = stringValue(entry, "bookSourceName") ?: return@mapNotNull null
+            val url = stringValue(entry, "bookSourceUrl") ?: return@mapNotNull null
+            ForeignSite(name = name, lang = stringValue(entry, "lang") ?: "", baseUrl = url)
+        }
+        if (sites.isEmpty()) return null
+        return RepoFormat.ForeignRepo("Legado", dedupe(sites))
+    }
+
+    private fun detectMihon(entries: List<JsonObject>): RepoFormat.ForeignRepo? {
+        var isMihon = false
+        val sites = mutableListOf<ForeignSite>()
+        for (entry in entries) {
+            val sources = entry["sources"] as? JsonArray ?: continue
+            val hasPackageMarker = entry.containsKey("pkg") || entry.containsKey("apk")
+            if (hasPackageMarker) isMihon = true
+            for (element in sources) {
+                val source = element as? JsonObject ?: continue
+                // A sources list shaped like Mihon's (name/lang/id/
+                // baseUrl) is itself a marker, even without pkg/apk.
+                if (!hasPackageMarker &&
+                    source.containsKey("baseUrl") &&
+                    (source.containsKey("lang") || source.containsKey("id"))
+                ) {
+                    isMihon = true
+                }
+                val baseUrl = stringValue(source, "baseUrl") ?: continue
+                if (!isHttpUrl(baseUrl)) continue
+                sites += ForeignSite(
+                    name = stringValue(source, "name") ?: "",
+                    lang = stringValue(source, "lang") ?: "",
+                    baseUrl = baseUrl
+                )
+            }
+        }
+        if (!isMihon) return null
+        return RepoFormat.ForeignRepo("Mihon", dedupe(sites))
+    }
+
+    private fun detectLnReader(entries: List<JsonObject>): RepoFormat.ForeignRepo? {
+        val sites = entries.mapNotNull { entry ->
+            lnReaderSite(entry)
+        }
+        if (sites.isEmpty()) return null
+        return RepoFormat.ForeignRepo("LNReader", dedupe(sites))
+    }
+
+    /**
+     * One LNReader entry, or null when the entry doesn't carry the
+     * LNReader shape: a site/plugin URL field plus a name or id.
+     * Strong signals only — a bare `url` on its own is the generic
+     * case below, not LNReader.
+     */
+    private fun lnReaderSite(entry: JsonObject): ForeignSite? {
+        val plugin = entry["plugin"] as? JsonObject
+        val source = entry["source"] as? JsonObject
+        val name = stringValue(entry, "name", "title")
+            ?: plugin?.let { stringValue(it, "name", "title") }
+            ?: source?.let { stringValue(it, "name", "title") }
+            ?: stringValue(entry, "id")
+            ?: plugin?.let { stringValue(it, "id") }
+            ?: source?.let { stringValue(it, "id") }
+            ?: return null
+        // The site's own address is the base URL when present; the
+        // plugin file URL is the fallback (it still identifies it).
+        val siteUrl = stringValue(entry, "site", "siteUrl")
+            ?: plugin?.let { stringValue(it, "site", "siteUrl", "url", "baseUrl") }
+            ?: source?.let { stringValue(it, "site", "siteUrl", "url", "baseUrl") }
+        val url = when {
+            siteUrl != null && isHttpUrl(siteUrl) -> siteUrl
+            // `url` counts for LNReader only alongside an id and a
+            // plugin-ish companion field — that's the plugins.json
+            // shape (id + site + url + lang/version/icon).
+            entry.containsKey("id") && entry.containsKey("url") &&
+                (entry.containsKey("lang") || entry.containsKey("version") ||
+                    entry.containsKey("iconUrl") || entry.containsKey("site")) -> {
+                val direct = stringValue(entry, "url")
+                if (direct != null && isHttpUrl(direct)) direct else null
+            }
+            else -> null
+        } ?: return null
+        return ForeignSite(
+            name = name,
+            lang = stringValue(entry, "lang") ?: "",
+            baseUrl = url
+        )
+    }
+
+    private fun detectGeneric(entries: List<JsonObject>): RepoFormat.ForeignRepo? {
+        val sites = entries.mapNotNull { entry ->
+            val url = listOf("baseUrl", "site", "url", "homepage", "homePage", "siteUrl")
+                .firstNotNullOfOrNull { key ->
+                    stringValue(entry, key)?.takeIf { isHttpUrl(it) }
+                }
+                ?: return@mapNotNull null
+            ForeignSite(
+                name = stringValue(entry, "name", "title", "id") ?: "",
+                lang = stringValue(entry, "lang") ?: "",
+                baseUrl = url
+            )
+        }
+        if (sites.isEmpty()) return null
+        return RepoFormat.ForeignRepo("another reader app", dedupe(sites))
+    }
+
+    // ── helpers ─────────────────────────────────────────────────────
+
+    private fun looksLikeDeclarativeConfig(obj: JsonObject): Boolean =
+        obj.containsKey("details") && obj.containsKey("chapter") &&
+            (obj.containsKey("baseUrl") || obj.containsKey("id"))
+
+    /** Entry objects inside an object root: a collection array under
+     * a known key, any array-of-objects value, or the object's own
+     * object values (dictionary-style indexes). */
+    private fun entriesFromObject(root: JsonObject): List<JsonObject> {
+        val collectionKeys = listOf(
+            "plugins", "sources", "extensions", "items", "list",
+            "bookSources", "sites", "repos", "catalogue", "catalog"
+        )
+        for (key in collectionKeys) {
+            val array = root[key] as? JsonArray ?: continue
+            val objects = array.mapNotNull { it as? JsonObject }
+            if (objects.isNotEmpty()) return objects
+        }
+        for ((_, value) in root) {
+            val array = value as? JsonArray ?: continue
+            val objects = array.mapNotNull { it as? JsonObject }
+            if (objects.isNotEmpty()) return objects
+        }
+        return root.values.mapNotNull { it as? JsonObject }
+    }
+
+    private fun dedupe(sites: List<ForeignSite>): List<ForeignSite> =
+        sites.distinctBy { it.baseUrl.trim().trimEnd('/').lowercase() }
+
+    private fun isHttpUrl(value: String): Boolean =
+        value.startsWith("http://") || value.startsWith("https://")
+
+    private fun stringValue(obj: JsonObject, vararg keys: String): String? {
+        for (key in keys) {
+            val primitive = obj[key] as? JsonPrimitive ?: continue
+            val value = primitive.contentOrNull?.trim()?.ifBlank { null } ?: continue
+            return value
+        }
+        return null
+    }
+}

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Xreader launcher glyph (v1.0.2, R09 — the locked two-colour spec).
+  ONE open book: two page arcs rising from a centre spine notch, drawn
+  as one bold filled silhouette. Colour is a single flat blue-violet,
+  #8383E8 (inside the approved #7B7BE0–#8B93F8 family) on the pure
+  black background layer. No shading, glow, shadow, texture, page
+  lines, text, or second motif — one flat colour only.
+
+  Geometry: the glyph's bounding box (x 28-80, y ~36-70 on the 108
+  canvas) sits fully inside the 66 dp safe circle — every anchor and
+  control point is within radius 33 of the centre (54,54), pinned by
+  IconGeometryTest. The spine groove is an even-odd cut in the same
+  single path, not a second colour.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#8383E8"
+        android:fillType="evenOdd"
+        android:pathData="M28,39 C36,35 46,36 54,43 C62,36 72,35 80,39 L80,67 C72,63 62,64 54,70 C46,64 36,63 28,67 Z M54,47 C52.8,53 52.8,59 54,64 C55.2,59 55.2,53 54,47 Z" />
+</vector>

@@ -1,0 +1,118 @@
+package app.xreader.data.db
+
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
+
+/**
+ * Manual migrations (the build.gradle schema-export comment made
+ * this the rule from day one: every schema change ships a tested
+ * manual migration, never a destructive fallback).
+ *
+ * 1 → 2 (Phase 6, gamification): sessions learn whether the EXP
+ * engine has paid them out; two small tables appear — the one-time
+ * award ledger and the achievement-unlock log.
+ */
+val MIGRATION_1_2: Migration = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `reading_sessions` ADD COLUMN `expProcessed` " +
+                "INTEGER NOT NULL DEFAULT 0"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `exp_events` (" +
+                "`eventKey` TEXT NOT NULL, " +
+                "`exp` INTEGER NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`eventKey`))"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `achievements` (" +
+                "`id` TEXT NOT NULL, " +
+                "`unlockedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`id`))"
+        )
+    }
+}
+
+/**
+ * 2 → 3 (v1.0.2): library organisation. Books gain the reversible
+ * merge pointer; six small tables appear — user shelves and their
+ * memberships, the canonical tag registry, per-book tag rows (with
+ * user-correction tombstones), tag follows, and saved vocabulary.
+ * No existing table loses or rewrites a row; every statement is
+ * additive. Runs rehearsed on the v2 schema shape by the gate's
+ * migration fixtures (Stage 3).
+ */
+val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `books` ADD COLUMN `mergedIntoId` INTEGER")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `shelves` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`name` TEXT NOT NULL, " +
+                "`kind` TEXT NOT NULL, " +
+                "`rule` TEXT, " +
+                "`ruleValue` TEXT NOT NULL, " +
+                "`sortOrder` INTEGER NOT NULL, " +
+                "`hidden` INTEGER NOT NULL, " +
+                "`sort` TEXT NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `shelf_books` (" +
+                "`shelfId` INTEGER NOT NULL, " +
+                "`bookId` INTEGER NOT NULL, " +
+                "`addedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`shelfId`, `bookId`), " +
+                "FOREIGN KEY(`shelfId`) REFERENCES `shelves`(`id`) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE , " +
+                "FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE )"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_shelf_books_bookId` " +
+                "ON `shelf_books` (`bookId`)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `tags` (" +
+                "`slug` TEXT NOT NULL, " +
+                "`displayName` TEXT NOT NULL, " +
+                "`family` TEXT NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`slug`))"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `book_tags` (" +
+                "`bookId` INTEGER NOT NULL, " +
+                "`slug` TEXT NOT NULL, " +
+                "`origin` TEXT NOT NULL, " +
+                "`suppressed` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`bookId`, `slug`))"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_book_tags_slug` " +
+                "ON `book_tags` (`slug`)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `tag_follows` (" +
+                "`slug` TEXT NOT NULL, " +
+                "`followedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`slug`))"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `vocab_words` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`word` TEXT NOT NULL, " +
+                "`definition` TEXT NOT NULL, " +
+                "`sentence` TEXT NOT NULL, " +
+                "`bookId` INTEGER, " +
+                "`chapterIndex` INTEGER NOT NULL, " +
+                "`state` TEXT NOT NULL, " +
+                "`intervalDays` REAL NOT NULL, " +
+                "`dueAt` INTEGER NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL)"
+        )
+    }
+}

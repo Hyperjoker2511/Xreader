@@ -1,0 +1,1219 @@
+package app.xreader.ui.shell
+
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.glance.appwidget.updateAll
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import app.xreader.core.motion.fadeTween
+import app.xreader.core.motion.pressSquish
+import app.xreader.core.motion.sharedAxisXEnter
+import app.xreader.core.motion.sharedAxisXExit
+import app.xreader.core.motion.sharedAxisXPopEnter
+import app.xreader.core.motion.sharedAxisXPopExit
+import app.xreader.core.motion.specFor
+import app.xreader.core.motion.SpringMotionEngine
+import app.xreader.data.db.Book
+import app.xreader.data.prefs.AppearanceState
+import app.xreader.di.AppContainer
+import app.xreader.ui.book.BookDetailScreen
+import app.xreader.ui.book.BookDetailViewModel
+import app.xreader.ui.common.XreaderPrimaryButton
+import app.xreader.ui.downloads.BookDownloads
+import app.xreader.ui.downloads.DownloadsScreen
+import app.xreader.ui.downloads.DownloadsViewModel
+import app.xreader.ui.library.LibraryScreen
+import app.xreader.ui.library.LibraryViewModel
+import app.xreader.ui.more.AboutScreen
+import app.xreader.ui.more.AppearanceScreen
+import app.xreader.ui.more.AppearanceViewModel
+import app.xreader.ui.more.LabsScreen
+import app.xreader.ui.more.MoreScreen
+import app.xreader.ui.opds.BrowseScreen
+import app.xreader.ui.opds.OpdsCatalogScreen
+import app.xreader.ui.opds.OpdsViewModel
+import app.xreader.ui.reader.ReaderScreen
+import app.xreader.ui.reader.ReaderViewModel
+import app.xreader.ui.sources.AddFromLinkScreen
+import app.xreader.ui.sources.GlobalSearchScreen
+import app.xreader.ui.sources.GlobalSearchViewModel
+import app.xreader.ui.sources.ExtensionDetailScreen
+import app.xreader.ui.sources.ExtensionDetailViewModel
+import app.xreader.ui.sources.LinkAddViewModel
+import app.xreader.ui.sources.LoginScreen
+import app.xreader.ui.sources.SourceCatalogScreen
+import app.xreader.ui.sources.SourceCatalogViewModel
+import app.xreader.ui.sources.SourcesScreen
+import app.xreader.ui.sources.SourcesViewModel
+import app.xreader.ui.common.frostedGlass
+import app.xreader.ui.theme.LocalGlassSettings
+import app.xreader.ui.theme.LocalHazeState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import dev.chrisbanes.haze.hazeSource
+import java.io.File
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
+
+/**
+ * The app shell (PLAN §3): four LABELLED tabs opening on Library.
+ *
+ * Phone: a floating frosted bar of FIXED height (64 dp) in the Scaffold
+ * bottomBar slot. Tablet (≥ 840 dp wide): the bar becomes the left rail
+ * (DESIGN.md large-screen rules). In both, the selection pill's rect
+ * comes ONLY from [NavGeometry] — a pure, clamped function — and the
+ * animated position is re-clamped every frame (the ReTranslate v1.1.1
+ * invariant; nothing here sizes from raw layout constraints).
+ */
+/**
+ * The five labelled tabs (v1.0.2, R08 — Line-up 2, locked by the user):
+ * Library · Browse · History · Downloads · Me. "More" dissolved into
+ * Me; History is a first-class tab. Order, routes and labels are
+ * pinned by ShellNavTest.
+ */
+enum class Tab(val route: String, val label: String, val icon: ImageVector) {
+    Library("library", "Library", Icons.Filled.MenuBook),
+    Browse("browse", "Browse", Icons.Filled.Explore),
+    History("history", "History", Icons.Filled.History),
+    Downloads("downloads", "Downloads", Icons.Filled.Download),
+    Me("me", "Me", Icons.Filled.Person)
+}
+
+internal val BarHeight = 64.dp
+private val RailWidth = 104.dp
+private val RailSlotHeight = 76.dp
+
+@Composable
+fun MainScaffold(container: AppContainer, appearance: AppearanceState) {
+    val navController = rememberNavController()
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val onPhaseNote: (String) -> Unit = { msg -> scope.launch { snackbar.showSnackbar(msg) } }
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    // Phase 2 view models live at host level so their message flows
+    // can feed the one snackbar.
+    val libraryViewModel = androidx.lifecycle.viewmodel.compose.viewModel<LibraryViewModel>(
+        factory = LibraryViewModel.factory(container)
+    )
+    val downloadsViewModel = androidx.lifecycle.viewmodel.compose.viewModel<DownloadsViewModel>(
+        factory = DownloadsViewModel.factory(container)
+    )
+    val opdsViewModel = androidx.lifecycle.viewmodel.compose.viewModel<OpdsViewModel>(
+        factory = OpdsViewModel.factory(container)
+    )
+    // Phase 3: sources live at host level too (the login handoff and
+    // its session-saved events are shared across destinations).
+    val sourcesViewModel = androidx.lifecycle.viewmodel.compose.viewModel<SourcesViewModel>(
+        factory = SourcesViewModel.factory(container)
+    )
+    val linkAddViewModel = androidx.lifecycle.viewmodel.compose.viewModel<LinkAddViewModel>(
+        factory = LinkAddViewModel.factory(container)
+    )
+    androidx.compose.runtime.LaunchedEffect(libraryViewModel) {
+        libraryViewModel.messages.collect { msg -> snackbar.showSnackbar(msg) }
+    }
+    androidx.compose.runtime.LaunchedEffect(opdsViewModel) {
+        opdsViewModel.messages.collect { msg -> snackbar.showSnackbar(msg) }
+    }
+    androidx.compose.runtime.LaunchedEffect(sourcesViewModel) {
+        sourcesViewModel.messages.collect { msg -> snackbar.showSnackbar(msg) }
+    }
+    androidx.compose.runtime.LaunchedEffect(linkAddViewModel) {
+        linkAddViewModel.messages.collect { msg -> snackbar.showSnackbar(msg) }
+    }
+
+    // Phase 6: opening the app settles EXP (idempotent) and honours
+    // a home-screen widget tap that asked for a specific book.
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        scope.launch {
+            runCatching { container.expService.settle() }
+            // Phase 6: keep the home-screen widget honest.
+            runCatching {
+                app.xreader.widget.XreaderWidget()
+                    .updateAll(context)
+            }
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        container.pendingOpenBook.collect { bookId ->
+            if (bookId != null) {
+                container.pendingOpenBook.value = null
+                val progress = runCatching {
+                    container.database.readingProgressDao().getForBook(bookId)
+                }.getOrNull()
+                navController.navigate("reader/$bookId/${progress?.chapterIndex ?: 0}")
+            }
+        }
+    }
+
+    // Import picker (SAF): multiple documents, any type — the sniffer
+    // decides what each file really is.
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val names = uris.map { uri -> displayName(context, uri) }
+        libraryViewModel.stagePickedUris(uris, names) { uri ->
+            runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
+        }
+    }
+    val onAddBook: () -> Unit = {
+        importLauncher.launch(arrayOf("*/*"))
+    }
+
+    // Export: "Make EPUB"/"Export" create a document via SAF, then the
+    // exporter writes into the chosen stream.
+    var pendingExport by remember { mutableStateOf<Pair<Book, String>?>(null) }
+    val exportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/epub+zip")
+    ) { uri ->
+        val pending = pendingExport
+        pendingExport = null
+        if (uri != null && pending != null) {
+            scope.launch {
+                val (book, kind) = pending
+                val stream = runCatching {
+                    context.contentResolver.openOutputStream(uri)
+                }.getOrNull()
+                if (stream == null) {
+                    snackbar.showSnackbar("That place couldn't be written to.")
+                    return@launch
+                }
+                val result = stream.use {
+                    if (kind == "cbz") {
+                        container.bookExporter.exportCbz(book, it)
+                    } else {
+                        container.bookExporter.exportEpub(book, it)
+                    }
+                }
+                snackbar.showSnackbar(
+                    when (result) {
+                        is app.xreader.core.error.AppResult.Ok ->
+                            "Saved “${book.title}” as ${kind.uppercase()}"
+                        is app.xreader.core.error.AppResult.Err ->
+                            app.xreader.core.error.ErrorText.displayText(result.error)
+                    }
+                )
+            }
+        }
+    }
+
+    // v1.0.1 customisation: library/navigation preferences drive
+    // the shell (bar style, tab labels) and the start screen.
+    val libraryState by container.libraryPrefs.state.collectAsStateWithLifecycle(
+        initialValue = app.xreader.data.library.LibraryState()
+    )
+    var startHandled by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(libraryState.startScreen) {
+        if (startHandled) return@LaunchedEffect
+        startHandled = true
+        when (libraryState.startScreen) {
+            app.xreader.data.library.StartScreen.DOWNLOADS ->
+                navigateToTab(navController, Tab.Downloads)
+            app.xreader.data.library.StartScreen.CONTINUE_READING -> {
+                val recent = runCatching {
+                    container.database.readingProgressDao().allProgress()
+                        .maxByOrNull { it.updatedAt }
+                }.getOrNull()
+                if (recent != null) {
+                    navController.navigate("reader/${recent.bookId}/${recent.chapterIndex}")
+                }
+            }
+            app.xreader.data.library.StartScreen.LIBRARY -> Unit
+        }
+    }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        if (maxWidth >= 840.dp) {
+            RailShell(
+                navController, snackbar, appearance, container, onPhaseNote,
+                libraryViewModel, downloadsViewModel, opdsViewModel,
+                sourcesViewModel, linkAddViewModel, onAddBook,
+                onExport = { book, kind -> pendingExport = book to kind },
+                libraryState = libraryState
+            )
+        } else {
+            PhoneShell(
+                navController, snackbar, appearance, container, onPhaseNote,
+                libraryViewModel, downloadsViewModel, opdsViewModel,
+                sourcesViewModel, linkAddViewModel, onAddBook,
+                onExport = { book, kind -> pendingExport = book to kind },
+                libraryState = libraryState
+            )
+        }
+    }
+}
+
+/** SAF display name for a picked document (falls back to the URI tail). */
+private fun displayName(context: android.content.Context, uri: android.net.Uri): String {
+    var name: String? = null
+    runCatching {
+        context.contentResolver.query(
+            uri,
+            arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+            null, null, null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                name = cursor.getString(0)
+            }
+        }
+    }
+    return name ?: uri.lastPathSegment?.substringAfterLast('/') ?: "book"
+}
+
+/** True while an immersive route (reader, login) is showing: the
+ * shell chrome animates away and the destination owns the screen. */
+@Composable
+private fun shellImmersive(navController: NavHostController): Boolean {
+    val entry by navController.currentBackStackEntryAsState()
+    return ShellChrome.isImmersiveRoutePattern(entry?.destination?.route)
+}
+
+@Composable
+private fun PhoneShell(
+    navController: NavHostController,
+    snackbar: SnackbarHostState,
+    appearance: AppearanceState,
+    container: AppContainer,
+    onPhaseNote: (String) -> Unit,
+    libraryViewModel: LibraryViewModel,
+    downloadsViewModel: DownloadsViewModel,
+    opdsViewModel: OpdsViewModel,
+    sourcesViewModel: SourcesViewModel,
+    linkAddViewModel: LinkAddViewModel,
+    onAddBook: () -> Unit,
+    onExport: (Book, String) -> Unit,
+    libraryState: app.xreader.data.library.LibraryState =
+        app.xreader.data.library.LibraryState()
+) {
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        bottomBar = {
+            // v1.0.1: immersive routes (reader, login) hide the bar —
+            // it animates out with the motion engine, never pops.
+            AnimatedVisibility(
+                visible = !shellImmersive(navController),
+                enter = fadeIn(fadeTween<Float>()),
+                exit = fadeOut(fadeTween<Float>())
+            ) {
+                FloatingNavBar(
+                    selected = selectedTab(navController),
+                    reduceMotion = appearance.reduceMotion,
+                    onSelect = { tab -> navigateToTab(navController, tab) },
+                    barStyle = libraryState.navBarStyle,
+                    labelStyle = libraryState.tabLabelStyle
+                )
+            }
+        }
+    ) { padding ->
+        val haze = LocalHazeState.current
+        val hostModifier = Modifier.padding(padding)
+            .let { if (haze != null) it.hazeSource(haze) else it }
+        XreaderNavHost(
+            navController, container, hostModifier,
+            appearance.reduceMotion, onPhaseNote,
+            libraryViewModel, downloadsViewModel, opdsViewModel,
+            sourcesViewModel, linkAddViewModel, onAddBook, onExport
+        )
+    }
+}
+
+@Composable
+private fun RailShell(
+    navController: NavHostController,
+    snackbar: SnackbarHostState,
+    appearance: AppearanceState,
+    container: AppContainer,
+    onPhaseNote: (String) -> Unit,
+    libraryViewModel: LibraryViewModel,
+    downloadsViewModel: DownloadsViewModel,
+    opdsViewModel: OpdsViewModel,
+    sourcesViewModel: SourcesViewModel,
+    linkAddViewModel: LinkAddViewModel,
+    onAddBook: () -> Unit,
+    onExport: (Book, String) -> Unit,
+    libraryState: app.xreader.data.library.LibraryState =
+        app.xreader.data.library.LibraryState()
+) {
+    Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
+        Row(Modifier.fillMaxSize().padding(padding)) {
+            AnimatedVisibility(
+                visible = !shellImmersive(navController),
+                enter = fadeIn(fadeTween<Float>()),
+                exit = fadeOut(fadeTween<Float>())
+            ) {
+            NavRail(
+                selected = selectedTab(navController),
+                reduceMotion = appearance.reduceMotion,
+                onSelect = { tab -> navigateToTab(navController, tab) },
+                onAddBook = onAddBook,
+                labelStyle = libraryState.tabLabelStyle
+            )
+            }
+            val haze = LocalHazeState.current
+            XreaderNavHost(
+                navController, container,
+                Modifier.weight(1f).let { if (haze != null) it.hazeSource(haze) else it },
+                appearance.reduceMotion, onPhaseNote,
+                libraryViewModel, downloadsViewModel, opdsViewModel,
+                sourcesViewModel, linkAddViewModel, onAddBook, onExport
+            )
+        }
+    }
+}
+
+@Composable
+private fun XreaderNavHost(
+    navController: NavHostController,
+    container: AppContainer,
+    modifier: Modifier,
+    reduceMotion: Boolean,
+    onPhaseNote: (String) -> Unit,
+    libraryViewModel: LibraryViewModel,
+    downloadsViewModel: DownloadsViewModel,
+    opdsViewModel: OpdsViewModel,
+    sourcesViewModel: SourcesViewModel,
+    linkAddViewModel: LinkAddViewModel,
+    onAddBook: () -> Unit,
+    onExport: (Book, String) -> Unit
+) {
+    val coverFile: (String?) -> File? = { path ->
+        path?.let { container.bookStorage.resolve(it) }
+    }
+    val assetFile: (Long, String) -> File = { bookId, name ->
+        File(container.bookStorage.contentDir(bookId), "img-$name")
+    }
+    // Phase 5: one sync brain for the whole shell — the Sync screen
+    // uses it, and opening the app gives auto-sync its chance (it is
+    // quiet, off by default, and never blocks reading).
+    val syncViewModel = androidx.lifecycle.viewmodel.compose
+        .viewModel<app.xreader.ui.sync.SyncViewModel>(
+            factory = app.xreader.ui.sync.SyncViewModel.factory(container)
+        )
+    androidx.compose.runtime.LaunchedEffect(syncViewModel) {
+        syncViewModel.autoSyncIfDue()
+    }
+    NavHost(
+        navController = navController,
+        startDestination = Tab.Library.route,
+        modifier = modifier,
+        enterTransition = { sharedAxisXEnter(reduceMotion) },
+        exitTransition = { sharedAxisXExit(reduceMotion) },
+        popEnterTransition = { sharedAxisXPopEnter(reduceMotion) },
+        popExitTransition = { sharedAxisXPopExit(reduceMotion) }
+    ) {
+        composable(Tab.Library.route) {
+            val appearance by container.appearancePrefs.state
+                .collectAsStateWithLifecycle(
+                    initialValue = app.xreader.data.prefs.AppearanceState()
+                )
+            LibraryScreen(
+                viewModel = libraryViewModel,
+                coverFile = coverFile,
+                reduceMotion = reduceMotion,
+                onAddBook = onAddBook,
+                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
+                onContinueReading = { bookId, chapterIndex ->
+                    navController.navigate("reader/$bookId/$chapterIndex")
+                },
+                onProfile = { navController.navigate("profile") },
+                onHistory = { navController.navigate("history") },
+                onOpenUpdates = { navController.navigate("updates") },
+                onOpenAddList = { navController.navigate("addList") },
+                coverGlow = appearance.coverGlow &&
+                    appearance.bookColours !=
+                    app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_ONLY
+            )
+        }
+        composable("updates") {
+            app.xreader.ui.library.UpdatesScreen(
+                viewModel = libraryViewModel,
+                coverFile = coverFile,
+                onBack = { navController.popBackStack() },
+                onOpenBook = { bookId -> navController.navigate("book/$bookId") }
+            )
+        }
+        composable("addList") {
+            val addListViewModel: app.xreader.ui.library.AddListViewModel =
+                androidx.lifecycle.viewmodel.compose.viewModel(
+                    factory = app.xreader.ui.library.AddListViewModel
+                        .factory(container)
+                )
+            app.xreader.ui.library.AddListScreen(
+                viewModel = addListViewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Tab.Browse.route) {
+            SourcesScreen(
+                viewModel = sourcesViewModel,
+                onOpenSource = { extId, sourceId ->
+                    navController.navigate("source/$extId/${android.net.Uri.encode(sourceId)}")
+                },
+                onOpenExtension = { extId -> navController.navigate("extensions/$extId") },
+                onOpenOpdsServers = { navController.navigate("opdsServers") },
+                onAddFromLink = { navController.navigate("addFromLink") },
+                onSearchAll = { navController.navigate("globalSearch") }
+            )
+        }
+        composable("opdsServers") {
+            BrowseScreen(
+                viewModel = opdsViewModel,
+                onOpenServer = { server ->
+                    opdsViewModel.openServer(server)
+                    navController.navigate("opds/${server.id}")
+                }
+            )
+        }
+        composable(
+            "source/{extId}/{sourceId}",
+            arguments = listOf(
+                androidx.navigation.navArgument("extId") {
+                    type = androidx.navigation.NavType.LongType
+                },
+                androidx.navigation.navArgument("sourceId") {
+                    type = androidx.navigation.NavType.StringType
+                }
+            )
+        ) { entry ->
+            val extId = entry.arguments?.getLong("extId") ?: 0L
+            val sourceId = entry.arguments?.getString("sourceId") ?: ""
+            val viewModel = androidx.lifecycle.viewmodel.compose.viewModel<SourceCatalogViewModel>(
+                key = "source-$extId-$sourceId",
+                factory = SourceCatalogViewModel.factory(container, extId, sourceId)
+            )
+            androidx.compose.runtime.LaunchedEffect(viewModel) {
+                viewModel.messages.collect { msg -> onPhaseNote(msg) }
+            }
+            SourceCatalogScreen(
+                viewModel = viewModel,
+                extensionId = extId,
+                onBack = { navController.popBackStack() },
+                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
+                onLogin = {
+                    val baseUrl = viewModel.state.value.baseUrl
+                    if (baseUrl.isNotBlank()) {
+                        sourcesViewModel.startLogin(
+                            sessionKey = sourcesViewModel.sessionKeyFor(extId),
+                            url = baseUrl,
+                            title = viewModel.state.value.sourceName
+                        )
+                        navController.navigate("login")
+                    }
+                }
+            )
+        }
+        composable(
+            "extensions/{extId}",
+            arguments = listOf(
+                androidx.navigation.navArgument("extId") {
+                    type = androidx.navigation.NavType.LongType
+                }
+            )
+        ) { entry ->
+            val extId = entry.arguments?.getLong("extId") ?: 0L
+            val viewModel = androidx.lifecycle.viewmodel.compose.viewModel<ExtensionDetailViewModel>(
+                key = "ext-detail-$extId",
+                factory = ExtensionDetailViewModel.factory(container, extId)
+            )
+            androidx.compose.runtime.LaunchedEffect(viewModel) {
+                viewModel.messages.collect { msg -> onPhaseNote(msg) }
+            }
+            ExtensionDetailScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() },
+                onLogin = {
+                    val ext = viewModel.state.value.extension
+                    if (ext != null) {
+                        val firstHost = app.xreader.data.extension.ExtensionPermissions
+                            .parse(ext.permissionsJson).domains.firstOrNull()
+                        if (firstHost != null) {
+                            sourcesViewModel.startLogin(
+                                sessionKey = sourcesViewModel.sessionKeyFor(extId),
+                                url = "https://$firstHost",
+                                title = ext.displayName
+                            )
+                            navController.navigate("login")
+                        } else {
+                            onPhaseNote("This source doesn't declare a site to sign in to")
+                        }
+                    }
+                },
+                onOpenSource = { sourceId ->
+                    navController.navigate("source/$extId/${android.net.Uri.encode(sourceId)}")
+                }
+            )
+        }
+        composable("login") {
+            val request by sourcesViewModel.loginRequest
+                .collectAsStateWithLifecycle()
+            val current = request
+            if (current == null) {
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    navController.popBackStack()
+                }
+            } else {
+                LoginScreen(
+                    request = current,
+                    viewModel = sourcesViewModel,
+                    onDone = {
+                        sourcesViewModel.clearLoginRequest()
+                        navController.popBackStack()
+                    },
+                    onCancel = {
+                        sourcesViewModel.clearLoginRequest()
+                        navController.popBackStack()
+                    }
+                )
+            }
+        }
+        composable("addFromLink") {
+            AddFromLinkScreen(
+                viewModel = linkAddViewModel,
+                sessionSaved = sourcesViewModel.sessionSaved,
+                onRequestLogin = { loginRequest ->
+                    sourcesViewModel.startLogin(
+                        sessionKey = loginRequest.sessionKey,
+                        url = loginRequest.url,
+                        title = loginRequest.title
+                    )
+                    navController.navigate("login")
+                },
+                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(
+            "opds/{serverId}",
+            arguments = listOf(
+                androidx.navigation.navArgument("serverId") {
+                    type = androidx.navigation.NavType.LongType
+                }
+            )
+        ) { entry ->
+            val serverName = opdsViewModel.servers.value
+                .firstOrNull { it.id == entry.arguments?.getLong("serverId") }?.name ?: "Catalog"
+            OpdsCatalogScreen(
+                viewModel = opdsViewModel,
+                serverName = serverName,
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Tab.Downloads.route) {
+            DownloadsScreen(
+                viewModel = downloadsViewModel,
+                coverFile = coverFile,
+                onMakeEpub = { group: BookDownloads -> onExport(group.book, "epub") },
+                onOpenBook = { bookId -> navController.navigate("book/$bookId") }
+            )
+        }
+        composable(Tab.Me.route) {
+            // The Me tab (R08): the v1.0.1 "More" hub, dissolved into
+            // Me — same destinations, now behind the labelled tab the
+            // user asked for. R06 grows this into the full Me home.
+            val profileViewModel = androidx.lifecycle.viewmodel.compose
+                .viewModel<app.xreader.ui.profile.ProfileViewModel>(
+                    key = "me-header",
+                    factory = app.xreader.ui.profile.ProfileViewModel.factory(container)
+                )
+            val meState by profileViewModel.state.collectAsStateWithLifecycle()
+            // R28: the What's New note shows until dismissed for
+            // the installed version code.
+            val whatsNewSeen by container.gamePrefs.whatsNewSeenCode
+                .collectAsStateWithLifecycle(initialValue = Int.MAX_VALUE)
+            val installedCode = remember {
+                runCatching {
+                    @Suppress("DEPRECATION")
+                    container.applicationContext.packageManager.getPackageInfo(
+                        container.applicationContext.packageName, 0
+                    ).versionCode
+                }.getOrDefault(0)
+            }
+            val meScope = androidx.compose.runtime.rememberCoroutineScope()
+            MoreScreen(
+                onAppearance = { navController.navigate("appearance") },
+                onLabs = { navController.navigate("labs") },
+                onAbout = { navController.navigate("about") },
+                onProviders = { navController.navigate("providers") },
+                onSync = { navController.navigate("sync") },
+                onProfile = { navController.navigate("profile") },
+                onMigration = { navController.navigate("migration") },
+                onHistory = { navController.navigate("history") },
+                onCustomise = { navController.navigate("customise") },
+                onVocab = { navController.navigate("vocab") },
+                meName = meState.profile?.displayName ?: "",
+                meLevel = meState.profile?.level ?: 1,
+                meTitle = meState.title,
+                meStreak = meState.stats.currentStreak,
+                whatsNewVisible = installedCode > 0 && whatsNewSeen < installedCode,
+                onOpenWhatsNew = { navController.navigate("about") },
+                onDismissWhatsNew = {
+                    meScope.launch {
+                        container.gamePrefs.setWhatsNewSeen(installedCode)
+                    }
+                }
+            )
+        }
+        composable("more") {
+            // Legacy route (old internal links / widget era): never a
+            // dead end — land on the Me tab.
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                navigateToTab(navController, Tab.Me)
+            }
+        }
+        composable("globalSearch") { entry ->
+            val viewModel = androidx.lifecycle.viewmodel.compose.viewModel<GlobalSearchViewModel>(
+                factory = GlobalSearchViewModel.factory(container)
+            )
+            // R26: an AI suggestion's Find arrives as a preset query
+            // on the previous entry — run it once, then clear it.
+            androidx.compose.runtime.LaunchedEffect(entry) {
+                val preset = navController.previousBackStackEntry
+                    ?.savedStateHandle
+                    ?.get<String>("presetQuery")
+                if (!preset.isNullOrBlank()) {
+                    navController.previousBackStackEntry
+                        ?.savedStateHandle
+                        ?.remove<String>("presetQuery")
+                    viewModel.setQuery(preset)
+                    viewModel.search()
+                }
+            }
+            GlobalSearchScreen(
+                viewModel = viewModel,
+                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Tab.History.route) {
+            // History is a first-class tab now (R08); its header back
+            // arrow returns to Library instead of popping (a tab has
+            // nothing to pop to).
+            val viewModel = androidx.lifecycle.viewmodel.compose.viewModel<
+                app.xreader.ui.more.HistoryViewModel>(
+                factory = app.xreader.ui.more.HistoryViewModel.factory(container)
+            )
+            app.xreader.ui.more.HistoryScreen(
+                viewModel = viewModel,
+                coverFile = coverFile,
+                onBack = { navigateToTab(navController, Tab.Library) },
+                onOpenBook = { bookId, chapterIndex ->
+                    navController.navigate("reader/$bookId/$chapterIndex")
+                }
+            )
+        }
+        composable("customise") {
+            val viewModel = androidx.lifecycle.viewmodel.compose.viewModel<
+                app.xreader.ui.more.CustomiseViewModel>(
+                factory = app.xreader.ui.more.CustomiseViewModel.factory(container)
+            )
+            app.xreader.ui.more.CustomiseScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable("profile") {
+            val viewModel = androidx.lifecycle.viewmodel.compose
+                .viewModel<app.xreader.ui.profile.ProfileViewModel>(
+                    factory = app.xreader.ui.profile.ProfileViewModel.factory(container)
+                )
+            app.xreader.ui.profile.ProfileScreen(
+                viewModel = viewModel,
+                container = container,
+                onBack = { navController.popBackStack() },
+                reduceMotion = reduceMotion,
+                lowRam = remember {
+                    val manager = navController.context
+                        .getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                        as android.app.ActivityManager
+                    val info = android.app.ActivityManager.MemoryInfo()
+                    manager.getMemoryInfo(info)
+                    info.totalMem / (1024L * 1024L) <= 2048L
+                },
+                onOpenHistory = { navController.navigate("history") },
+                onOpenSync = { navController.navigate("sync") },
+                onOpenCustomise = { navController.navigate("customise") }
+            )
+        }
+        composable("migration") {
+            val viewModel = androidx.lifecycle.viewmodel.compose
+                .viewModel<app.xreader.ui.migration.MigrationViewModel>(
+                    factory = app.xreader.ui.migration.MigrationViewModel.factory(container)
+                )
+            app.xreader.ui.migration.MigrationScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() },
+                onAddFromLink = { navController.navigate("addFromLink") }
+            )
+        }
+        composable("providers") {
+            val viewModel = androidx.lifecycle.viewmodel.compose
+                .viewModel<app.xreader.ui.ai.ProvidersViewModel>(
+                    factory = app.xreader.ui.ai.ProvidersViewModel.factory(container)
+                )
+            app.xreader.ui.ai.ProvidersScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable("sync") {
+            app.xreader.ui.sync.SyncScreen(
+                viewModel = syncViewModel,
+                container = container,
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(
+            "lore/{bookId}",
+            arguments = listOf(
+                androidx.navigation.navArgument("bookId") {
+                    type = androidx.navigation.NavType.LongType
+                }
+            )
+        ) { entry ->
+            val bookId = entry.arguments?.getLong("bookId") ?: 0L
+            val viewModel = androidx.lifecycle.viewmodel.compose
+                .viewModel<app.xreader.ui.ai.LoreViewModel>(
+                    key = "lore-$bookId",
+                    factory = app.xreader.ui.ai.LoreViewModel.factory(container, bookId)
+                )
+            app.xreader.ui.ai.LoreScreen(
+                viewModel = viewModel,
+                artFile = { path -> container.bookStorage.resolve(path) },
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(
+            "book/{bookId}",
+            arguments = listOf(
+                androidx.navigation.navArgument("bookId") {
+                    type = androidx.navigation.NavType.LongType
+                }
+            )
+        ) { entry ->
+            val bookId = entry.arguments?.getLong("bookId") ?: 0L
+            val viewModel = androidx.lifecycle.viewmodel.compose.viewModel<BookDetailViewModel>(
+                key = "book-$bookId",
+                factory = BookDetailViewModel.factory(container, bookId)
+            )
+            androidx.compose.runtime.LaunchedEffect(viewModel) {
+                viewModel.messages.collect { msg -> onPhaseNote(msg) }
+            }
+            BookDetailScreen(
+                viewModel = viewModel,
+                coverFile = coverFile,
+                assetFile = assetFile,
+                onBack = { navController.popBackStack() },
+                onOpenLore = { navController.navigate("lore/$bookId") },
+                onOpenRelated = { relatedId -> navController.navigate("book/$relatedId") },
+                onReadChapter = { chapterIndex ->
+                    navController.navigate("reader/$bookId/$chapterIndex")
+                },
+                onExportEpub = {
+                    val book = viewModel.state.value.book
+                    if (book != null) onExport(book, "epub") else onPhaseNote("Book not loaded yet")
+                },
+                onExportCbz = {
+                    val book = viewModel.state.value.book
+                    if (book != null) onExport(book, "cbz") else onPhaseNote("Book not loaded yet")
+                },
+                onOpenTag = { slug ->
+                    navController.navigate(
+                        "tag/${android.net.Uri.encode(slug)}"
+                    )
+                },
+                onFindTitle = { title ->
+                    navController.currentBackStackEntry?.savedStateHandle
+                        ?.set("presetQuery", title)
+                    navController.navigate("globalSearch")
+                }
+            )
+        }
+        composable(
+            "tag/{slug}",
+            arguments = listOf(
+                androidx.navigation.navArgument("slug") {
+                    type = androidx.navigation.NavType.StringType
+                }
+            )
+        ) { entry ->
+            val slug = entry.arguments?.getString("slug") ?: ""
+            val viewModel = androidx.lifecycle.viewmodel.compose
+                .viewModel<app.xreader.ui.library.TagPageViewModel>(
+                    key = "tag-$slug",
+                    factory = app.xreader.ui.library.TagPageViewModel
+                        .factory(container, slug)
+                )
+            app.xreader.ui.library.TagPageScreen(
+                viewModel = viewModel,
+                coverFile = coverFile,
+                onBack = { navController.popBackStack() },
+                onOpenBook = { id -> navController.navigate("book/$id") }
+            )
+        }
+        composable("vocab") {
+            val viewModel = androidx.lifecycle.viewmodel.compose
+                .viewModel<app.xreader.ui.library.VocabViewModel>(
+                    factory = app.xreader.ui.library.VocabViewModel
+                        .factory(container)
+                )
+            app.xreader.ui.library.VocabScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(
+            "reader/{bookId}/{chapterIndex}",
+            arguments = listOf(
+                androidx.navigation.navArgument("bookId") {
+                    type = androidx.navigation.NavType.LongType
+                },
+                androidx.navigation.navArgument("chapterIndex") {
+                    type = androidx.navigation.NavType.IntType
+                }
+            )
+        ) { entry ->
+            val bookId = entry.arguments?.getLong("bookId") ?: 0L
+            val chapterIndex = entry.arguments?.getInt("chapterIndex") ?: 0
+            val viewModel = androidx.lifecycle.viewmodel.compose.viewModel<ReaderViewModel>(
+                key = "reader-$bookId-$chapterIndex",
+                factory = ReaderViewModel.factory(container, bookId, chapterIndex)
+            )
+            ReaderScreen(
+                viewModel = viewModel,
+                container = container,
+                reduceMotion = reduceMotion,
+                assetFile = assetFile,
+                bookId = bookId,
+                onBack = { navController.popBackStack() },
+                onOpenCustomise = { navController.navigate("customise") }
+            )
+        }
+        composable("appearance") {
+            // R07: "Appearance" ceased to be a separate door — its
+            // controls (theme mode, reduce motion) moved into
+            // Customise, and this legacy route lands there instead
+            // of dead-ending (the More hub's old link still works).
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                navController.navigate("customise") {
+                    popUpTo("appearance") { inclusive = true }
+                }
+            }
+        }
+        composable("labs") {
+            LabsScreen(container = container, onBack = { navController.popBackStack() })
+        }
+        composable("about") {
+            AboutScreen(onBack = { navController.popBackStack() })
+        }
+    }
+}
+
+@Composable
+private fun selectedTab(navController: NavHostController): Tab {
+    val entry by navController.currentBackStackEntryAsState()
+    val route = entry?.destination?.route
+    return when {
+        route == "appearance" || route == "about" || route == "labs" ||
+            route == "providers" || route == "sync" || route == "profile" ||
+            route == "migration" || route == "customise" || route == "more" -> Tab.Me
+        route?.startsWith("book/") == true || route?.startsWith("reader/") == true ||
+            route?.startsWith("lore/") == true || route == "updates" ||
+            route?.startsWith("tag/") == true || route == "vocab" -> Tab.Library
+        route?.startsWith("opds/") == true || route == "opdsServers" ||
+            route?.startsWith("source/") == true || route?.startsWith("extensions/") == true ||
+            route == "login" || route == "addFromLink" -> Tab.Browse
+        else -> Tab.entries.firstOrNull { it.route == route } ?: Tab.Library
+    }
+}
+
+private fun navigateToTab(navController: NavHostController, tab: Tab) {
+    navController.navigate(tab.route) {
+        popUpTo(navController.graph.startDestinationId) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+}
+
+/**
+ * The floating frosted bottom bar. Height is a CONSTANT (64 dp): the
+ * Scaffold bottomBar slot permits full-screen height, so nothing in
+ * here may size from the slot's constraints — the v1.1.1 lesson.
+ */
+@Composable
+private fun FloatingNavBar(
+    selected: Tab,
+    reduceMotion: Boolean,
+    onSelect: (Tab) -> Unit,
+    barStyle: app.xreader.data.library.NavBarStyle =
+        app.xreader.data.library.NavBarStyle.FLOATING_PILL,
+    labelStyle: app.xreader.data.library.TabLabelStyle =
+        app.xreader.data.library.TabLabelStyle.ALWAYS
+) {
+    val glass = LocalGlassSettings.current
+    val density = LocalDensity.current
+    var barWidthPx by remember { mutableIntStateOf(0) }
+    val barHeightPx = with(density) { BarHeight.roundToPx() }
+    val hInsetPx = with(density) { 6.dp.roundToPx() }
+    val vInsetPx = with(density) { 6.dp.roundToPx() }
+    val itemCount = Tab.entries.size
+    val selectedIndex = Tab.entries.indexOf(selected)
+
+    val pillWidth = NavGeometry.pillWidthPx(barWidthPx, itemCount, hInsetPx)
+    val pillHeight = NavGeometry.pillHeightPx(barHeightPx, vInsetPx)
+    val targetX = NavGeometry.pillTargetXPx(barWidthPx, itemCount, selectedIndex, hInsetPx)
+    val animatedX by animateFloatAsState(
+        targetValue = targetX.toFloat(),
+        animationSpec = if (reduceMotion) {
+            androidx.compose.animation.core.snap()
+        } else {
+            specFor(SpringMotionEngine.Spatial, SpringMotionEngine.MassClass.Light)
+        },
+        label = "navPillX"
+    )
+    val pillX = NavGeometry.clampPillXPx(animatedX, barWidthPx, pillWidth)
+    val pillY = NavGeometry.pillTargetYPx(barHeightPx, vInsetPx)
+
+    val docked = barStyle == app.xreader.data.library.NavBarStyle.DOCKED_BAR
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(
+                horizontal = if (docked) 0.dp else 16.dp,
+                vertical = if (docked) 0.dp else 10.dp
+            )
+    ) {
+        Surface(
+            shape = if (docked) RoundedCornerShape(0.dp) else RoundedCornerShape(50),
+            color = glass.glassSurface(MaterialTheme.colorScheme.surface),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp, MaterialTheme.colorScheme.outline
+            ),
+            shadowElevation = glass.raisedElevation,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(BarHeight)
+                .frostedGlass(glass, MaterialTheme.colorScheme.surface)
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { barWidthPx = it.width }
+            ) {
+                if (pillWidth > 0 && pillHeight > 0) {
+                    Box(
+                        Modifier
+                            .offset { IntOffset(pillX.roundToInt(), pillY) }
+                            .size(
+                                width = with(density) { pillWidth.toDp() },
+                                height = with(density) { pillHeight.toDp() }
+                            )
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.fillMaxSize()
+                        ) {}
+                    }
+                }
+                Row(Modifier.fillMaxSize()) {
+                    Tab.entries.forEach { tab ->
+                        NavSlot(
+                            tab = tab,
+                            selected = tab == selected,
+                            onClick = { onSelect(tab) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                            labelStyle = labelStyle
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The tablet left rail: fixed width, fixed-height slots stacked from the
+ * top, "+ Add a book" pinned at the base (DESIGN.md). The pill's rect is
+ * [NavGeometry] rail math over the deterministic slots region. */
+@Composable
+private fun NavRail(
+    selected: Tab,
+    reduceMotion: Boolean,
+    onSelect: (Tab) -> Unit,
+    onAddBook: () -> Unit,
+    labelStyle: app.xreader.data.library.TabLabelStyle =
+        app.xreader.data.library.TabLabelStyle.ALWAYS
+) {
+    val glass = LocalGlassSettings.current
+    val density = LocalDensity.current
+    val itemCount = Tab.entries.size
+    val slotPx = with(density) { RailSlotHeight.roundToPx() }
+    val railWidthPx = with(density) { RailWidth.roundToPx() }
+    val slotsHeightPx = slotPx * itemCount
+    val hInsetPx = with(density) { 10.dp.roundToPx() }
+    val vInsetPx = with(density) { 8.dp.roundToPx() }
+    val selectedIndex = Tab.entries.indexOf(selected)
+
+    val pillWidth = NavGeometry.pillWidthRailPx(railWidthPx, hInsetPx)
+    val pillHeight = NavGeometry.pillHeightRailPx(slotsHeightPx, itemCount, vInsetPx)
+    val targetY = NavGeometry.pillTargetYRailPx(slotsHeightPx, itemCount, selectedIndex, vInsetPx)
+    val animatedY by animateFloatAsState(
+        targetValue = targetY.toFloat(),
+        animationSpec = if (reduceMotion) {
+            androidx.compose.animation.core.snap()
+        } else {
+            specFor(SpringMotionEngine.Spatial, SpringMotionEngine.MassClass.Light)
+        },
+        label = "railPillY"
+    )
+    val pillY = NavGeometry.clampPillYPx(animatedY, slotsHeightPx, pillHeight)
+    val pillX = NavGeometry.pillTargetXRailPx(railWidthPx, hInsetPx)
+
+    Surface(
+        color = glass.glassSurface(MaterialTheme.colorScheme.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        shadowElevation = glass.cardElevation,
+        modifier = Modifier
+            .width(RailWidth)
+            .fillMaxHeight()
+            .frostedGlass(glass, MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            Modifier
+                .fillMaxHeight()
+                .statusBarsPadding()
+                .padding(vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(Modifier.width(RailWidth).height(RailSlotHeight * itemCount)) {
+                if (pillWidth > 0 && pillHeight > 0) {
+                    Box(
+                        Modifier
+                            .offset { IntOffset(pillX, pillY.roundToInt()) }
+                            .size(
+                                width = with(density) { pillWidth.toDp() },
+                                height = with(density) { pillHeight.toDp() }
+                            )
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.fillMaxSize()
+                        ) {}
+                    }
+                }
+                Column {
+                    Tab.entries.forEach { tab ->
+                        NavSlot(
+                            tab = tab,
+                            selected = tab == selected,
+                            onClick = { onSelect(tab) },
+                            modifier = Modifier
+                                .width(RailWidth)
+                                .height(RailSlotHeight),
+                            labelStyle = labelStyle
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            XreaderPrimaryButton(
+                text = "+ Add a book",
+                onClick = onAddBook,
+                modifier = Modifier.padding(horizontal = 10.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun NavSlot(
+    tab: Tab,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    labelStyle: app.xreader.data.library.TabLabelStyle =
+        app.xreader.data.library.TabLabelStyle.ALWAYS
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val contentColor =
+        if (selected) MaterialTheme.colorScheme.onPrimary
+        else MaterialTheme.colorScheme.onSurfaceVariant
+    Column(
+        modifier
+            .pressSquish(interaction, haptics = false)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+    ) {
+        Icon(tab.icon, contentDescription = tab.label, tint = contentColor)
+        // v1.0.1 tab-label choice: always / selected only / icons only.
+        // The contentDescription always carries the label either way.
+        val showLabel = when (labelStyle) {
+            app.xreader.data.library.TabLabelStyle.ALWAYS -> true
+            app.xreader.data.library.TabLabelStyle.SELECTED_ONLY -> selected
+            app.xreader.data.library.TabLabelStyle.ICONS_ONLY -> false
+        }
+        if (showLabel) {
+            Text(
+                tab.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = contentColor
+            )
+        }
+    }
+}

@@ -1,0 +1,299 @@
+package app.xreader.ui.sources
+import app.xreader.ui.theme.aiAccentColor
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.XreaderPrimaryButton
+
+/**
+ * "Add source from link" (Amendment 7): paste a book page link →
+ * Xreader looks at the site, works out how to read it, TEST-DRIVES
+ * itself on that book, and shows the proof (title, chapter count,
+ * first lines) before offering Save. Plain words at every step,
+ * including when it can't manage — with the door left open for the
+ * smarter AI-assisted detector coming later.
+ */
+@Composable
+fun AddFromLinkScreen(
+    viewModel: LinkAddViewModel,
+    sessionSaved: kotlinx.coroutines.flow.SharedFlow<String>,
+    onRequestLogin: (LoginRequest) -> Unit,
+    onOpenBook: (Long) -> Unit,
+    onBack: () -> Unit
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val aiAvailable by viewModel.aiAvailable.collectAsStateWithLifecycle()
+    val engineLabel by viewModel.engineLabel.collectAsStateWithLifecycle()
+    var url by remember { mutableStateOf("") }
+
+    LaunchedEffect(viewModel) {
+        sessionSaved.collect { key -> viewModel.onSessionSaved(key) }
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 16.dp)
+    ) {
+        androidx.compose.foundation.layout.Row(
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+            Text("Add from link", style = MaterialTheme.typography.headlineSmall)
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Paste the link of a book page from a site you read. Xreader will look " +
+                "at the page, work out where the chapters and text live, and test " +
+                "itself on the book before saving anything.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(14.dp))
+        OutlinedTextField(
+            value = url,
+            onValueChange = { url = it },
+            label = { Text("Book page link") },
+            placeholder = { Text("https://site.example/novel/my-book") },
+            singleLine = true,
+            enabled = state is LinkAddUiState.Idle || state is LinkAddUiState.Failed,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(10.dp))
+        when (val current = state) {
+            is LinkAddUiState.Idle -> {
+                XreaderPrimaryButton(
+                    text = "Look at this site",
+                    onClick = { viewModel.probe(url) },
+                    enabled = url.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            is LinkAddUiState.Probing -> {
+                Column(
+                    Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator()
+                    Text(
+                        "Looking at the site and test-reading a chapter…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            is LinkAddUiState.AiProbing -> {
+                Column(
+                    Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(
+                        color = aiAccentColor()
+                    )
+                    Text(
+                        "The AI is studying the page — then Xreader test-reads " +
+                            "a chapter with what it proposes. Nothing is saved " +
+                            "unless the test passes.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            is LinkAddUiState.LoginRequired -> {
+                GlassCard {
+                    Text("This site needs a sign-in first", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Log in inside Xreader's browser (you'll pass any checks yourself), " +
+                            "then Xreader will look at the site again with your session.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    XreaderPrimaryButton(
+                        text = "Log in to ${current.host}",
+                        onClick = {
+                            viewModel.loginRequest()?.let(onRequestLogin)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    TextButton(
+                        onClick = { viewModel.reset() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Use a different link") }
+                }
+            }
+            is LinkAddUiState.Ready -> {
+                val drive = current.draft.testDrive
+                GlassCard {
+                    Text("It works — here's the proof", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Book found: “${drive.bookTitle}”",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        "${drive.chapterCount} chapters found • first chapter " +
+                            "“${drive.firstChapterTitle}”",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    // v1.0.1: search is part of the proof — verified
+                    // in plain words, or honestly flagged.
+                    if (drive.searchVerified && drive.searchProof != null) {
+                        Text(
+                            drive.searchProof!!,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    } else {
+                        Text(
+                            "Search couldn't be set up for this site yet. " +
+                                "You can still save it — browsing and reading work, " +
+                                "and the source's page has a “Set up search” button.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (drive.reviewsFound) {
+                        Text(
+                            "Reader reviews were found on this site — they'll show on book pages.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "The chapter starts:",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "“${drive.chapterTextPreview}…”",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = current.sourceName,
+                        onValueChange = { viewModel.setSourceName(it) },
+                        label = { Text("Source name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    XreaderPrimaryButton(
+                        text = "Save this source",
+                        onClick = { viewModel.save() },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    TextButton(
+                        onClick = { viewModel.reset() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Don't save") }
+                }
+            }
+            is LinkAddUiState.Failed -> {
+                GlassCard {
+                    Text("That didn't work", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        current.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    if (aiAvailable) {
+                        XreaderPrimaryButton(
+                            text = "Try the AI detector",
+                            onClick = { viewModel.probeWithAi() },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        androidx.compose.foundation.layout.Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            app.xreader.ui.ai.EngineChip(label = engineLabel)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    XreaderPrimaryButton(
+                        text = "Try again",
+                        onClick = { viewModel.probe(url) },
+                        enabled = url.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    TextButton(
+                        onClick = { viewModel.reset() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Start over") }
+                }
+            }
+            is LinkAddUiState.Saving -> {
+                Column(
+                    Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator()
+                    Text(
+                        "Saving the source and adding the book…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            is LinkAddUiState.Saved -> {
+                GlassCard {
+                    Text("Source saved", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "“${current.bookTitle}” is ready in your library, and the source " +
+                            "is in Sources like any other — with the same site permissions " +
+                            "and trust settings.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    if (current.bookId != null) {
+                        XreaderPrimaryButton(
+                            text = "Open the book",
+                            onClick = { onOpenBook(current.bookId) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+                        Text("Back to Sources")
+                    }
+                }
+            }
+        }
+    }
+}
