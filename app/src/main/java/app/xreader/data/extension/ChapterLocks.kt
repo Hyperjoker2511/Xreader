@@ -30,7 +30,7 @@ object ChapterLocks {
      * lock class token on the row or any descendant, or a 🔒 in
      * the row's text. */
     fun rowIsLocked(row: Element): Boolean {
-        if (row.text().contains('🔒')) return true
+        if (row.text().contains("🔒")) return true
         val elements = mutableListOf(row)
         elements += row.getAllElements()
         for (element in elements) {
@@ -47,7 +47,7 @@ object ChapterLocks {
      * trailing "(locked)" / "[locked]" tag). A story title that
      * merely contains the word "lock" does not count. */
     fun nameSuggestsLocked(name: String): Boolean {
-        if (name.contains('🔒')) return true
+        if (name.contains("🔒")) return true
         val trimmed = name.trim().lowercase()
         return trimmed.endsWith("(locked)") || trimmed.endsWith("[locked]")
     }
