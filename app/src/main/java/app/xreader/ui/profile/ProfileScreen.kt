@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -57,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -117,6 +119,14 @@ fun ProfileScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
+        // v1.0.4 (D12): the breathing glow — a Me-scoped overlay
+        // layer behind this screen's content (never a haze source,
+        // never an effect; static under reduce-motion / low RAM).
+        MeBreathingGlow(
+            reduceMotion = reduceMotion,
+            lowRam = lowRam,
+            modifier = Modifier.fillMaxSize()
+        )
         Column(
             Modifier
                 .fillMaxSize()
@@ -342,6 +352,27 @@ fun ProfileScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    // v1.0.4 (D13 extras): the mock's fluid goal
+                    // bar — fills to today's real fraction through
+                    // the engine's progress adapter. The slider
+                    // below still sets the goal itself.
+                    val goalAnimated = animateProgressAsState(
+                        dailyGoalFraction(
+                            state.todayMinutes, profile.dailyGoalMinutes
+                        ),
+                        label = "todaysGoal"
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { goalAnimated },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                        strokeCap = StrokeCap.Round
+                    )
                     var goalDraft by remember(profile.dailyGoalMinutes) {
                         mutableFloatStateOf(profile.dailyGoalMinutes.toFloat())
                     }
@@ -378,32 +409,50 @@ fun ProfileScreen(
                 }
 
                 // Lifetime stats (design: hours / books / chapters + pace).
+                // v1.0.4 (D12): the numbers ROLL UP on entry (the
+                // mock's animated counters) via the showpiece's
+                // CountUpText, bound to the same real stats; static
+                // under reduce-motion. Words/min keeps its "—" for
+                // no-pace-yet and its trend arrow in the label.
                 GlassCard(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth()) {
-                        StatCell(
-                            value = "${state.stats.totalActiveMinutes / 60}h",
+                        StatCountCell(
+                            value = state.stats.totalActiveMinutes / 60,
+                            suffix = "h",
                             label = "hours read",
+                            reduceMotion = reduceMotion,
                             modifier = Modifier.weight(1f)
                         )
-                        StatCell(
-                            value = "${state.stats.booksTotal}",
+                        StatCountCell(
+                            value = state.stats.booksTotal,
                             label = "books",
+                            reduceMotion = reduceMotion,
                             modifier = Modifier.weight(1f)
                         )
-                        StatCell(
-                            value = formatNumber(state.stats.chaptersFinished.toLong()),
+                        StatCountCell(
+                            value = state.stats.chaptersFinished,
                             label = "chapters",
+                            reduceMotion = reduceMotion,
                             modifier = Modifier.weight(1f)
                         )
-                        StatCell(
-                            value = if (state.wpmNow > 0) "${state.wpmNow}" else "—",
-                            label = "words/min" + when {
-                                state.wpmDelta > 0 -> " ↑${state.wpmDelta}"
-                                state.wpmDelta < 0 -> " ↓${-state.wpmDelta}"
-                                else -> ""
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
+                        if (state.wpmNow > 0) {
+                            StatCountCell(
+                                value = state.wpmNow,
+                                label = "words/min" + when {
+                                    state.wpmDelta > 0 -> " ↑${state.wpmDelta}"
+                                    state.wpmDelta < 0 -> " ↓${-state.wpmDelta}"
+                                    else -> ""
+                                },
+                                reduceMotion = reduceMotion,
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            StatCell(
+                                value = "—",
+                                label = "words/min",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
 
@@ -471,7 +520,16 @@ fun ProfileScreen(
 private fun LevelRing(fraction: Float, level: Int) {
     val animated = animateProgressAsState(fraction, label = "levelRing")
     val track = MaterialTheme.colorScheme.surfaceVariant
-    val ember = MaterialTheme.colorScheme.primary
+    // v1.0.4 (D12): the progress arc is the mock's sweep gradient —
+    // cyan → electric purple → cyan (the user's palette tokens),
+    // still animated to the real fraction by the progress adapter.
+    val sweep = androidx.compose.ui.graphics.Brush.sweepGradient(
+        listOf(
+            app.xreader.ui.theme.VibrantCyan,
+            app.xreader.ui.theme.ElectricPurple,
+            app.xreader.ui.theme.VibrantCyan
+        )
+    )
     Box(
         Modifier.size(144.dp),
         contentAlignment = Alignment.Center
@@ -486,7 +544,7 @@ private fun LevelRing(fraction: Float, level: Int) {
                 style = Stroke(width = stroke)
             )
             drawArc(
-                color = ember,
+                brush = sweep,
                 startAngle = -90f,
                 sweepAngle = 360f * animated.coerceIn(0f, 1f),
                 useCenter = false,
@@ -565,6 +623,31 @@ private fun StatCell(value: String, label: String, modifier: Modifier = Modifier
     }
 }
 
+/** A lifetime-stat cell whose number counts up on entry (D12),
+ * with an optional unit suffix kept in the same type style. */
+@Composable
+private fun StatCountCell(
+    value: Int,
+    label: String,
+    reduceMotion: Boolean,
+    modifier: Modifier = Modifier,
+    suffix: String = ""
+) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CountUpText(value = value, reduceMotion = reduceMotion)
+            if (suffix.isNotEmpty()) {
+                Text(suffix, style = MaterialTheme.typography.titleLarge)
+            }
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
 @Composable
 private fun AchievementCard(
     achievement: AchievementUi,
@@ -576,7 +659,19 @@ private fun AchievementCard(
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
-    GlassCard(modifier = modifier) {
+    // v1.0.4 (D12): the mock's active/locked treatment — unlocked
+    // cards at full strength, locked ones quieter (its dimmer-glass
+    // alphas, expressed as a layer alpha over our one GlassCard so
+    // no second surface system appears).
+    GlassCard(
+        modifier = modifier.then(
+            if (achievement.unlocked) {
+                Modifier
+            } else {
+                Modifier.graphicsLayer { alpha = 0.78f }
+            }
+        )
+    ) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
@@ -684,3 +779,16 @@ private fun ParticleBurst(onFinished: () -> Unit) {
 
 private fun formatNumber(value: Long): String =
     java.text.NumberFormat.getIntegerInstance().format(value)
+
+/**
+ * Pure: today's reading as a 0..1 fraction of the daily goal
+ * (v1.0.4, D13 extras). A non-positive goal reads as no progress
+ * rather than dividing by zero; over-goal days clamp at full.
+ * Unit-tested — the goal bar and any future goal surface share it.
+ */
+fun dailyGoalFraction(todayMinutes: Int, goalMinutes: Int): Float =
+    if (goalMinutes <= 0) {
+        0f
+    } else {
+        (todayMinutes.toFloat() / goalMinutes.toFloat()).coerceIn(0f, 1f)
+    }

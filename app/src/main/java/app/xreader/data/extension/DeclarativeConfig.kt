@@ -151,6 +151,30 @@ data class SelectorSpec(val css: String, val attr: String?) {
     }
 }
 
+/**
+ * Selector fallback chains (v1.0.4, D14): one stored selector field
+ * may carry several candidates separated by [SEPARATOR] — the engine
+ * tries them in order and the first that finds something wins. A
+ * field without the separator is a one-candidate chain, so every
+ * config written before chains existed behaves exactly as before
+ * (no storage change: the separator lives inside the existing
+ * string fields, and `||` cannot appear in a valid single jsoup
+ * selector — `|=` attribute matching uses a single pipe).
+ */
+object SelectorChains {
+    const val SEPARATOR = "||"
+
+    /** Candidates in order. A field with no separator is returned
+     * as-is — a one-element chain, even when blank. */
+    fun split(raw: String): List<String> {
+        if (!raw.contains(SEPARATOR)) return listOf(raw)
+        return raw.split(SEPARATOR).map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    fun join(candidates: List<String>): String =
+        candidates.joinToString(" $SEPARATOR ")
+}
+
 object DeclarativeFingerprints {
     private val json = Json {
         ignoreUnknownKeys = true

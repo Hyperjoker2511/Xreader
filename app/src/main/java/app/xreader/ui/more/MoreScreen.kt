@@ -67,7 +67,11 @@ fun MoreScreen(
         // v1.0.1: "Me" — the personal home base is the FIRST thing
         // on this screen, one tap, labelled. (Visibility law: who
         // uses it if it's not visible?)
-        GlassCard(onClick = onProfile, modifier = Modifier.fillMaxWidth()) {
+        GlassCard(
+            onClick = onProfile,
+            modifier = Modifier.fillMaxWidth(),
+            bouncePress = true
+        ) {
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -133,7 +137,7 @@ fun MoreScreen(
         }
         MoreRow(
             title = "Customise",
-            subtitle = "Colours, glass, library layout, navigation, reader look",
+            subtitle = "Colours, glass, library layout, navigation, reader look, downloads",
             onClick = onCustomise
         )
         MoreRow(
@@ -181,7 +185,13 @@ fun MoreScreen(
 
 @Composable
 private fun MoreRow(title: String, subtitle: String, onClick: () -> Unit) {
-    GlassCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+    // v1.0.4 (D12): destination rows bounce like the mock's glass
+    // settings rows (GlassCard carries the press plumbing).
+    GlassCard(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        bouncePress = true
+    ) {
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,

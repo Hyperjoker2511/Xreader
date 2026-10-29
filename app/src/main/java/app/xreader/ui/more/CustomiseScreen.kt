@@ -84,16 +84,21 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         val library: LibraryState = LibraryState(),
         val reader: ReaderConfig = ReaderConfig(),
         val bestSourcePriority: app.xreader.data.extension.BestSourcePriority =
-            app.xreader.data.extension.BestSourcePriority.DOWNLOADED_FIRST
+            app.xreader.data.extension.BestSourcePriority.DOWNLOADED_FIRST,
+        /** v1.0.4 (D10/D13): the download switches' home — the same
+         * DownloadPrefs the download engine reads. */
+        val downloads: app.xreader.data.download.DownloadSettings =
+            app.xreader.data.download.DownloadSettings()
     )
 
     val state: StateFlow<UiState> = combine(
         container.appearancePrefs.state,
         container.libraryPrefs.state,
         container.readerPrefs.config,
-        container.sourcePrefs.bestSourcePriority
-    ) { appearance, library, reader, priority ->
-        UiState(appearance, library, reader, priority)
+        container.sourcePrefs.bestSourcePriority,
+        container.downloadPrefs.settings
+    ) { appearance, library, reader, priority, downloads ->
+        UiState(appearance, library, reader, priority, downloads)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
     /** Storage sizes load off the main thread and refresh after a
@@ -164,6 +169,19 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
 
     fun setBestSourcePriority(priority: app.xreader.data.extension.BestSourcePriority) {
         viewModelScope.launch { container.sourcePrefs.setBestSourcePriority(priority) }
+    }
+
+    // ── v1.0.4 (D10/D13): the download switches, moved here from
+    // the Library and Downloads screens by the user's ruling. Both
+    // write the SAME prefs the engine already reads — nothing about
+    // download behaviour changes, only where the switches live. ──
+
+    fun setAutoDownloadTracked(value: Boolean) {
+        viewModelScope.launch { container.libraryPrefs.setAutoDownloadTracked(value) }
+    }
+
+    fun setWifiOnlyPrefetch(value: Boolean) {
+        viewModelScope.launch { container.downloadPrefs.setWifiOnlyPrefetch(value) }
     }
 
     /** Reset customisation (R07): look-and-feel back to defaults.
@@ -994,6 +1012,27 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     "you always see the match first.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // ── Downloads (v1.0.4, D10/D13) ─────────────────────────
+        // The user's ruling: ALL download switches live together in
+        // Settings. The auto-download switch came from the Library,
+        // the Wi-Fi-only switch from the Downloads screen; both
+        // keep their full labels and their exact prefs.
+        CustomiseSection("Downloads") {
+            CustomiseSwitch(
+                label = "Auto-download new chapters for tracked books (Wi-Fi)",
+                description = "Books you track fetch their new chapters on their own, " +
+                    "so they're ready to read offline.",
+                checked = state.library.autoDownloadTracked,
+                onChange = viewModel::setAutoDownloadTracked
+            )
+            CustomiseSwitch(
+                label = "Wi-Fi only downloads",
+                description = "Pause the queue when on mobile data",
+                checked = state.downloads.wifiOnlyPrefetch,
+                onChange = viewModel::setWifiOnlyPrefetch
             )
         }
 

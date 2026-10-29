@@ -73,10 +73,11 @@ data class GlassSettings(
     val frosted: Boolean get() = effectiveStyle == GlassStyle.FROSTED
 }
 
-/** The shared Haze state: the app content is the haze SOURCE and the
- * chrome surfaces (nav bar, rail, floating cards, reader bars) are
- * the effects — one state, shared, per the Haze docs' pattern, so
- * blur stays chrome-sized and never full-screen. */
+/** The shared Haze state: ONE state for the whole shell. Since
+ * v1.0.4 (D1) the shell's mesh backdrop layer is the haze SOURCE
+ * and the glass surfaces — cards, nav bar, rail, reader bars — are
+ * the effects sampling it; before that the NavHost content itself
+ * was the source, which structurally forbade card effects (R01). */
 val LocalHazeState = compositionLocalOf<HazeState?> { null }
 
 /** The active app colour scheme (v1.0.1), for accent-as-text helpers. */

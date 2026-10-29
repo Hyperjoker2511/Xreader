@@ -78,10 +78,46 @@ data class BookDetailUiState(
 ) {
     val downloadedCount: Int get() = chapters.count { it.downloadState == DownloadState.READY }
     val continueChapterIndex: Int get() = progress?.chapterIndex ?: 0
+    /** v1.0.4 (D14): non-null blocks the Read action — the loaded
+     * chapter list is empty, so reading could only fail downstream
+     * in the reader ("isn't in the book anymore"). The reason is
+     * shown right under the button instead. */
+    val readBlockedReason: String?
+        get() = ChapterReadGuard.blockedReason(
+            isExtensionBook = book?.sourceType ==
+                app.xreader.data.db.SourceType.EXTENSION,
+            chapterCount = chapters.size,
+            pageLoading = loading,
+            chaptersLoading = chaptersLoading
+        )
     val hasUndownloadedChapters: Boolean
         get() = chapters.any {
             it.downloadState != DownloadState.READY && !it.remoteId.isNullOrBlank()
         }
+}
+
+/**
+ * The book page's Read guard (v1.0.4, D14): a source book whose
+ * loaded chapter list is EMPTY must not offer a working Read
+ * button — tapping it could only land in the reader's last-resort
+ * "isn't in the book anymore" error. The guard applies once the
+ * page has settled (not while the book or its chapter list is
+ * still loading) and only to source books; local books' empty
+ * lists are an import fact, not a broken source. Pure, so the
+ * truth table is unit-tested.
+ */
+object ChapterReadGuard {
+    fun blockedReason(
+        isExtensionBook: Boolean,
+        chapterCount: Int,
+        pageLoading: Boolean,
+        chaptersLoading: Boolean
+    ): String? {
+        if (!isExtensionBook || chapterCount > 0) return null
+        if (pageLoading || chaptersLoading) return null
+        return "No chapters found — this source may be broken. " +
+            "Try Repair on the source's Details page."
+    }
 }
 
 enum class OtherSourcesState { NOT_LOADED, LOADING, LOADED, FAILED }

@@ -12,8 +12,10 @@ import app.xreader.data.importer.BookImporter
 import app.xreader.data.importer.ImportCandidate
 import app.xreader.di.AppContainer
 import java.io.InputStream
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -104,12 +106,27 @@ class LibraryViewModel(
 
     private val checkingUpdatesFlow = MutableStateFlow(false)
 
+    /**
+     * v1.0.4 (D3): a sidecar flow (DataStore prefs, the profile row)
+     * must never wedge the library state. The base combine clears
+     * `loading` only when ALL five inputs have emitted; in v1.0.3 a
+     * single stalled/failed sidecar left the combined state at its
+     * initial value forever — chrome rendered, the book list stayed
+     * empty, and the "No books yet" empty state could never show.
+     * A failed sidecar now degrades to its default value; the Room
+     * flows (shelf, progress) stay raw — if those fail, the
+     * database itself is broken and the crash reporter owns it.
+     */
+    private fun <T> Flow<T>.orDefault(value: T): Flow<T> = catch { emit(value) }
+
     private val baseState: StateFlow<LibraryUiState> = combine(
         container.database.bookDao().observeShelf(),
         container.database.readingProgressDao().observeRecent(),
-        container.database.profileDao().observe(),
-        container.bookMetaPrefs.all,
-        container.libraryPrefs.state
+        container.database.profileDao().observe().orDefault(null),
+        container.bookMetaPrefs.all.orDefault(emptyMap()),
+        container.libraryPrefs.state.orDefault(
+            app.xreader.data.library.LibraryState()
+        )
     ) { books, progresses, profile, metas, libraryPrefs ->
         val byBook = progresses.associateBy { it.bookId }
         val shelf = books.map { book ->
@@ -152,13 +169,13 @@ class LibraryViewModel(
     private val pullRefreshingFlow = MutableStateFlow(false)
 
     private val orgState: StateFlow<OrgData> = combine(
-        container.bookMetaPrefs.favourites,
+        container.bookMetaPrefs.favourites.orDefault(emptySet()),
         container.database.shelfDao().observeAll(),
         container.database.shelfDao().observeMemberships(),
         container.database.tagDao().observeAllBookTags(),
         container.database.chapterDao().observeDownloadCounts(),
-        container.libraryPrefs.hiddenBuiltinShelves,
-        container.libraryPrefs.selectedShelf,
+        container.libraryPrefs.hiddenBuiltinShelves.orDefault(emptySet()),
+        container.libraryPrefs.selectedShelf.orDefault("all"),
         pullRefreshingFlow,
         container.database.tagDao().observeFollows()
     ) { values ->

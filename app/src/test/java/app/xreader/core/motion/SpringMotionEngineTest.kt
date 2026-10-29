@@ -64,6 +64,31 @@ class SpringMotionEngineTest {
     }
 
     @Test
+    fun `apple press keeps the user supplied numbers`() {
+        // v1.0.4 (D5): the user's paste, verbatim — squash to 0.92,
+        // spring stiffness 300 / dampingRatio 0.6.
+        assertEquals(0.92f, SpringMotionEngine.APPLE_PRESS_SCALE, 0.0f)
+        assertEquals(300f, SpringMotionEngine.ApplePress.stiffness, 0f)
+        assertEquals(0.6f, SpringMotionEngine.ApplePress.dampingRatio, 0f)
+        // ζ 0.6 overshoots ≈9.5% — the visible bounce IS the feature.
+        assertEquals(
+            0.0948, SpringMotionEngine.overshootFraction(0.6f), 0.001
+        )
+    }
+
+    @Test
+    fun `apple press stays out of the subtle family`() {
+        // The subtle contract above governs `profiles`; the Apple
+        // press is a separate user-directed family (like the
+        // celebration profiles) and must never leak into it.
+        assertFalse(SpringMotionEngine.profiles.contains(SpringMotionEngine.ApplePress))
+        assertTrue(SpringMotionEngine.pressProfiles.contains(SpringMotionEngine.ApplePress))
+        assertFalse(
+            SpringMotionEngine.celebrationProfiles.contains(SpringMotionEngine.ApplePress)
+        )
+    }
+
+    @Test
     fun `mass classes order stiffness and damping the Quantum way`() {
         val base = SpringMotionEngine.Spatial
         val light = SpringMotionEngine.profileFor(base, MassClass.Light)

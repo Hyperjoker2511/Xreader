@@ -88,6 +88,59 @@ object SpringMotionEngine {
     val celebrationProfiles: List<SpringProfile> =
         listOf(CelebrationRing, CelebrationBurst, CelebrationBadge)
 
+    // ── Apple press family (v1.0.4, D5 — user-supplied) ──────────
+    // The SECOND sanctioned exception to the subtle default, and
+    // like the celebration family it is user-directed: he pasted
+    // the Apple-style bounce (squash to 0.92, spring ζ 0.6 / k 300 —
+    // a real ~9.5% overshoot on release) and the mocks apply it to
+    // cards, chips, nav items, primary buttons and the hero. It
+    // lives HERE (never in [profiles], whose subtle contract the
+    // tests pin, and never as screen-local constants); the generic
+    // press everywhere else stays MicroPress at [PRESS_SCALE].
+
+    /** Apple press squash depth (user-supplied, D5). */
+    const val APPLE_PRESS_SCALE = 0.92f
+
+    /** Apple press spring: stiffness 300, dampingRatio 0.6 (D5). */
+    val ApplePress = SpringProfile("ApplePress", stiffness = 300f, dampingRatio = 0.6f)
+
+    val pressProfiles: List<SpringProfile> = listOf(ApplePress)
+
+    // ── Nav stack family (v1.0.4, D8 — user-supplied) ──────────
+    // The THIRD user-directed exception, again kept out of
+    // [profiles]: the user pasted Apple's stack transitions and
+    // their geometry is the design — new screens travel the FULL
+    // width, the screen being covered (or returned to) drifts only
+    // a QUARTER (parallax). iOS drives that geometry with a timed
+    // curve, not a spring, so the nav token is a duration: 400 ms,
+    // the paste's number verbatim. Tab-to-tab switches never slide
+    // (Apple's tabs don't either) — the shell crossfades those; the
+    // pure decision + offset math live here so they are testable.
+
+    /** Nav stack transition duration (user-supplied, D8). */
+    const val NAV_TRANSITION_MS = 400
+
+    /** The parallax divisor: covered screens drift width / this. */
+    const val NAV_PARALLAX_DIVISOR = 4
+
+    /** How far a covered/returning screen drifts for a full-width
+     * travel of [fullPx] — the quarter-offset parallax (D8). */
+    fun navParallaxOffset(fullPx: Int): Int = fullPx / NAV_PARALLAX_DIVISOR
+
+    /**
+     * True when a navigation is purely between bottom tabs (both
+     * endpoint routes are tab routes): those crossfade and never
+     * slide. Anything touching a pushed route uses the stack
+     * geometry. Pure — the shell passes its tab route set in.
+     */
+    fun isTabSwitch(
+        initialRoute: String?,
+        targetRoute: String?,
+        tabRoutes: Set<String>
+    ): Boolean =
+        initialRoute != null && targetRoute != null &&
+            initialRoute in tabRoutes && targetRoute in tabRoutes
+
     /**
      * Quantum Animation Engine 3.0's dynamic damping, as three mass
      * classes over a base profile: light elements run stiffer and a

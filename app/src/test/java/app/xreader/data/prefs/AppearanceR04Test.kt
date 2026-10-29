@@ -23,6 +23,17 @@ class AppearanceR04Test {
     }
 
     @Test
+    fun `electric violet is registered`() {
+        // v1.0.4 (D6): the user's palette scheme validates like the
+        // R04 vibrant presets, so a stored selection survives.
+        assertTrue("Electric violet" in AppearanceValidation.COLOUR_SCHEMES)
+        assertEquals(
+            "Electric violet",
+            AppearanceValidation.parseColourScheme("Electric violet")
+        )
+    }
+
+    @Test
     fun `custom scheme specs round-trip through storage format`() {
         val specs = listOf(
             CustomSchemeSpec("c1", "My violet", 0xFF7C5CD6L, null, 1),

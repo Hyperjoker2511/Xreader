@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -122,6 +123,82 @@ fun MeGradientHeader(
             drawRect(brush = brush)
         }
     }
+}
+
+/**
+ * v1.0.4 (D12): the breathing glow — the user's Profile mock drifts
+ * its mesh centre slowly behind the glass. This is the Me-scoped
+ * version: an OVERLAY glow layer owned by the Profile screen alone.
+ * It deliberately does NOT touch the shell's haze source (the one
+ * source stays in MeshBackdrop) and carries NO haze effect — it is
+ * just two radial glows whose centres wander on a slow 10 s
+ * back-and-forth, painted behind the screen's own content. Under
+ * Reduce Motion or on the low-RAM tier it renders the same glows,
+ * still. The drift pauses itself whenever the screen leaves
+ * composition (the Animatable loop is effect-scoped).
+ */
+@Composable
+fun MeBreathingGlow(
+    reduceMotion: Boolean,
+    lowRam: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    val tertiary = MaterialTheme.colorScheme.tertiary
+    val drift = remember { Animatable(0.35f) }
+    LaunchedEffect(reduceMotion, lowRam) {
+        if (reduceMotion || lowRam) {
+            drift.snapTo(0.35f)
+            return@LaunchedEffect
+        }
+        while (true) {
+            drift.animateTo(
+                1f,
+                androidx.compose.animation.core.tween(
+                    durationMillis = 10_000,
+                    easing = androidx.compose.animation.core.LinearEasing
+                )
+            )
+            drift.animateTo(
+                0f,
+                androidx.compose.animation.core.tween(
+                    durationMillis = 10_000,
+                    easing = androidx.compose.animation.core.LinearEasing
+                )
+            )
+        }
+    }
+    val t = drift.value
+    Box(
+        modifier.drawBehind {
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        primary.copy(alpha = 0.20f),
+                        Color.Transparent
+                    ),
+                    center = Offset(
+                        size.width * (0.28f + 0.44f * t),
+                        size.height * (0.14f + 0.10f * t)
+                    ),
+                    radius = size.maxDimension * 0.75f
+                )
+            )
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        tertiary.copy(alpha = 0.14f),
+                        Color.Transparent
+                    ),
+                    center = Offset(
+                        size.width * (0.88f - 0.30f * t),
+                        size.height * (0.58f - 0.16f * t)
+                    ),
+                    radius = size.maxDimension * 0.6f
+                )
+            )
+        }
+    )
 }
 
 /**

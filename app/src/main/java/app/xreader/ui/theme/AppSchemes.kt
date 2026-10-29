@@ -218,10 +218,31 @@ val SunsetScheme = scheme(
     aiTextDark = Color(0xFFB7A8E3), aiTextLight = Color(0xFF5E4E96)
 )
 
+// ── v1.0.4 (D6): the user's own vibrant palette as a scheme ──────
+// Built on his exact trio — ElectricPurple #8A2BE2 is the primary
+// in BOTH modes (white reads 5.9:1 on it, so the pure colour can
+// carry the fill). Cyan and pink are too bright to carry white text
+// as raw fills (1.4:1 / 3.6:1), so their scheme fills are the deep
+// counterparts (#007A87 / #C21847, both ≥5:1 with white); the pure
+// #00F0FF / #FF2D55 live as the text/stage tokens below and in the
+// shell mesh + hero gradient, where no small text sits on them.
+
+val ElectricVioletScheme = scheme(
+    name = "Electric violet",
+    darkPrimary = ElectricPurple, darkSecondary = Color(0xFF007A87), darkTertiary = Color(0xFFC21847),
+    lightPrimary = ElectricPurple, lightSecondary = Color(0xFF00707C), lightTertiary = Color(0xFFC21847),
+    darkBg = DeepSpace, darkSurface = Color(0xFF1A1526), darkHigh = Color(0xFF251D38),
+    darkText = Color(0xFFF2EFFF), darkMuted = Color(0xFFB9AFD6), darkHair = Color(0xFF3A3153),
+    lightBg = Color(0xFFF6F2FC), lightSurface = Color(0xFFFFFFFF), lightHigh = Color(0xFFEAE2F7),
+    lightText = Color(0xFF1D1430), lightMuted = Color(0xFF5B4E77), lightHair = Color(0xFFCFC2E6),
+    primaryTextDark = VibrantCyan, primaryTextLight = Color(0xFF6D28B8),
+    aiTextDark = Color(0xFFFF8FAB), aiTextLight = Color(0xFFB0123F)
+)
+
 /** All picker schemes, Ember first (the default). */
 val AppSchemes: List<AppScheme> = listOf(
     EmberScheme, VioletNightScheme, OceanScheme, ForestScheme, RoseScheme, MonoScheme,
-    NebulaVioletScheme, EmeraldScheme, SunsetScheme
+    NebulaVioletScheme, EmeraldScheme, SunsetScheme, ElectricVioletScheme
 )
 
 /**

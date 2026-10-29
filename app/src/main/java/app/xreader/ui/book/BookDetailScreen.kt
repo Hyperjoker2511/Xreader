@@ -265,7 +265,12 @@ fun BookDetailScreen(
                         XreaderPrimaryButton(
                             text = if (state.progress == null) "Start reading" else "Continue reading",
                             onClick = { onReadChapter(state.continueChapterIndex) },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            // v1.0.4 (D14): an empty loaded chapter
+                            // list disables Read — the reason shows
+                            // right under the button instead of the
+                            // reader failing downstream.
+                            enabled = state.readBlockedReason == null
                         )
                         if (state.hasUndownloadedChapters) {
                             XreaderPrimaryButton(
@@ -274,6 +279,13 @@ fun BookDetailScreen(
                                 modifier = Modifier.weight(1f)
                             )
                         }
+                    }
+                    state.readBlockedReason?.let { reason ->
+                        Text(
+                            reason,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = app.xreader.ui.theme.errorTextColor()
+                        )
                     }
                     if (state.hasUndownloadedChapters) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

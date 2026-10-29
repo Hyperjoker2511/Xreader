@@ -2,8 +2,10 @@ package app.xreader.ui.sources
 import app.xreader.ui.theme.primaryTextColor
 import app.xreader.ui.theme.errorTextColor
 
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -36,6 +39,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.listPlacementSpec
+import app.xreader.core.motion.pressBounce
 import app.xreader.data.db.ExtensionRepo
 import app.xreader.data.db.InstalledExtension
 import app.xreader.data.db.TrustState
@@ -86,6 +90,9 @@ fun SourcesScreen(
     var pendingRepoRemoval by remember { mutableStateOf<ExtensionRepo?>(null) }
     // ── v1.0.2 (R14): storefront search + filters ────────────────
     var repoQuery by remember { mutableStateOf("") }
+    // v1.0.4 (D11): one shared press source for the repo filter
+    // chips (the Library pattern) — they bounce like the mock's.
+    val repoChipInteraction = remember { MutableInteractionSource() }
     var repoFilter by remember { mutableStateOf("ALL") }
     var repoLanguage by remember { mutableStateOf<String?>(null) }
     var pendingUninstall by remember { mutableStateOf<InstalledExtension?>(null) }
@@ -96,13 +103,19 @@ fun SourcesScreen(
             .statusBarsPadding()
             .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
+        // v1.0.4 (D11): the header action bounces like the mock's.
+        val checkUpdatesInteraction = remember { MutableInteractionSource() }
         ScreenHeader(
             title = "Browse",
             eyebrow = "Sources",
             action = {
                 TextButton(
                     onClick = { viewModel.refreshAll() },
-                    enabled = !state.busy
+                    enabled = !state.busy,
+                    interactionSource = checkUpdatesInteraction,
+                    modifier = Modifier.pressBounce(
+                        checkUpdatesInteraction, enabled = !state.busy
+                    )
                 ) { Text("Check for updates") }
             }
         )
@@ -115,21 +128,27 @@ fun SourcesScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // ── Search everything: ONE-LINE PILL (v1.0.2, item 20
-            // — the v1.0.1 card read as content, not as search) ──
+            // — the v1.0.1 card read as content, not as search).
+            // v1.0.4 (D11): the pill is glass now (a GlassCard with
+            // pill padding + the Apple bounce), and the emoji glyph
+            // becomes the real Search icon the mock uses. ──
             item {
-                Surface(
+                GlassCard(
                     onClick = onSearchAll,
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.surfaceVariant
-                        .copy(alpha = 0.55f),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 13.dp),
+                    bouncePress = true
                 ) {
                     Row(
-                        Modifier.padding(horizontal = 18.dp, vertical = 13.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("🔍", style = MaterialTheme.typography.bodyLarge)
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
                         Text(
                             "Search all your sources",
                             style = MaterialTheme.typography.bodyLarge,
@@ -399,7 +418,9 @@ fun SourcesScreen(
                         androidx.compose.material3.FilterChip(
                             selected = repoFilter == key,
                             onClick = { repoFilter = key },
-                            label = { Text(label) }
+                            label = { Text(label) },
+                            interactionSource = repoChipInteraction,
+                            modifier = Modifier.pressBounce(repoChipInteraction)
                         )
                     }
                     val languages = state.catalogues.values.flatten()
@@ -412,7 +433,9 @@ fun SourcesScreen(
                                 repoFilter = "LANGUAGE"
                                 repoLanguage = lang
                             },
-                            label = { Text(lang.uppercase()) }
+                            label = { Text(lang.uppercase()) },
+                            interactionSource = repoChipInteraction,
+                            modifier = Modifier.pressBounce(repoChipInteraction)
                         )
                     }
                 }
@@ -493,7 +516,7 @@ fun SourcesScreen(
 
             // ── OPDS + trust note ───────────────────────────────────
             item {
-                GlassCard(onClick = onOpenOpdsServers) {
+                GlassCard(onClick = onOpenOpdsServers, bouncePress = true) {
                     Text("Library servers (OPDS)", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Komga, Kavita and Calibre-Web servers you added.",

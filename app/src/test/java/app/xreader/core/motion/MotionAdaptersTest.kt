@@ -1,6 +1,7 @@
 package app.xreader.core.motion
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** The Amendment-5 adapters' pure math: parallax is identical on every
@@ -18,6 +19,32 @@ class MotionAdaptersTest {
         // Out-of-range rates clamp.
         assertEquals(0f, parallaxTranslationPx(200f, 2f), 0f)
         assertEquals(-200f, parallaxTranslationPx(200f, -1f), 0f)
+    }
+
+    @Test
+    fun `nav parallax is the quarter offset`() {
+        // D8 geometry: covered/returning screens drift width / 4.
+        assertEquals(25, SpringMotionEngine.navParallaxOffset(100))
+        assertEquals(270, SpringMotionEngine.navParallaxOffset(1080))
+        assertEquals(0, SpringMotionEngine.navParallaxOffset(0))
+        assertEquals(1, SpringMotionEngine.navParallaxOffset(7))
+        assertEquals(400, SpringMotionEngine.NAV_TRANSITION_MS)
+        assertEquals(4, SpringMotionEngine.NAV_PARALLAX_DIVISOR)
+    }
+
+    @Test
+    fun `tab switches are only tab to tab`() {
+        val tabs = setOf("library", "browse", "history", "downloads", "me")
+        // Tab ↔ tab crossfades.
+        assertTrue(SpringMotionEngine.isTabSwitch("library", "browse", tabs))
+        assertTrue(SpringMotionEngine.isTabSwitch("me", "me", tabs))
+        // Anything touching a pushed route uses the stack geometry.
+        assertTrue(!SpringMotionEngine.isTabSwitch("library", "book/{bookId}", tabs))
+        assertTrue(!SpringMotionEngine.isTabSwitch("book/{bookId}", "library", tabs))
+        assertTrue(!SpringMotionEngine.isTabSwitch("book/{bookId}", "reader/{bookId}/{chapterIndex}", tabs))
+        // Unknown endpoints never count as tab switches.
+        assertTrue(!SpringMotionEngine.isTabSwitch(null, "library", tabs))
+        assertTrue(!SpringMotionEngine.isTabSwitch("library", null, tabs))
     }
 
     @Test

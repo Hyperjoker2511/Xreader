@@ -4,6 +4,7 @@ package app.xreader.ui.library
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -54,6 +55,7 @@ import app.xreader.core.motion.animateProgressAsState
 import app.xreader.core.motion.itemEnter
 import app.xreader.core.motion.itemExit
 import app.xreader.core.motion.listPlacementSpec
+import app.xreader.core.motion.pressBounce
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.pressTilt
@@ -201,11 +203,19 @@ fun LibraryScreen(
                 ) {
                     // Design #1: the profile avatar lives in the
                     // Library header and opens Profile & progress.
+                    // v1.0.4 (D5/D9): the bubble takes the Apple
+                    // bounce press, like the mock's glass Lv bubble.
+                    val avatarInteraction = remember {
+                        androidx.compose.foundation.interaction.MutableInteractionSource()
+                    }
                     androidx.compose.material3.Surface(
                         onClick = onProfile,
+                        interactionSource = avatarInteraction,
                         shape = androidx.compose.foundation.shape.CircleShape,
                         color = MaterialTheme.colorScheme.primaryContainer,
-                        modifier = Modifier.size(44.dp)
+                        modifier = Modifier
+                            .size(44.dp)
+                            .pressBounce(avatarInteraction)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             val avatar = state.avatarFile
@@ -232,14 +242,39 @@ fun LibraryScreen(
         )
         Spacer(Modifier.height(16.dp))
 
-        if (!state.loading && state.books.isEmpty() && candidates.isEmpty()) {
+        // v1.0.4 (D3): the empty decision is the pure predicate in
+        // LibraryEmptyState (unit-tested), and when it fires the
+        // empty state OWNS the screen — search, toolbar and chips
+        // never render over it. The D13 hover drift is perf-gated:
+        // full motion tier only, never under reduce-motion.
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val totalRamMb = remember(context) {
+            runCatching {
+                val am = context.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                    as android.app.ActivityManager
+                val info = android.app.ActivityManager.MemoryInfo()
+                am.getMemoryInfo(info)
+                info.totalMem / (1024L * 1024L)
+            }.getOrDefault(4096L)
+        }
+        val hoverEmpty = !reduceMotion &&
+            app.xreader.core.motion.SpringMotionEngine.tierFor(
+                totalRamMb, animationsOn = true
+            ) != app.xreader.core.motion.SpringMotionEngine.MotionTier.Minimal
+        if (app.xreader.data.library.LibraryEmptyState.show(
+                loading = state.loading,
+                bookCount = state.books.size,
+                candidateCount = candidates.size
+            )
+        ) {
             EmptyState(
                 title = "No books yet",
                 message = "Add your first book — EPUB, PDF, TXT and more — " +
                     "and it will live here, ready to read.",
                 actionLabel = "Add a book",
                 onAction = onAddBook,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                hover = hoverEmpty
             )
             return@Column
         }
@@ -254,54 +289,79 @@ fun LibraryScreen(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+        // v1.0.4 (D2/D9): the toolbar is a horizontally scrolling
+        // row of glass chips (the user's Library mock independently
+        // chose the same fix). The v1.0.3 TextButton row starved its
+        // last items — "Add a list" crushed letter-by-letter, Sort
+        // pushed off screen. Chips are single-line and the row
+        // scrolls, so nothing can crush or clip.
+        androidx.compose.foundation.lazy.LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            TextButton(
-                onClick = { viewModel.checkForUpdates() },
-                enabled = !state.checkingUpdates
-            ) {
-                Text(if (state.checkingUpdates) "Checking…" else "Check for updates")
+            item(key = "action-check") {
+                LibraryActionChip(
+                    label = if (state.checkingUpdates) "Checking…" else "Check for updates",
+                    onClick = { viewModel.checkForUpdates() },
+                    enabled = !state.checkingUpdates
+                )
             }
-            TextButton(onClick = onHistory) { Text("History") }
-            TextButton(onClick = onOpenUpdates) { Text("Updates") }
-            TextButton(onClick = onOpenAddList) { Text("Add a list") }
-            Box {
-                TextButton(onClick = { sortMenuOpen = true }) {
-                    Text("Sort: ${sortLabel(effectiveSort)}")
-                }
-                DropdownMenu(
-                    expanded = sortMenuOpen,
-                    onDismissRequest = { sortMenuOpen = false }
-                ) {
-                    app.xreader.data.library.LibrarySort.entries.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(sortLabel(option)) },
-                            onClick = {
-                                sort = option
-                                // R21: a user shelf remembers its sort.
-                                selectedUserShelf?.let {
-                                    viewModel.setShelfSort(it.id, option)
+            item(key = "action-history") {
+                LibraryActionChip(label = "History", onClick = onHistory)
+            }
+            item(key = "action-updates") {
+                LibraryActionChip(label = "Updates", onClick = onOpenUpdates)
+            }
+            item(key = "action-addlist") {
+                LibraryActionChip(label = "Add a list", onClick = onOpenAddList)
+            }
+            item(key = "action-sort") {
+                Box {
+                    LibraryActionChip(
+                        label = "Sort: ${sortLabel(effectiveSort)}",
+                        onClick = { sortMenuOpen = true }
+                    )
+                    DropdownMenu(
+                        expanded = sortMenuOpen,
+                        onDismissRequest = { sortMenuOpen = false }
+                    ) {
+                        app.xreader.data.library.LibrarySort.entries.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(sortLabel(option)) },
+                                onClick = {
+                                    sort = option
+                                    // R21: a user shelf remembers its sort.
+                                    selectedUserShelf?.let {
+                                        viewModel.setShelfSort(it.id, option)
+                                    }
+                                    sortMenuOpen = false
                                 }
-                                sortMenuOpen = false
-                            }
-                        )
+                            )
+                        }
                     }
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // v1.0.4 (D2/D5): the status row scrolls horizontally too
+        // (six chips never fit a narrow phone side by side) and the
+        // chips take the bounce press.
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             listOf(
                 "ALL" to "All", "READING" to "Reading",
                 "COMPLETED" to "Completed", "ON_HOLD" to "On hold",
                 "DROPPED" to "Dropped", "NOT_STARTED" to "Not started"
             ).forEach { (value, label) ->
+                val chipInteraction = remember {
+                    androidx.compose.foundation.interaction.MutableInteractionSource()
+                }
                 FilterChip(
                     selected = statusFilter == value,
                     onClick = { statusFilter = value },
-                    label = { Text(label) }
+                    label = { Text(label) },
+                    interactionSource = chipInteraction,
+                    modifier = Modifier.pressBounce(chipInteraction)
                 )
             }
         }
@@ -312,17 +372,27 @@ fun LibraryScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(shelfChips, key = { "shelf-${it.ref}" }) { chip ->
+                val chipInteraction = remember {
+                    androidx.compose.foundation.interaction.MutableInteractionSource()
+                }
                 FilterChip(
                     selected = state.selectedShelf == chip.ref,
                     onClick = { viewModel.selectShelf(chip.ref) },
-                    label = { Text("${chip.name} · ${chip.count}") }
+                    label = { Text("${chip.name} · ${chip.count}") },
+                    interactionSource = chipInteraction,
+                    modifier = Modifier.pressBounce(chipInteraction)
                 )
             }
             item(key = "shelf-add") {
+                val addInteraction = remember {
+                    androidx.compose.foundation.interaction.MutableInteractionSource()
+                }
                 FilterChip(
                     selected = false,
                     onClick = { manageShelvesOpen = true },
-                    label = { Text("+ Shelf") }
+                    label = { Text("+ Shelf") },
+                    interactionSource = addInteraction,
+                    modifier = Modifier.pressBounce(addInteraction)
                 )
             }
         }
@@ -365,17 +435,10 @@ fun LibraryScreen(
                 }
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "Auto-download new chapters for tracked books (Wi-Fi)",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1f)
-            )
-            Switch(
-                checked = state.libraryPrefs.autoDownloadTracked,
-                onCheckedChange = { viewModel.setAutoDownloadTracked(it) }
-            )
-        }
+        // v1.0.4 (D10 — the user's ruling): the auto-download switch
+        // no longer lives in the Library. It moved to Settings →
+        // Customise → Downloads, with the Wi-Fi-only switch beside
+        // it. No trace is left here.
 
         // v1.0.2 (R20): pull to refresh — silent; the results are
         // read on the Updates page and the +N badges.
@@ -811,6 +874,41 @@ fun LibraryScreen(
     }
 }
 
+/**
+ * v1.0.4 (D2/D9): one action in the Library toolbar — a glass chip
+ * in the horizontally scrolling action row, with the Apple bounce
+ * press (D5). Single-line label at a fixed chip height: nothing in
+ * the row can crush vertically or push a sibling off screen (the
+ * v1.0.3 TextButton row did both). A disabled action (an update
+ * check already running) renders dimmed and swallows taps —
+ * GlassCard has no disabled state of its own.
+ */
+@Composable
+private fun LibraryActionChip(
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true
+) {
+    GlassCard(
+        onClick = if (enabled) onClick else ({}),
+        bouncePress = true,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = 16.dp, vertical = 8.dp
+        )
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            color = if (enabled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
+    }
+}
+
 private fun sortLabel(sort: app.xreader.data.library.LibrarySort): String = when (sort) {
     app.xreader.data.library.LibrarySort.RECENTLY_READ -> "Recently read"
     app.xreader.data.library.LibrarySort.TITLE -> "Title"
@@ -982,7 +1080,35 @@ private fun ContinueReadingHero(
     onContinue: () -> Unit
 ) {
     val progress = animateProgressAsState(hero.fraction, label = "heroProgress")
-    GlassCard(Modifier.fillMaxWidth()) {
+    // v1.0.4 (D7): the showcase stage from the user's Liquid Glass
+    // demo — his trio (cyan → purple → pink) as a gradient stage
+    // behind the glass card. Under FROSTED the card really blurs
+    // the gradient; under TINTED/SOLID it reads as a slim vibrant
+    // frame. The whole card is the Continue action now, with the
+    // Apple bounce press; the button inside still works too.
+    val glass = app.xreader.ui.theme.LocalGlassSettings.current
+    Box(Modifier.fillMaxWidth()) {
+        Box(
+            Modifier
+                .matchParentSize()
+                .clip(RoundedCornerShape(glass.cardRadius + 4.dp))
+                .background(
+                    androidx.compose.ui.graphics.Brush.linearGradient(
+                        listOf(
+                            app.xreader.ui.theme.VibrantCyan.copy(alpha = 0.85f),
+                            app.xreader.ui.theme.ElectricPurple.copy(alpha = 0.85f),
+                            app.xreader.ui.theme.ApplePink.copy(alpha = 0.85f)
+                        )
+                    )
+                )
+        )
+        GlassCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(3.dp),
+            onClick = onContinue,
+            bouncePress = true
+        ) {
         Row(Modifier.fillMaxWidth()) {
             AsyncImage(
                 model = coverFile(hero.book.coverPath),
@@ -1017,6 +1143,7 @@ private fun ContinueReadingHero(
                 )
                 XreaderPrimaryButton(text = "Continue", onClick = onContinue)
             }
+        }
         }
     }
 }

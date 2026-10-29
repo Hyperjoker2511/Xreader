@@ -76,6 +76,19 @@ fun ExtensionDetailScreen(
             .statusBarsPadding()
             .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
+        // ── v1.0.4 (D14): the parser-rules editor takes over the
+        // page while it's open (a labelled destination from the
+        // Parser rules card below, next to Health).
+        if (ext != null && state.parserEditorOpen && state.linkConfig != null) {
+            ParserRulesEditorScreen(
+                config = state.linkConfig!!,
+                saving = state.parserSaving,
+                message = state.parserMessage,
+                onSave = { viewModel.saveParserRules(it) },
+                onBack = { viewModel.closeParserEditor() }
+            )
+            return@Column
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -311,6 +324,51 @@ fun ExtensionDetailScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+
+            // ── v1.0.4 (D14): parser rules — the escape hatch when
+            // a site changes its layout. Editable for link/AI-built
+            // sources (their rules live on this device); repo
+            // sources say plainly why theirs can't be edited here —
+            // the same distinction Repair already makes.
+            if (kind == ExtensionKind.DECLARATIVE) {
+                GlassCard {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            "Parser rules",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        if (ext.packageId.startsWith("link.")) {
+                            Text(
+                                "These rules are how Xreader reads this " +
+                                    "site's pages — where the book list, " +
+                                    "synopsis, chapter list and story text " +
+                                    "live. If the site changes its layout " +
+                                    "and reading breaks, you can fix them " +
+                                    "here. A test read must pass before " +
+                                    "new rules are saved.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                            XreaderPrimaryButton(
+                                text = "Edit parser rules",
+                                onClick = { viewModel.openParserEditor() },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        } else {
+                            Text(
+                                "This source's rules come from its " +
+                                    "repository and can't be edited here — " +
+                                    "if they break, the repository needs " +
+                                    "to update them.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
 

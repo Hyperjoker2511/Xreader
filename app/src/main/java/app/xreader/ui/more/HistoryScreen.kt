@@ -10,11 +10,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -36,6 +32,8 @@ import app.xreader.data.library.HistoryBuilder
 import app.xreader.di.AppContainer
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.ScreenHeader
+import app.xreader.ui.common.rememberHoverEmptyState
 import coil.compose.AsyncImage
 import java.io.File
 import java.time.ZoneId
@@ -129,7 +127,9 @@ fun HistoryScreen(
     viewModel: HistoryViewModel,
     coverFile: (String?) -> File?,
     onBack: () -> Unit,
-    onOpenBook: (bookId: Long, chapterIndex: Int) -> Unit
+    onOpenBook: (bookId: Long, chapterIndex: Int) -> Unit,
+    /** v1.0.4 (D13): gates the empty-state hover (shell passes it). */
+    reduceMotion: Boolean = false
 ) {
     val groups by viewModel.groups.collectAsStateWithLifecycle()
     var confirmClear by remember { mutableStateOf(false) }
@@ -139,24 +139,28 @@ fun HistoryScreen(
             .statusBarsPadding()
             .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+        // v1.0.4 (D13): History is a bottom TAB — no back arrow
+        // (the D13 mock's arrow is dropped, same ruling as Me).
+        // The shared ScreenHeader carries the title; Clear history
+        // stays visible in its action slot. [onBack] remains in the
+        // signature for the shell's wiring compatibility.
+        ScreenHeader(
+            title = "History",
+            eyebrow = "Xreader",
+            action = {
+                if (groups.isNotEmpty()) {
+                    TextButton(onClick = { confirmClear = true }) {
+                        Text("Clear history")
+                    }
+                }
             }
-            Text(
-                "History",
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.weight(1f)
-            )
-            if (groups.isNotEmpty()) {
-                TextButton(onClick = { confirmClear = true }) { Text("Clear history") }
-            }
-        }
+        )
         if (groups.isEmpty()) {
             EmptyState(
                 title = "Nothing here yet",
                 message = "Books you read will show up here, newest first.",
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                hover = rememberHoverEmptyState(reduceMotion)
             )
         } else {
             LazyColumn(
@@ -178,7 +182,8 @@ fun HistoryScreen(
                                     onOpenBook(it, entry.chapterIndex)
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            bouncePress = true
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,

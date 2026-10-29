@@ -66,29 +66,51 @@ fun AboutScreen(onBack: () -> Unit) {
                     style = MaterialTheme.typography.titleMedium
                 )
                 listOf(
-                    "Shelves for your library — plus Favourites, Downloaded " +
-                        "and Behind-on built in, and smart shelves that fill " +
-                        "themselves.",
-                    "Tags on every book (Male MC and friends) — tap one to " +
-                        "see everything with it, follow the ones you love.",
-                    "Pull down in the Library to check for new chapters, " +
-                        "silently; results live on the new Updates page.",
-                    "Sources check themselves: a test-drive proves a source " +
-                        "can list, open, and load a chapter before you trust " +
-                        "it, and repairs are offered when one breaks.",
-                    "“Bring my library” — after signing in to a source, " +
-                        "import the bookshelf from your account there.",
-                    "Move a book to another source without losing your " +
-                        "place, and merge duplicate copies reversibly.",
-                    "The reader flows from chapter to chapter, and a tap " +
-                        "in the middle brings up everything in one sheet.",
-                    "A new Me card with your reading stats on its back, " +
-                        "cover-colour themes, and a make-your-own theme " +
-                        "editor.",
-                    "“Words I'm learning” — save words while reading and " +
-                        "review them on a gentle spaced ladder.",
-                    "Fixed: the frosted-glass crash, and dim text on the " +
-                        "recovery and welcome screens."
+                    // v1.0.4 Stage 1 (the Liquid round). Stages 2–3
+                    // extend this list before the version ships.
+                    "Real frosted glass: with Frosted on, cards and the " +
+                        "navigation bar now truly blur the glowing mesh " +
+                        "behind them — no more flat tint pretending.",
+                    "A new colour scheme, “Electric violet”, built on " +
+                        "electric purple, cyan and pink.",
+                    "Buttons, cards and the Continue Reading card bounce " +
+                        "with a springy Apple-style press.",
+                    "The Library toolbar scrolls sideways now — “Add a " +
+                        "list” and Sort can never be crushed or pushed " +
+                        "off screen again.",
+                    "Fixed: an empty library shows its proper “No books " +
+                        "yet” screen instead of bare chrome.",
+                    "The download switches moved to Settings → Customise " +
+                        "→ Downloads, together, with their full names.",
+                    // v1.0.4 Stage 2 (Browse / Me / History /
+                    // Downloads + screen transitions).
+                    "Browse, History, Downloads and Me now wear the " +
+                        "same liquid glass as the Library — search pill, " +
+                        "source cards and settings rows included.",
+                    "Moving between screens slides the Apple way: a " +
+                        "new page slides in fully while the page beneath " +
+                        "drifts back just a little. Tabs still crossfade " +
+                        "calmly — they never slide.",
+                    "Your Profile breathes: the glow behind your card " +
+                        "drifts slowly, the level ring sweeps in cyan " +
+                        "and purple, your stats count up, and today's " +
+                        "goal fills as a smooth bar.",
+                    "Empty History and Downloads screens float gently " +
+                        "instead of sitting flat.",
+                    // v1.0.4 Stage 3 (sources: D14 + D15).
+                    "Add from link got smarter: it can now work out " +
+                        "a site's layout from the shape of its pages " +
+                        "alone — no AI key needed — and it still proves " +
+                        "itself with a test read before saving.",
+                    "You can fix a link source yourself: on its " +
+                        "Details page, “Edit parser rules” lets you " +
+                        "adjust how Xreader reads the site, with a " +
+                        "test read before anything is saved — and " +
+                        "rules can now carry fallbacks, so one broken " +
+                        "selector no longer breaks the source.",
+                    "A book whose chapter list comes back empty now " +
+                        "says so plainly on its page, instead of " +
+                        "failing later in the reader."
                 ).forEach { line ->
                     Text(
                         "• $line",

@@ -50,7 +50,10 @@ import app.xreader.core.motion.SpringMotionEngine.SpringProfile
  * ColorOS behaviours encoded here, per the research:
  *  - position is ALWAYS a spring (velocity-continuous, interruptible
  *    mid-flight — ColorOS 17's Progressive Motion); tweens are used
- *    only for alpha and progress, never for travel;
+ *    only for alpha and progress, never for travel — ONE sanctioned
+ *    exception: the D8 nav-stack transitions (v1.0.4), where the
+ *    user supplied Apple's timed 400 ms curve with the geometry;
+ *    the token lives in the engine like the other exceptions;
  *  - press feedback SQUASHES to 0.95 (Flexible Feedback) with a crisp
  *    haptic tick lined up with the visual, and springs back on the
  *    MicroPress profile (ζ 0.95 — no visible bounce on release);
@@ -122,6 +125,57 @@ fun sharedAxisXPopExit(reduceMotion: Boolean): ExitTransition =
     else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) { it / 6 } +
         fadeOut(fadeTween())
 
+// --- Nav stack (v1.0.4, D8): the user's Apple-style transitions.
+// --- Geometry is the design and is not negotiable: pushed screens
+// --- travel the FULL width; the covered screen (forward) and the
+// --- returning screen (back) drift only the engine's quarter
+// --- parallax offset. The curve is the paste's timed 400 ms — iOS
+// --- stack motion is a timed curve, and the number lives in the
+// --- engine (NAV_TRANSITION_MS), never in a screen. Tab switches
+// --- use the plain crossfade below (Apple's tabs don't slide).
+
+/** The nav slide curve (IntOffset travel): the D8 timed token. */
+fun navSlideSpec() = tween<IntOffset>(
+    durationMillis = SpringMotionEngine.NAV_TRANSITION_MS,
+    easing = FadeEasing
+)
+
+/** The nav fade curve: the same 400 ms token, for alpha. */
+fun navFadeSpec() = tween<Float>(
+    durationMillis = SpringMotionEngine.NAV_TRANSITION_MS,
+    easing = FadeEasing
+)
+
+/** Pushed screen arriving: full slide in from the right + fade. */
+fun stackEnter(reduceMotion: Boolean): EnterTransition =
+    if (reduceMotion) fadeIn(fadeTween())
+    else slideInHorizontally(navSlideSpec()) { it } + fadeIn(navFadeSpec())
+
+/** Screen being covered: parallax drift to the quarter offset + fade. */
+fun stackExit(reduceMotion: Boolean): ExitTransition =
+    if (reduceMotion) fadeOut(fadeTween())
+    else slideOutHorizontally(navSlideSpec()) {
+        -SpringMotionEngine.navParallaxOffset(it)
+    } + fadeOut(navFadeSpec())
+
+/** Screen being returned to: starts at the quarter offset + fade. */
+fun stackPopEnter(reduceMotion: Boolean): EnterTransition =
+    if (reduceMotion) fadeIn(fadeTween())
+    else slideInHorizontally(navSlideSpec()) {
+        -SpringMotionEngine.navParallaxOffset(it)
+    } + fadeIn(navFadeSpec())
+
+/** Popped screen leaving: full slide out to the right + fade. */
+fun stackPopExit(reduceMotion: Boolean): ExitTransition =
+    if (reduceMotion) fadeOut(fadeTween())
+    else slideOutHorizontally(navSlideSpec()) { it } + fadeOut(navFadeSpec())
+
+/** Tab-to-tab: the existing calm crossfade — tabs never slide (D8). */
+fun tabEnter(): EnterTransition = fadeIn(fadeTween())
+
+/** Tab-to-tab exit: the existing calm crossfade (D8). */
+fun tabExit(): ExitTransition = fadeOut(fadeTween())
+
 /** Shared Axis Y for sheets: rises on the Sheet (heavy) spring. */
 fun sharedAxisYEnter(reduceMotion: Boolean): EnterTransition =
     if (reduceMotion) fadeIn(fadeTween())
@@ -168,6 +222,49 @@ fun Modifier.pressSquish(
         targetValue = if (pressed && enabled) pressedScale else 1f,
         animationSpec = SpringMotionEngine.MicroPress.toSpec(),
         label = "pressSquish"
+    )
+    graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+    }
+}
+
+/**
+ * The Apple bounce press (v1.0.4, D5 — user-supplied numbers, our
+ * plumbing): press down → squash to [SpringMotionEngine.APPLE_PRESS_SCALE]
+ * (0.92) with the same haptic tick as [pressSquish]; release → the
+ * ApplePress spring (ζ 0.6, k 300) settles it back WITH the visible
+ * overshoot the user asked for. Driven by the component's own
+ * [interactionSource] exactly like [pressSquish] — the paste's raw
+ * pointerInput loop is deliberately NOT used: it would bypass the
+ * clickable's scroll cancellation, pressed-state semantics and
+ * accessibility. Apply to the pressables the user's mocks mark:
+ * cards, chips, nav items, primary buttons, the hero.
+ */
+fun Modifier.pressBounce(
+    interactionSource: InteractionSource,
+    enabled: Boolean = true,
+    haptics: Boolean = true
+): Modifier = composed {
+    val view = LocalView.current
+    var pressed by remember { mutableStateOf(false) }
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> {
+                    pressed = true
+                    if (enabled && haptics) {
+                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    }
+                }
+                is PressInteraction.Release, is PressInteraction.Cancel -> pressed = false
+            }
+        }
+    }
+    val scale by animateFloatAsState(
+        targetValue = if (pressed && enabled) SpringMotionEngine.APPLE_PRESS_SCALE else 1f,
+        animationSpec = SpringMotionEngine.ApplePress.toSpec(),
+        label = "pressBounce"
     )
     graphicsLayer {
         scaleX = scale

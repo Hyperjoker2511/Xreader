@@ -152,7 +152,7 @@ object AppearanceValidation {
      * that — an older device holding the value falls back to Ember. */
     val COLOUR_SCHEMES = listOf(
         "Ember", "Violet night", "Ocean", "Forest", "Rose", "Mono",
-        "Nebula violet", "Emerald", "Sunset", "Wallpaper"
+        "Nebula violet", "Emerald", "Sunset", "Electric violet", "Wallpaper"
     )
 
     /** The fresh-install default scheme (R04 + the user's autonomy

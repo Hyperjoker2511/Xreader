@@ -23,6 +23,12 @@ import java.net.URI
  * Failure copy is plain and leaves the door open: Phase 5's AI
  * selector retries smarter on sites these heuristics can't read —
  * and faces the very same test-drive before anything is saved.
+ *
+ * Proposer order (v1.0.4, D15): the built-in templates and
+ * [LinkInference] first (Madara fast-path, cluster rules), then
+ * [HeuristicProposer] (density + clustering, still no AI), and only
+ * then — as a separate user tap — the AI selector. A site readable
+ * without AI never waits for AI.
  */
 class LinkProber(
     private val contextFactory: HostContextFactory,
@@ -112,14 +118,22 @@ class LinkProber(
         if (analysis == null) {
             val chapterAnalysis = LinkInference.analyseChapterPage(bookDoc, bookUrl)
             if (chapterAnalysis != null) {
+                var rescuedBookPage = false
                 val bookLink = LinkInference.findBookPageLink(bookDoc, bookUrl)
                 if (bookLink != null && bookLink != bookUrl) {
                     val bookFetch = probeClient.get(bookLink)
                     if (bookFetch is AppResult.Ok && bookFetch.value.status in 200..299) {
                         bookUrl = bookFetch.value.finalUrl.ifBlank { bookLink }
                         bookDoc = Jsoup.parse(bookFetch.value.body, bookUrl)
+                        rescuedBookPage = true
                         analysis = LinkInference.analyseBookPage(bookDoc, bookUrl)
                     }
+                }
+                if (analysis == null && rescuedBookPage) {
+                    // The book page was found but the primary
+                    // inference can't read it — the heuristic
+                    // proposer (D15) reads it the second way.
+                    analysis = HeuristicProposer.analyseBookPage(bookDoc, bookUrl)
                 }
                 if (analysis == null) {
                     return Outcome.Failed(
@@ -128,15 +142,34 @@ class LinkProber(
                     )
                 }
             } else {
-                return Outcome.Failed(
-                    "Xreader couldn't spot a chapter list or readable chapter text on that page. " +
-                        "It may use a layout the automatic detector can't read — if you have a " +
-                        "Gemini key saved, try the AI detector below; it reads pages the way " +
-                        "a person would."
+                // v1.0.4 (D15): before giving up, the heuristic
+                // proposer reads the same page a second way —
+                // text density and link clustering, no AI, no key.
+                // Its candidate faces the very same mandatory
+                // test-drive below as every other proposer.
+                analysis = HeuristicProposer.analyseBookPage(bookDoc, bookUrl)
+                if (analysis == null) {
+                    return Outcome.Failed(
+                        "Xreader couldn't spot a chapter list or readable chapter text on that page. " +
+                            "It may use a layout the automatic detector can't read — if you have a " +
+                            "Gemini key saved, try the AI detector below; it reads pages the way " +
+                            "a person would."
                     )
+                }
             }
         }
-        val book = analysis!!
+        // v1.0.4 (D15): when the primary inference found no
+        // description, the heuristic density score may still spot
+        // the synopsis block (an unnamed plain div its class-name
+        // search walks past).
+        val inferred = analysis!!
+        val book = if (inferred.descriptionSpec == null) {
+            HeuristicProposer.synopsisSpec(bookDoc)?.let { spec ->
+                inferred.copy(descriptionSpec = spec)
+            } ?: inferred
+        } else {
+            inferred
+        }
 
         // Fetch the first chapter and check its text is readable.
         val chapterFetch = probeClient.get(book.firstChapterUrl)

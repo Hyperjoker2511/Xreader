@@ -56,7 +56,12 @@ data class ExtensionDetailUiState(
      * counted as already-in-library). */
     val aiConfirmedMatches: Set<String> = emptySet(),
     /** A plain line about the AI matching pass (or why it's off). */
-    val aiMatchNote: String? = null
+    val aiMatchNote: String? = null,
+    // ── v1.0.4 (D14): Edit parser rules ──────────────────────────
+    val parserEditorOpen: Boolean = false,
+    val parserSaving: Boolean = false,
+    /** Why an edited candidate was NOT saved (test read failed…). */
+    val parserMessage: String? = null
 ) {
     val permissions: ExtensionPermissions
         get() = ExtensionPermissions.parse(extension?.permissionsJson)
@@ -106,6 +111,15 @@ class ExtensionDetailViewModel(
 
     private val _bring = MutableStateFlow(BringLocal())
 
+    /** v1.0.4 (D14): parser-rules editor state. */
+    private data class ParserLocal(
+        val open: Boolean = false,
+        val saving: Boolean = false,
+        val message: String? = null
+    )
+
+    private val _parser = MutableStateFlow(ParserLocal())
+
     /** The engine chip's text (v1.0.3) for the AI-match surface. */
     val engineLabel: StateFlow<String> = container.aiHub.chipLabel
         .stateIn(
@@ -133,13 +147,14 @@ class ExtensionDetailViewModel(
 
     val state: StateFlow<ExtensionDetailUiState> = combine(
         container.database.installedExtensionDao().observeById(extensionId),
-        _sessionSaved, _rules, _test, _linkConfig, _health, _bring
+        _sessionSaved, _rules, _test, _linkConfig, _health, _bring, _parser
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val ext = values[0] as InstalledExtension?
         val test = values[3] as Pair<String?, List<String>>
         val health = values[5] as HealthLocal
         val bring = values[6] as BringLocal
+        val parser = values[7] as ParserLocal
         ExtensionDetailUiState(
             extension = ext,
             pending = ext?.let { container.extensionStore.readPending(it.packageId) },
@@ -160,7 +175,10 @@ class ExtensionDetailViewModel(
             aiMatchBusy = bring.aiBusy,
             aiProposals = bring.aiProposals,
             aiConfirmedMatches = bring.aiConfirmed,
-            aiMatchNote = bring.aiNote
+            aiMatchNote = bring.aiNote,
+            parserEditorOpen = parser.open,
+            parserSaving = parser.saving,
+            parserMessage = parser.message
         )
     }.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000),
@@ -568,6 +586,109 @@ class ExtensionDetailViewModel(
                     }
                 }
                 is AppResult.Err -> say(ErrorText.displayText(result.error))
+            }
+        }
+    }
+
+    // ── v1.0.4 (D14): Edit parser rules ──────────────────────────
+
+    fun openParserEditor() {
+        _parser.value = ParserLocal(open = true)
+    }
+
+    fun closeParserEditor() {
+        _parser.value = _parser.value.copy(open = false, message = null)
+    }
+
+    /**
+     * The gated save: build the candidate from the edited fields,
+     * run the SAME mandatory test-drive every built source faces
+     * ([app.xreader.data.extension.LinkProber.testDrive]), and only
+     * a passing candidate replaces the stored rules. A failed test
+     * read keeps the working rules and says why — the editor stays
+     * open so the user can keep fixing or back out.
+     */
+    fun saveParserRules(
+        fields: app.xreader.data.extension.ParserRulesEditor.Fields
+    ) {
+        val original = _linkConfig.value ?: return
+        val ext = state.value.extension ?: return
+        if (!ext.packageId.startsWith("link.")) return
+        if (_parser.value.saving) return
+        when (
+            val built = app.xreader.data.extension.ParserRulesEditor
+                .buildCandidate(original, fields)
+        ) {
+            is AppResult.Err -> _parser.value = _parser.value.copy(
+                message = ErrorText.displayText(built.error)
+            )
+            is AppResult.Ok -> {
+                val candidate = built.value
+                _parser.value = _parser.value.copy(
+                    saving = true, message = null
+                )
+                viewModelScope.launch {
+                    try {
+                        val drive = if (candidate.sampleBookUrl != null) {
+                            container.linkProber.testDrive(
+                                candidate, candidate.sampleBookUrl
+                            )
+                        } else {
+                            container.linkProber.testDriveFromCatalogue(
+                                candidate
+                            )
+                        }
+                        when (drive) {
+                            is AppResult.Err -> _parser.value =
+                                _parser.value.copy(
+                                    message = "The test read failed, so " +
+                                        "your old rules were kept. " +
+                                        ErrorText.displayText(drive.error)
+                                )
+                            is AppResult.Ok -> {
+                                // Mirror the probe's own bookkeeping:
+                                // search counts as set up only when
+                                // the test read verified it.
+                                val proven = candidate.copy(
+                                    searchNeedsSetup =
+                                        candidate.search == null ||
+                                            !drive.value.searchVerified
+                                )
+                                val host = app.xreader.data.extension
+                                    .CookieParsing.hostOf(proven.baseUrl)
+                                    ?: ""
+                                when (
+                                    container.repoManager.saveLinkSource(
+                                        proven, host
+                                    )
+                                ) {
+                                    is AppResult.Ok -> {
+                                        _linkConfig.value = proven
+                                        _parser.value = ParserLocal()
+                                        say(
+                                            "Parser rules saved — the test " +
+                                                "read passed: opened " +
+                                                "“${drive.value.bookTitle}”, " +
+                                                "${drive.value.chapterCount} " +
+                                                "chapters, and the first " +
+                                                "chapter's text read fine."
+                                        )
+                                    }
+                                    is AppResult.Err -> _parser.value =
+                                        _parser.value.copy(
+                                            message = "The new rules passed " +
+                                                "the test read, but they " +
+                                                "couldn't be saved — your " +
+                                                "old rules are still in " +
+                                                "place."
+                                        )
+                                }
+                            }
+                        }
+                    } finally {
+                        _parser.value = _parser.value.copy(saving = false)
+                    }
+                }
             }
         }
     }

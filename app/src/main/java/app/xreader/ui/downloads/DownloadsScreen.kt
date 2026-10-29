@@ -21,7 +21,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,22 +36,26 @@ import app.xreader.data.db.QueueState
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.ScreenHeader
+import app.xreader.ui.common.rememberHoverEmptyState
 import app.xreader.ui.common.StatusPill
 import coil.compose.AsyncImage
 import java.io.File
 
 /**
- * Downloads (Stitch design, PLAN §4): status line, the Wi-Fi-only
- * card, active per-book download cards with animated progress +
- * pause/cancel, and finished rows with "Make EPUB". All progress
- * animates through the motion engine's progress adapter (Amendment 5).
+ * Downloads (Stitch design, PLAN §4): status line, active per-book
+ * download cards with animated progress + pause/cancel, and
+ * finished rows with "Make EPUB". All progress animates through
+ * the motion engine's progress adapter (Amendment 5). (v1.0.4: the
+ * Wi-Fi-only switch moved to Settings — see the note in the body.)
  */
 @Composable
 fun DownloadsScreen(
     viewModel: DownloadsViewModel,
     coverFile: (String?) -> File?,
     onMakeEpub: (BookDownloads) -> Unit,
-    onOpenBook: (Long) -> Unit
+    onOpenBook: (Long) -> Unit,
+    /** v1.0.4 (D13): gates the empty-state hover (shell passes it). */
+    reduceMotion: Boolean = false
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     Column(
@@ -70,34 +73,22 @@ fun DownloadsScreen(
         )
         Spacer(Modifier.height(16.dp))
 
-        GlassCard(Modifier.fillMaxWidth()) {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Wi-Fi only downloads", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Pause the queue when on mobile data",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = state.wifiOnlyPrefetch,
-                    onCheckedChange = { viewModel.setWifiOnlyPrefetch(it) }
-                )
-            }
-        }
-        Spacer(Modifier.height(16.dp))
+        // v1.0.4 (D13 ruling — "Settings, all download switches
+        // together"): the Wi-Fi-only switch no longer lives here.
+        // It moved to Settings → Customise → Downloads, beside the
+        // auto-download switch. This screen keeps the queue, the
+        // counts line and the storage story only.
 
         if (!state.loading && state.active.isEmpty() && state.finished.isEmpty()) {
+            // v1.0.4 (D13): the shared EmptyState with the gentle
+            // hover treatment from the user's mock — tier-gated by
+            // rememberHoverEmptyState, like History and Library.
             EmptyState(
                 title = "Nothing downloading",
                 message = "Chapters you queue will download here in the " +
                     "background, with progress you can check any time.",
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                hover = rememberHoverEmptyState(reduceMotion)
             )
             return@Column
         }
@@ -246,7 +237,8 @@ private fun FinishedDownloadRow(
 ) {
     GlassCard(
         modifier = modifier.fillMaxWidth(),
-        onClick = onOpen
+        onClick = onOpen,
+        bouncePress = true
     ) {
         Row(
             Modifier.fillMaxWidth(),

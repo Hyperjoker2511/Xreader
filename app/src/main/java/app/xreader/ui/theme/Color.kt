@@ -68,6 +68,34 @@ val EmberSageTextDark = Color(0xFFA9BFA9)
  * ([EmberAmber], 3.0:1 on paper) must never carry text itself. */
 val EmberAmberTextLight = Color(0xFF8A5608)
 
+// ---- v1.0.4 "Liquid" tokens (user-supplied palette, D6/D7/D9) -----------
+// The user's own vibrant trio + the Library mock's mesh pair, kept as
+// named tokens so the scheme, the shell mesh backdrop and the hero
+// stage all draw from ONE set of hexes. ElectricPurple is also the
+// "Electric violet" scheme's primary in both modes (AppSchemes.kt);
+// the deep fill variants a scheme needs for 4.5:1 on* pairs live
+// there, not here — these are the pure accent/stage colours.
+
+/** The user's ElectricPurple (#8A2BE2) — scheme primary + mesh family. */
+val ElectricPurple = Color(0xFF8A2BE2)
+
+/** The user's VibrantCyan (#00F0FF) — accent/stage colour, never a fill. */
+val VibrantCyan = Color(0xFF00F0FF)
+
+/** The user's ApplePink (#FF2D55) — accent/stage colour, never a fill. */
+val ApplePink = Color(0xFFFF2D55)
+
+/** D9 mesh: the glow colour over near-black in the dark shell backdrop. */
+val NeonPurple = Color(0xFF6A0DAD)
+
+/** D9 mesh: the near-black base of the dark shell backdrop. */
+val DeepSpace = Color(0xFF0D0B14)
+
+/** D6 glass values: the FROSTED card fill (white at 10%) and the
+ * specular border's bright end (white at 30%) in dark mode. */
+val LiquidGlassFillDark = Color(0x1AFFFFFF)
+val LiquidGlassBorderBright = Color(0x4DFFFFFF)
+
 // ---- Reader palettes (PLAN §2.3 — their own token family) ---------------
 
 /** A reading surface: page, ink, muted ink, accent. */

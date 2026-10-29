@@ -1,6 +1,12 @@
 package app.xreader.ui.common
 import app.xreader.ui.theme.primaryTextColor
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.SineEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -8,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -16,15 +23,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.xreader.core.motion.pressBounce
 import app.xreader.core.motion.pressSquish
 import app.xreader.ui.theme.GlassSettings
+import app.xreader.ui.theme.LiquidGlassBorderBright
+import app.xreader.ui.theme.LiquidGlassFillDark
 import app.xreader.ui.theme.LocalGlassSettings
 import app.xreader.ui.theme.LocalHazeState
 import dev.chrisbanes.haze.HazeTint
@@ -41,10 +53,15 @@ import dev.chrisbanes.haze.hazeEffect
  * on the first hardware-accelerated frame when no background colour
  * is set — that was the v1.0.1 frosted-glass crash. The colour Haze
  * composites the blur over is now always the scheme's opaque
- * background. TRUE CHROME ONLY (nav bar, rail, genuine overlay
- * bars): content cards inside the haze source must NOT carry their
- * own effect node (nested effect areas are Haze's second IAE), so
- * [GlassCard] deliberately does not use this modifier any more.
+ * background.
+ *
+ * v1.0.4 (D1 topology change): the ONE haze source is the shell's
+ * mesh backdrop layer — a SIBLING behind the content, never an
+ * ancestor of any effect node. That is what makes it safe for
+ * content surfaces ([GlassCard], the nav chrome) to carry this
+ * effect: an effect node inside the source's own subtree was
+ * Haze's second IAE (the other half of R01), and that structure
+ * no longer exists anywhere in the shell.
  */
 @Composable
 fun Modifier.frostedGlass(glass: GlassSettings, tint: Color): Modifier {
@@ -63,29 +80,51 @@ fun Modifier.frostedGlass(glass: GlassSettings, tint: Color): Modifier {
  * The aquamorphic surface (SPEC §D / PLAN §2.2): layered translucency +
  * hairline border + soft shadow.
  *
- * v1.0.2 (R01 topology): content cards live INSIDE the shell's single
- * haze source, so they render the tinted glass surface WITHOUT their
- * own Haze effect node — nesting an effect area inside the source's
- * backdrop is Haze's second IllegalArgumentException, defused here
- * structurally. Real blur is reserved for true overlay chrome (nav
- * bar, rail, overlay bars) via [frostedGlass]. Under FROSTED the card
- * keeps its mostly-translucent tint over the shell background; the
- * tint pairs are pinned by the contrast gate.
+ * v1.0.4 (D1/D6/D7): under FROSTED the card is a REAL Haze effect
+ * surface. The shell's mesh backdrop is the single haze source and a
+ * sibling layer behind the content (see [frostedGlass]), so a card
+ * effect node never sits inside the source — the R01 structure is
+ * defused by topology, not by withholding blur. The card's own fill
+ * drops to the user's D6 values so the blur carries the surface
+ * (white 10% in dark mode; a light 35% surface veil in light mode),
+ * and the dark-mode border takes his specular gradient (white 30%
+ * at the top fading down). TINTED/SOLID render exactly as before —
+ * no effect node, the tinted [GlassSettings.glassSurface] fill whose
+ * pairs the contrast gate pins. [bouncePress] swaps the clickable
+ * variant's MicroPress squish for the Apple bounce (D5) — the hero
+ * and other showcase cards opt in.
  */
 @Composable
 fun GlassCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
     contentPadding: PaddingValues = PaddingValues(16.dp),
+    bouncePress: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val glass = LocalGlassSettings.current
+    val scheme = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(glass.cardRadius)
-    val surfaceColor = glass.glassSurface(MaterialTheme.colorScheme.surface)
-    val border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+    val dark = scheme.background.luminance() < 0.5f
+    val surfaceColor = if (glass.frosted) {
+        if (dark) LiquidGlassFillDark else scheme.surface.copy(alpha = 0.35f)
+    } else {
+        glass.glassSurface(scheme.surface)
+    }
+    val border = if (glass.frosted && dark) {
+        BorderStroke(
+            1.dp,
+            Brush.verticalGradient(
+                listOf(LiquidGlassBorderBright, Color.White.copy(alpha = 0.08f))
+            )
+        )
+    } else {
+        BorderStroke(1.dp, scheme.outline)
+    }
+    val effectModifier = modifier.frostedGlass(glass, scheme.surface)
     if (onClick == null) {
         Surface(
-            modifier = modifier,
+            modifier = effectModifier,
             shape = shape,
             color = surfaceColor,
             border = border,
@@ -97,7 +136,10 @@ fun GlassCard(
         val interaction = remember { MutableInteractionSource() }
         Surface(
             onClick = onClick,
-            modifier = modifier.pressSquish(interaction),
+            modifier = effectModifier.then(
+                if (bouncePress) Modifier.pressBounce(interaction)
+                else Modifier.pressSquish(interaction)
+            ),
             shape = shape,
             color = surfaceColor,
             border = border,
@@ -110,7 +152,8 @@ fun GlassCard(
 }
 
 /** The design's full-pill primary action (ember amber), with the
- * ColorOS press squish + haptic tick from the motion engine. */
+ * Apple bounce press + haptic tick from the motion engine
+ * (v1.0.4, D5: primary buttons are on the user's bounce list). */
 @Composable
 fun XreaderPrimaryButton(
     text: String,
@@ -121,7 +164,7 @@ fun XreaderPrimaryButton(
     val interaction = remember { MutableInteractionSource() }
     Button(
         onClick = onClick,
-        modifier = modifier.pressSquish(interaction, enabled = enabled),
+        modifier = modifier.pressBounce(interaction, enabled = enabled),
         enabled = enabled,
         interactionSource = interaction,
         shape = RoundedCornerShape(50),
@@ -194,18 +237,66 @@ fun ScreenHeader(
     }
 }
 
+/**
+ * The D13 hover gate, shared by the tab screens (v1.0.4, Stage 2):
+ * the [EmptyState] hover drift is allowed only when motion is on
+ * for this user AND the device's motion tier is above Minimal —
+ * the same rule Library applied inline in Stage 1 (full motion
+ * tier only, never under reduce-motion, static on the 2 GB tier).
+ */
+@Composable
+fun rememberHoverEmptyState(reduceMotion: Boolean): Boolean {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val totalRamMb = remember(context) {
+        runCatching {
+            val am = context.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                as android.app.ActivityManager
+            val info = android.app.ActivityManager.MemoryInfo()
+            am.getMemoryInfo(info)
+            info.totalMem / (1024L * 1024L)
+        }.getOrDefault(4096L)
+    }
+    return !reduceMotion &&
+        app.xreader.core.motion.SpringMotionEngine.tierFor(
+            totalRamMb, animationsOn = true
+        ) != app.xreader.core.motion.SpringMotionEngine.MotionTier.Minimal
+}
+
 /** Designed empty state (PLAN §2.4 #32): plain words + the one obvious
- * next action. Every list screen renders this instead of a blank void. */
+ * next action. Every list screen renders this instead of a blank void.
+ *
+ * v1.0.4 (D13): [hover] adds the gentle floating treatment from the
+ * user's Downloads/History mocks — a slow ±10 dp sine drift so an
+ * empty screen feels alive. Callers own the perf decision (motion
+ * tier / reduce-motion): pass hover only where the device tier
+ * allows it; the default stays static. */
 @Composable
 fun EmptyState(
     title: String,
     message: String,
     modifier: Modifier = Modifier,
     actionLabel: String? = null,
-    onAction: (() -> Unit)? = null
+    onAction: (() -> Unit)? = null,
+    hover: Boolean = false
 ) {
+    val hoverModifier = if (hover) {
+        val transition = rememberInfiniteTransition(label = "emptyStateHover")
+        val offsetY by transition.animateFloat(
+            initialValue = -10f,
+            targetValue = 10f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2000, easing = SineEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "emptyStateHoverY"
+        )
+        Modifier.offset(y = offsetY.dp)
+    } else {
+        Modifier
+    }
     Column(
         modifier = modifier
+            .then(hoverModifier)
             .fillMaxWidth()
             .padding(horizontal = 32.dp, vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

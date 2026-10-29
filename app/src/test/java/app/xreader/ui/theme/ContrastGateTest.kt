@@ -127,6 +127,22 @@ class ContrastGateTest {
     }
 
     @Test
+    fun `electric violet scheme is built on the user palette`() {
+        // v1.0.4 (D6): the scheme exists, its primary is the user's
+        // exact ElectricPurple in both modes, and its dark accent
+        // text is the pure VibrantCyan (the generic loops above pin
+        // every pair ≥4.5:1 — this pins the IDENTITY of the scheme).
+        val scheme = AppSchemes.firstOrNull { it.name == "Electric violet" }
+        assertTrue("Electric violet scheme missing", scheme != null)
+        scheme!!
+        assertTrue(scheme.dark.primary == ElectricPurple)
+        assertTrue(scheme.light.primary == ElectricPurple)
+        assertTrue(scheme.primaryTextDark == VibrantCyan)
+        // The dark ground is the mock's DeepSpace.
+        assertTrue(scheme.dark.background == DeepSpace)
+    }
+
+    @Test
     fun `custom pair warning logic - close pairs fail the gate ratio`() {
         assertTrue(Contrast.ratio(Color(0xFF777777), Color(0xFF888888)) < 4.5)
         assertTrue(Contrast.ratio(Color.White, Color.Black) >= 4.5)

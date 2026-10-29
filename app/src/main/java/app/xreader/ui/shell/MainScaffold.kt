@@ -54,11 +54,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import app.xreader.core.motion.fadeTween
-import app.xreader.core.motion.pressSquish
-import app.xreader.core.motion.sharedAxisXEnter
-import app.xreader.core.motion.sharedAxisXExit
-import app.xreader.core.motion.sharedAxisXPopEnter
-import app.xreader.core.motion.sharedAxisXPopExit
+import app.xreader.core.motion.pressBounce
+import app.xreader.core.motion.stackEnter
+import app.xreader.core.motion.stackExit
+import app.xreader.core.motion.stackPopEnter
+import app.xreader.core.motion.stackPopExit
+import app.xreader.core.motion.tabEnter
+import app.xreader.core.motion.tabExit
 import app.xreader.core.motion.specFor
 import app.xreader.core.motion.SpringMotionEngine
 import app.xreader.data.db.Book
@@ -94,8 +96,18 @@ import app.xreader.ui.sources.SourceCatalogViewModel
 import app.xreader.ui.sources.SourcesScreen
 import app.xreader.ui.sources.SourcesViewModel
 import app.xreader.ui.common.frostedGlass
+import app.xreader.ui.theme.DeepSpace
+import app.xreader.ui.theme.ElectricPurple
 import app.xreader.ui.theme.LocalGlassSettings
 import app.xreader.ui.theme.LocalHazeState
+import app.xreader.ui.theme.NeonPurple
+import app.xreader.ui.theme.VibrantCyan
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -319,6 +331,67 @@ private fun shellImmersive(navController: NavHostController): Boolean {
     return ShellChrome.isImmersiveRoutePattern(entry?.destination?.route)
 }
 
+/**
+ * v1.0.4 (D1/D7/D9): the shell's backdrop stage — and the app's ONE
+ * haze source. A full-size layer behind the content: under FROSTED
+ * it is the user's mesh (NeonPurple glow over DeepSpace in dark
+ * mode, a faint violet glow over the light surface), and every
+ * glass surface — cards, nav bar, rail — is a haze EFFECT sampling
+ * it. Keeping the source here, as a sibling behind the NavHost
+ * instead of a modifier ON the NavHost, is the topology change
+ * that lets content cards blur safely (an effect node inside the
+ * source's subtree was Haze's second R01 IAE). Under TINTED/SOLID
+ * nothing changes visually: the base is the plain scheme
+ * background and no effect nodes exist. Pure black (true black /
+ * AMOLED schemes) keeps its promise — no glow, black base.
+ */
+@Composable
+private fun MeshBackdrop(modifier: Modifier = Modifier) {
+    val glass = LocalGlassSettings.current
+    val haze = LocalHazeState.current
+    val scheme = MaterialTheme.colorScheme
+    val dark = scheme.background.luminance() < 0.5f
+    val pureBlack = dark && scheme.background == Color.Black
+    val base = if (dark && glass.frosted && !pureBlack) {
+        DeepSpace
+    } else {
+        scheme.background
+    }
+    Box(
+        modifier
+            .background(base)
+            .drawBehind {
+                if (glass.frosted && !pureBlack) {
+                    val glow = if (dark) {
+                        NeonPurple.copy(alpha = 0.40f)
+                    } else {
+                        ElectricPurple.copy(alpha = 0.10f)
+                    }
+                    drawRect(
+                        brush = Brush.radialGradient(
+                            colors = listOf(glow, Color.Transparent),
+                            center = Offset(size.width * 0.5f, size.height * 0.28f),
+                            radius = size.maxDimension * 0.95f
+                        )
+                    )
+                    val glow2 = if (dark) {
+                        VibrantCyan.copy(alpha = 0.10f)
+                    } else {
+                        ElectricPurple.copy(alpha = 0.05f)
+                    }
+                    drawRect(
+                        brush = Brush.radialGradient(
+                            colors = listOf(glow2, Color.Transparent),
+                            center = Offset(size.width, size.height),
+                            radius = size.maxDimension * 0.7f
+                        )
+                    )
+                }
+            }
+            .let { if (haze != null) it.hazeSource(haze) else it }
+    )
+}
+
 @Composable
 private fun PhoneShell(
     navController: NavHostController,
@@ -356,15 +429,18 @@ private fun PhoneShell(
             }
         }
     ) { padding ->
-        val haze = LocalHazeState.current
-        val hostModifier = Modifier.padding(padding)
-            .let { if (haze != null) it.hazeSource(haze) else it }
-        XreaderNavHost(
-            navController, container, hostModifier,
-            appearance.reduceMotion, onPhaseNote,
-            libraryViewModel, downloadsViewModel, opdsViewModel,
-            sourcesViewModel, linkAddViewModel, onAddBook, onExport
-        )
+        // v1.0.4 (D1): the mesh backdrop fills the whole scaffold
+        // (behind the bottom bar too, so the nav's blur has the
+        // stage to sample); the NavHost sits above it, padded.
+        Box(Modifier.fillMaxSize()) {
+            MeshBackdrop(Modifier.fillMaxSize())
+            XreaderNavHost(
+                navController, container, Modifier.fillMaxSize().padding(padding),
+                appearance.reduceMotion, onPhaseNote,
+                libraryViewModel, downloadsViewModel, opdsViewModel,
+                sourcesViewModel, linkAddViewModel, onAddBook, onExport
+            )
+        }
     }
 }
 
@@ -386,28 +462,31 @@ private fun RailShell(
         app.xreader.data.library.LibraryState()
 ) {
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
-        Row(Modifier.fillMaxSize().padding(padding)) {
-            AnimatedVisibility(
-                visible = !shellImmersive(navController),
-                enter = fadeIn(fadeTween<Float>()),
-                exit = fadeOut(fadeTween<Float>())
-            ) {
-            NavRail(
-                selected = selectedTab(navController),
-                reduceMotion = appearance.reduceMotion,
-                onSelect = { tab -> navigateToTab(navController, tab) },
-                onAddBook = onAddBook,
-                labelStyle = libraryState.tabLabelStyle
-            )
+        // v1.0.4 (D1): same backdrop stage as the phone shell.
+        Box(Modifier.fillMaxSize()) {
+            MeshBackdrop(Modifier.fillMaxSize())
+            Row(Modifier.fillMaxSize().padding(padding)) {
+                AnimatedVisibility(
+                    visible = !shellImmersive(navController),
+                    enter = fadeIn(fadeTween<Float>()),
+                    exit = fadeOut(fadeTween<Float>())
+                ) {
+                NavRail(
+                    selected = selectedTab(navController),
+                    reduceMotion = appearance.reduceMotion,
+                    onSelect = { tab -> navigateToTab(navController, tab) },
+                    onAddBook = onAddBook,
+                    labelStyle = libraryState.tabLabelStyle
+                )
+                }
+                XreaderNavHost(
+                    navController, container,
+                    Modifier.weight(1f),
+                    appearance.reduceMotion, onPhaseNote,
+                    libraryViewModel, downloadsViewModel, opdsViewModel,
+                    sourcesViewModel, linkAddViewModel, onAddBook, onExport
+                )
             }
-            val haze = LocalHazeState.current
-            XreaderNavHost(
-                navController, container,
-                Modifier.weight(1f).let { if (haze != null) it.hazeSource(haze) else it },
-                appearance.reduceMotion, onPhaseNote,
-                libraryViewModel, downloadsViewModel, opdsViewModel,
-                sourcesViewModel, linkAddViewModel, onAddBook, onExport
-            )
         }
     }
 }
@@ -443,14 +522,43 @@ private fun XreaderNavHost(
     androidx.compose.runtime.LaunchedEffect(syncViewModel) {
         syncViewModel.autoSyncIfDue()
     }
+    // v1.0.4 (D8): the user's Apple stack geometry for PUSHED
+    // routes (full slide in, quarter-offset parallax out/back);
+    // tab-to-tab switches crossfade and never slide. The branch is
+    // the engine's pure isTabSwitch over the two endpoint routes.
+    val tabRoutes = remember { Tab.entries.map { it.route }.toSet() }
     NavHost(
         navController = navController,
         startDestination = Tab.Library.route,
         modifier = modifier,
-        enterTransition = { sharedAxisXEnter(reduceMotion) },
-        exitTransition = { sharedAxisXExit(reduceMotion) },
-        popEnterTransition = { sharedAxisXPopEnter(reduceMotion) },
-        popExitTransition = { sharedAxisXPopExit(reduceMotion) }
+        enterTransition = {
+            if (SpringMotionEngine.isTabSwitch(
+                    initialState.destination.route,
+                    targetState.destination.route, tabRoutes
+                )
+            ) tabEnter() else stackEnter(reduceMotion)
+        },
+        exitTransition = {
+            if (SpringMotionEngine.isTabSwitch(
+                    initialState.destination.route,
+                    targetState.destination.route, tabRoutes
+                )
+            ) tabExit() else stackExit(reduceMotion)
+        },
+        popEnterTransition = {
+            if (SpringMotionEngine.isTabSwitch(
+                    initialState.destination.route,
+                    targetState.destination.route, tabRoutes
+                )
+            ) tabEnter() else stackPopEnter(reduceMotion)
+        },
+        popExitTransition = {
+            if (SpringMotionEngine.isTabSwitch(
+                    initialState.destination.route,
+                    targetState.destination.route, tabRoutes
+                )
+            ) tabExit() else stackPopExit(reduceMotion)
+        }
     ) {
         composable(Tab.Library.route) {
             val appearance by container.appearancePrefs.state
@@ -653,6 +761,7 @@ private fun XreaderNavHost(
             DownloadsScreen(
                 viewModel = downloadsViewModel,
                 coverFile = coverFile,
+                reduceMotion = reduceMotion,
                 onMakeEpub = { group: BookDownloads -> onExport(group.book, "epub") },
                 onOpenBook = { bookId -> navController.navigate("book/$bookId") }
             )
@@ -746,6 +855,7 @@ private fun XreaderNavHost(
             app.xreader.ui.more.HistoryScreen(
                 viewModel = viewModel,
                 coverFile = coverFile,
+                reduceMotion = reduceMotion,
                 onBack = { navigateToTab(navController, Tab.Library) },
                 onOpenBook = { bookId, chapterIndex ->
                     navController.navigate("reader/$bookId/$chapterIndex")
@@ -1194,7 +1304,7 @@ private fun NavSlot(
         else MaterialTheme.colorScheme.onSurfaceVariant
     Column(
         modifier
-            .pressSquish(interaction, haptics = false)
+            .pressBounce(interaction, haptics = false)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

@@ -95,7 +95,7 @@ class DeclarativeSource(
         } else {
             fetchDoc(url)
         }
-        val books = doc.select(spec.results).mapNotNull { el ->
+        val books = selectChained(doc, spec.results).mapNotNull { el ->
             val title = readSpec(el, spec.title)?.trim().orEmpty()
             val link = readSpec(el, spec.link)?.trim().orEmpty()
             if (title.isEmpty() || link.isEmpty()) return@mapNotNull null
@@ -108,7 +108,7 @@ class DeclarativeSource(
             )
         }
         val hasNext = spec.nextPage?.let { sel ->
-            doc.select(SelectorSpec.parse(sel).css).isNotEmpty()
+            selectChained(doc, sel).isNotEmpty()
         } ?: false
         return SourceBookPage(books, hasNext)
     }
@@ -138,7 +138,7 @@ class DeclarativeSource(
     override fun reviews(book: SourceBook): List<app.xreader.extensionapi.SourceReview>? {
         val spec = config.reviews ?: return null
         val doc = fetchDoc(bookPageUrl(book))
-        return doc.select(SelectorSpec.parse(spec.list).css).mapNotNull { el ->
+        return selectChained(doc, spec.list).mapNotNull { el ->
             val text = readSpec(el, spec.text)?.trim().orEmpty()
             if (text.isEmpty()) return@mapNotNull null
             app.xreader.extensionapi.SourceReview(
@@ -154,7 +154,7 @@ class DeclarativeSource(
     override fun comments(book: SourceBook): List<app.xreader.extensionapi.SourceComment>? {
         val spec = config.comments ?: return null
         val doc = fetchDoc(bookPageUrl(book))
-        return doc.select(SelectorSpec.parse(spec.list).css).mapNotNull { el ->
+        return selectChained(doc, spec.list).mapNotNull { el ->
             val text = readSpec(el, spec.text)?.trim().orEmpty()
             if (text.isEmpty()) return@mapNotNull null
             app.xreader.extensionapi.SourceComment(
@@ -169,7 +169,7 @@ class DeclarativeSource(
         val spec = config.related ?: return null
         val url = bookPageUrl(book)
         val doc = fetchDoc(url)
-        return doc.select(SelectorSpec.parse(spec.results).css).mapNotNull { el ->
+        return selectChained(doc, spec.results).mapNotNull { el ->
             val title = readSpec(el, spec.title)?.trim().orEmpty()
             val link = readSpec(el, spec.link)?.trim().orEmpty()
             if (title.isEmpty() || link.isEmpty()) return@mapNotNull null
@@ -201,12 +201,10 @@ class DeclarativeSource(
 
     private fun parseChapters(doc: Document, pageUrl: String): List<SourceChapter> {
         val spec = config.details.chapters
-        val nameSpec = SelectorSpec.parse(spec.name)
-        val linkSpec = SelectorSpec.parse(spec.link)
-        val chapters = doc.select(spec.list).mapIndexedNotNull { index, el ->
-            val link = readParsedSpec(el, linkSpec)?.trim().orEmpty()
+        val chapters = selectChained(doc, spec.list).mapIndexedNotNull { index, el ->
+            val link = readSpec(el, spec.link)?.trim().orEmpty()
             if (link.isEmpty()) return@mapIndexedNotNull null
-            val chapterName = readParsedSpec(el, nameSpec)?.trim()
+            val chapterName = readSpec(el, spec.name)?.trim()
                 ?.ifEmpty { null } ?: "Chapter ${index + 1}"
             SourceChapter(
                 id = absolute(link, pageUrl),
@@ -231,17 +229,18 @@ class DeclarativeSource(
             if (title == null) {
                 title = spec.title?.let { readDocSpec(doc, it) }?.ifBlank { null }
             }
-            val contentSpec = SelectorSpec.parse(spec.content)
-            val element = doc.selectFirst(contentSpec.css)
+            val element = firstChainedMatch(doc, spec.content)?.first
                 ?: throw SourceException("the chapter text wasn't found on the page")
             val clone = element.clone()
             for (removeSel in spec.remove) {
-                runCatching { clone.select(removeSel).remove() }
+                for (candidate in SelectorChains.split(removeSel)) {
+                    runCatching { clone.select(candidate).remove() }
+                }
             }
             fragments += clone.html()
             url = spec.nextPage?.let { nextSel ->
-                val parsed = SelectorSpec.parse(nextSel)
-                val nextEl = doc.selectFirst(parsed.css) ?: return@let null
+                val (nextEl, parsed) = firstChainedMatch(doc, nextSel)
+                    ?: return@let null
                 val href = if (parsed.attr != null) {
                     readAttr(nextEl, parsed.attr)
                 } else {
@@ -282,29 +281,80 @@ class DeclarativeSource(
     private fun absolute(raw: String, pageUrl: String): String =
         runCatching { URI(pageUrl).resolve(raw).toString() }.getOrDefault(raw)
 
+    /**
+     * v1.0.4 (D14): every selector read goes through the fallback
+     * chain — candidates are tried in order and the first that
+     * produces a non-blank value wins. A one-candidate chain (every
+     * config written before chains existed) returns exactly what the
+     * old single-selector read returned, blank included.
+     */
     private fun readDocSpec(doc: Document, rawSpec: String): String? {
-        val spec = SelectorSpec.parse(rawSpec)
-        val el = if (spec.css.isBlank()) doc else doc.selectFirst(spec.css) ?: return null
-        return readFrom(el, spec)
+        var firstValue: String? = null
+        var seen = false
+        for (candidate in SelectorChains.split(rawSpec)) {
+            val spec = SelectorSpec.parse(candidate)
+            val el = if (spec.css.isBlank()) {
+                doc
+            } else {
+                doc.selectFirst(spec.css) ?: continue
+            }
+            val value = readFrom(el, spec)
+            if (!seen) {
+                firstValue = value
+                seen = true
+            }
+            if (!value.isNullOrBlank()) return value
+        }
+        return firstValue
     }
 
     private fun readSpec(element: Element, rawSpec: String): String? {
-        val spec = SelectorSpec.parse(rawSpec)
-        val target = if (spec.css.isBlank()) {
-            element
-        } else {
-            element.selectFirst(spec.css) ?: return null
+        var firstValue: String? = null
+        var seen = false
+        for (candidate in SelectorChains.split(rawSpec)) {
+            val spec = SelectorSpec.parse(candidate)
+            val target = if (spec.css.isBlank()) {
+                element
+            } else {
+                element.selectFirst(spec.css) ?: continue
+            }
+            val value = readFrom(target, spec)
+            if (!seen) {
+                firstValue = value
+                seen = true
+            }
+            if (!value.isNullOrBlank()) return value
         }
-        return readFrom(target, spec)
+        return firstValue
     }
 
-    private fun readParsedSpec(element: Element, spec: SelectorSpec): String? {
-        val target = if (spec.css.isBlank()) {
-            element
-        } else {
-            element.selectFirst(spec.css) ?: return null
+    /** First candidate of a (possibly chained) list selector that
+     * matches anything in [doc] wins; no match anywhere = empty. */
+    private fun selectChained(doc: Document, rawSpec: String): List<Element> {
+        for (candidate in SelectorChains.split(rawSpec)) {
+            val css = SelectorSpec.parse(candidate).css
+            if (css.isBlank()) continue
+            val found = runCatching { doc.select(css) }.getOrNull()
+            if (!found.isNullOrEmpty()) return found
         }
-        return readFrom(target, spec)
+        return emptyList()
+    }
+
+    /** The first element any candidate of a (possibly chained)
+     * selector matches, with the candidate that matched — chapter
+     * content and next-page resolution need the parsed spec too. */
+    private fun firstChainedMatch(
+        doc: Document,
+        rawSpec: String
+    ): Pair<Element, SelectorSpec>? {
+        for (candidate in SelectorChains.split(rawSpec)) {
+            val spec = SelectorSpec.parse(candidate)
+            if (spec.css.isBlank()) continue
+            val el = runCatching { doc.selectFirst(spec.css) }.getOrNull()
+                ?: continue
+            return el to spec
+        }
+        return null
     }
 
     private fun readFrom(element: Element, spec: SelectorSpec): String? {
