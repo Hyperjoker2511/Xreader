@@ -62,6 +62,7 @@ import java.io.File
  * and the chapter list with per-chapter download state icons.
  */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun BookDetailScreen(
     viewModel: BookDetailViewModel,

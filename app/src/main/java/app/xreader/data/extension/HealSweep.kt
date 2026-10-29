@@ -1,6 +1,6 @@
 package app.xreader.data.extension
 
-import app.xreader.core.AppResult
+import app.xreader.core.error.AppResult
 import app.xreader.data.db.BookDao
 import app.xreader.data.db.InstalledExtension
 import app.xreader.data.db.InstalledExtensionDao
@@ -97,7 +97,7 @@ class HealSweep(
     private val repoManager: RepoManager,
     private val extensionStore: ExtensionStore,
     private val sourcePrefs: SourcePrefs,
-    private val sourceBookSync: app.xreader.data.library.SourceBookSync,
+    private val sourceBookSync: SourceBookSync,
     private val networkGate: app.xreader.data.download.NetworkGate,
     private val battery: () -> Battery
 ) {

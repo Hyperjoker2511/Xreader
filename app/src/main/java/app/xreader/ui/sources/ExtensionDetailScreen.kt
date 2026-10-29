@@ -341,6 +341,10 @@ fun ExtensionDetailScreen(
                                 app.xreader.data.extension.SourceHealthState.BROKEN
                             )
                     ) {
+                        // Non-null snapshot for the click lambda
+                        // below: a smart cast on `health` does not
+                        // carry into the lambda, a plain val does.
+                        val healthNow = health
                         val clipboard = androidx.compose.ui.platform
                             .LocalClipboardManager.current
                         TextButton(onClick = {
@@ -349,7 +353,7 @@ fun ExtensionDetailScreen(
                                     app.xreader.data.extension.ContractVerdict.READING_CORE
                             }
                             val failedCapability = failedResult?.capability
-                                ?: health.failedCore.firstOrNull()?.let { raw ->
+                                ?: healthNow.failedCore.firstOrNull()?.let { raw ->
                                     runCatching {
                                         app.xreader.data.extension
                                             .SourceCapability.valueOf(raw)
@@ -377,7 +381,7 @@ fun ExtensionDetailScreen(
                                         },
                                         failingStep = failingStep,
                                         reason = failedResult?.detail
-                                            ?: health.summaryLine(),
+                                            ?: healthNow.summaryLine(),
                                         appVersion = app.xreader.BuildConfig.VERSION_NAME
                                     )
                                 )

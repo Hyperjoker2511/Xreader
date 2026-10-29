@@ -85,6 +85,7 @@ import java.io.File
  * real format before anything is parsed.
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun LibraryScreen(
     viewModel: LibraryViewModel,
