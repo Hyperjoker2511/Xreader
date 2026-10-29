@@ -23,10 +23,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      
+      # (No setup-android step: the runner image already ships the Android
+      # SDK with licences accepted; the setup-android@v3 action failed in
+      # 8s on the first runs, 2026-10-29, so the step was removed.)
 
       - name: Test gate (full unit suite, one clean run)
-        run: ./gradlew clean :app:testDebugUnitTest
+        run: bash gradlew clean :app:testDebugUnitTest
 
       - name: Restore signing key
         env:
@@ -41,7 +43,7 @@ jobs:
           XR_STORE_PASSWORD: ${{ secrets.XR_STORE_PASSWORD }}
           XR_KEY_ALIAS: ${{ secrets.XR_KEY_ALIAS }}
           XR_KEY_PASSWORD: ${{ secrets.XR_KEY_PASSWORD }}
-        run: ./gradlew :app:assembleRelease
+        run: bash gradlew :app:assembleRelease
 
       - uses: actions/upload-artifact@v4
         with:
@@ -49,3 +51,4 @@ jobs:
           path: |
             app/build/outputs/apk/release/*.apk
             app/build/reports/tests/
+            
