@@ -1,0 +1,51 @@
+name: Build Xreader
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  gate-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore binary assets (stored base64-encoded for transport)
+        run: |
+          find . -name '*.b64' -print0 | while IFS= read -r -d '' f; do
+            base64 -d "$f" > "${f%.b64}"
+            rm "$f"
+          done
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Test gate (full unit suite, one clean run)
+        run: ./gradlew clean :app:testDebugUnitTest
+
+      - name: Restore signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then echo "KEYSTORE_B64 secret is not set - cannot sign the release."; exit 1; fi
+          mkdir -p release
+          echo "$KEYSTORE_B64" | base64 -d > release/xreader-release.jks
+
+      - name: Build signed release
+        env:
+          XR_STORE_PASSWORD: ${{ secrets.XR_STORE_PASSWORD }}
+          XR_KEY_ALIAS: ${{ secrets.XR_KEY_ALIAS }}
+          XR_KEY_PASSWORD: ${{ secrets.XR_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Xreader-release
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/reports/tests/
