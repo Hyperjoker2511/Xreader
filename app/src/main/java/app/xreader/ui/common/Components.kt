@@ -2,7 +2,7 @@ package app.xreader.ui.common
 import app.xreader.ui.theme.primaryTextColor
 
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.SineEasing
+import androidx.compose.animation.core.EaseInOutSine
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -285,7 +285,7 @@ fun EmptyState(
             initialValue = -10f,
             targetValue = 10f,
             animationSpec = infiniteRepeatable(
-                animation = tween(2000, easing = SineEasing),
+                animation = tween(2000, easing = EaseInOutSine),
                 repeatMode = RepeatMode.Reverse
             ),
             label = "emptyStateHoverY"
