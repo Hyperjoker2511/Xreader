@@ -63,10 +63,10 @@ class GeminiClient(
 
     override suspend fun generateText(
         prompt: String,
-        system: String? = null,
-        jsonMode: Boolean = false,
-        temperature: Float? = null,
-        maxOutputTokens: Int? = null
+        system: String?,
+        jsonMode: Boolean,
+        temperature: Float?,
+        maxOutputTokens: Int?
     ): AppResult<TextResult> {
         val key = keyProvider()?.takeIf { it.isNotBlank() }
             ?: return AppResult.Err(noKeyError())
@@ -114,8 +114,8 @@ class GeminiClient(
      */
     override fun generateTextStream(
         prompt: String,
-        system: String? = null,
-        temperature: Float? = null
+        system: String?,
+        temperature: Float?
     ): Flow<StreamEvent> = flow {
         val key = keyProvider()?.takeIf { it.isNotBlank() }
         if (key == null) {
