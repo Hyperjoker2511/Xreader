@@ -23,7 +23,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      
 
       - name: Test gate (full unit suite, one clean run)
         run: ./gradlew clean :app:testDebugUnitTest
