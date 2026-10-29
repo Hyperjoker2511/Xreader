@@ -217,10 +217,15 @@ fun LibraryScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Design #1: the profile avatar lives in the
-                    // Library header and opens Profile & progress.
-                    // v1.0.4 (D5/D9): the bubble takes the Apple
-                    // bounce press, like the mock's glass Lv bubble.
+                    // Design #1: the profile lives in the Library
+                    // header and opens Profile & progress.
+                    // v1.0.6: the old circle showed a bare "Lv"
+                    // when no avatar was set — a label nobody
+                    // could read. It is now a plain-words pill,
+                    // "Level N" (the number was already in state
+                    // as profileLevel), with the avatar picture
+                    // kept as a small circle inside it when one
+                    // is set. Same tap target, same bounce press.
                     val avatarInteraction = remember {
                         androidx.compose.foundation.interaction.MutableInteractionSource()
                     }
@@ -230,26 +235,35 @@ fun LibraryScreen(
                         shape = androidx.compose.foundation.shape.CircleShape,
                         color = MaterialTheme.colorScheme.primaryContainer,
                         modifier = Modifier
-                            .size(44.dp)
                             .pressBounce(avatarInteraction)
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            modifier = Modifier.padding(
+                                horizontal = 12.dp, vertical = 8.dp
+                            )
+                        ) {
                             val avatar = state.avatarFile
                             if (avatar != null) {
                                 AsyncImage(
                                     model = coverFile(avatar),
                                     contentDescription = "Your profile",
                                     contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            } else {
-                                Text(
-                                    state.profileName.trim().firstOrNull()
-                                        ?.uppercase() ?: "Lv",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .clip(
+                                            androidx.compose.foundation
+                                                .shape.CircleShape
+                                        )
                                 )
                             }
+                            Text(
+                                "Level ${state.profileLevel}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme
+                                    .onPrimaryContainer
+                            )
                         }
                     }
                     XreaderPrimaryButton(text = "+ Add a book", onClick = onAddBook)
@@ -1161,10 +1175,17 @@ private fun ShelfGridCard(
                     }
                 }
             }
+            // v1.0.6: the title always gets a full two-line
+            // area (minLines keeps short titles from shrinking
+            // the card, so rows align) and overflows with an
+            // ellipsis — the default clip used to cut titles
+            // mid-word ("I Fell into the Martial").
             Text(
                 shelfBook.book.title,
                 style = MaterialTheme.typography.titleSmall,
-                maxLines = 2
+                maxLines = 2,
+                minLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
                 "${shelfBook.book.totalChapters} chapters",

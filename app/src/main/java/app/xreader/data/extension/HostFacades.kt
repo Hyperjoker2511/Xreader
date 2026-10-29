@@ -32,11 +32,15 @@ import org.jsoup.nodes.Element
  *   there is no way to even name another extension's store.
  */
 class HostHttpImpl(
-    private val client: ExtensionHttpClient
+    private val fetcher: PageFetcher
 ) : HostHttp {
 
+    /** Static-only construction (JS/dex sources, tests): the client
+     * IS a [PageFetcher], so behaviour is exactly the pre-v1.0.6 path. */
+    constructor(client: ExtensionHttpClient) : this(client as PageFetcher)
+
     override fun get(url: String, headers: Map<String, String>): HostResponse =
-        unwrap(runBlocking { client.get(url, headers) })
+        unwrap(runBlocking { fetcher.get(url, headers) })
 
     override fun post(
         url: String,
@@ -44,7 +48,7 @@ class HostHttpImpl(
         contentType: String,
         headers: Map<String, String>
     ): HostResponse =
-        unwrap(runBlocking { client.post(url, body, contentType, headers) })
+        unwrap(runBlocking { fetcher.post(url, body, contentType, headers) })
 
     private fun unwrap(result: AppResult<HostResponse>): HostResponse =
         when (result) {
@@ -151,13 +155,24 @@ class HostContextFactory(
     private val store: ExtensionStore,
     private val sessionStore: SessionStore,
     private val transport: app.xreader.data.net.HttpTransport,
-    private val rateLimiters: MutableMap<Long, RateLimiter> = mutableMapOf()
+    private val rateLimiters: MutableMap<Long, RateLimiter> = mutableMapOf(),
+    /** v1.0.6 (W1): the browser-view fetcher + its runtime gates.
+     * Both null in tests that don't exercise rendering — contexts
+     * then stay on the static client, exactly as before. */
+    val renderedFetcher: RenderedPageFetcher? = null,
+    val renderRuntime: RenderRuntime? = null,
+    /** TR4 sink: an unmarked source served a JS shell at runtime.
+     * The container records it in prefs; nothing is flipped here. */
+    private val onRuntimeShell: (extensionRowId: Long) -> Unit = {}
 ) {
     fun contextFor(
         extensionRowId: Long,
         packageId: String,
         label: String,
-        permissions: () -> ExtensionPermissions
+        permissions: () -> ExtensionPermissions,
+        /** v1.0.6: live read of the source's `needsRendering` marker
+         * (only declarative sources pass one). */
+        needsRendering: () -> Boolean = { false }
     ): SourceContext {
         val limiter = synchronized(rateLimiters) {
             rateLimiters.getOrPut(extensionRowId) { RateLimiter() }
@@ -170,12 +185,52 @@ class HostContextFactory(
             whitelist = permissions,
             rateLimiter = limiter
         )
+        val fetcher: PageFetcher = escalatingFetcherOrNull(
+            client = client,
+            sessionKey = ExtensionHttpClient.sessionKeyFor(extensionRowId),
+            purpose = RenderPurpose.SOURCE,
+            needsRendering = needsRendering,
+            permissions = permissions,
+            rateLimiter = limiter,
+            onRuntimeShell = { onRuntimeShell(extensionRowId) }
+        ) ?: client
         return object : SourceContext {
-            override val http: HostHttp = HostHttpImpl(client)
+            override val http: HostHttp = HostHttpImpl(fetcher)
             override val html: HostHtml = HostHtmlImpl()
             override val store: HostStore = HostStoreImpl(this@HostContextFactory.store, packageId)
             override val log: HostLog = HostLogImpl(label)
         }
+    }
+
+    /**
+     * v1.0.6 (W1.1): wraps [client] in the escalating decorator when
+     * a renderer and a runtime are wired; null otherwise (callers
+     * fall back to the client itself). Used by source contexts above
+     * and by the probe family (LinkProber / SelectorAi), which build
+     * their own clients via [clientFor].
+     */
+    fun escalatingFetcherOrNull(
+        client: ExtensionHttpClient,
+        sessionKey: String,
+        purpose: RenderPurpose,
+        needsRendering: () -> Boolean = { false },
+        permissions: () -> ExtensionPermissions,
+        rateLimiter: RateLimiter,
+        onRuntimeShell: (() -> Unit)? = null
+    ): EscalatingPageFetcher? {
+        val renderer = renderedFetcher ?: return null
+        val runtime = renderRuntime ?: return null
+        return EscalatingPageFetcher(
+            staticFetcher = client,
+            renderedFetcher = renderer,
+            sessionKey = sessionKey,
+            purpose = purpose,
+            needsRendering = needsRendering,
+            permissions = permissions,
+            rateLimiter = rateLimiter,
+            gate = runtime.gate(),
+            onRuntimeShell = onRuntimeShell
+        )
     }
 
     /** A raw (context-free) client for probes and cover fetches. */

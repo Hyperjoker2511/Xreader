@@ -108,18 +108,35 @@ object CoverPaletteExtractor {
      * The designed placeholder's palette (R05/R19): a book with no
      * cover gets a deterministic colour family from its title — the
      * app never pretends this was extracted from artwork.
+     *
+     * v1.0.6: the family is ONE family — every placeholder hue sits
+     * inside the violet / bluish-purple band (232°–288°, around the
+     * app's own #7B7BE0–#8B93F8 violets) instead of anywhere on the
+     * wheel. A shelf of coverless books used to clash (green, rust,
+     * maroon, magenta side by side — the user's "it looks ugly"
+     * verdict); now neighbouring tiles differ by hue step and a
+     * small lightness step, never by family. This function feeds
+     * ONLY the designed placeholder (tiles + the grid glow) — real
+     * covers still go through [extract] untouched.
      */
     fun placeholderPalette(title: String): CoverPalette {
         var hash = 0
         for (c in title.trim().lowercase()) hash = (hash * 31 + c.code) and 0x7FFFFFFF
-        val hue = (hash % 360).toFloat()
+        val hue = (PLACEHOLDER_HUE_MIN + hash % PLACEHOLDER_HUE_SPAN).toFloat()
+        // A second hash slice steps the deep shades ±0.03 so books
+        // sharing a hue still read as different tiles.
+        val lift = ((hash / PLACEHOLDER_HUE_SPAN) % 3 - 1) * 0.03f
         return CoverPalette(
-            vibrant = CustomSchemeGenerator.hsl(hue, 0.55f, 0.45f),
-            muted = CustomSchemeGenerator.hsl(hue, 0.3f, 0.55f),
-            darkVibrant = CustomSchemeGenerator.hsl(hue, 0.6f, 0.28f),
-            dominant = CustomSchemeGenerator.hsl(hue, 0.5f, 0.38f)
+            vibrant = CustomSchemeGenerator.hsl(hue, 0.6f, 0.5f),
+            muted = CustomSchemeGenerator.hsl(hue, 0.35f, 0.55f),
+            darkVibrant = CustomSchemeGenerator.hsl(hue, 0.62f, 0.27f + lift),
+            dominant = CustomSchemeGenerator.hsl(hue, 0.55f, 0.36f + lift)
         )
     }
+
+    /** The placeholder family's band: violet through bluish-purple. */
+    const val PLACEHOLDER_HUE_MIN = 232
+    const val PLACEHOLDER_HUE_SPAN = 57
 
     private fun hslOf(r: Int, g: Int, b: Int): Triple<Float, Float, Float> {
         val rf = r / 255f; val gf = g / 255f; val bf = b / 255f

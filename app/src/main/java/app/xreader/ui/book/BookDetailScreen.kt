@@ -81,7 +81,10 @@ fun BookDetailScreen(
     onFindTitle: (String) -> Unit = {},
     /** v1.0.5 (B1): the Chapters section's "Go to Repair" door —
      * lands on the source's Details page, where Repair lives. */
-    onOpenSourceDetails: (extensionId: Long) -> Unit = {}
+    onOpenSourceDetails: (extensionId: Long) -> Unit = {},
+    /** v1.0.6 (W4.3): the Chapters section's site-check door —
+     * opens the app-styled check screen for this book's source. */
+    onSiteCheck: (extensionId: Long) -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val engineLabel by viewModel.engineLabel.collectAsStateWithLifecycle()
@@ -159,7 +162,8 @@ fun BookDetailScreen(
             isExtensionBook = book.sourceType ==
                 app.xreader.data.db.SourceType.EXTENSION,
             remoteId = book.remoteId,
-            isLinkSource = state.isLinkSource
+            isLinkSource = state.isLinkSource,
+            needsSiteCheck = state.sourceNeedsSiteCheck
         )
         val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
         LazyColumn(
@@ -565,6 +569,15 @@ fun BookDetailScreen(
                                             }
                                         }
                                     ) { Text("Go to Repair") }
+                                }
+                                if (section.canSiteCheck) {
+                                    TextButton(
+                                        onClick = {
+                                            book.extensionId?.let {
+                                                onSiteCheck(it)
+                                            }
+                                        }
+                                    ) { Text("Do the site check") }
                                 }
                             }
                         }

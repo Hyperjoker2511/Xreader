@@ -57,13 +57,27 @@ class SelectorAi(
             ?: return Outcome.Failed("That doesn't look like a web address — check the link.")
         val host = CookieParsing.hostOf(url)
             ?: return Outcome.Failed("That doesn't look like a web address — check the link.")
+        val probeLimiter = RateLimiter(minIntervalMs = 0)
         val probeClient = contextFactory.clientFor(
             sessionKey = ExtensionHttpClient.linkProbeSessionKey(host),
             label = host,
             permissions = ExtensionPermissions(domains = listOf(host)),
-            rateLimiter = RateLimiter(minIntervalMs = 0)
+            rateLimiter = probeLimiter
         )
-        val bookFetch = probeClient.get(url)
+        // v1.0.6 (W3.2): the AI studies the same pages the probe
+        // does — when a page only exists after its scripts run,
+        // the model is shown the RENDERED document (the escalated
+        // fetch), never the empty shell.
+        val escalating = contextFactory.escalatingFetcherOrNull(
+            client = probeClient,
+            sessionKey = ExtensionHttpClient.linkProbeSessionKey(host),
+            purpose = app.xreader.data.extension.RenderPurpose.PROBE,
+            permissions = { ExtensionPermissions(domains = listOf(host)) },
+            rateLimiter = probeLimiter
+        )
+        val fetcher: app.xreader.data.extension.PageFetcher =
+            escalating ?: probeClient
+        val bookFetch = fetcher.get(url)
         val bookResponse = when (bookFetch) {
             is AppResult.Err -> return Outcome.Failed(
                 "Xreader couldn't open that page. " +
@@ -93,7 +107,7 @@ class SelectorAi(
                 "Even the AI needs one chapter page to study, and no chapter link " +
                     "could be found on that page."
             )
-        val chapterFetch = probeClient.get(chapterUrl)
+        val chapterFetch = fetcher.get(chapterUrl)
         val chapterResponse = when (chapterFetch) {
             is AppResult.Err -> return Outcome.Failed(
                 "Xreader found a chapter link but couldn't open it. " +
@@ -118,15 +132,24 @@ class SelectorAi(
             is AppResult.Ok -> proposed.value
         }
 
+        // v1.0.6: when the model studied rendered pages, the
+        // config it proposed is a browser-view source — mark it
+        // before the drive, so the drive renders too and the
+        // saved source keeps the marker (TR1).
+        val drivenConfig = if (escalating?.renderedAny == true) {
+            config.copy(needsRendering = true)
+        } else {
+            config
+        }
         // The gate every candidate faces — no exceptions for AI.
-        return when (val drive = prober.testDrive(config, bookUrl)) {
+        return when (val drive = prober.testDrive(drivenConfig, bookUrl)) {
             is AppResult.Err -> Outcome.Failed(
                 "The AI suggested page rules, but the test read failed, so nothing " +
                     "was saved. ${(drive.error as? AppError.BadFile)?.reason ?: ""}"
             )
             is AppResult.Ok -> Outcome.Ready(
                 LinkProber.Draft(
-                    config = config,
+                    config = drivenConfig,
                     testDrive = drive.value,
                     bookUrl = bookUrl,
                     host = host

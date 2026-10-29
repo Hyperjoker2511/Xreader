@@ -74,7 +74,11 @@ data class ReaderUiState(
     val hasBookOverride: Boolean = false,
     /** True when the text on screen is the RAW translation, not the
      * book's own text (Phase 5). The original is never overwritten. */
-    val showingTranslation: Boolean = false
+    val showingTranslation: Boolean = false,
+    /** v1.0.6 (W3.4): one-shot plain note when this book's source
+     * reads through the browser view — shown once per source per
+     * session via the reader's transient notice, then consumed. */
+    val browserViewNotice: String? = null
 ) {
     val chapter: Chapter? get() = chapters.getOrNull(chapterIndex)
     val hasPrevious: Boolean get() = chapterIndex > 0
@@ -260,10 +264,15 @@ class ReaderViewModel(
             val book = container.database.bookDao().getById(bookId)
             val chapters = container.database.chapterDao().forBook(bookId)
             val saved = container.database.readingProgressDao().getForBook(bookId)
+            // v1.0.6 (W3.4): a browser-view source gets ONE plain
+            // note per source per session, so slower chapter turns
+            // never read as the app hanging.
+            val sourceNotice = browserViewNoticeFor(book)
             _state.value = _state.value.copy(
                 bookTitle = book?.title ?: "",
                 chapters = chapters,
-                pageTurnTier = computeTier(_config.value)
+                pageTurnTier = computeTier(_config.value),
+                browserViewNotice = sourceNotice ?: _state.value.browserViewNotice
             )
             val startIndex = initialChapterIndex.coerceIn(0, maxOf(0, chapters.lastIndex))
             val restore = if (saved != null && saved.chapterIndex == startIndex) {
@@ -1212,9 +1221,44 @@ class ReaderViewModel(
         _externalTurns.tryEmit(direction)
     }
 
+    /** v1.0.6 (W3.4): the browser-view note for [book]'s source,
+     * or null when the source reads normally — or when this
+     * session has already shown the note for that source. */
+    private suspend fun browserViewNoticeFor(
+        book: app.xreader.data.db.Book?
+    ): String? {
+        val extensionId = book?.extensionId ?: return null
+        if (book.sourceType != app.xreader.data.db.SourceType.EXTENSION) {
+            return null
+        }
+        if (extensionId in browserNoticeShownFor) return null
+        val marked = container.extensionService.sourcesOf(extensionId)
+            .getOrNull()
+            ?.any { handle ->
+                container.extensionService.declarativeConfigOf(handle)
+                    ?.needsRendering == true
+            } == true
+        if (!marked) return null
+        browserNoticeShownFor += extensionId
+        return "This source loads its pages with the browser view — " +
+            "chapters can take a few seconds."
+    }
+
+    /** The screen has shown the one-shot note; clear it. */
+    fun consumeBrowserNotice() {
+        if (_state.value.browserViewNotice != null) {
+            _state.value = _state.value.copy(browserViewNotice = null)
+        }
+    }
+
     companion object {
         const val SAVE_DEBOUNCE_MS = 1_500L
         const val BOOKMARK_SNAP_CHARS = 400
+
+        /** v1.0.6 (W3.4): extension ids whose browser-view note
+         * this session has already shown. Process-lifetime on
+         * purpose: the note is a session courtesy, not a setting. */
+        private val browserNoticeShownFor = mutableSetOf<Long>()
 
         fun factory(
             container: AppContainer,

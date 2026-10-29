@@ -134,16 +134,32 @@ fun AddFromLinkScreen(
             }
             is LinkAddUiState.LoginRequired -> {
                 GlassCard {
-                    Text("This site needs a sign-in first", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Log in inside Xreader's browser (you'll pass any checks yourself), " +
-                            "then Xreader will look at the site again with your session.",
+                        if (current.siteCheck) {
+                            "This site needs a quick check first"
+                        } else {
+                            "This site needs a sign-in first"
+                        },
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        if (current.siteCheck) {
+                            "Open the site inside Xreader and do the check yourself, " +
+                                "then Xreader will look at the site again with your session."
+                        } else {
+                            "Log in inside Xreader's browser (you'll pass any checks yourself), " +
+                                "then Xreader will look at the site again with your session."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(10.dp))
                     XreaderPrimaryButton(
-                        text = "Log in to ${current.host}",
+                        text = if (current.siteCheck) {
+                            "Open ${current.host}"
+                        } else {
+                            "Log in to ${current.host}"
+                        },
                         onClick = {
                             viewModel.loginRequest()?.let(onRequestLogin)
                         },

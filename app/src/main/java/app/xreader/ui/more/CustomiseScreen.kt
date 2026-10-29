@@ -88,7 +88,9 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         /** v1.0.4 (D10/D13): the download switches' home — the same
          * DownloadPrefs the download engine reads. */
         val downloads: app.xreader.data.download.DownloadSettings =
-            app.xreader.data.download.DownloadSettings()
+            app.xreader.data.download.DownloadSettings(),
+        /** v1.0.6 (W2.4): the browser-view master switch. */
+        val browserViewEnabled: Boolean = true
     )
 
     val state: StateFlow<UiState> = combine(
@@ -96,9 +98,20 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         container.libraryPrefs.state,
         container.readerPrefs.config,
         container.sourcePrefs.bestSourcePriority,
-        container.downloadPrefs.settings
-    ) { appearance, library, reader, priority, downloads ->
-        UiState(appearance, library, reader, priority, downloads)
+        container.downloadPrefs.settings,
+        container.sourcePrefs.browserViewEnabled
+    ) { values ->
+        @Suppress("UNCHECKED_CAST")
+        UiState(
+            appearance = values[0] as AppearanceState,
+            library = values[1] as LibraryState,
+            reader = values[2] as ReaderConfig,
+            bestSourcePriority = values[3]
+                as app.xreader.data.extension.BestSourcePriority,
+            downloads = values[4]
+                as app.xreader.data.download.DownloadSettings,
+            browserViewEnabled = values[5] as Boolean
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
     /** Storage sizes load off the main thread and refresh after a
@@ -169,6 +182,11 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
 
     fun setBestSourcePriority(priority: app.xreader.data.extension.BestSourcePriority) {
         viewModelScope.launch { container.sourcePrefs.setBestSourcePriority(priority) }
+    }
+
+    /** v1.0.6 (W2.4): the browser-view master switch. */
+    fun setBrowserViewEnabled(value: Boolean) {
+        viewModelScope.launch { container.sourcePrefs.setBrowserViewEnabled(value) }
     }
 
     // ── v1.0.4 (D10/D13): the download switches, moved here from
@@ -1002,6 +1020,18 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
 
         // ── Sources & repairs (R11 preference) ───────────────────
         CustomiseSection("Sources & repairs") {
+            // v1.0.6 (W2.4): the one master switch for the browser
+            // view — default on; off restores static-only reading.
+            CustomiseSwitch(
+                label = "Browser view for sites that need JavaScript",
+                description = "Some sites build their pages with JavaScript, so there's " +
+                    "nothing to read until the page builds itself. With this on, " +
+                    "Xreader reads those sites with its built-in browser view — you " +
+                    "never see a browser; pages may just take a few seconds longer. " +
+                    "Turn it off and those sites can't be added or read.",
+                checked = state.browserViewEnabled,
+                onChange = { viewModel.setBrowserViewEnabled(it) }
+            )
             Text(
                 "When a book exists on several sources, “Best source” picks by:",
                 style = MaterialTheme.typography.bodyMedium

@@ -40,6 +40,13 @@ data class ExtensionDetailUiState(
         emptyList(),
     val testing: Boolean = false,
     val repairing: Boolean = false,
+    /** v1.0.6: the last Repair's persisted record (note +
+     * probe stage log), shown under the Health card. */
+    val lastRepair: app.xreader.data.extension.SourceRepairRecord? = null,
+    /** v1.0.6 (TR4): this source's site started serving JS shells
+     * while its rules are unmarked — the page offers Repair,
+     * which may flip it to the browser view. */
+    val browserViewNeeded: Boolean = false,
     // ── v1.0.2 (R24): "Bring my library" ─────────────────────────
     val hasBookshelf: Boolean = false,
     val bringBusy: Boolean = false,
@@ -89,7 +96,9 @@ class ExtensionDetailViewModel(
         val record: app.xreader.data.extension.SourceHealthRecord? = null,
         val results: List<app.xreader.data.extension.CapabilityResult> = emptyList(),
         val testing: Boolean = false,
-        val repairing: Boolean = false
+        val repairing: Boolean = false,
+        /** v1.0.6: the last Repair's persisted record. */
+        val repairRecord: app.xreader.data.extension.SourceRepairRecord? = null
     )
 
     private val _health = MutableStateFlow(HealthLocal())
@@ -147,7 +156,8 @@ class ExtensionDetailViewModel(
 
     val state: StateFlow<ExtensionDetailUiState> = combine(
         container.database.installedExtensionDao().observeById(extensionId),
-        _sessionSaved, _rules, _test, _linkConfig, _health, _bring, _parser
+        _sessionSaved, _rules, _test, _linkConfig, _health, _bring, _parser,
+        container.sourcePrefs.browserViewNeededIds
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val ext = values[0] as InstalledExtension?
@@ -155,6 +165,8 @@ class ExtensionDetailViewModel(
         val health = values[5] as HealthLocal
         val bring = values[6] as BringLocal
         val parser = values[7] as ParserLocal
+        @Suppress("UNCHECKED_CAST")
+        val browserNeededIds = values[8] as Set<Long>
         ExtensionDetailUiState(
             extension = ext,
             pending = ext?.let { container.extensionStore.readPending(it.packageId) },
@@ -168,6 +180,8 @@ class ExtensionDetailViewModel(
             healthResults = health.results,
             testing = health.testing,
             repairing = health.repairing,
+            lastRepair = health.repairRecord,
+            browserViewNeeded = extensionId in browserNeededIds,
             hasBookshelf = bring.hasBookshelf,
             bringBusy = bring.busy,
             bringPreview = bring.preview,
@@ -206,11 +220,21 @@ class ExtensionDetailViewModel(
                 .getOrNull()
             val firstSourceId = handles?.firstOrNull()?.source?.id
             if (firstSourceId != null) {
+                val key = app.xreader.data.extension.SourceHealthRecord
+                    .key(extensionId, firstSourceId)
                 val record = container.sourcePrefs.sourceHealth
-                    .first()[app.xreader.data.extension.SourceHealthRecord
-                        .key(extensionId, firstSourceId)]
+                    .first()[key]
                 if (record != null) {
                     _health.value = _health.value.copy(record = record)
+                }
+                // v1.0.6: the last Repair's record lives under
+                // the same key — show it with the health.
+                val repairRecord = container.sourcePrefs.sourceRepairLog
+                    .first()[key]
+                if (repairRecord != null) {
+                    _health.value = _health.value.copy(
+                        repairRecord = repairRecord
+                    )
                 }
             }
             // R24: does this source know its account bookshelf?
@@ -516,7 +540,26 @@ class ExtensionDetailViewModel(
             try {
                 val file = container.extensionStore.definitionFile(ext.packageId)
                 val backup = container.extensionStore.readText(file)
-                val probeUrl = config.sampleBookUrl ?: config.baseUrl
+                // v1.0.6: never seed the probe blindly from the
+                // stored sampleBookUrl — a stored sample can be
+                // the one book no config could ever prove
+                // against (the device case: a book whose every
+                // listed chapter is paid or locked). Pick a
+                // fresh sample from the live catalogue,
+                // preferring a book with an unlocked chapter;
+                // fall back to the stored seed only when the
+                // catalogue can't be read at all.
+                val probeUrl = runCatching {
+                    container.linkProber.freshSampleUrl(config)
+                }.getOrNull() ?: config.sampleBookUrl ?: config.baseUrl
+                // v1.0.6: the persisted outcome — filled in by
+                // the branches below and written to SourcePrefs
+                // when the repair finishes, so what Repair did
+                // (and what each proposer did) stays on this
+                // page instead of vanishing with its message.
+                var repairSaved = false
+                var repairNote = ""
+                var repairStageLines: List<String> = emptyList()
                 // v1.0.5 (A4): Repair drives EVERY automatic
                 // proposer (fast lane → templates/inference →
                 // heuristic) and keeps the best passing candidate;
@@ -529,6 +572,7 @@ class ExtensionDetailViewModel(
                     probeUrl, aiAvailable = false, tryAllProposers = true
                 )) {
                     is app.xreader.data.extension.LinkProber.Outcome.Ready -> {
+                        repairStageLines = outcome.stageLines.map { it.render() }
                         when (
                             val saved = container.repoManager.saveLinkSource(
                                 outcome.draft.config, outcome.draft.host
@@ -536,6 +580,9 @@ class ExtensionDetailViewModel(
                         ) {
                             is AppResult.Ok -> {
                                 _linkConfig.value = outcome.draft.config
+                                repairSaved = true
+                                repairNote =
+                                    "Repair rebuilt the rules from the live site."
                                 say(
                                     "Repair rebuilt the rules from the live " +
                                         "site. Running the test-drive…"
@@ -546,6 +593,9 @@ class ExtensionDetailViewModel(
                                 if (backup != null) {
                                     container.extensionStore.writeText(file, backup)
                                 }
+                                repairNote =
+                                    "Repair couldn't save the rebuilt rules — " +
+                                        "your old ones were kept."
                                 say(
                                     "Repair couldn't save the rebuilt rules — " +
                                         "your old ones were kept."
@@ -553,13 +603,19 @@ class ExtensionDetailViewModel(
                             }
                         }
                     }
-                    is app.xreader.data.extension.LinkProber.Outcome.LoginRequired ->
+                    is app.xreader.data.extension.LinkProber.Outcome.LoginRequired -> {
+                        repairNote =
+                            "Repair needs you signed in first — use " +
+                                "“Sign in” on this source, then try Repair again. " +
+                                "Nothing was changed."
                         say(
                             "Repair needs you signed in first — use " +
                                 "“Sign in” on this source, then try Repair again. " +
                                 "Nothing was changed."
                         )
+                    }
                     is app.xreader.data.extension.LinkProber.Outcome.Failed -> {
+                        repairStageLines = outcome.stageLines.map { it.render() }
                         // v1.0.5 (A4): the last proposer — the AI
                         // detector, when a key exists. Its proposal
                         // faces the same mandatory test-drive
@@ -574,6 +630,9 @@ class ExtensionDetailViewModel(
                         }
                         when (aiOutcome) {
                             is app.xreader.data.ai.SelectorAi.Outcome.Ready -> {
+                                repairStageLines = repairStageLines +
+                                    "AI detector — passed: its rules passed " +
+                                    "the test-drive"
                                 when (
                                     container.repoManager.saveLinkSource(
                                         aiOutcome.draft.config, aiOutcome.draft.host
@@ -581,21 +640,33 @@ class ExtensionDetailViewModel(
                                 ) {
                                     is AppResult.Ok -> {
                                         _linkConfig.value = aiOutcome.draft.config
+                                        repairSaved = true
+                                        repairNote =
+                                            "Repair rebuilt the rules with the " +
+                                                "AI detector."
                                         say(
                                             "Repair rebuilt the rules with the AI " +
                                                 "detector. Running the test-drive…"
                                         )
                                         runTestDrive()
                                     }
-                                    is AppResult.Err -> say(
-                                        "Repair found working rules with the AI " +
-                                            "detector, but they couldn't be saved — " +
-                                            "your old ones were kept."
-                                    )
+                                    is AppResult.Err -> {
+                                        repairNote =
+                                            "Repair found working rules with " +
+                                                "the AI detector, but they " +
+                                                "couldn't be saved — your old " +
+                                                "ones were kept."
+                                        say(
+                                            "Repair found working rules with the AI " +
+                                                "detector, but they couldn't be saved — " +
+                                                "your old ones were kept."
+                                        )
+                                    }
                                 }
                             }
-                            else -> say(
-                                "Repair tried the site's known shape, the " +
+                            else -> {
+                                val failureMessage =
+                                    "Repair tried the site's known shape, the " +
                                     "automatic detectors" +
                                     (if (aiOutcome != null) " and the AI detector" else "") +
                                     ", and none could read the site well enough. " +
@@ -627,10 +698,58 @@ class ExtensionDetailViewModel(
                                     } else {
                                         ""
                                     })
-                            )
+                                repairNote = failureMessage
+                                repairStageLines = repairStageLines +
+                                    when (aiOutcome) {
+                                        is app.xreader.data.ai.SelectorAi
+                                            .Outcome.Failed ->
+                                            "AI detector — failed: " +
+                                                aiOutcome.message.take(160)
+                                        is app.xreader.data.ai.SelectorAi
+                                            .Outcome.LoginRequired ->
+                                            "AI detector — sign-in needed: " +
+                                                "it asked for a sign-in first"
+                                        else ->
+                                            "AI detector — not tried: no " +
+                                                "AI key is saved"
+                                    }
+                                say(failureMessage)
+                            }
                         }
                     }
                 }
+                // v1.0.6: persist the finished Repair — when,
+                // saved-or-not, the final note, and the probe's
+                // stage log — under the same per-source key as
+                // the health record, and show it on this page.
+                val repairRecord =
+                    app.xreader.data.extension.SourceRepairRecord(
+                        repairedAtMillis = System.currentTimeMillis(),
+                        saved = repairSaved,
+                        note = repairNote,
+                        stageLines = repairStageLines
+                    )
+                val repairKeySourceId = container.extensionService
+                    .sourcesOf(extensionId).getOrNull()
+                    ?.firstOrNull()?.source?.id
+                    ?: _linkConfig.value?.id
+                    ?: config.id
+                container.sourcePrefs.setSourceRepairLog(
+                    app.xreader.data.extension.SourceHealthRecord.key(
+                        extensionId, repairKeySourceId
+                    ),
+                    repairRecord
+                )
+                // v1.0.6 (TR4): a Repair that saved new rules has
+                // answered the "site changed" flag one way or the
+                // other — clear it; if the site still serves
+                // shells unmarked, the next fetch re-records it.
+                if (repairSaved) {
+                    runCatching {
+                        container.sourcePrefs.clearBrowserViewNeeded(extensionId)
+                    }
+                }
+                _health.value = _health.value.copy(repairRecord = repairRecord)
             } finally {
                 _health.value = _health.value.copy(repairing = false)
             }

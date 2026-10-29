@@ -25,7 +25,13 @@ data class CapabilityResult(
     val capability: SourceCapability,
     val ok: Boolean,
     /** Plain-words detail: what was tried / what failed. */
-    val detail: String = ""
+    val detail: String = "",
+    /** v1.0.6: the step failed ONLY because of a stated limit
+     * of the site — every chapter it could sample is paid or
+     * locked — not because the source is broken. A verdict
+     * whose core failures are all limit-only is
+     * WORKING_WITH_LIMITS, never NEEDS_SETUP (see [judge]). */
+    val limitOnly: Boolean = false
 )
 
 data class ContractVerdict(
@@ -81,13 +87,25 @@ data class ContractVerdict(
          * for a source to be called working. Optional failures make
          * it "working with limits". Any core failure means the
          * source can only be saved as Needs setup, and only after
-         * the user explicitly chooses that.
+         * the user explicitly chooses that. v1.0.6: core failures
+         * that are ALL limit-only (the site's sampled content is
+         * paid or locked — a limit of the site, not a breakage)
+         * also read as "working with limits"; a single real core
+         * failure still means Needs setup.
          */
         fun judge(results: List<CapabilityResult>, checkedAtMillis: Long): SourceHealthState {
             if (results.isEmpty()) return SourceHealthState.UNKNOWN
             val core = results.filter { it.capability in READING_CORE }
-            if (core.size < READING_CORE.size || core.any { !it.ok }) {
+            if (core.size < READING_CORE.size) {
                 return SourceHealthState.NEEDS_SETUP
+            }
+            val coreFailed = core.filter { !it.ok }
+            if (coreFailed.isNotEmpty()) {
+                return if (coreFailed.all { it.limitOnly }) {
+                    SourceHealthState.WORKING_WITH_LIMITS
+                } else {
+                    SourceHealthState.NEEDS_SETUP
+                }
             }
             val optionalFailed = results.any {
                 it.capability !in READING_CORE && !it.ok
@@ -145,4 +163,21 @@ fun ContractVerdict.toRecord(): SourceHealthRecord = SourceHealthRecord(
     proofFirstLine = proofFirstLine,
     checkedAtMillis = checkedAtMillis,
     failedCore = failedCore().map { it.name }
+)
+
+/**
+ * The persisted form of the last Repair (v1.0.6): when it ran,
+ * whether it saved rebuilt rules, the final plain note the
+ * user was shown, and the probe's stage log — one rendered
+ * line per proposer ("fast lane — chapter text: …"). Stored
+ * per source by SourcePrefs, keyed exactly like the health
+ * record ([SourceHealthRecord.key]), so the Details page can
+ * show what the last Repair actually did instead of the
+ * outcome living only in a message that vanished.
+ */
+data class SourceRepairRecord(
+    val repairedAtMillis: Long = 0,
+    val saved: Boolean = false,
+    val note: String = "",
+    val stageLines: List<String> = emptyList()
 )

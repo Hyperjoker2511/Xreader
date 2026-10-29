@@ -21,7 +21,13 @@ import kotlinx.coroutines.launch
 sealed interface LinkAddUiState {
     data object Idle : LinkAddUiState
     data object Probing : LinkAddUiState
-    data class LoginRequired(val loginUrl: String, val host: String) : LinkAddUiState
+    data class LoginRequired(
+        val loginUrl: String,
+        val host: String,
+        /** v1.0.6 (W4): the site asked for a human check — the
+         * login screen opens in SITE_CHECK mode. */
+        val siteCheck: Boolean = false
+    ) : LinkAddUiState
     data class Ready(
         val draft: LinkProber.Draft,
         val sourceName: String
@@ -83,7 +89,8 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
                     sourceName = outcome.draft.config.name
                 )
                 is LinkProber.Outcome.LoginRequired -> LinkAddUiState.LoginRequired(
-                    loginUrl = outcome.loginUrl, host = outcome.host
+                    loginUrl = outcome.loginUrl, host = outcome.host,
+                    siteCheck = outcome.siteCheck
                 )
                 is LinkProber.Outcome.Failed -> LinkAddUiState.Failed(outcome.message)
             }
@@ -138,7 +145,12 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
         return LoginRequest(
             sessionKey = ExtensionHttpClient.linkProbeSessionKey(current.host),
             url = current.loginUrl,
-            title = current.host
+            title = current.host,
+            mode = if (current.siteCheck) {
+                LoginMode.SITE_CHECK
+            } else {
+                LoginMode.SIGN_IN
+            }
         )
     }
 

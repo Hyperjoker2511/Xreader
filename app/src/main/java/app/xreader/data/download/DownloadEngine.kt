@@ -111,6 +111,16 @@ class DownloadEngine(
      * a failing hook never fails a download. */
     private val onChapterDownloaded: suspend (bookId: Long, chapterId: Long) -> Unit =
         { _, _ -> },
+    /**
+     * v1.0.6 (Q4/W5.2): the browser-view download gate. Returns a
+     * plain-words note when this item must WAIT (its source reads
+     * through the browser view and the app isn't open — rendering
+     * never happens in the background), null when it may proceed.
+     * A gated item stays QUEUED with the note on it, exactly like
+     * the Wi-Fi gate below; the container wires the real check.
+     */
+    private val browserDownloadDeferral: suspend (DownloadQueueItem) -> String? =
+        { null },
     private val delayer: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
     private val jitter: () -> Double = { 0.8 + Math.random() * 0.4 },
     private val maxConcurrent: Int = 4,
@@ -193,6 +203,18 @@ class DownloadEngine(
             settingsProvider().wifiOnlyPrefetch && !networkGate.onUnmeteredNetwork()
         ) {
             return false // stays QUEUED; re-run happens on the next enqueue
+        }
+
+        // Browser-view gate (v1.0.6, Q4): a browser source's
+        // downloads run only while the app is open. The item stays
+        // QUEUED and carries the reason on its row, so Downloads
+        // shows why it's waiting instead of a silent stall.
+        val deferralNote = browserDownloadDeferral(item)
+        if (deferralNote != null) {
+            queueDao.update(
+                item.copy(lastErrorDetail = deferralNote, updatedAt = clock())
+            )
+            return false
         }
 
         item = item.copy(state = QueueState.RUNNING, lastErrorDetail = null, updatedAt = clock())

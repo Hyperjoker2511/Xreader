@@ -198,6 +198,14 @@ class HealSweep(
         outcome: Outcome
     ): Outcome {
         val handle = firstHandle(extension.id) ?: return outcome
+        // v1.0.6 (W5.7): browser-view sources are out of the
+        // sweep this round — background work never renders, so a
+        // sweep could only record a false failure against them.
+        // Skipped silently: no health write, no repair, the
+        // source's stored verdict stays exactly as it was.
+        if (extensionService.declarativeConfigOf(handle)?.needsRendering == true) {
+            return outcome
+        }
         val sourceId = handle.source.id
         val key = SourceHealthRecord.key(extension.id, sourceId)
         val prior = health[key]

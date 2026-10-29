@@ -23,7 +23,13 @@ class LibraryRefreshWorker(
     override suspend fun doWork(): Result {
         val container = (applicationContext as XreaderApp).container
         return runCatching {
-            container.libraryRefresher.refreshAll()
+            // v1.0.6 (W5.2): the worker is background work — it
+            // never renders. A browser-view source's refresh just
+            // waits for the next foreground refresh (the direct
+            // LibraryViewModel path, which does render).
+            container.renderRuntime.asBackgroundWork {
+                container.libraryRefresher.refreshAll()
+            }
         }.fold(
             onSuccess = { Result.success() },
             onFailure = { Result.retry() }

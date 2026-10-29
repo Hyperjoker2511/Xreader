@@ -10,6 +10,7 @@ import app.xreader.data.db.ReadingProgress
 import app.xreader.di.AppContainer
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
@@ -37,6 +38,10 @@ data class BookDetailUiState(
      * lives on the source's Details page and works on the link
      * contract). Resolved once from the extension record. */
     val isLinkSource: Boolean = false,
+    /** v1.0.6 (W4.3): this book's source reads through the
+     * browser view and its last health verdict is NEEDS_SETUP —
+     * the Chapters recovery doors offer the site check. */
+    val sourceNeedsSiteCheck: Boolean = false,
     /** v1.0.5 (B1/E2): the Re-check door's honest-drive outcome —
      * busy while the source's test-drive runs, then the verdict
      * in plain words (or null when no check has run). */
@@ -178,6 +183,7 @@ class BookDetailViewModel(
             chaptersLoading = story.chaptersLoading,
             chaptersError = story.chaptersError,
             isLinkSource = story.isLinkSource,
+            sourceNeedsSiteCheck = story.sourceNeedsSiteCheck,
             recheckBusy = story.recheckBusy,
             recheckNote = story.recheckNote,
             reviews = story.reviews,
@@ -377,14 +383,32 @@ class BookDetailViewModel(
         // v1.0.5 (B1): resolve once whether this book's source is
         // a link source — it decides the Chapters section's
         // "Go to Repair" door (Repair works on link contracts).
+        // v1.0.6 (W4.3): the same resolution decides the site-
+        // check door — a browser-view source whose health verdict
+        // is NEEDS_SETUP almost always wants its human check.
         viewModelScope.launch {
             val book = container.database.bookDao().getById(bookId)
                 ?: return@launch
             val extensionId = book.extensionId ?: return@launch
             val extension = container.database.installedExtensionDao()
                 .getById(extensionId) ?: return@launch
+            val handle = container.extensionService
+                .sourcesOf(extensionId).getOrNull()?.firstOrNull()
+            val health = handle?.let {
+                container.sourcePrefs.sourceHealth.first()[
+                    app.xreader.data.extension.SourceHealthRecord.key(
+                        extensionId, it.source.id
+                    )
+                ]
+            }
             storyLocal.value = storyLocal.value.copy(
-                isLinkSource = extension.packageId.startsWith("link.")
+                isLinkSource = extension.packageId.startsWith("link."),
+                sourceNeedsSiteCheck =
+                    handle?.let {
+                        container.extensionService.declarativeConfigOf(it)
+                    }?.needsRendering == true &&
+                        health?.state ==
+                        app.xreader.data.extension.SourceHealthState.NEEDS_SETUP
             )
         }
     }

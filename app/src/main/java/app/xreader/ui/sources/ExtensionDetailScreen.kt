@@ -382,13 +382,63 @@ fun ExtensionDetailScreen(
                                         failingStep = failingStep,
                                         reason = failedResult?.detail
                                             ?: healthNow.summaryLine(),
-                                        appVersion = app.xreader.BuildConfig.VERSION_NAME
+                                        appVersion = app.xreader.BuildConfig.VERSION_NAME,
+                                        // v1.0.6: the last
+                                        // Repair's record rides
+                                        // along when one exists.
+                                        repair = state.lastRepair,
+                                        // v1.0.6 (W3.5): the
+                                        // payload says when this
+                                        // source reads through
+                                        // the browser view.
+                                        browserView =
+                                            state.linkConfig?.needsRendering == true
                                     )
                                 )
                             )
                             detailsCopied = true
                         }) {
                             Text(if (detailsCopied) "Copied ✓" else "Copy details")
+                        }
+                    }
+                    // v1.0.6: the last Repair, persisted — what
+                    // it did and what each proposer did, in
+                    // plain words. A Repair's outcome used to
+                    // live only in a message that vanished; now
+                    // it stays here and rides along in Copy
+                    // details.
+                    val lastRepair = state.lastRepair
+                    if (lastRepair != null) {
+                        Text(
+                            "Last repair",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            app.xreader.data.extension.lastCheckedLine(
+                                lastRepair.repairedAtMillis,
+                                System.currentTimeMillis()
+                            ).replace("Last checked", "Ran") +
+                                if (lastRepair.saved) {
+                                    " — the rules were rebuilt and saved."
+                                } else {
+                                    " — the rules weren't changed."
+                                },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (lastRepair.note.isNotBlank()) {
+                            Text(
+                                lastRepair.note,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        lastRepair.stageLines.forEach { line ->
+                            Text(
+                                "· $line",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme
+                                    .colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
@@ -419,6 +469,32 @@ fun ExtensionDetailScreen(
                                 color = MaterialTheme.colorScheme
                                     .onSurfaceVariant
                             )
+                            // v1.0.6 (W3.5/Q5): the reading mode,
+                            // stated plainly on the page.
+                            when {
+                                state.linkConfig?.needsRendering == true ->
+                                    Text(
+                                        "This site builds its pages as you " +
+                                            "look at them, so Xreader reads " +
+                                            "them with its built-in browser " +
+                                            "view. Everything looks the same — " +
+                                            "pages may just take a few " +
+                                            "seconds longer.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                state.browserViewNeeded ->
+                                    Text(
+                                        "This site has started building its " +
+                                            "pages with JavaScript — run " +
+                                            "Repair above and Xreader will set " +
+                                            "up the browser view for it.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                            }
                             XreaderPrimaryButton(
                                 text = "Edit parser rules",
                                 onClick = { viewModel.openParserEditor() },

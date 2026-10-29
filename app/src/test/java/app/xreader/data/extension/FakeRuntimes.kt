@@ -1,5 +1,8 @@
 package app.xreader.data.extension
 
+import app.xreader.core.error.AppError
+import app.xreader.core.error.AppResult
+import app.xreader.extensionapi.HostResponse
 import app.xreader.extensionapi.Source
 import app.xreader.extensionapi.SourceContext
 
@@ -28,6 +31,42 @@ class FakeJsRuntime(
     }
 
     override fun close() = Unit
+}
+
+/**
+ * v1.0.6 (W6.2): a [RenderedPageFetcher] that never touches a
+ * browser — the "rendered DOM" for each URL is whatever the test
+ * supplies, and every call is recorded so routing contracts can
+ * assert renders happened (or provably did NOT happen). A URL with
+ * no page answers the same typed failure the real fetcher gives
+ * for a page it couldn't build.
+ */
+class FakeRenderedFetcher(
+    private val pages: Map<String, String> = emptyMap(),
+    private val fallback: (String) -> String? = { null }
+) : RenderedPageFetcher {
+
+    val calls = mutableListOf<String>()
+
+    override suspend fun fetchRendered(
+        url: String,
+        sessionKey: String,
+        permissions: ExtensionPermissions,
+        waitForSelector: String?
+    ): AppResult<HostResponse> {
+        calls += url
+        val body = pages[url] ?: fallback(url)
+            ?: return AppResult.Err(
+                AppError.ProviderDown(
+                    "browser view",
+                    retryable = true,
+                    detail = "no rendered page for $url"
+                )
+            )
+        return AppResult.Ok(
+            HostResponse(status = 200, body = body, finalUrl = url)
+        )
+    }
 }
 
 /** A DexLoader that pretends to load: returns one inert source. */

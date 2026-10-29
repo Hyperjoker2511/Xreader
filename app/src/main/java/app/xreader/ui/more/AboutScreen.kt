@@ -66,6 +66,36 @@ fun AboutScreen(onBack: () -> Unit) {
                     style = MaterialTheme.typography.titleMedium
                 )
                 listOf(
+                    // v1.0.6 (repair records, the browser view,
+                    // the Library look).
+                    "Repair now picks a fair test book from the " +
+                        "site's own list — and leaves a short " +
+                        "written note of what it did on the " +
+                        "source's page, so nothing important " +
+                        "disappears with a passing message.",
+                    "A source no longer fails just because its " +
+                        "test book's chapters are all paid: good " +
+                        "rules are kept, and the source simply " +
+                        "works \u201cwith limits\u201d.",
+                    "Sites that build their pages with scripts " +
+                        "can now be read through the built-in " +
+                        "browser view. It never looks like a " +
+                        "browser — you only see Xreader's own " +
+                        "screens, plus a sign-in page when a site " +
+                        "asks for one. Its switch is in Customise.",
+                    "The source health check reads the little " +
+                        "lock marks on chapter lists properly " +
+                        "now, so paid chapters aren't mistaken " +
+                        "for broken ones.",
+                    "If your connection is too slow to finish " +
+                        "checking a site, Repair now says that " +
+                        "plainly instead of blaming the site.",
+                    "Your library looks better: books without " +
+                        "covers get calm violet tiles instead of " +
+                        "clashing colours, long titles wrap over " +
+                        "two full lines instead of being cut off " +
+                        "mid-word, and the header pill now reads " +
+                        "\u201cLevel\u201d with your level number.",
                     // v1.0.5.1 (the hotfix).
                     "Fixed: a known site's proven setup could be " +
                         "silently skipped when its book page " +

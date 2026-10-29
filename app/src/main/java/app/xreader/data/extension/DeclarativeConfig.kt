@@ -25,6 +25,15 @@ data class DeclarativeConfig(
     /** v1.0.1: true when the test-drive could NOT verify search —
      * the source page must say so plainly and offer "Set up search". */
     val searchNeedsSetup: Boolean = false,
+    /**
+     * v1.0.6 (W1.3): the source's pages are JavaScript shells — every
+     * fetch for this source goes through the browser view
+     * ([RenderedPageFetcher]) instead of the static client. Written
+     * ONLY by a drive that proved the source rendered (plan triggers
+     * TR1 / TR4-flip, Q5); defaulted so every pre-v1.0.6 config file
+     * decodes unchanged and unmarked.
+     */
+    val needsRendering: Boolean = false,
     /** v1.0.1: a book page on this site that probing proved readable
      * — the "Set up search" retry re-detects from this page. */
     val sampleBookUrl: String? = null,

@@ -3,6 +3,7 @@ package app.xreader.data.extension
 import app.xreader.core.error.AppError
 import app.xreader.core.error.AppResult
 import app.xreader.core.error.ErrorText
+import app.xreader.data.net.HttpTransport
 import app.xreader.extensionapi.HostHtml
 import app.xreader.extensionapi.HostLog
 import app.xreader.extensionapi.HostStore
@@ -67,6 +68,17 @@ class LinkProber(
          * lock-marked (paid) on the site. The sampled chapter is
          * always an unlocked one. */
         val lockedChapterCount: Int = 0,
+        /** v1.0.6: the drive listed the book's chapters but
+         * could not sample any chapter text, because EVERY
+         * chapter on the test book is paid or locked. The
+         * candidate PASSED with this limit recorded — it is
+         * the one and only text-step outcome allowed to pass
+         * without a proven chapter; any other text failure
+         * (empty, unreadable, a paywall notice on an unlocked
+         * chapter, a fetch error) still fails the candidate.
+         * In candidate ranking a pass with this limit ranks
+         * below any fully-proven pass. */
+        val allChaptersLocked: Boolean = false,
         /** v1.0.5 (A6): the driven book page carried a cover the
          * source can show. False is surfaced as a warning, never
          * silently (D19's letter tiles). */
@@ -92,9 +104,40 @@ class LinkProber(
         val host: String
     )
 
+    /**
+     * One proposer's story in a probe (v1.0.6): which proposer
+     * ran, the furthest step it reached ("book page",
+     * "chapter list", "chapter text", "passed"), and a short
+     * plain reason. One line per candidate actually driven —
+     * persisted by Repair and pasted into problem details, so
+     * a failure is debuggable from the user's own report
+     * instead of a vanished on-screen message.
+     */
+    data class StageLine(
+        val proposer: String,
+        val step: String,
+        val detail: String
+    ) {
+        /** The one-line rendering used in notes and pastes. */
+        fun render(): String = "$proposer — $step: $detail"
+    }
+
     sealed interface Outcome {
-        data class Ready(val draft: Draft) : Outcome
-        data class LoginRequired(val loginUrl: String, val host: String) : Outcome
+        data class Ready(
+            val draft: Draft,
+            /** v1.0.6: every proposer's stage line, in the
+             * order they were driven. */
+            val stageLines: List<StageLine> = emptyList()
+        ) : Outcome
+
+        data class LoginRequired(
+            val loginUrl: String,
+            val host: String,
+            /** v1.0.6 (W4): the page asks for a human check, not
+             * (only) a password — the sign-in screen opens in its
+             * SITE_CHECK mode. */
+            val siteCheck: Boolean = false
+        ) : Outcome
 
         /**
          * A failed probe. [proposersTried] (v1.0.5.1) names the
@@ -102,10 +145,13 @@ class LinkProber(
          * words — empty when the probe refused before any stage
          * ran (a bad link, an unreachable page, a JS shell), so a
          * failure report starts from facts instead of guesses.
+         * [stageLines] (v1.0.6) adds the per-proposer detail:
+         * the furthest step each one reached and why it stopped.
          */
         data class Failed(
             val message: String,
-            val proposersTried: List<String> = emptyList()
+            val proposersTried: List<String> = emptyList(),
+            val stageLines: List<StageLine> = emptyList()
         ) : Outcome
     }
 
@@ -145,15 +191,17 @@ class LinkProber(
             ?: return Outcome.Failed("That doesn't look like a web address — check the link and try again.")
         val host = CookieParsing.hostOf(url)
             ?: return Outcome.Failed("That doesn't look like a web address — check the link and try again.")
-        val probeClient = contextFactory.clientFor(
-            sessionKey = ExtensionHttpClient.linkProbeSessionKey(host),
-            label = host,
-            permissions = ExtensionPermissions(domains = listOf(host)),
-            rateLimiter = RateLimiter(minIntervalMs = 0)
-        )
-        val context = probeContext(probeClient, host)
+        // v1.0.6 (W2/TR1): probes escalate — a page that arrives
+        // as a JavaScript shell is re-fetched through the browser
+        // view once, and the RENDERED page is what gets studied
+        // below. With no renderer wired (or the policy saying no)
+        // the probe runs on the static client exactly as before.
+        val stack = probeStack(host)
+        val escalating = stack.escalating
+        val fetcher = stack.fetcher
+        val context = probeContext(fetcher, host)
 
-        val firstFetch = probeClient.get(url)
+        val firstFetch = fetcher.get(url)
         val firstResponse = when (firstFetch) {
             is AppResult.Err -> return Outcome.Failed(
                 "Xreader couldn't open that page. " +
@@ -163,10 +211,15 @@ class LinkProber(
         }
         var bookUrl = firstResponse.finalUrl.ifBlank { url }
         var bookDoc: Document = Jsoup.parse(firstResponse.body, bookUrl)
+        // v1.0.6 (W4): a bot-check interstitial routes to the same
+        // sign-in screen in its SITE_CHECK mode — the person does
+        // the check once; the saved session carries it afterwards.
+        val siteCheck = SiteCheck.hasChallengeMarkers(bookDoc)
         if (firstResponse.status in setOf(401, 403) ||
-            LinkInference.needsLogin(bookDoc, bookUrl)
+            LinkInference.needsLogin(bookDoc, bookUrl) ||
+            siteCheck
         ) {
-            return Outcome.LoginRequired(bookUrl, host)
+            return Outcome.LoginRequired(bookUrl, host, siteCheck = siteCheck)
         }
         if (firstResponse.status !in 200..299) {
             return Outcome.Failed(
@@ -177,11 +230,24 @@ class LinkProber(
         // ANY static pipeline — refuse plainly, install nothing,
         // and never imply the AI detector would have saved it
         // (it reads the same fetched HTML).
+        // v1.0.6: a page STILL a shell at this point was already
+        // re-fetched through the browser view by the fetch layer
+        // whenever that was allowed (TR1) — the copy says which
+        // of the two honest things happened. When no render was
+        // attempted (no renderer, master switch off, background),
+        // the refusal is the pre-v1.0.6 one, word for word.
         if (LinkInference.isJsShell(bookDoc)) {
             return Outcome.Failed(
-                "This site loads its pages with JavaScript — Xreader can't read it yet, " +
-                    "so no source was added. The page only exists after the site's own " +
-                    "scripts run, which no automatic detector can follow."
+                if (escalating?.renderedAny == true) {
+                    "This site builds its pages with JavaScript, and even the " +
+                        "browser view couldn't get it to show its books — it may " +
+                        "need a sign-in or a quick human check first, or it may " +
+                        "have changed. No source was added."
+                } else {
+                    "This site loads its pages with JavaScript — Xreader can't read it yet, " +
+                        "so no source was added. The page only exists after the site's own " +
+                        "scripts run, which no automatic detector can follow."
+                }
             )
         }
 
@@ -198,13 +264,54 @@ class LinkProber(
         // failure so the next diagnosis (Repair's note, a
         // support paste) starts from facts, not guesses.
         val proposersTried = mutableListOf<String>()
+        // v1.0.6: one stage line per candidate actually driven
+        // — the probe's own log, carried out on Ready and
+        // Failed alike so Repair can persist it and a pasted
+        // problem report shows what each proposer did.
+        val stageLines = mutableListOf<StageLine>()
+        // v1.0.6 (W2): when the browser view read pages during
+        // this probe, the outcome's log leads with that fact —
+        // Repair persists it, and the Details page can explain
+        // why the source was flipped to the browser view (Q5).
+        fun outcomeLines(): List<StageLine> =
+            if (escalating?.renderedAny == true) {
+                listOf(
+                    StageLine(
+                        "browser view", "pages",
+                        "pages were read with the browser view — this " +
+                            "site builds them with JavaScript"
+                    )
+                ) + stageLines
+            } else {
+                stageLines.toList()
+            }
         fun tried(tag: String) {
             if (tag !in proposersTried) proposersTried += tag
         }
-        fun consider(config: DeclarativeConfig, driveBookUrl: String, drive: ScoredDrive) {
+        fun consider(
+            proposer: String,
+            config: DeclarativeConfig,
+            driveBookUrl: String,
+            drive: ScoredDrive
+        ) {
             when (val result = drive.result) {
                 is AppResult.Ok -> {
+                    stageLines += if (result.value.allChaptersLocked) {
+                        StageLine(
+                            proposer, "chapter text",
+                            "all ${result.value.chapterCount} chapters on " +
+                                "the test book are paid or locked, so the " +
+                                "text couldn't be checked — passed with " +
+                                "that limit"
+                        )
+                    } else {
+                        StageLine(proposer, "passed", "the test-drive passed")
+                    }
+                    // Rank: a fully-proven candidate always
+                    // beats a pass-with-limits (v1.0.6), then
+                    // search proof, chapter count, text length.
                     val rank = listOf(
+                        if (result.value.allChaptersLocked) 0 else 1,
                         if (result.value.searchVerified) 1 else 0,
                         result.value.chapterCount,
                         result.value.chapterTextLength
@@ -215,7 +322,16 @@ class LinkProber(
                         bestDraft = Draft(
                             config = config.copy(
                                 searchNeedsSetup = config.search == null ||
-                                    !result.value.searchVerified
+                                    !result.value.searchVerified,
+                                // v1.0.6 (TR1/Q5): a drive that
+                                // passed with rendered pages marks
+                                // the saved source — its fetches go
+                                // straight to the browser view from
+                                // now on (TR3). Repair flips a
+                                // source the same way, and Details
+                                // says so plainly.
+                                needsRendering = config.needsRendering ||
+                                    escalating?.renderedAny == true
                             ),
                             testDrive = result.value.copy(
                                 reviewsFound = config.reviews != null
@@ -226,6 +342,15 @@ class LinkProber(
                     }
                 }
                 is AppResult.Err -> {
+                    stageLines += StageLine(
+                        proposer,
+                        when (drive.steps) {
+                            0 -> "book page"
+                            1 -> "chapter list"
+                            else -> "chapter text"
+                        },
+                        badFileReason(result.error)
+                    )
                     val failure = bestFailure
                     if (failure == null || drive.steps > failure.first) {
                         bestFailure = drive.steps to badFileReason(result.error)
@@ -240,10 +365,12 @@ class LinkProber(
         // candidate failed DEEP into its drive (the text step),
         // its precise reason beats a vaguer local one.
         fun failOrDraft(message: String): Outcome =
-            bestDraft?.let { Outcome.Ready(it) } ?: Outcome.Failed(
-                bestFailure?.takeIf { it.first >= 2 }?.second ?: message,
-                proposersTried.toList()
-            )
+            bestDraft?.let { Outcome.Ready(it, outcomeLines()) }
+                ?: Outcome.Failed(
+                    bestFailure?.takeIf { it.first >= 2 }?.second ?: message,
+                    proposersTried.toList(),
+                    outcomeLines()
+                )
 
         // ── v1.0.5 (A11): the known-sites fast lane ─────────────
         // A recognised domain's known-good shape is driven FIRST,
@@ -290,7 +417,7 @@ class LinkProber(
                     )
                     tried("fast lane")
                     consider(
-                        laneFull, sample,
+                        "fast lane", laneFull, sample,
                         testDriveScored(laneFull, sample, context)
                     )
                 }
@@ -299,7 +426,9 @@ class LinkProber(
         // The add path stops at a passing lane drive; Repair
         // (tryAllProposers) keeps going and lets every candidate
         // compete on rank (A4).
-        bestDraft?.let { if (!tryAllProposers) return Outcome.Ready(it) }
+        bestDraft?.let {
+            if (!tryAllProposers) return Outcome.Ready(it, outcomeLines())
+        }
 
         tried("inference")
         var analysis = LinkInference.analyseBookPage(bookDoc, bookUrl)
@@ -311,7 +440,7 @@ class LinkProber(
                 var rescuedBookPage = false
                 val bookLink = LinkInference.findBookPageLink(bookDoc, bookUrl)
                 if (bookLink != null && bookLink != bookUrl) {
-                    val bookFetch = probeClient.get(bookLink)
+                    val bookFetch = fetcher.get(bookLink)
                     if (bookFetch is AppResult.Ok && bookFetch.value.status in 200..299) {
                         bookUrl = bookFetch.value.finalUrl.ifBlank { bookLink }
                         bookDoc = Jsoup.parse(bookFetch.value.body, bookUrl)
@@ -379,7 +508,7 @@ class LinkProber(
         }
 
         // Fetch the first chapter and check its text is readable.
-        val chapterFetch = probeClient.get(book.firstChapterUrl)
+        val chapterFetch = fetcher.get(book.firstChapterUrl)
         val chapterResponse = when (chapterFetch) {
             is AppResult.Err -> return failOrDraft(
                 "Xreader found the chapter list but couldn't open a chapter. " +
@@ -479,7 +608,7 @@ class LinkProber(
                 if (searchSpec != null) break
                 val spec = runCatching {
                     if (form.method == "POST") {
-                        val fetched = probeClient.post(
+                        val fetched = fetcher.post(
                             form.actionUrl,
                             "${form.inputName}=${SearchCandidates.encodeQuery(searchWord)}",
                             contentType = "application/x-www-form-urlencoded"
@@ -508,7 +637,7 @@ class LinkProber(
                             "{query}", SearchCandidates.encodeQuery(searchWord)
                         ).replace("{page}", "1")
                         val listing = analyseResults {
-                            val fetched = probeClient.get(verifyUrl)
+                            val fetched = fetcher.get(verifyUrl)
                             if (fetched is AppResult.Ok && fetched.value.status in 200..299) {
                                 fetched.value.body to fetched.value.finalUrl
                             } else {
@@ -537,7 +666,7 @@ class LinkProber(
                     tried("templates")
                     val spec = runCatching {
                         val listing = analyseResults {
-                            val fetched = probeClient.get(candidateUrl)
+                            val fetched = fetcher.get(candidateUrl)
                             if (fetched is AppResult.Ok && fetched.value.status in 200..299) {
                                 fetched.value.body to fetched.value.finalUrl
                             } else {
@@ -586,7 +715,7 @@ class LinkProber(
         if (searchSpec == null) searchSpec = unprovenSpec
         val baseUrl = baseOf(bookUrl)
         val popularSpec = runCatching {
-            val homeFetch = probeClient.get(baseUrl)
+            val homeFetch = fetcher.get(baseUrl)
             if (homeFetch is AppResult.Ok && homeFetch.value.status in 200..299) {
                 val homeDoc = Jsoup.parse(homeFetch.value.body, homeFetch.value.finalUrl)
                 LinkInference.analyseListingPage(homeDoc, homeFetch.value.finalUrl, bookUrl)
@@ -651,27 +780,32 @@ class LinkProber(
             if (entry != null) {
                 config = KnownSites.applyOverrides(entry, config)
             }
-            consider(config, bookUrl, testDriveScored(config, bookUrl, context))
+            consider(
+                if (candidate === heuristicAlt) "heuristics" else "inference",
+                config, bookUrl, testDriveScored(config, bookUrl, context)
+            )
             bestDraft?.let { draft ->
                 // The add path stops at the first passing
                 // candidate (today's behaviour); Repair
                 // (tryAllProposers) drives them all and keeps
                 // the best.
-                if (!tryAllProposers) return Outcome.Ready(draft)
+                if (!tryAllProposers) return Outcome.Ready(draft, outcomeLines())
             }
         }
 
         // ── The mandatory test-drive has spoken ─────────────────
-        bestDraft?.let { return Outcome.Ready(it) }
+        bestDraft?.let { return Outcome.Ready(it, outcomeLines()) }
         return Outcome.Failed(
             bestFailure?.second
                 ?: "Xreader couldn't read that page well enough to build a source from it.",
-            proposersTried.toList()
+            proposersTried.toList(),
+            outcomeLines()
         )
     }
 
-    /** True when candidate rank [a] beats [b]: search proof
-     * first, then chapter count, then readable text length.
+    /** True when candidate rank [a] beats [b]: fully-proven
+     * first (a pass-with-limits never beats a proven pass),
+     * then search proof, chapter count, readable text length.
      * Ties keep the EARLIER proposer (the caller only replaces
      * on a strict win). */
     private fun rankIsBetter(a: List<Int>, b: List<Int>): Boolean {
@@ -686,6 +820,9 @@ class LinkProber(
      * AI-proposed (Phase 5): run the real declarative engine against
      * the live site; the book's title must resolve, the chapter list
      * must be non-empty, and one chapter must yield readable text.
+     * The single exception (v1.0.6): when every chapter on the test
+     * book is paid or locked, the drive passes with that limit
+     * recorded instead ([TestDriveResult.allChaptersLocked]).
      * Nothing is saved anywhere by this function.
      */
     suspend fun testDrive(
@@ -703,13 +840,11 @@ class LinkProber(
     ): AppResult<TestDriveResult> {
         val host = CookieParsing.hostOf(bookUrl) ?: config.baseUrl.let { CookieParsing.hostOf(it) }
             ?: return AppResult.Err(AppError.BadFile("that page address doesn't look right"))
-        val probeClient = contextFactory.clientFor(
-            sessionKey = ExtensionHttpClient.linkProbeSessionKey(host),
-            label = host,
-            permissions = ExtensionPermissions(domains = listOf(host)),
-            rateLimiter = RateLimiter(minIntervalMs = 0)
-        )
-        return testDrive(config, bookUrl, probeContext(probeClient, host))
+        // v1.0.6: a marked config's drive renders its fetches
+        // (needsRendering honoured); an unmarked one escalates
+        // on shells like any probe.
+        val stack = probeStack(host) { config.needsRendering }
+        return testDrive(config, bookUrl, probeContext(stack.fetcher, host))
     }
 
     /**
@@ -732,13 +867,8 @@ class LinkProber(
     ): AppResult<TestDriveResult> {
         val host = CookieParsing.hostOf(config.baseUrl)
             ?: return AppResult.Err(AppError.BadFile("that site address doesn't look right"))
-        val probeClient = contextFactory.clientFor(
-            sessionKey = ExtensionHttpClient.linkProbeSessionKey(host),
-            label = host,
-            permissions = ExtensionPermissions(domains = listOf(host)),
-            rateLimiter = RateLimiter(minIntervalMs = 0)
-        )
-        val context = probeContext(probeClient, host)
+        val stack = probeStack(host) { config.needsRendering }
+        val context = probeContext(stack.fetcher, host)
         val source = DeclarativeSource(config, context)
         val first = runCatching { source.popular(1).books.firstOrNull() }
             .getOrNull()
@@ -749,6 +879,49 @@ class LinkProber(
             )
         return testDrive(config.copy(sampleBookUrl = first.id), first.id, context)
     }
+
+    /**
+     * v1.0.6: pick a FRESH sample book for a Repair probe from
+     * the config's own catalogue — the stored `sampleBookUrl`
+     * is never trusted as the seed, because a stored sample
+     * can be exactly the wrong book (the device case: a book
+     * whose every listed chapter is paid or locked, which no
+     * candidate config could ever prove text against). Up to
+     * the first [MAX_SAMPLE_BOOKS] catalogue books are read;
+     * the first with at least one unlocked chapter wins. When
+     * none qualifies, the first book WITH a chapter list is
+     * returned (the drive's pass-with-limits then applies).
+     * Null when the catalogue can't be read at all — the
+     * caller falls back to the stored seed. Bounded: at most
+     * [MAX_SAMPLE_BOOKS] book-page reads (plus the catalogue
+     * itself), each through the same probe client a probe
+     * would use.
+     */
+    suspend fun freshSampleUrl(config: DeclarativeConfig): String? =
+        withContext(Dispatchers.Default) {
+            val host = CookieParsing.hostOf(config.baseUrl)
+                ?: return@withContext null
+            val stack = probeStack(host) { config.needsRendering }
+            val source = DeclarativeSource(
+                config, probeContext(stack.fetcher, host)
+            )
+            val books = runCatching { source.popular(1).books }
+                .getOrDefault(emptyList())
+                .take(MAX_SAMPLE_BOOKS)
+            var firstWithChapters: String? = null
+            for (book in books) {
+                val chapters = runCatching { source.chapters(book) }
+                    .getOrDefault(emptyList())
+                if (chapters.isEmpty()) continue
+                if (firstWithChapters == null) firstWithChapters = book.id
+                val lockedIds = runCatching { source.lockedChapterIds(book) }
+                    .getOrDefault(emptySet())
+                if (chapters.any { it.id !in lockedIds }) {
+                    return@withContext book.id
+                }
+            }
+            firstWithChapters
+        }
 
     /** A test-drive outcome plus how far it got (v1.0.5, A4):
      * steps 0 = page/title, 1 = chapter list, 2 = chapter text,
@@ -765,6 +938,81 @@ class LinkProber(
         context: SourceContext
     ): AppResult<TestDriveResult> = testDriveScored(config, bookUrl, context).result
 
+    /** The search filtering proof's outcome (A5), shared by
+     * the fully-proven drive result and the v1.0.6
+     * pass-with-limits one. */
+    private data class SearchProof(
+        val verified: Boolean,
+        val proof: String?,
+        val failure: String?
+    )
+
+    /**
+     * v1.0.5 (A5): search must PROVE it filters — a real word
+     * from the book's title, a nonsense control word, and the
+     * unfiltered catalogue, judged by SearchFilterProof.
+     */
+    private fun verifySearch(
+        source: DeclarativeSource,
+        config: DeclarativeConfig,
+        bookTitle: String
+    ): SearchProof {
+        if (config.search == null) return SearchProof(false, null, null)
+        val word = distinctiveWord(bookTitle)
+        var verified = false
+        var proof: String? = null
+        var failure: String? = null
+        runCatching {
+            val page = source.search(word, 1)
+            val host = CookieParsing.hostOf(config.baseUrl)
+            val resolving = page.books.count { candidate ->
+                val candidateHost = CookieParsing.hostOf(candidate.id)
+                candidateHost != null && candidateHost == host &&
+                    candidate.id != config.search.url
+            }
+            val controlIds = runCatching {
+                source.search(SearchFilterProof.NONSENSE_TERM, 1)
+                    .books.map { it.id }.toSet()
+            }.getOrDefault(emptySet())
+            val catalogueIds = if (config.popular != null || config.latest != null) {
+                runCatching {
+                    source.popular(1).books.map { it.id }.toSet()
+                }.getOrNull()
+            } else {
+                null
+            }
+            val verdict = SearchFilterProof.judge(
+                page.books.map { it.id }.toSet(), controlIds, catalogueIds
+            )
+            if (resolving >= 1 && verdict.verified) {
+                verified = true
+                proof = "Search works — ‘$word’ found " +
+                    "${page.books.size} book(s)"
+            } else {
+                failure = verdict.reason
+                    ?: "search results didn't lead back to a book page"
+            }
+        }
+        if (!verified && failure == null) {
+            failure = "search couldn't be checked — the site didn't answer it"
+        }
+        return SearchProof(verified, proof, failure)
+    }
+
+    /**
+     * v1.0.6: is this failure a TIMEOUT — the connection, not
+     * the site, gave up? By the time a fetch error reaches the
+     * drive it has been unwrapped into a plain message (the
+     * host facade throws the transport's detail as a message),
+     * so detection walks the cause chain for the exception
+     * itself and matches the transport's timeout detail text.
+     */
+    private fun isTimeoutFailure(error: Throwable): Boolean =
+        generateSequence(error) { it.cause }.any { link ->
+            link is java.net.SocketTimeoutException ||
+                link.message?.contains(HttpTransport.TIMEOUT_DETAIL) == true
+        }
+
     /**
      * The scored test-drive (v1.0.5: A1 honest steps, A3
      * locked-aware sampling, A5 filtering proof, A6 cover flag).
@@ -772,8 +1020,13 @@ class LinkProber(
      * could pass and let the text step take the blame, D17); the
      * text step samples an UNLOCKED chapter — the first in
      * reading order, falling forward when a chapter is
-     * individually unreadable — and reports the distinct
-     * paid/locked state when no unlocked chapter exists.
+     * individually unreadable. v1.0.6: when EVERY chapter on the
+     * test book is paid or locked the drive PASSES WITH LIMITS
+     * (the config listed the chapters; the text is simply
+     * unprovable against a paywalled book) — the only text-step
+     * outcome allowed to pass without a proven chapter. And a
+     * fetch timeout is retried once, then reported as the
+     * connection being too slow, never as a site fault.
      */
     private suspend fun testDriveScored(
         config: DeclarativeConfig,
@@ -783,14 +1036,30 @@ class LinkProber(
         val source = DeclarativeSource(config, context)
         val testBook = SourceBook(id = bookUrl, title = "")
         val fetched = runCatching { source.detailsAndChapters(testBook) }
+            .recoverCatching { first ->
+                when {
+                    first is kotlinx.coroutines.CancellationException ->
+                        throw first
+                    // v1.0.6: one retry for a timed-out page —
+                    // a slow link gets a second chance before
+                    // the drive judges anything.
+                    isTimeoutFailure(first) ->
+                        source.detailsAndChapters(testBook)
+                    else -> throw first
+                }
+            }
             .getOrElse { e ->
                 return ScoredDrive(
                     0,
                     AppResult.Err(
                         AppError.BadFile(
-                            "The test read failed: " +
-                                (e.message?.take(160)
-                                    ?: "the site didn't answer as expected")
+                            if (isTimeoutFailure(e)) {
+                                SLOW_CONNECTION_REASON
+                            } else {
+                                "The test read failed: " +
+                                    (e.message?.take(160)
+                                        ?: "the site didn't answer as expected")
+                            }
                         )
                     )
                 )
@@ -821,14 +1090,43 @@ class LinkProber(
             .getOrDefault(emptySet())
         val unlocked = chapters.filter { it.id !in lockedIds }
         if (unlocked.isEmpty()) {
+            // v1.0.6: PASS WITH LIMITS. The config DID its job —
+            // it listed every chapter; the text is unprovable
+            // only because this test book's chapters are all
+            // paid or locked. Discarding correct rules over a
+            // paywalled sample book was the device trap (a
+            // stored all-locked sample made Repair unsavable
+            // forever). The limit is recorded on the result,
+            // the candidate ranks below any fully-proven one,
+            // and the search proof still runs — HARD BOUNDARY:
+            // this explicit all-locked outcome is the ONLY
+            // text-step result that passes without a proven
+            // chapter; every other text failure below still
+            // fails the candidate.
+            val search = verifySearch(source, config, details.title)
+            val coverFoundLocked = details.coverUrl != null
             return ScoredDrive(
-                2,
-                AppResult.Err(
-                    AppError.BadFile(
-                        "The test read found ${chapters.size} chapters, but every one " +
-                            "is paid or locked on this site — Xreader can't read locked " +
-                            "chapters, so the source can't be proven. Signing in on the " +
-                            "source's page (if you have an account) may unlock them."
+                3,
+                AppResult.Ok(
+                    TestDriveResult(
+                        bookTitle = details.title,
+                        chapterCount = chapters.size,
+                        firstChapterTitle = chapters.first().name,
+                        chapterTextPreview = "",
+                        chapterTextLength = 0,
+                        searchVerified = search.verified,
+                        searchProof = search.proof,
+                        searchFailure = search.failure,
+                        provenChapters = chapters.map { it.id to it.name },
+                        lockedChapterCount = lockedIds.size,
+                        coverFound = coverFoundLocked,
+                        coverWarning = if (coverFoundLocked) {
+                            null
+                        } else {
+                            "No cover image was found on the book page — this book will " +
+                                "show a plain letter tile until the site gives it one."
+                        },
+                        allChaptersLocked = true
                     )
                 )
             )
@@ -837,19 +1135,41 @@ class LinkProber(
         var bestText = ""
         var lockedEvidence = false
         var firstError: Throwable? = null
+        var timeoutError: Throwable? = null
         for (candidate in unlocked.take(MAX_TEXT_SAMPLES)) {
-            val text = runCatching {
+            fun readText(): String {
                 source.chapterContent(candidate)
-                source.contentOf(candidate.id)?.blocks?.joinToString("\n") { block ->
-                    when (block) {
-                        is app.xreader.domain.content.ChapterBlock.Paragraph -> block.text
-                        is app.xreader.domain.content.ChapterBlock.Heading -> block.text
-                        else -> ""
+                return source.contentOf(candidate.id)?.blocks
+                    ?.joinToString("\n") { block ->
+                        when (block) {
+                            is app.xreader.domain.content.ChapterBlock.Paragraph ->
+                                block.text
+                            is app.xreader.domain.content.ChapterBlock.Heading ->
+                                block.text
+                            else -> ""
+                        }
+                    }?.trim().orEmpty()
+            }
+            val text = runCatching { readText() }.getOrElse { e ->
+                when {
+                    e is kotlinx.coroutines.CancellationException -> throw e
+                    // v1.0.6: a timed-out chapter fetch is
+                    // retried once before it counts as a failure.
+                    isTimeoutFailure(e) ->
+                        runCatching { readText() }.getOrElse { retryError ->
+                            if (retryError is
+                                kotlinx.coroutines.CancellationException
+                            ) {
+                                throw retryError
+                            }
+                            if (timeoutError == null) timeoutError = retryError
+                            ""
+                        }
+                    else -> {
+                        if (firstError == null) firstError = e
+                        ""
                     }
-                }?.trim().orEmpty()
-            }.getOrElse { e ->
-                if (firstError == null) firstError = e
-                ""
+                }
             }
             if (text.length > bestText.length) bestText = text
             if (text.length >= LinkInference.MIN_READABLE_CHARS) {
@@ -863,6 +1183,9 @@ class LinkProber(
             AppResult.Err(
                 AppError.BadFile(
                     when {
+                        // v1.0.6: the connection, not the site,
+                        // failed this drive — say so plainly.
+                        timeoutError != null -> SLOW_CONNECTION_REASON
                         lockedEvidence ->
                             "The test read opened a chapter, but it asks for payment " +
                                 "or sign-in instead of showing text — the readable " +
@@ -880,49 +1203,7 @@ class LinkProber(
             )
         )
         val text = bestText
-        // v1.0.5 (A5): search must PROVE it filters — a real word
-        // from the book's title, a nonsense control word, and the
-        // unfiltered catalogue, judged by SearchFilterProof.
-        var searchVerified = false
-        var searchProof: String? = null
-        var searchFailure: String? = null
-        if (config.search != null) {
-            val word = distinctiveWord(details.title)
-            runCatching {
-                val page = source.search(word, 1)
-                val host = CookieParsing.hostOf(config.baseUrl)
-                val resolving = page.books.count { candidate ->
-                    val candidateHost = CookieParsing.hostOf(candidate.id)
-                    candidateHost != null && candidateHost == host &&
-                        candidate.id != config.search.url
-                }
-                val controlIds = runCatching {
-                    source.search(SearchFilterProof.NONSENSE_TERM, 1)
-                        .books.map { it.id }.toSet()
-                }.getOrDefault(emptySet())
-                val catalogueIds = if (config.popular != null || config.latest != null) {
-                    runCatching {
-                        source.popular(1).books.map { it.id }.toSet()
-                    }.getOrNull()
-                } else {
-                    null
-                }
-                val verdict = SearchFilterProof.judge(
-                    page.books.map { it.id }.toSet(), controlIds, catalogueIds
-                )
-                if (resolving >= 1 && verdict.verified) {
-                    searchVerified = true
-                    searchProof = "Search works — ‘$word’ found " +
-                        "${page.books.size} book(s)"
-                } else {
-                    searchFailure = verdict.reason
-                        ?: "search results didn't lead back to a book page"
-                }
-            }
-            if (!searchVerified && searchFailure == null) {
-                searchFailure = "search couldn't be checked — the site didn't answer it"
-            }
-        }
+        val search = verifySearch(source, config, details.title)
         // v1.0.5 (A6): a missing cover is a flagged warning,
         // never a silent letter tile.
         val coverFound = details.coverUrl != null
@@ -935,9 +1216,9 @@ class LinkProber(
                     firstChapterTitle = provenChapter.name,
                     chapterTextPreview = text.take(LinkInference.PREVIEW_CHARS),
                     chapterTextLength = text.length,
-                    searchVerified = searchVerified,
-                    searchProof = searchProof,
-                    searchFailure = searchFailure,
+                    searchVerified = search.verified,
+                    searchProof = search.proof,
+                    searchFailure = search.failure,
                     provenChapters = chapters.map { it.id to it.name },
                     lockedChapterCount = lockedIds.size,
                     coverFound = coverFound,
@@ -1000,10 +1281,46 @@ class LinkProber(
     private fun badFileReason(error: AppError): String =
         (error as? AppError.BadFile)?.reason ?: ErrorText.of(error).message
 
+    /**
+     * v1.0.6 (W1/W2): the probe family's fetch stack for [host] —
+     * a fresh probe client, wrapped in the escalating decorator
+     * when a renderer is wired (null then, and [fetcher] is the
+     * client itself: the probe behaves exactly as it did before
+     * the browser view existed).
+     */
+    private data class ProbeStack(
+        val client: ExtensionHttpClient,
+        val escalating: EscalatingPageFetcher?
+    ) {
+        val fetcher: PageFetcher get() = escalating ?: client
+    }
+
+    private fun probeStack(
+        host: String,
+        needsRendering: () -> Boolean = { false }
+    ): ProbeStack {
+        val limiter = RateLimiter(minIntervalMs = 0)
+        val client = contextFactory.clientFor(
+            sessionKey = ExtensionHttpClient.linkProbeSessionKey(host),
+            label = host,
+            permissions = ExtensionPermissions(domains = listOf(host)),
+            rateLimiter = limiter
+        )
+        val escalating = contextFactory.escalatingFetcherOrNull(
+            client = client,
+            sessionKey = ExtensionHttpClient.linkProbeSessionKey(host),
+            purpose = RenderPurpose.PROBE,
+            needsRendering = needsRendering,
+            permissions = { ExtensionPermissions(domains = listOf(host)) },
+            rateLimiter = limiter
+        )
+        return ProbeStack(client, escalating)
+    }
+
     /** A minimal context for probing: host HTTP through the probe
-     * client, host HTML, a throwaway in-memory store. */
+     * fetcher, host HTML, a throwaway in-memory store. */
     private fun probeContext(
-        client: ExtensionHttpClient,
+        client: PageFetcher,
         label: String
     ): SourceContext {
         val memoryStore = object : HostStore {
@@ -1027,6 +1344,17 @@ class LinkProber(
     companion object {
         /** Chapters sampled for readable text per drive (A3). */
         const val MAX_TEXT_SAMPLES = 3
+
+        /** Catalogue books a Repair sample pick may read
+         * before falling back (v1.0.6). */
+        const val MAX_SAMPLE_BOOKS = 3
+
+        /** v1.0.6: the plain-words failure when the CONNECTION
+         * gave up mid-drive — the site is never blamed for a
+         * slow link. */
+        const val SLOW_CONNECTION_REASON =
+            "The connection was too slow to finish checking this site. " +
+                "Try again when your connection is better."
 
         fun normaliseUrl(raw: String): String? {
             var candidate = raw.trim()

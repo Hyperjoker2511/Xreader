@@ -32,6 +32,7 @@ import java.io.File
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -77,6 +78,21 @@ class AppContainer(context: Context) {
 
     val sourcePrefs: app.xreader.data.prefs.SourcePrefs =
         app.xreader.data.prefs.SourcePrefs(appContext.settingsDataStore)
+
+    /** v1.0.6 (W1/W5): the browser-view runtime — the master
+     * switch and performance tier mirrored from prefs, foreground
+     * state fed by the lifecycle callbacks in init, and the
+     * background-work depth the workers and the heal sweep count
+     * through `asBackgroundWork`. */
+    val renderRuntime: app.xreader.data.extension.RenderRuntime =
+        app.xreader.data.extension.RenderRuntime(
+            masterEnabledFlow = sourcePrefs.browserViewEnabled,
+            tierFlow = appearancePrefs.state.map { appearance ->
+                app.xreader.data.prefs.PerformancePolicy.resolve(
+                    appearance.performanceMode, totalRamMb(), false
+                ).tier
+            }
+        )
 
     /** v1.0.2 (R05): cover palettes, bounded by the performance
      * policy's budget for this device (resized when the policy's
@@ -212,6 +228,34 @@ class AppContainer(context: Context) {
             database.bookDao().getById(bookId)?.opdsServerId?.let { serverId ->
                 opdsCredentials.credentialsFor(serverId)
             }
+        },
+        browserDownloadDeferral = { item ->
+            // v1.0.6 (Q4): a browser-view source's downloads run
+            // only while the app is open — rendering never happens
+            // in the background. Checked per item, against the
+            // book's source marker.
+            val book = database.bookDao().getById(item.bookId)
+            val extensionId = book?.extensionId
+            val marked = if (
+                book != null &&
+                book.sourceType == app.xreader.data.db.SourceType.EXTENSION &&
+                extensionId != null
+            ) {
+                extensionService.sourcesOf(extensionId).getOrNull()
+                    ?.any { handle ->
+                        extensionService.declarativeConfigOf(handle)
+                            ?.needsRendering == true
+                    } == true
+            } else {
+                false
+            }
+            if (marked && !renderRuntime.appInForeground) {
+                "This book's source reads its pages with the browser view, " +
+                    "which only runs while the app is open — this download " +
+                    "will continue when you're back."
+            } else {
+                null
+            }
         }
     )
 
@@ -231,11 +275,25 @@ class AppContainer(context: Context) {
     val cleanerRuleStore: app.xreader.data.extension.CleanerRuleStore =
         app.xreader.data.extension.CleanerRuleStore(extensionStore)
 
+    /** v1.0.6 (W1.2): the device browser view behind the
+     * [app.xreader.data.extension.RenderedPageFetcher] seam —
+     * JVM tests substitute a fake and never load this class. */
+    val renderedPageFetcher: app.xreader.data.extension.RenderedPageFetcher =
+        app.xreader.data.extension.WebViewRenderedFetcher(
+            appContext, sessionStore
+        ) { renderRuntime.currentTier }
+
     val hostContextFactory: app.xreader.data.extension.HostContextFactory =
         app.xreader.data.extension.HostContextFactory(
             store = extensionStore,
             sessionStore = sessionStore,
-            transport = extensionTransport
+            transport = extensionTransport,
+            renderedFetcher = renderedPageFetcher,
+            renderRuntime = renderRuntime,
+            onRuntimeShell = { rowId ->
+                // TR4: recorded in prefs; Details offers Repair.
+                appScope.launch { sourcePrefs.markBrowserViewNeeded(rowId) }
+            }
         )
 
     val extensionService: app.xreader.data.extension.ExtensionService =
@@ -781,6 +839,47 @@ class AppContainer(context: Context) {
     fun acknowledgeCrash() = CrashGuard.acknowledgeCrash(appContext)
 
     init {
+        // v1.0.6 (W5): foreground tracking for the browser view —
+        // rendering permission and the browser-source download
+        // gate both key off whether a person is looking at the app.
+        (appContext as? android.app.Application)
+            ?.registerActivityLifecycleCallbacks(
+                object : android.app.Application.ActivityLifecycleCallbacks {
+                    private var startedActivities = 0
+
+                    override fun onActivityStarted(activity: android.app.Activity) {
+                        startedActivities++
+                        renderRuntime.appInForeground = startedActivities > 0
+                    }
+
+                    override fun onActivityStopped(activity: android.app.Activity) {
+                        startedActivities--
+                        renderRuntime.appInForeground = startedActivities > 0
+                    }
+
+                    override fun onActivityCreated(
+                        activity: android.app.Activity,
+                        savedInstanceState: android.os.Bundle?
+                    ) = Unit
+
+                    override fun onActivityResumed(
+                        activity: android.app.Activity
+                    ) = Unit
+
+                    override fun onActivityPaused(
+                        activity: android.app.Activity
+                    ) = Unit
+
+                    override fun onActivitySaveInstanceState(
+                        activity: android.app.Activity,
+                        outState: android.os.Bundle
+                    ) = Unit
+
+                    override fun onActivityDestroyed(
+                        activity: android.app.Activity
+                    ) = Unit
+                }
+            )
         // R04 one-time default-scheme priming: fresh installs get
         // Violet Night, established installs keep Ember/their look.
         // Runs before any screen composes (the container is built in

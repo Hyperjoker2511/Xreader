@@ -207,7 +207,11 @@ fun MainScaffold(container: AppContainer, appearance: AppearanceState) {
                     ).versionCode
                 }.getOrDefault(0)
                 if (installedCode > 0) {
-                    container.healSweep.runIfNeeded(installedCode)
+                    // v1.0.6 (W5.2): the sweep is background work —
+                    // its probes never render.
+                    container.renderRuntime.asBackgroundWork {
+                        container.healSweep.runIfNeeded(installedCode)
+                    }
                 }
             }
         }
@@ -724,10 +728,24 @@ private fun XreaderNavHost(
                         val firstHost = app.xreader.data.extension.ExtensionPermissions
                             .parse(ext.permissionsJson).domains.firstOrNull()
                         if (firstHost != null) {
+                            // v1.0.6 (W4.3): a browser-view source
+                            // whose health says NEEDS_SETUP almost
+                            // always wants the site's human check,
+                            // not a password — open in that mode.
+                            val detailState = viewModel.state.value
                             sourcesViewModel.startLogin(
                                 sessionKey = sourcesViewModel.sessionKeyFor(extId),
                                 url = "https://$firstHost",
-                                title = ext.displayName
+                                title = ext.displayName,
+                                mode = if (
+                                    detailState.linkConfig?.needsRendering == true &&
+                                    detailState.health?.state ==
+                                    app.xreader.data.extension.SourceHealthState.NEEDS_SETUP
+                                ) {
+                                    app.xreader.ui.sources.LoginMode.SITE_CHECK
+                                } else {
+                                    app.xreader.ui.sources.LoginMode.SIGN_IN
+                                }
                             )
                             navController.navigate("login")
                         } else {
@@ -771,7 +789,8 @@ private fun XreaderNavHost(
                     sourcesViewModel.startLogin(
                         sessionKey = loginRequest.sessionKey,
                         url = loginRequest.url,
-                        title = loginRequest.title
+                        title = loginRequest.title,
+                        mode = loginRequest.mode
                     )
                     navController.navigate("login")
                 },
@@ -1037,6 +1056,34 @@ private fun XreaderNavHost(
                 // lands on the source's Details page.
                 onOpenSourceDetails = { extId ->
                     navController.navigate("extensions/$extId")
+                },
+                // v1.0.6 (W4.3): the site-check door opens the
+                // app-styled check screen for the book's source.
+                onSiteCheck = { extId ->
+                    scope.launch {
+                        val ext = container.database
+                            .installedExtensionDao().getById(extId)
+                        val firstHost = ext?.let {
+                            app.xreader.data.extension.ExtensionPermissions
+                                .parse(it.permissionsJson)
+                                .domains.firstOrNull()
+                        }
+                        if (ext != null && firstHost != null) {
+                            sourcesViewModel.startLogin(
+                                sessionKey = sourcesViewModel
+                                    .sessionKeyFor(extId),
+                                url = "https://$firstHost",
+                                title = ext.displayName,
+                                mode = app.xreader.ui.sources
+                                    .LoginMode.SITE_CHECK
+                            )
+                            navController.navigate("login")
+                        } else {
+                            onPhaseNote(
+                                "This source doesn't declare a site to check"
+                            )
+                        }
+                    }
                 }
             )
         }

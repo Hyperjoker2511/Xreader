@@ -58,18 +58,18 @@ class ExtensionHttpClient(
     private val label: String,
     private val whitelist: () -> ExtensionPermissions,
     private val rateLimiter: RateLimiter
-) {
+) : PageFetcher {
 
-    suspend fun get(
+    override suspend fun get(
         url: String,
-        headers: Map<String, String> = emptyMap()
+        headers: Map<String, String>
     ): AppResult<HostResponse> = request("GET", url, null, null, headers)
 
-    suspend fun post(
+    override suspend fun post(
         url: String,
         body: String,
         contentType: String,
-        headers: Map<String, String> = emptyMap()
+        headers: Map<String, String>
     ): AppResult<HostResponse> = request("POST", url, body, contentType, headers)
 
     private suspend fun request(

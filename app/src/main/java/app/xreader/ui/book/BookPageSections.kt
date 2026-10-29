@@ -44,7 +44,10 @@ data class ChaptersSectionState(
     val chapterCount: Int,
     /** The book's page on its source's site, when it is a URL. */
     val sourcePageUrl: String?,
-    val isLinkSource: Boolean
+    val isLinkSource: Boolean,
+    /** v1.0.6 (W4.3): the source reads through the browser view
+     * and its health verdict is NEEDS_SETUP. */
+    val needsSiteCheck: Boolean = false
 ) {
     /** The recovery-doors card renders for exactly these kinds. */
     val showRecoveryDoors: Boolean
@@ -56,6 +59,9 @@ data class ChaptersSectionState(
 
     val canGoToRepair: Boolean
         get() = showRecoveryDoors && isLinkSource
+
+    val canSiteCheck: Boolean
+        get() = showRecoveryDoors && needsSiteCheck
 }
 
 object ChaptersSection {
@@ -75,7 +81,8 @@ object ChaptersSection {
         chaptersError: String?,
         isExtensionBook: Boolean,
         remoteId: String?,
-        isLinkSource: Boolean
+        isLinkSource: Boolean,
+        needsSiteCheck: Boolean = false
     ): ChaptersSectionState {
         val kind = when {
             chapterCount > 0 -> ChaptersSectionKind.LIST
@@ -88,7 +95,8 @@ object ChaptersSection {
             kind = kind,
             chapterCount = chapterCount,
             sourcePageUrl = sourcePageUrl(remoteId),
-            isLinkSource = isLinkSource
+            isLinkSource = isLinkSource,
+            needsSiteCheck = needsSiteCheck
         )
     }
 }

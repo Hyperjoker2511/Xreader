@@ -204,6 +204,15 @@ fun ReaderScreen(
         }
     }
 
+    // v1.0.6 (W3.4): surface the browser-view note through the
+    // same transient notice as everything else, once.
+    LaunchedEffect(state.browserViewNotice) {
+        state.browserViewNotice?.let { text ->
+            notice = text
+            viewModel.consumeBrowserNotice()
+        }
+    }
+
     val chapterHighlights = remember(allHighlights, state.chapter?.id) {
         allHighlights.filter { it.chapterId == state.chapter?.id }
     }

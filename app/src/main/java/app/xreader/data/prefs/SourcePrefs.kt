@@ -2,10 +2,12 @@ package app.xreader.data.prefs
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.xreader.data.extension.BestSourcePriority
 import app.xreader.data.extension.SourceHealthRecord
+import app.xreader.data.extension.SourceRepairRecord
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -130,6 +132,72 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    // ── Last repair (v1.0.6) ─────────────────────────────────
+    //
+    // The last Repair's outcome per source, keyed exactly like
+    // the health map ("extensionId:sourceId"), so a Repair's
+    // result — saved or not, the final note, and the probe's
+    // stage log — survives on the Details page and in copied
+    // problem details instead of vanishing with its message.
+
+    val sourceRepairLog: Flow<Map<String, SourceRepairRecord>> =
+        store.data.map { prefs ->
+            decodeRepairLog(prefs[KEY_REPAIR_LOG])
+        }
+
+    suspend fun setSourceRepairLog(key: String, record: SourceRepairRecord) {
+        store.edit { prefs ->
+            val current = decodeRepairLog(prefs[KEY_REPAIR_LOG]).toMutableMap()
+            current[key] = record
+            prefs[KEY_REPAIR_LOG] = encodeRepairLog(current)
+        }
+    }
+
+    private fun decodeRepairLog(
+        raw: String?
+    ): Map<String, SourceRepairRecord> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val parsed = healthJson.decodeFromString<RepairLogDto>(raw)
+            parsed.entries.mapValues { (_, dto) ->
+                SourceRepairRecord(
+                    repairedAtMillis = dto.repairedAtMillis,
+                    saved = dto.saved,
+                    note = dto.note,
+                    stageLines = dto.stageLines
+                )
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun encodeRepairLog(map: Map<String, SourceRepairRecord>): String =
+        healthJson.encodeToString(
+            RepairLogDto.serializer(),
+            RepairLogDto(
+                entries = map.mapValues { (_, record) ->
+                    RepairEntryDto(
+                        repairedAtMillis = record.repairedAtMillis,
+                        saved = record.saved,
+                        note = record.note,
+                        stageLines = record.stageLines
+                    )
+                }
+            )
+        )
+
+    @kotlinx.serialization.Serializable
+    private data class RepairEntryDto(
+        val repairedAtMillis: Long = 0,
+        val saved: Boolean = false,
+        val note: String = "",
+        val stageLines: List<String> = emptyList()
+    )
+
+    @kotlinx.serialization.Serializable
+    private data class RepairLogDto(
+        val entries: Map<String, RepairEntryDto> = emptyMap()
+    )
+
     // ── Heal-my-library sweep (v1.0.5, E1) ───────────────────────
     //
     // A versioned one-time flag: the sweep runs once per app
@@ -193,6 +261,49 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
             )
         )
 
+    // ── Browser view (v1.0.6, W2.4 + TR4) ────────────────────────
+
+    /** The one master switch for the browser view (Customise →
+     * Sources & repairs). Default ON; OFF means every fetch is
+     * static-only and JS-shell sites get the plain refusal —
+     * exactly the pre-v1.0.6 behaviour. */
+    val browserViewEnabled: Flow<Boolean> = store.data.map { prefs ->
+        prefs[KEY_BROWSER_VIEW] ?: true
+    }
+
+    suspend fun setBrowserViewEnabled(enabled: Boolean) {
+        store.edit { it[KEY_BROWSER_VIEW] = enabled }
+    }
+
+    /** TR4 record: extension rows whose site started serving JS
+     * shells at runtime while their config is unmarked. Details
+     * shows "run Repair" for these; a successful Repair clears
+     * the row's flag. Ids only — no content. */
+    val browserViewNeededIds: Flow<Set<Long>> = store.data.map { prefs ->
+        decodeIds(prefs[KEY_BROWSER_VIEW_NEEDED])
+    }
+
+    suspend fun markBrowserViewNeeded(extensionId: Long) {
+        store.edit { prefs ->
+            val current = decodeIds(prefs[KEY_BROWSER_VIEW_NEEDED])
+            if (extensionId !in current) {
+                prefs[KEY_BROWSER_VIEW_NEEDED] =
+                    (current + extensionId).joinToString(",")
+            }
+        }
+    }
+
+    suspend fun clearBrowserViewNeeded(extensionId: Long) {
+        store.edit { prefs ->
+            val current = decodeIds(prefs[KEY_BROWSER_VIEW_NEEDED]) - extensionId
+            if (current.isEmpty()) {
+                prefs.remove(KEY_BROWSER_VIEW_NEEDED)
+            } else {
+                prefs[KEY_BROWSER_VIEW_NEEDED] = current.joinToString(",")
+            }
+        }
+    }
+
     @kotlinx.serialization.Serializable
     private data class HealthEntryDto(
         val state: String,
@@ -228,9 +339,12 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         val KEY_RECENT_SEARCHES = stringPreferencesKey("search.recent")
         val KEY_SAVED_SEARCHES = stringPreferencesKey("search.saved")
         val KEY_SOURCE_HEALTH = stringPreferencesKey("source.health_map")
+        val KEY_REPAIR_LOG = stringPreferencesKey("source.repair_log_map")
         val KEY_HEAL_DONE_FOR =
             androidx.datastore.preferences.core.intPreferencesKey("heal.sweep_done_for_code")
         val KEY_HEAL_NOTE = stringPreferencesKey("heal.note")
+        val KEY_BROWSER_VIEW = booleanPreferencesKey("sources.browser_view_enabled")
+        val KEY_BROWSER_VIEW_NEEDED = stringPreferencesKey("sources.browser_view_needed")
         const val MAX_RECENT_REPOS = 8
         const val MAX_RECENT_SEARCHES = 12
     }

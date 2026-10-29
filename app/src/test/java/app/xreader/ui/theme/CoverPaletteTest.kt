@@ -47,6 +47,55 @@ class CoverPaletteTest {
     }
 
     @Test
+    fun `placeholder tiles stay in the violet family with readable initials`() {
+        // v1.0.6: a shelf of coverless books must read as one
+        // harmonious violet family (never green/rust/maroon), and
+        // the white initials must keep AA contrast on the tile
+        // base colour (darkVibrant, falling back to dominant —
+        // the same pick PlaceholderCover makes).
+        val titles = listOf(
+            "Shadow Slave", "I Fell into the Martial World",
+            "Building a Longevity Technique", "The Lord Who Levels Up",
+            "Forced to Sell Myself", "Third-rate Martial Artist",
+            "The Real Young Master", "Return of the Sword God"
+        ) + (1..40).map { "Generated Placeholder Title $it" }
+        for (title in titles) {
+            val palette = CoverPaletteExtractor.placeholderPalette(title)
+            for (colour in listOf(
+                palette.vibrant, palette.muted,
+                palette.darkVibrant, palette.dominant
+            )) {
+                assertNotNull(colour)
+                val hue = hueOf(colour!!)
+                assertTrue(
+                    "hue $hue for '$title' left the violet family",
+                    hue in 226f..294f
+                )
+            }
+            val base = palette.darkVibrant ?: palette.dominant!!
+            val initials = Contrast.blendOver(Color.White, base, 0.9f)
+            assertTrue(
+                "initials unreadable for '$title'",
+                Contrast.ratio(initials, base) >= 4.5
+            )
+        }
+    }
+
+    /** Standard RGB → hue (degrees), for the family assertions. */
+    private fun hueOf(color: Color): Float {
+        val r = color.red; val g = color.green; val b = color.blue
+        val max = maxOf(r, g, b); val min = minOf(r, g, b)
+        if (max == min) return 0f
+        val d = max - min
+        val hue = when (max) {
+            r -> 60f * (((g - b) / d) % 6f)
+            g -> 60f * (((b - r) / d) + 2f)
+            else -> 60f * (((r - g) / d) + 4f)
+        }
+        return (hue + 360f) % 360f
+    }
+
+    @Test
     fun `cache evicts least recently used beyond capacity`() {
         val cache = CoverPaletteCache(2)
         cache.put("a", CoverPalette.EMPTY)

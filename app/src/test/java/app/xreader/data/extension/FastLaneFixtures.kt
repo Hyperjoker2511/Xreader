@@ -19,7 +19,9 @@ import app.xreader.data.FakeTransport
  *   text comes from: `/book/ajax/read-chapter/<id>` answers 403
  *   without the `X-Requested-With: XMLHttpRequest` header, gives
  *   full prose JSON for unlocked chapters, and an EMPTY content
- *   div for locked ones (all verified live 2026-10-29).
+ *   div for locked ones (all verified live 2026-10-29). Since
+ *   v1.0.6 it also models the all-locked outlier book (every
+ *   listed chapter paid) behind the v1.0.5.1 device trap.
  * - [LyingSearchSite] is a readable site whose "search" returns
  *   the whole catalogue for every query — the A5 filtering proof
  *   must catch it.
@@ -61,9 +63,11 @@ object NovelightSite {
         </form>
     """.trimIndent()
 
-    /** The book page: newest chapters locked, the full list in a
-     * second block overlapping the "last chapters" block (E3). */
-    val BOOK_PAGE = """
+    /** The book page shape: newest chapters locked, the full
+     * list in a second block overlapping the "last chapters"
+     * block (E3). [lockAll] marks EVERY row paid — the
+     * all-locked outlier shape (v1.0.6). */
+    private fun bookPage(lockAll: Boolean): String = """
         <html><head>
           <title>Lord of Talents - Novelight</title>
           <meta name="description" content="A talent lord rises."/>
@@ -77,18 +81,27 @@ object NovelightSite {
         <div class="chapters">
           ${chapterRow(105, "Finale (5)", locked = true)}
           ${chapterRow(104, "Finale (4)", locked = true)}
-          ${chapterRow(103, "Finale (3)", locked = false)}
+          ${chapterRow(103, "Finale (3)", locked = lockAll)}
         </div>
         <h2>All chapters</h2>
         <div class="chapters">
           ${chapterRow(105, "Finale (5)", locked = true)}
           ${chapterRow(104, "Finale (4)", locked = true)}
-          ${chapterRow(103, "Finale (3)", locked = false)}
-          ${chapterRow(102, "Finale (2)", locked = false)}
-          ${chapterRow(101, "Finale (1)", locked = false)}
+          ${chapterRow(103, "Finale (3)", locked = lockAll)}
+          ${chapterRow(102, "Finale (2)", locked = lockAll)}
+          ${chapterRow(101, "Finale (1)", locked = lockAll)}
         </div>
         </body></html>
     """.trimIndent()
+
+    val BOOK_PAGE = bookPage(lockAll = false)
+
+    /** v1.0.6: the same book with EVERY chapter row
+     * lock-marked — the "Urban Vagabond" outlier from the
+     * v1.0.5.1 device draw-check: a ~300-chapter book whose
+     * listed (newest) chapters are all paid, so no drive can
+     * sample an unlocked chapter from it. */
+    val BOOK_PAGE_ALL_LOCKED = bookPage(lockAll = true)
 
     /** The same book page WITH the long prose synopsis real
      * novelight pages carry (v1.0.5.1). The trimmed capture
@@ -193,10 +206,26 @@ object NovelightSite {
     fun transportLongSynopsis(): FakeTransport =
         transportServing(BOOK_PAGE_LONG_SYNOPSIS)
 
-    private fun transportServing(bookPage: String): FakeTransport {
+    /** v1.0.6: every book page is the all-locked one, and the
+     * ajax endpoint answers every chapter id with the empty
+     * (locked) content div. */
+    fun transportAllLocked(): FakeTransport =
+        transportServing(BOOK_PAGE_ALL_LOCKED, ajaxAllLocked = true)
+
+    /** v1.0.6: the catalogue's FIRST book is all-locked, the
+     * second is readable — the sample picker's proving
+     * ground. */
+    fun transportPicker(): FakeTransport =
+        transportServing(BOOK_PAGE_ALL_LOCKED, book2Page = BOOK_PAGE)
+
+    private fun transportServing(
+        bookPage: String,
+        book2Page: String = bookPage,
+        ajaxAllLocked: Boolean = false
+    ): FakeTransport {
         val pages = mapOf(
             BOOK_URL to bookPage,
-            BOOK2_URL to bookPage,
+            BOOK2_URL to book2Page,
             CHAPTER_101_URL to CHAPTER_PAGE,
             "$BASE/book/chapter/102" to CHAPTER_PAGE,
             "$BASE/book/chapter/103" to CHAPTER_PAGE,
@@ -226,6 +255,8 @@ object NovelightSite {
                 return@FakeTransport when {
                     !ajaxHeader ->
                         AppResult.Ok(FakeTransport.response(403, "forbidden"))
+                    ajaxAllLocked ->
+                        FakeTransport.ok(ajaxChapterJson(prose = false))
                     request.url.removePrefix(AJAX_PREFIX) in
                         setOf("101", "102", "103") ->
                         FakeTransport.ok(ajaxChapterJson(prose = true))
@@ -327,6 +358,118 @@ object JsShellSite {
         </body></html>
     """.trimIndent()
 
+    fun transport(): FakeTransport = FakeTransport { request ->
+        if (request.url.startsWith(BASE)) {
+            FakeTransport.ok(SHELL_PAGE)
+        } else {
+            AppResult.Ok(FakeTransport.response(404, "not found"))
+        }
+    }
+}
+
+/**
+ * chikari.moe (v1.0.6, W6.3/D27): a JavaScript-app site that DOES
+ * carry prose novels. [SHELL_PAGE] is the shape of the REAL static
+ * capture taken 2026-10-29 (23 KB SvelteKit shell, trimmed to its
+ * load-bearing bones): an `#app-root` mount, an inline bootstrap
+ * that dynamic-imports the app, a boot splash whose ring div is
+ * empty, ~50 characters of visible text and zero anchors — the
+ * shipped A9 check flags it via the empty-div mount signal
+ * (verified against the capture). The static transport serves the
+ * shell for EVERY route, like the real SPA.
+ *
+ * The RENDERED_* pages are the DOM the site's own scripts build —
+ * synthetic fixtures in the shapes [LinkInference] provably reads
+ * (the LyingSearchSite skeleton), standing in for what the browser
+ * view returns. The day the real rendered DOM is captured on a
+ * device, these get replaced by it.
+ */
+object ChikariSite {
+    const val HOST = "chikari.moe"
+    const val BASE = "https://chikari.moe"
+    const val BOOK_URL = "$BASE/novels/shadow-slave"
+    const val CHAPTER_1_URL = "$BASE/novels/shadow-slave/chapter-1"
+
+    val SHELL_PAGE = """
+        <!doctype html>
+        <html lang="en" class="dark"><head>
+          <meta charset="utf-8" />
+          <title>chikari.moe</title>
+          <meta name="description" content="Read manga, manhwa, and manhua online with a fast, clean, full-screen reader." />
+        </head>
+        <body data-sveltekit-preload-data="hover">
+          <div id="app-root" style="display: contents">
+            <script>
+              { __sveltekit_z1krx7 = { base: "" };
+                const element = document.currentScript.parentElement;
+                Promise.all([
+                  import("/_app/immutable/entry/start.CVcPCmEK.js"),
+                  import("/_app/immutable/entry/app.NmZ9v-kO.js")
+                ]).then(([kit, app]) => { kit.start(app, element); }); }
+            </script>
+          </div>
+          <div id="boot-splash">
+            <div id="boot-splash-ring"></div>
+            <div id="boot-splash-failed"><div>chikari didn't finish loading.</div></div>
+          </div>
+          <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora&amp;display=swap" /></noscript>
+        </body></html>
+    """.trimIndent()
+
+    val chapterText = (1..5).joinToString("\n") {
+        "Nephis stood at the edge of the shattered shore in part $it, watching the tide of darkness roll in."
+    }
+
+    private fun chapterPage(n: Int): String = """
+        <html><head><title>Chapter $n - Shadow Slave</title></head><body>
+        <h1>Chapter $n</h1>
+        <div id="chapter-content">
+          ${chapterText.split("\n").joinToString("\n") { "<p>$it</p>" }}
+        </div>
+        </body></html>
+    """.trimIndent()
+
+    val RENDERED_BOOK_PAGE = """
+        <html><head>
+          <title>Shadow Slave - chikari</title>
+          <meta property="og:title" content="Shadow Slave"/>
+          <meta property="og:image" content="https://chikari.moe/covers/shadow-slave.jpg"/>
+          <meta name="description" content="Growing up in poverty, Sunny never expected anything good from life."/>
+        </head><body>
+        <form action="/search" method="get"><input type="text" name="q"/></form>
+        <h1>Shadow Slave</h1>
+        <ul id="chapter-list">
+          <li><a href="/novels/shadow-slave/chapter-3">Chapter 3</a></li>
+          <li><a href="/novels/shadow-slave/chapter-2">Chapter 2</a></li>
+          <li><a href="/novels/shadow-slave/chapter-1">Chapter 1</a></li>
+        </ul>
+        </body></html>
+    """.trimIndent()
+
+    val RENDERED_HOME_PAGE = """
+        <html><body><div class="grid">
+          <a href="/novels/shadow-slave"><img src="/covers/shadow-slave.jpg"/>Shadow Slave</a>
+          <a href="/novels/lord-of-ash"><img src="/covers/ash.jpg"/>Lord of Ash</a>
+          <a href="/novels/dim-harbour"><img src="/covers/harbour.jpg"/>Dim Harbour</a>
+        </div></body></html>
+    """.trimIndent()
+
+    /** The rendered pages the browser view hands back, by URL. */
+    fun renderedPages(): Map<String, String> = mapOf(
+        BOOK_URL to RENDERED_BOOK_PAGE,
+        BASE to RENDERED_HOME_PAGE,
+        "$BASE/" to RENDERED_HOME_PAGE
+    )
+
+    /** Fallback for the URL families (chapters, search results). */
+    fun renderedFallback(url: String): String? = when {
+        url.startsWith("$BASE/novels/shadow-slave/chapter-") ->
+            chapterPage(url.substringAfterLast("chapter-").toIntOrNull() ?: 1)
+        url.startsWith("$BASE/search") -> RENDERED_HOME_PAGE
+        else -> null
+    }
+
+    /** Static view of the site: the shell, for every route. */
     fun transport(): FakeTransport = FakeTransport { request ->
         if (request.url.startsWith(BASE)) {
             FakeTransport.ok(SHELL_PAGE)

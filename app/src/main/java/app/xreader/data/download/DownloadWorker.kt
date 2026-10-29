@@ -26,7 +26,19 @@ class DownloadWorker(
     override suspend fun doWork(): Result {
         val app = applicationContext as? XreaderApp ?: return Result.failure()
         return try {
-            app.container.downloadEngine.runQueue()
+            val container = app.container
+            // v1.0.6 (W5.2/Q4): a drain started while the app is
+            // closed is background work — it never renders, and
+            // the engine defers browser-source items with a note.
+            // A drain started while the app is open may use the
+            // browser view (the person is watching Downloads).
+            if (container.renderRuntime.appInForeground) {
+                container.downloadEngine.runQueue()
+            } else {
+                container.renderRuntime.asBackgroundWork {
+                    container.downloadEngine.runQueue()
+                }
+            }
             Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e

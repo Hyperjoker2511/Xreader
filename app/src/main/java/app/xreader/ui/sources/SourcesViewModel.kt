@@ -28,11 +28,18 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+/** Why the built-in browser screen is being shown (v1.0.6, W4):
+ * a sign-in, or a site's human check. Same screen, different
+ * words — the mode is chosen by whoever detected the need, never
+ * guessed by the screen. */
+enum class LoginMode { SIGN_IN, SITE_CHECK }
+
 /** A login the user is being asked to perform in the built-in browser. */
 data class LoginRequest(
     val sessionKey: String,
     val url: String,
-    val title: String
+    val title: String,
+    val mode: LoginMode = LoginMode.SIGN_IN
 )
 
 /** One row of the Legado import report (v1.0.1). */
@@ -431,8 +438,13 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
 
     // ── login handoff ───────────────────────────────────────────────
 
-    fun startLogin(sessionKey: String, url: String, title: String) {
-        _loginRequest.value = LoginRequest(sessionKey, url, title)
+    fun startLogin(
+        sessionKey: String,
+        url: String,
+        title: String,
+        mode: LoginMode = LoginMode.SIGN_IN
+    ) {
+        _loginRequest.value = LoginRequest(sessionKey, url, title, mode)
     }
 
     fun clearLoginRequest() {

@@ -101,20 +101,37 @@ class ExtensionService(
             return AppResult.Err(refusalError(row))
         }
         val permissions = ExtensionPermissions.parse(row.permissionsJson)
+        // v1.0.6 (W1.3): a declarative row's rules are decoded once,
+        // up front — the context's render marker reads them. Link
+        // packages hold exactly one config, so the marker is exact
+        // wherever it can be written; a multi-source rules package
+        // would render as a package (its configs never carry the
+        // marker — only the probe/Repair write it, into link rows).
+        val rawDefinition: String? =
+            if (row.kind == app.xreader.data.db.ExtensionKind.DECLARATIVE) {
+                store.readText(store.definitionFile(row.packageId))
+            } else {
+                null
+            }
+        val declarativeConfigs: List<DeclarativeConfig> =
+            rawDefinition?.let { DeclarativeFingerprints.decode(it) }
+                ?: emptyList()
         val context: SourceContext = contextFactory.contextFor(
             extensionRowId = row.id,
             packageId = row.packageId,
             label = row.displayName,
-            permissions = { permissions }
+            permissions = { permissions },
+            needsRendering = { declarativeConfigs.any { it.needsRendering } }
         )
         val sources: List<Source> = try {
             when (row.kind) {
                 app.xreader.data.db.ExtensionKind.DECLARATIVE -> {
-                    val raw = store.readText(store.definitionFile(row.packageId))
-                        ?: return AppResult.Err(
+                    if (rawDefinition == null) {
+                        return AppResult.Err(
                             AppError.ExtensionFailed(row.displayName, "its rules file is missing")
                         )
-                    DeclarativeFingerprints.decode(raw).map { config ->
+                    }
+                    declarativeConfigs.map { config ->
                         DeclarativeSource(config, context)
                     }
                 }
@@ -222,6 +239,22 @@ class ExtensionService(
     /** The declarative rules behind a handle, when rule-based. */
     fun declarativeConfigOf(handle: SourceHandle): DeclarativeConfig? =
         (handle.source as? DeclarativeSource)?.config
+
+    /**
+     * v1.0.6 (WT): the chapter ids the book page marks as locked IN
+     * THE ROW MARKUP (a lock badge on the row), as opposed to locks
+     * visible in chapter names. Only declarative sources can know;
+     * anything else — and any failure — answers empty, so callers
+     * treat the result as an extra filter, never a requirement.
+     */
+    suspend fun lockedChapterIds(
+        handle: SourceHandle,
+        book: app.xreader.extensionapi.SourceBook
+    ): Set<String> {
+        val source = handle.source as? DeclarativeSource ?: return emptySet()
+        return guarded(handle) { source.lockedChapterIds(book) }
+            .getOrNull() ?: emptySet()
+    }
 
     /** One page of the account bookshelf (login session applies). */
     suspend fun bookshelf(

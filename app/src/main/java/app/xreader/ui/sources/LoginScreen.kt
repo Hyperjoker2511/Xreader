@@ -74,7 +74,17 @@ fun LoginScreen(
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Cancel")
             }
             Column(Modifier.weight(1f)) {
-                Text("Sign in to ${request.title}", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    // v1.0.6 (W4.2): SITE_CHECK mode — the same
+                    // screen, the words swapped. This screen is the
+                    // ONLY place a browser ever becomes visible.
+                    if (request.mode == LoginMode.SITE_CHECK) {
+                        "One quick check — ${request.title}"
+                    } else {
+                        "Sign in to ${request.title}"
+                    },
+                    style = MaterialTheme.typography.titleMedium
+                )
                 Text(
                     request.url,
                     style = MaterialTheme.typography.bodySmall,
@@ -90,15 +100,25 @@ fun LoginScreen(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "Sign in as you normally would — including any “I'm not a robot” checks. " +
-                "Then tap the button below: Xreader saves this site's session cookies " +
-                "(encrypted, only for this source) and never sees your password.",
+            if (request.mode == LoginMode.SITE_CHECK) {
+                "This site wants a quick human check before it shows its pages. " +
+                    "Do the check here; after that Xreader reads the site quietly " +
+                    "in the background — you'll never see a browser while you read."
+            } else {
+                "Sign in as you normally would — including any “I'm not a robot” checks. " +
+                    "Then tap the button below: Xreader saves this site's session cookies " +
+                    "(encrypted, only for this source) and never sees your password."
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(8.dp))
         XreaderPrimaryButton(
-            text = "I'm signed in — save my session",
+            text = if (request.mode == LoginMode.SITE_CHECK) {
+                "Done — continue"
+            } else {
+                "I'm signed in — save my session"
+            },
             onClick = {
                 val cookieManager = CookieManager.getInstance()
                 val currentUrl = webView.url ?: request.url

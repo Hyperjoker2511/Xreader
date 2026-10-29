@@ -63,11 +63,18 @@ interface HttpTransport {
     suspend fun execute(request: Request): AppResult<Response>
 
     companion object {
+        /** The detail every timeout carries (v1.0.6: the
+         * test-drives match on this exact text to tell a slow
+         * connection apart from a site that answered badly —
+         * by the time the error reaches them, the exception
+         * itself has been unwrapped into a plain message). */
+        const val TIMEOUT_DETAIL = "the server took too long to answer"
+
         /** Maps transport failures onto the app's error vocabulary. */
         fun ioError(e: Exception): AppError = when (e) {
             is UnknownHostException -> AppError.NoNetwork
             is SocketTimeoutException ->
-                AppError.ProviderDown("server", detail = "the server took too long to answer")
+                AppError.ProviderDown("server", detail = TIMEOUT_DETAIL)
             else -> AppError.Unknown(e)
         }
 

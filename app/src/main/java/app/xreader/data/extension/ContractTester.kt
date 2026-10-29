@@ -176,8 +176,20 @@ class ContractTester(private val service: ExtensionService) {
         // sample is a paywall notice) the step reports the
         // distinct paid/locked state instead of "unreadable".
         val chapterList = chapters ?: emptyList()
+        // v1.0.6 (WT): name-based lock detection misses sites that
+        // mark locks only in the chapter ROW markup (novelight's
+        // lock badge) — sampling then reads a locked chapter, gets
+        // empty text and reports a breakage that is really the
+        // site's paywall. For declarative sources the row-locked ids
+        // are subtracted too; other source kinds behave exactly as
+        // before (the service answers an empty set for them).
+        val rowLockedIds = if (chapters != null) {
+            service.lockedChapterIds(handle, detailed)
+        } else {
+            emptySet()
+        }
         val unlockedChapters = chapterList.filterNot {
-            ChapterLocks.nameSuggestsLocked(it.name)
+            ChapterLocks.nameSuggestsLocked(it.name) || it.id in rowLockedIds
         }
         when {
             chapters == null -> results += CapabilityResult(
@@ -194,7 +206,11 @@ class ContractTester(private val service: ExtensionService) {
                 capability = SourceCapability.TEXT,
                 ok = false,
                 detail = "all ${chapterList.size} chapter(s) are marked paid or " +
-                    "locked on this site — locked chapters can't be sampled"
+                    "locked on this site — locked chapters can't be sampled",
+                // v1.0.6: a limit of the site, not a breakage —
+                // the verdict reads WORKING_WITH_LIMITS when
+                // this is the only core failure (see judge).
+                limitOnly = true
             )
             else -> {
                 var sampledName = ""
