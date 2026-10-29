@@ -92,14 +92,68 @@ data class ChapterListSpec(
 /** One chapter page. [content] selects the readable element; [nextPage]
  * chains multi-page chapters (selector for the next-page link),
  * capped by the engine. [remove] selectors are stripped first
- * (site ads, "previous/next" bars inside the text…). */
+ * (site ads, "previous/next" bars inside the text…). [ajax] is the
+ * optional background-text mode (v1.0.5 Stage 1.5) for sites whose
+ * chapter pages are shells that load their text from a JSON
+ * endpoint; null (every config written before it existed) = the
+ * static page is read exactly as before. */
 @Serializable
 data class ChapterSpec(
     val content: String,
     val title: String? = null,
     val nextPage: String? = null,
-    val remove: List<String> = emptyList()
+    val remove: List<String> = emptyList(),
+    val ajax: ChapterTextAjax? = null
 )
+
+/**
+ * AJAX chapter-text mode (v1.0.5 Stage 1.5): some sites serve a
+ * chapter page with no prose in it — the page's JavaScript fetches
+ * the text from a JSON endpoint instead (novelight's
+ * `/book/ajax/read-chapter/<id>` is the verified shape, and it
+ * refuses with HTTP 403 unless the request carries an
+ * XMLHttpRequest header). This block declares that endpoint
+ * declaratively, like everything else in the config:
+ *
+ * - [urlTemplate] builds the endpoint from the chapter page's URL;
+ *   `{id}` is replaced by the chapter URL's trailing numeric
+ *   segment (`/book/chapter/346043` → `346043`). A chapter URL
+ *   with no numeric tail makes the mode simply not apply — the
+ *   engine falls back to the static page for that chapter.
+ * - [headers] are sent with the request (through the source's
+ *   normal session/whitelist HTTP, so cookies and rate limits
+ *   still apply). The default carries the header the verified
+ *   shape demands.
+ * - [jsonContentField] names the JSON field whose value is the
+ *   chapter's HTML; the engine then runs the chapter spec's
+ *   ordinary content extraction and cleanup over it. An empty or
+ *   missing field — or HTML with no readable text in it — is how
+ *   the site says the chapter is paid/locked, and the engine
+ *   reports it that way instead of serving an empty chapter.
+ */
+@Serializable
+data class ChapterTextAjax(
+    val urlTemplate: String,
+    val headers: Map<String, String> = mapOf(
+        "X-Requested-With" to "XMLHttpRequest"
+    ),
+    val jsonContentField: String = "content"
+) {
+    /** The chapter id this mode would use for [chapterUrl]: the
+     * URL's trailing path segment when it is entirely numeric,
+     * else null (the mode doesn't apply to that chapter). */
+    fun chapterId(chapterUrl: String): String? {
+        val tail = chapterUrl.trimEnd('/').substringAfterLast('/')
+        return tail.takeIf { it.isNotEmpty() && it.all { c -> c.isDigit() } }
+    }
+
+    /** The endpoint URL for [chapterUrl], or null when the mode
+     * doesn't apply (no numeric chapter id). */
+    fun endpointFor(chapterUrl: String): String? {
+        val id = chapterId(chapterUrl) ?: return null
+        return urlTemplate.replace("{id}", id)
+    }
+}
 
 /** Reviews on a book page (v1.0.1): [list] selects one review
  * element; the rest resolve within it. [aggregate] reads the

@@ -13,7 +13,25 @@ import org.jsoup.nodes.Element
  */
 object SelectorSynthesizer {
 
-    fun forElement(element: Element): String {
+    fun forElement(element: Element): String = build(element, listMode = false)
+
+    /**
+     * A REPEATING selector for a list item (v1.0.5, A2 — D18):
+     * the selector must match EVERY row of the list, on every
+     * page of the site, so nothing in it may name one specific
+     * row. Differences from [forElement]: the item's own segment
+     * never carries `:nth-of-type` or an `#id` (ids are unique
+     * per row), and ancestor segments never carry `:nth-of-type`
+     * either (a container's position shifts between pages — the
+     * "last chapters" block and the full list trade places).
+     * Ancestors still anchor on stable ids/classes exactly as
+     * [forElement] does. Callers used to fake this by regex-
+     * stripping `:nth-of-type` out of [forElement]'s output; the
+     * list mode is that rule built in and unit-tested.
+     */
+    fun forList(element: Element): String = build(element, listMode = true)
+
+    private fun build(element: Element, listMode: Boolean): String {
         val segments = mutableListOf<String>()
         var current: Element? = element
         var depth = 0
@@ -25,8 +43,9 @@ object SelectorSynthesizer {
                 segments += "body"
                 break
             }
+            val isItem = depth == 0
             val id = el.id()
-            if (id.isNotBlank() && isStableId(id)) {
+            if (id.isNotBlank() && isStableId(id) && !(listMode && isItem)) {
                 segments += "$tag#$id"
                 break
             }
@@ -35,17 +54,19 @@ object SelectorSynthesizer {
             if (classes.isNotEmpty()) {
                 segment += classes.joinToString("") { ".$it" }
             }
-            val parent = el.parent()
-            if (parent != null) {
-                val siblings = parent.children().filter { sibling ->
-                    sibling.tagName() == tag &&
-                        stableClasses(sibling).take(2) == classes
-                }
-                if (siblings.size > 1) {
-                    val index = parent.children()
-                        .filter { it.tagName() == tag }
-                        .indexOf(el) + 1
-                    if (index > 0) segment += ":nth-of-type($index)"
+            if (!listMode) {
+                val parent = el.parent()
+                if (parent != null) {
+                    val siblings = parent.children().filter { sibling ->
+                        sibling.tagName() == tag &&
+                            stableClasses(sibling).take(2) == classes
+                    }
+                    if (siblings.size > 1) {
+                        val index = parent.children()
+                            .filter { it.tagName() == tag }
+                            .indexOf(el) + 1
+                        if (index > 0) segment += ":nth-of-type($index)"
+                    }
                 }
             }
             segments += segment

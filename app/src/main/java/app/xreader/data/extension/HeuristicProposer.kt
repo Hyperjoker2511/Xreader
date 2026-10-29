@@ -46,7 +46,19 @@ object HeuristicProposer {
      * test-drive) is shared unchanged.
      */
     fun analyseBookPage(doc: Document, pageUrl: String): LinkInference.BookPageAnalysis? {
-        val title = findTitle(doc) ?: return null
+        val foundTitle = findTitle(doc)
+        // v1.0.5 (A7): mirror the primary inference — date-only
+        // candidates are rejected; the URL slug is the fallback.
+        val title: Pair<String, String>
+        val fromSlug: Boolean
+        if (foundTitle != null) {
+            title = foundTitle
+            fromSlug = false
+        } else {
+            val slug = TitleCleaner.slugTitle(pageUrl) ?: return null
+            title = slug to ""
+            fromSlug = true
+        }
         val cluster = findChapterCluster(doc, pageUrl) ?: return null
         val numbers = cluster.rows.mapNotNull { ChapterNumbers.parse(it.text()) }
         val newestFirst = numbers.size >= 2 && numbers.first() > numbers.last()
@@ -55,12 +67,19 @@ object HeuristicProposer {
         val firstUrl = firstAnchor.attr("abs:href").ifBlank { null }
             ?: absolute(firstAnchor.attr("href"), pageUrl).ifBlank { null }
             ?: return null
+        val coverUrl = findCover(doc, pageUrl)
         return LinkInference.BookPageAnalysis(
             title = title.first,
             titleSpec = title.second,
             authorSpec = findAuthorSpec(doc),
             descriptionSpec = synopsisElement(doc)?.let { specFor(doc, it) },
-            coverUrl = findCover(doc, pageUrl),
+            coverUrl = coverUrl,
+            coverSpec = if (coverUrl != null) {
+                "meta[property=og:image]@content"
+            } else {
+                null
+            },
+            titleFromSlug = fromSlug,
             chapterListSelector = listSelectorFor(cluster.rows.first()),
             chapterNameSpec = if (cluster.itemsAreAnchors) "@text" else "a@text",
             chapterLinkSpec = if (cluster.itemsAreAnchors) "@href" else "a@href",
@@ -81,20 +100,31 @@ object HeuristicProposer {
     // ── title ───────────────────────────────────────────────────────
 
     private fun findTitle(doc: Document): Pair<String, String>? {
+        // v1.0.5 (A7): shared title hygiene — a candidate that is
+        // only a date stamp is rejected, exactly as in the primary
+        // inference.
+        fun usable(raw: String): String? {
+            val cleaned = TitleCleaner.clean(raw)
+            return cleaned.takeIf {
+                it.isNotBlank() && !TitleCleaner.isDateOnly(it)
+            }
+        }
         val h1 = doc.select("h1").firstOrNull { it.text().isNotBlank() }
-        if (h1 != null) return cleanTitle(h1.text()) to specFor(doc, h1)
+        if (h1 != null) usable(h1.text())?.let { return it to specFor(doc, h1) }
         doc.selectFirst("meta[property=og:title]")?.attr("content")
             ?.trim()?.ifBlank { null }
-            ?.let { return cleanTitle(it) to "meta[property=og:title]@content" }
+            ?.let { raw ->
+                usable(raw)?.let {
+                    return it to "meta[property=og:title]@content"
+                }
+            }
         val named = doc.select(".title, .book-name, .novel-title")
             .firstOrNull { it.text().isNotBlank() }
-        if (named != null) return cleanTitle(named.text()) to specFor(doc, named)
+        if (named != null) {
+            usable(named.text())?.let { return it to specFor(doc, named) }
+        }
         return null
     }
-
-    private fun cleanTitle(raw: String): String =
-        raw.substringBefore(" | ").substringBefore(" - ").trim()
-            .ifBlank { raw.trim() }
 
     // ── synopsis ────────────────────────────────────────────────────
 
@@ -102,6 +132,9 @@ object HeuristicProposer {
         var best: Element? = null
         var bestScore = 0
         for (element in doc.select("div, p, span")) {
+            // v1.0.5 (A8): a blurb inside carousel chrome is
+            // another book's synopsis, never this one's.
+            if (isInChromeContainer(element)) continue
             val text = element.ownText()
             if (text.length < MIN_SYNOPSIS_CHARS) continue
             var score = text.length
@@ -247,15 +280,30 @@ object HeuristicProposer {
     /**
      * The chapter LIST selector must match every row: the row's
      * class form when [safeSelector] offers one, otherwise the
-     * app's stable path with any per-row :nth-of-type dropped (the
-     * same construction [LinkInference] uses for its lists).
+     * synthesiser's list mode (v1.0.5, A2 — no per-row position
+     * anywhere in the selector).
      */
     private fun listSelectorFor(row: Element): String {
         val safe = safeSelector(row)
         if (safe.startsWith(".")) return safe
-        return SelectorSynthesizer.forElement(row)
-            .replace(Regex(":nth-of-type\\(\\d+\\)"), "")
+        return SelectorSynthesizer.forList(row)
     }
+
+    /** Carousel/slider chrome check (A8), mirroring
+     * [LinkInference]'s field sanity. */
+    private fun isInChromeContainer(element: Element): Boolean {
+        var current: Element? = element
+        while (current != null) {
+            val marker = (current.className() + " " + current.id()).lowercase()
+            if (CHROME_CONTAINERS.any { marker.contains(it) }) return true
+            current = current.parent()
+        }
+        return false
+    }
+
+    private val CHROME_CONTAINERS = listOf(
+        "swiper", "slider", "carousel", "owl-carousel", "slick-"
+    )
 
     // ── small pieces ────────────────────────────────────────────────
 

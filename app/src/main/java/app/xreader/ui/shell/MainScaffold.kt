@@ -194,6 +194,22 @@ fun MainScaffold(container: AppContainer, appearance: AppearanceState) {
                 app.xreader.widget.XreaderWidget()
                     .updateAll(context)
             }
+            // v1.0.5 (E1): the heal-my-library sweep — once per
+            // app version, link sources are re-driven with the
+            // honest engine and the failures repaired quietly in
+            // the background. It gates itself on network, metering
+            // and battery; a skipped run retries on a later launch.
+            runCatching {
+                val installedCode = runCatching {
+                    @Suppress("DEPRECATION")
+                    container.applicationContext.packageManager.getPackageInfo(
+                        container.applicationContext.packageName, 0
+                    ).versionCode
+                }.getOrDefault(0)
+                if (installedCode > 0) {
+                    container.healSweep.runIfNeeded(installedCode)
+                }
+            }
         }
     }
     androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -575,8 +591,6 @@ private fun XreaderNavHost(
                     navController.navigate("reader/$bookId/$chapterIndex")
                 },
                 onProfile = { navController.navigate("profile") },
-                onHistory = { navController.navigate("history") },
-                onOpenUpdates = { navController.navigate("updates") },
                 onOpenAddList = { navController.navigate("addList") },
                 coverGlow = appearance.coverGlow &&
                     appearance.bookColours !=
@@ -603,6 +617,10 @@ private fun XreaderNavHost(
             )
         }
         composable(Tab.Browse.route) {
+            // v1.0.5 (C3): Browse is the neat list; OPDS servers
+            // fold into it, adding and the store are pushed screens.
+            val opdsServers by opdsViewModel.servers
+                .collectAsStateWithLifecycle()
             SourcesScreen(
                 viewModel = sourcesViewModel,
                 onOpenSource = { extId, sourceId ->
@@ -610,8 +628,28 @@ private fun XreaderNavHost(
                 },
                 onOpenExtension = { extId -> navController.navigate("extensions/$extId") },
                 onOpenOpdsServers = { navController.navigate("opdsServers") },
+                onSearchAll = { navController.navigate("globalSearch") },
+                onAddSource = { navController.navigate("addSource") },
+                onOpenStore = { navController.navigate("sourceStore") },
+                opdsServers = opdsServers,
+                onOpenOpdsServer = { server ->
+                    opdsViewModel.openServer(server)
+                    navController.navigate("opds/${server.id}")
+                }
+            )
+        }
+        composable("addSource") {
+            app.xreader.ui.sources.AddSourceScreen(
+                viewModel = sourcesViewModel,
+                onBack = { navController.popBackStack() },
                 onAddFromLink = { navController.navigate("addFromLink") },
-                onSearchAll = { navController.navigate("globalSearch") }
+                onOpenStore = { navController.navigate("sourceStore") }
+            )
+        }
+        composable("sourceStore") {
+            app.xreader.ui.sources.SourceStoreScreen(
+                viewModel = sourcesViewModel,
+                onBack = { navController.popBackStack() }
             )
         }
         composable("opdsServers") {
@@ -789,6 +827,10 @@ private fun XreaderNavHost(
                 }.getOrDefault(0)
             }
             val meScope = androidx.compose.runtime.rememberCoroutineScope()
+            // v1.0.5 (E1): the heal sweep's one calm line, until
+            // dismissed.
+            val healNote by container.sourcePrefs.healNote
+                .collectAsStateWithLifecycle(initialValue = null)
             MoreScreen(
                 onAppearance = { navController.navigate("appearance") },
                 onLabs = { navController.navigate("labs") },
@@ -810,6 +852,10 @@ private fun XreaderNavHost(
                     meScope.launch {
                         container.gamePrefs.setWhatsNewSeen(installedCode)
                     }
+                },
+                healNote = healNote,
+                onDismissHealNote = {
+                    meScope.launch { container.sourcePrefs.setHealNote(null) }
                 }
             )
         }
@@ -986,6 +1032,11 @@ private fun XreaderNavHost(
                     navController.currentBackStackEntry?.savedStateHandle
                         ?.set("presetQuery", title)
                     navController.navigate("globalSearch")
+                },
+                // v1.0.5 (B1): the Chapters section's Repair door
+                // lands on the source's Details page.
+                onOpenSourceDetails = { extId ->
+                    navController.navigate("extensions/$extId")
                 }
             )
         }

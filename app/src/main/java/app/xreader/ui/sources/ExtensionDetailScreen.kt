@@ -60,6 +60,8 @@ fun ExtensionDetailScreen(
     var showDexConsent by remember { mutableStateOf(false) }
     var showUninstallConfirm by remember { mutableStateOf(false) }
     var repairConfirm by remember { mutableStateOf(false) }
+    // v1.0.5 (E5): "Copy details" confirmation on the Health card.
+    var detailsCopied by remember { mutableStateOf(false) }
     var newPattern by remember { mutableStateOf("") }
     var newReplacement by remember { mutableStateOf("") }
     var testSample by remember { mutableStateOf("") }
@@ -253,10 +255,14 @@ fun ExtensionDetailScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        // v1.0.5 (E2): "Last checked" in the
+                        // reader's terms — the same record the
+                        // Browse health dot reads.
                         Text(
-                            "Checked " + java.text.DateFormat.getDateTimeInstance(
-                                java.text.DateFormat.SHORT, java.text.DateFormat.SHORT
-                            ).format(java.util.Date(health.checkedAtMillis)),
+                            app.xreader.data.extension.lastCheckedLine(
+                                health.checkedAtMillis,
+                                System.currentTimeMillis()
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -324,6 +330,63 @@ fun ExtensionDetailScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    // v1.0.5 (E5): one-tap problem details — a
+                    // failing verdict becomes a compact plain-text
+                    // summary on the clipboard (site, failing step,
+                    // reason, app version), ready to paste anywhere.
+                    if (health != null && (
+                            health.state ==
+                                app.xreader.data.extension.SourceHealthState.NEEDS_SETUP ||
+                                health.state ==
+                                app.xreader.data.extension.SourceHealthState.BROKEN
+                            )
+                    ) {
+                        val clipboard = androidx.compose.ui.platform
+                            .LocalClipboardManager.current
+                        TextButton(onClick = {
+                            val failedResult = state.healthResults.firstOrNull {
+                                !it.ok && it.capability in
+                                    app.xreader.data.extension.ContractVerdict.READING_CORE
+                            }
+                            val failedCapability = failedResult?.capability
+                                ?: health.failedCore.firstOrNull()?.let { raw ->
+                                    runCatching {
+                                        app.xreader.data.extension
+                                            .SourceCapability.valueOf(raw)
+                                    }.getOrNull()
+                                }
+                            val failingStep = when (failedCapability) {
+                                app.xreader.data.extension.SourceCapability.LIST ->
+                                    "Book list"
+                                app.xreader.data.extension.SourceCapability.SEARCH ->
+                                    "Search"
+                                app.xreader.data.extension.SourceCapability.DETAILS ->
+                                    "Book pages"
+                                app.xreader.data.extension.SourceCapability.CHAPTERS ->
+                                    "Chapter lists"
+                                app.xreader.data.extension.SourceCapability.TEXT ->
+                                    "Chapter text"
+                                else -> failedCapability?.name
+                            }
+                            clipboard.setText(
+                                androidx.compose.ui.text.AnnotatedString(
+                                    app.xreader.data.extension.ProblemDetails.format(
+                                        host = state.linkConfig?.baseUrl?.let {
+                                            app.xreader.data.extension.CookieParsing
+                                                .hostOf(it)
+                                        },
+                                        failingStep = failingStep,
+                                        reason = failedResult?.detail
+                                            ?: health.summaryLine(),
+                                        appVersion = app.xreader.BuildConfig.VERSION_NAME
+                                    )
+                                )
+                            )
+                            detailsCopied = true
+                        }) {
+                            Text(if (detailsCopied) "Copied ✓" else "Copy details")
+                        }
+                    }
                 }
             }
 

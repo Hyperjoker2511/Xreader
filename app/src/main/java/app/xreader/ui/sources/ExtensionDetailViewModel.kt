@@ -517,7 +517,17 @@ class ExtensionDetailViewModel(
                 val file = container.extensionStore.definitionFile(ext.packageId)
                 val backup = container.extensionStore.readText(file)
                 val probeUrl = config.sampleBookUrl ?: config.baseUrl
-                when (val outcome = container.linkProber.probe(probeUrl)) {
+                // v1.0.5 (A4): Repair drives EVERY automatic
+                // proposer (fast lane → templates/inference →
+                // heuristic) and keeps the best passing candidate;
+                // when all fail, the AI detector gets its turn too
+                // (below), and the final message names the step
+                // that actually broke. aiAvailable stays false:
+                // this flow never renders an AI button, so the
+                // probe's own failure copy must not promise one.
+                when (val outcome = container.linkProber.probe(
+                    probeUrl, aiAvailable = false, tryAllProposers = true
+                )) {
                     is app.xreader.data.extension.LinkProber.Outcome.Ready -> {
                         when (
                             val saved = container.repoManager.saveLinkSource(
@@ -549,11 +559,51 @@ class ExtensionDetailViewModel(
                                 "“Sign in” on this source, then try Repair again. " +
                                 "Nothing was changed."
                         )
-                    is app.xreader.data.extension.LinkProber.Outcome.Failed ->
-                        say(
-                            "Repair couldn't read the site: ${outcome.message} " +
-                                "Nothing was changed."
-                        )
+                    is app.xreader.data.extension.LinkProber.Outcome.Failed -> {
+                        // v1.0.5 (A4): the last proposer — the AI
+                        // detector, when a key exists. Its proposal
+                        // faces the same mandatory test-drive
+                        // inside SelectorAi before it can be saved.
+                        val aiOutcome = if (
+                            runCatching { container.aiHub.client.hasKey() }
+                                .getOrDefault(false)
+                        ) {
+                            container.selectorAi.buildFromLink(probeUrl)
+                        } else {
+                            null
+                        }
+                        when (aiOutcome) {
+                            is app.xreader.data.ai.SelectorAi.Outcome.Ready -> {
+                                when (
+                                    container.repoManager.saveLinkSource(
+                                        aiOutcome.draft.config, aiOutcome.draft.host
+                                    )
+                                ) {
+                                    is AppResult.Ok -> {
+                                        _linkConfig.value = aiOutcome.draft.config
+                                        say(
+                                            "Repair rebuilt the rules with the AI " +
+                                                "detector. Running the test-drive…"
+                                        )
+                                        runTestDrive()
+                                    }
+                                    is AppResult.Err -> say(
+                                        "Repair found working rules with the AI " +
+                                            "detector, but they couldn't be saved — " +
+                                            "your old ones were kept."
+                                    )
+                                }
+                            }
+                            else -> say(
+                                "Repair tried the site's known shape, the " +
+                                    "automatic detectors" +
+                                    (if (aiOutcome != null) " and the AI detector" else "") +
+                                    ", and none could read the site well enough. " +
+                                    "The step that got furthest said: ${outcome.message} " +
+                                    "Your old rules were kept."
+                            )
+                        }
+                    }
                 }
             } finally {
                 _health.value = _health.value.copy(repairing = false)

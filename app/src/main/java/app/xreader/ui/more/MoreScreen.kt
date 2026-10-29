@@ -50,7 +50,11 @@ fun MoreScreen(
     /** v1.0.2 (R28): one dismissible What's New note per release. */
     whatsNewVisible: Boolean = false,
     onOpenWhatsNew: () -> Unit = {},
-    onDismissWhatsNew: () -> Unit = {}
+    onDismissWhatsNew: () -> Unit = {},
+    /** v1.0.5 (E1): the heal sweep's one calm report line, shown
+     * once after it fixed something, then dismissed for good. */
+    healNote: String? = null,
+    onDismissHealNote: () -> Unit = {}
 ) {
     Column(
         Modifier
@@ -132,6 +136,26 @@ fun MoreScreen(
                             onClick = onDismissWhatsNew
                         ) { Text("Dismiss") }
                     }
+                }
+            }
+        }
+        if (healNote != null) {
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Good news about your sources",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        "While checking your sources with the improved " +
+                            "test read, Xreader quietly repaired what it " +
+                            "could: $healNote.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    androidx.compose.material3.TextButton(
+                        onClick = onDismissHealNote
+                    ) { Text("Dismiss") }
                 }
             }
         }

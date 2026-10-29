@@ -49,7 +49,16 @@ object LinkInference {
         val chapterLinkSpec: String,
         val chapterCount: Int,
         val firstChapterUrl: String,
-        val newestFirst: Boolean
+        val newestFirst: Boolean,
+        /** v1.0.5 (A6): the spec that REPRODUCES [coverUrl] from
+         * the page (an <img> spec, or the og:image meta spec) —
+         * null exactly when no cover was found, so a found cover
+         * never degrades into a blank cover rule. */
+        val coverSpec: String? = null,
+        /** v1.0.5 (A7): the title came from the URL slug because
+         * every on-page candidate was a date stamp — there is no
+         * honest title spec, and callers must not store one. */
+        val titleFromSlug: Boolean = false
     )
 
     data class ChapterPageAnalysis(
@@ -78,12 +87,54 @@ object LinkInference {
         return loginPath && doc.select("form").isNotEmpty()
     }
 
+    /**
+     * JavaScript-shell detection (v1.0.5, A9 — D16): some sites
+     * serve an empty app shell and fill it with JavaScript — no
+     * static reader (templates, inference, heuristics, or the AI
+     * detector, all reading the same fetched HTML) can read them,
+     * and the honest answer is to say so at add-time instead of
+     * installing broken rules. A page counts as a shell only with
+     * POSITIVE app evidence — an empty JS mount point, a
+     * "enable JavaScript" noscript, or module scripts — combined
+     * with a near-empty body; a plain sparse page (a blog post)
+     * is NOT a shell and keeps the ordinary failure path.
+     */
+    fun isJsShell(doc: Document): Boolean {
+        val body = doc.body() ?: return false
+        if (body.text().trim().length >= 120) return false
+        if (body.select("a[href]").size >= 5) return false
+        val mount = doc.select("div, main, section").any { el ->
+            el.id().lowercase() in JS_MOUNT_IDS &&
+                el.children().isEmpty() && el.text().isBlank()
+        }
+        if (mount) return true
+        val noscript = doc.select("noscript").any {
+            it.text().lowercase().contains("javascript")
+        }
+        if (noscript) return true
+        return doc.select("script[type=module]").size >= 2
+    }
+
     // ── book page ───────────────────────────────────────────────────
 
     fun analyseBookPage(doc: Document, pageUrl: String): BookPageAnalysis? {
         val cluster = findAnchorCluster(doc, chapterAnchors(doc)) ?: return null
-        val title = findTitle(doc) ?: return null
-        val cover = findCover(doc, pageUrl)
+        val foundTitle = findTitle(doc)
+        // v1.0.5 (A7): every on-page title candidate was a date
+        // stamp — fall back to the URL slug rather than naming
+        // the book after a calendar day. A slug title has no
+        // honest spec; titleFromSlug tells callers so.
+        val title: Pair<String, String>
+        val fromSlug: Boolean
+        if (foundTitle != null) {
+            title = foundTitle
+            fromSlug = false
+        } else {
+            val slug = TitleCleaner.slugTitle(pageUrl) ?: return null
+            title = slug to ""
+            fromSlug = true
+        }
+        val cover = findCover(doc, pageUrl, title.first)
         val numbers = cluster.items.mapNotNull { item ->
             ChapterNumbers.parse(item.text())
         }
@@ -99,14 +150,10 @@ object LinkInference {
             titleSpec = title.second,
             authorSpec = findAuthorSpec(doc),
             descriptionSpec = findDescriptionSpec(doc),
-            coverUrl = cover,
-            chapterListSelector = SelectorSynthesizer.forElement(cluster.items.first())
-                .let { itemSelector ->
-                    // The list selector must match EVERY item, so drop
-                    // any :nth-of-type the synthesiser added for the
-                    // first item specifically.
-                    itemSelector.replace(Regex(":nth-of-type\\(\\d+\\)"), "")
-                },
+            coverUrl = cover?.url,
+            coverSpec = cover?.spec,
+            titleFromSlug = fromSlug,
+            chapterListSelector = SelectorSynthesizer.forList(cluster.items.first()),
             chapterNameSpec = if (itemIsAnchor) "@text" else "a@text",
             chapterLinkSpec = if (itemIsAnchor) "@href" else "a@href",
             chapterCount = cluster.items.size,
@@ -171,8 +218,7 @@ object LinkInference {
                 it.select("img").isNotEmpty()
             })
         return ListingAnalysis(
-            resultsSelector = SelectorSynthesizer.forElement(cluster.items.first())
-                .replace(Regex(":nth-of-type\\(\\d+\\)"), ""),
+            resultsSelector = SelectorSynthesizer.forList(cluster.items.first()),
             titleSpec = if (cluster.itemsAreAnchors) "@text" else "a@text",
             linkSpec = if (cluster.itemsAreAnchors) "@href" else "a@href",
             coverSpec = when {
@@ -181,6 +227,41 @@ object LinkInference {
                 else -> null
             },
             count = cluster.items.size
+        )
+    }
+
+    /**
+     * Search-results analysis (v1.0.5, A5): a real search often
+     * returns ONE or TWO books — below [analyseListingPage]'s
+     * cluster minimum — and the old all-or-nothing judgement then
+     * preferred any convention whose unfiltered catalogue DID
+     * cluster (the `?s=` failure, D21). This variant falls back
+     * to a single matching item and derives the repeating specs
+     * from it, so a small honest result set still counts.
+     */
+    fun analyseSearchResultsPage(
+        doc: Document,
+        pageUrl: String,
+        bookUrlHint: String?
+    ): ListingAnalysis? {
+        analyseListingPage(doc, pageUrl, bookUrlHint)?.let { return it }
+        val hintSegment = bookUrlHint?.let { pathPrefix(it, 1) }
+        val anchor = doc.select("a[href]").firstOrNull { candidate ->
+            val href = candidate.attr("abs:href")
+                .ifBlank { absolute(candidate.attr("href"), pageUrl) }
+            if (href.isBlank() || href == bookUrlHint) return@firstOrNull false
+            val wrapsImage = candidate.select("img").isNotEmpty()
+            val sharesSegment = hintSegment != null && hintSegment.isNotEmpty() &&
+                pathPrefix(href, 1) == hintSegment
+            wrapsImage || sharesSegment
+        } ?: return null
+        val hasImage = anchor.select("img").isNotEmpty()
+        return ListingAnalysis(
+            resultsSelector = SelectorSynthesizer.forList(anchor),
+            titleSpec = "@text",
+            linkSpec = "@href",
+            coverSpec = if (hasImage) "img@src" else null,
+            count = 1
         )
     }
 
@@ -309,8 +390,7 @@ object LinkInference {
             val children = container.children().filter { it.text().trim().length >= 20 }
             if (children.size < 2) continue
             val item = children.first()
-            val itemSelector = SelectorSynthesizer.forElement(item)
-                .replace(Regex(":nth-of-type\\(\\d+\\)"), "")
+            val itemSelector = SelectorSynthesizer.forList(item)
             val authorEl = item.select("a, [class*=author], [class*=name], [class*=user]")
                 .firstOrNull()
             val ratingEl = item.select(
@@ -382,38 +462,107 @@ object LinkInference {
         return null
     }
 
+    /**
+     * Title candidates in order (og:title → h1 → <title>), each
+     * cleaned by [TitleCleaner]. v1.0.5 (A7): a candidate that is
+     * ONLY a date stamp is rejected outright — the extractor
+     * grabbed the date element, not the title (D25) — and the
+     * next candidate gets its chance.
+     */
     private fun findTitle(doc: Document): Pair<String, String>? {
         doc.selectFirst("meta[property=og:title]")?.attr("content")
-            ?.trim()?.ifBlank { null }?.let { return cleanTitle(it) to "meta[property=og:title]@content" }
+            ?.trim()?.ifBlank { null }?.let { raw ->
+                val cleaned = TitleCleaner.clean(raw)
+                if (cleaned.isNotBlank() && !TitleCleaner.isDateOnly(cleaned)) {
+                    return cleaned to "meta[property=og:title]@content"
+                }
+            }
         doc.selectFirst("h1")?.let { h1 ->
             val text = h1.text().trim()
-            if (text.isNotBlank()) return cleanTitle(text) to SelectorSynthesizer.forElement(h1)
+            val cleaned = TitleCleaner.clean(text)
+            if (text.isNotBlank() && cleaned.isNotBlank() &&
+                !TitleCleaner.isDateOnly(cleaned)
+            ) {
+                return cleaned to SelectorSynthesizer.forElement(h1)
+            }
         }
         val titleTag = doc.title().trim()
-        if (titleTag.isNotBlank()) return cleanTitle(titleTag) to "title@text"
+        if (titleTag.isNotBlank()) {
+            val cleaned = TitleCleaner.clean(titleTag)
+            if (cleaned.isNotBlank() && !TitleCleaner.isDateOnly(cleaned)) {
+                return cleaned to "title@text"
+            }
+        }
         return null
     }
 
-    private fun cleanTitle(raw: String): String =
-        raw.substringBefore(" | ").substringBefore(" - ").trim().ifBlank { raw.trim() }
+    /** A found cover: its absolute URL plus the spec that
+     * reproduces it from the page (A6). */
+    private data class CoverHit(val url: String, val spec: String)
 
-    private fun findCover(doc: Document, pageUrl: String): String? {
-        doc.selectFirst("meta[property=og:image]")?.attr("content")
-            ?.ifBlank { null }?.let { return absolute(it, pageUrl) }
-        val image = doc.select("img").firstOrNull { img ->
+    /**
+     * The cover chain (v1.0.5, A6 — D19/D21): (1) an <img> whose
+     * alt names THIS book (sites like Novelight/NovelFull put the
+     * book's own poster among other books' posters — the alt is
+     * the tell); (2) an <img> with cover/poster/thumb hints near
+     * the title, never inside carousel chrome (A8); (3) og:image;
+     * (4) the first image in article/main, chrome excluded. A hit
+     * always carries the spec that reproduces it, so a found
+     * cover can never degrade into a blank cover rule.
+     */
+    private fun findCover(doc: Document, pageUrl: String, title: String): CoverHit? {
+        val titleLower = title.trim().lowercase()
+        if (titleLower.length >= 2) {
+            val byAlt = doc.select("img").firstOrNull { img ->
+                val alt = img.attr("alt").trim().lowercase()
+                val src = img.attr("src").lowercase()
+                alt.isNotBlank() &&
+                    (alt == titleLower || alt.startsWith(titleLower)) &&
+                    !src.contains("logo") && !src.contains("banner")
+            }
+            if (byAlt != null) {
+                imageUrl(byAlt, pageUrl)?.let {
+                    return CoverHit(it, SelectorSynthesizer.forElement(byAlt) + "@src")
+                }
+            }
+        }
+        val hinted = doc.select("img").firstOrNull { img ->
             val cls = (img.className() + " " + img.id()).lowercase()
-            cls.contains("cover") || cls.contains("poster") || cls.contains("thumb")
-        } ?: doc.selectFirst("article img, main img")
-        val src = image?.attr("abs:src")?.ifBlank { null }
-            ?: image?.attr("src")?.ifBlank { null }?.let { absolute(it, pageUrl) }
-        return src
+            val hint = cls.contains("cover") || cls.contains("poster") ||
+                cls.contains("thumb")
+            hint && !isInChromeContainer(img)
+        }
+        if (hinted != null) {
+            imageUrl(hinted, pageUrl)?.let {
+                return CoverHit(it, SelectorSynthesizer.forElement(hinted) + "@src")
+            }
+        }
+        doc.selectFirst("meta[property=og:image]")?.attr("content")
+            ?.ifBlank { null }?.let {
+                return CoverHit(absolute(it, pageUrl), "meta[property=og:image]@content")
+            }
+        val image = doc.select("article img, main img")
+            .firstOrNull { !isInChromeContainer(it) }
+        if (image != null) {
+            imageUrl(image, pageUrl)?.let {
+                return CoverHit(it, SelectorSynthesizer.forElement(image) + "@src")
+            }
+        }
+        return null
     }
+
+    private fun imageUrl(img: Element, pageUrl: String): String? =
+        img.attr("abs:src").ifBlank { null }
+            ?: img.attr("src").ifBlank { null }?.let { absolute(it, pageUrl) }
 
     private fun findAuthorSpec(doc: Document): String? {
         doc.selectFirst("meta[name=author]")?.attr("content")
             ?.ifBlank { null }?.let { return "meta[name=author]@content" }
         val el = doc.select("[class*=author], [id*=author]")
-            .firstOrNull { it.text().trim().length in 2..60 && it.children().size <= 2 }
+            .firstOrNull {
+                it.text().trim().length in 2..60 && it.children().size <= 2 &&
+                    !isInChromeContainer(it)
+            }
             ?: return null
         return SelectorSynthesizer.forElement(el)
     }
@@ -428,9 +577,27 @@ object LinkInference {
             return "meta[property=og:description]@content"
         }
         val el = doc.select("[class*=synopsis], [class*=description], [class*=summary]")
-            .firstOrNull { it.text().trim().length >= 40 }
+            .firstOrNull { it.text().trim().length >= 40 && !isInChromeContainer(it) }
             ?: return null
         return SelectorSynthesizer.forElement(el)
+    }
+
+    /**
+     * Field sanity (v1.0.5, A8 — D21): detail fields must never
+     * be read out of page CHROME — carousels and sliders hold
+     * OTHER books' covers, authors and blurbs (the stored
+     * novelight author rule pointed into a swiper). True when
+     * [element] or any ancestor is a swiper/slider/carousel
+     * container.
+     */
+    private fun isInChromeContainer(element: Element): Boolean {
+        var current: Element? = element
+        while (current != null) {
+            val marker = (current.className() + " " + current.id()).lowercase()
+            if (CHROME_CONTAINERS.any { marker.contains(it) }) return true
+            current = current.parent()
+        }
+        return false
     }
 
     private fun isChrome(element: Element): Boolean {
@@ -468,4 +635,11 @@ object LinkInference {
         "nav", "menu", "header", "footer", "sidebar", "comment",
         "pagination", "breadcrumb", "share", "related", "cookie"
     )
+    /** Carousel/slider containers whose contents are page chrome,
+     * never the book's own fields (A8). */
+    private val CHROME_CONTAINERS = listOf(
+        "swiper", "slider", "carousel", "owl-carousel", "slick-"
+    )
+    /** Empty mount points of the common JS app frameworks (A9). */
+    private val JS_MOUNT_IDS = setOf("root", "app", "__next", "__nuxt", "app-root")
 }

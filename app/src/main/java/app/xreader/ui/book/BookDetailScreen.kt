@@ -2,6 +2,7 @@ package app.xreader.ui.book
 import app.xreader.ui.theme.errorTextColor
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FiberNew
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,6 +50,7 @@ import androidx.compose.runtime.setValue
 import app.xreader.data.library.ReadingStatus
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.GlassSheetActionRow
 import app.xreader.ui.common.StatusPill
 import app.xreader.ui.common.XreaderPrimaryButton
 import coil.compose.AsyncImage
@@ -57,6 +61,7 @@ import java.io.File
  * "Start reading" + "Download" + "Export EPUB" actions, synopsis,
  * and the chapter list with per-chapter download state icons.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun BookDetailScreen(
     viewModel: BookDetailViewModel,
@@ -70,11 +75,18 @@ fun BookDetailScreen(
     onOpenRelated: (Long) -> Unit = {},
     onOpenTag: (String) -> Unit = {},
     /** v1.0.2 (R26): find an AI-suggested title across sources. */
-    onFindTitle: (String) -> Unit = {}
+    onFindTitle: (String) -> Unit = {},
+    /** v1.0.5 (B1): the Chapters section's "Go to Repair" door —
+     * lands on the source's Details page, where Repair lives. */
+    onOpenSourceDetails: (extensionId: Long) -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val engineLabel by viewModel.engineLabel.collectAsStateWithLifecycle()
     val book = state.book
+    // v1.0.5 (B2/E6): the Download sheet's open state — the three
+    // choices (all / next 10 / latest unread) live there, beside
+    // Start reading, never only in a long-press sheet.
+    var downloadSheetOpen by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     // Phase 6: highlights → Markdown, saved where the user picks.
     val markdownLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -135,6 +147,18 @@ fun BookDetailScreen(
             viewModel.loadEnrichment()
             viewModel.loadPalette()
         }
+        // v1.0.5 (B1): the Chapters section's pure state — which
+        // form it renders and which recovery doors it may offer.
+        val section = ChaptersSection.state(
+            chapterCount = state.chapters.size,
+            chaptersLoading = state.chaptersLoading,
+            chaptersError = state.chaptersError,
+            isExtensionBook = book.sourceType ==
+                app.xreader.data.db.SourceType.EXTENSION,
+            remoteId = book.remoteId,
+            isLinkSource = state.isLinkSource
+        )
+        val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
         LazyColumn(
             Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -214,7 +238,14 @@ fun BookDetailScreen(
                                     }
                                 )
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // v1.0.5 (B3): the pills WRAP — the
+                            // header column is narrow (cover +
+                            // margins), and three pills side by
+                            // side could squeeze on small phones.
+                            androidx.compose.foundation.layout.FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 StatusPill(
                                     text = book.localFormat.name,
                                     color = MaterialTheme.colorScheme.primary
@@ -272,10 +303,17 @@ fun BookDetailScreen(
                             // reader failing downstream.
                             enabled = state.readBlockedReason == null
                         )
+                        // v1.0.5 (B2): Download is a first-class
+                        // action BESIDE Start reading whenever
+                        // there is anything to fetch — it opens
+                        // the choices sheet (all / next 10 /
+                        // latest unread) instead of firing the
+                        // whole book at once, and it no longer
+                        // hides in the Library's long-press sheet.
                         if (state.hasUndownloadedChapters) {
                             XreaderPrimaryButton(
                                 text = "Download",
-                                onClick = { viewModel.downloadAllChapters() },
+                                onClick = { downloadSheetOpen = true },
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -287,21 +325,16 @@ fun BookDetailScreen(
                             color = app.xreader.ui.theme.errorTextColor()
                         )
                     }
-                    if (state.hasUndownloadedChapters) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { viewModel.downloadNextTen() }) {
-                                Text("Next 10")
-                            }
-                            TextButton(onClick = { viewModel.downloadAllUnread() }) {
-                                Text("All unread")
-                            }
-                        }
-                    }
                     // v1.0.1: reading status + Track (feeds the
                     // library filter and the new-chapter badges).
-                    Row(
+                    // v1.0.5 (B3/D25): the status chips WRAP.
+                    // As a fixed Row they crushed "Dropped" into
+                    // a vertical letter stack on the user's phone
+                    // — the same defect class as the old Library
+                    // toolbar. FlowRow keeps every chip whole.
+                    androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         listOf(
                             ReadingStatus.READING to "Reading",
@@ -337,7 +370,15 @@ fun BookDetailScreen(
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // v1.0.5 (B4/B3): exports + book tools in ONE
+                    // wrapping row. As two fixed Rows, "Highlights
+                    // (.md)" wrapped mid-label and the row crowded
+                    // on narrow phones (D25's audit); FlowRow keeps
+                    // every label whole.
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         TextButton(onClick = onExportEpub) { Text("Export EPUB") }
                         TextButton(onClick = onExportCbz) { Text("Export CBZ") }
                         TextButton(
@@ -353,8 +394,6 @@ fun BookDetailScreen(
                                 Text("Refresh chapters")
                             }
                         }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { viewModel.storySoFar() }) {
                             Text("Catch me up")
                         }
@@ -395,50 +434,137 @@ fun BookDetailScreen(
                             Text("Next unread: ${nextUnread.title}")
                         }
                     }
-                    Text("Chapters", style = MaterialTheme.typography.titleMedium)
+                    // v1.0.5 (B1): the "Chapters" heading moved
+                    // out of this header card — it now opens the
+                    // always-present Chapters section below, with
+                    // its count and recovery doors.
                 }
                 }
             }
-            if (state.chapters.isEmpty()) {
-                item(key = "chapters-state") {
-                    when {
-                        state.chaptersLoading -> Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Text(
-                                "Loading the chapter list…",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        state.chaptersError != null -> Column(
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                "The chapter list couldn't be loaded. " +
-                                    (state.chaptersError ?: ""),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = app.xreader.ui.theme.errorTextColor()
-                            )
-                            TextButton(onClick = { viewModel.refreshChapters() }) {
-                                Text("Retry")
-                            }
-                        }
-                        book.sourceType == app.xreader.data.db.SourceType.EXTENSION ->
-                            Text(
-                                "No chapters yet — pull the list from the source.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        else -> Text(
-                            "This book has no chapters.",
+            // v1.0.5 (B1/D26): the Chapters section ALWAYS opens
+            // with its header — count and order when there is a
+            // list — so the section exists even when the list
+            // doesn't (previously an empty book had no Chapters
+            // section at all, just a red sentence elsewhere).
+            item(key = "chapters-header") {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Chapters", style = MaterialTheme.typography.titleMedium)
+                    if (section.kind == ChaptersSectionKind.LIST) {
+                        Text(
+                            "${section.chapterCount} chapters · in reading order",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            when (section.kind) {
+                ChaptersSectionKind.LIST -> Unit
+                ChaptersSectionKind.LOADING -> item(key = "chapters-state") {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            "Loading the chapter list…",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+                ChaptersSectionKind.EMPTY_LOCAL -> item(key = "chapters-state") {
+                    Text(
+                        "This book has no chapters.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                ChaptersSectionKind.ERROR,
+                ChaptersSectionKind.EMPTY_SOURCE -> item(key = "chapters-state") {
+                    // The recovery-doors card: say what happened,
+                    // then offer the ways out — Re-check (the
+                    // chapter fetch AND the source's honest
+                    // test-drive), the book's own page on the
+                    // source's site, and Repair for link sources.
+                    GlassCard(Modifier.fillMaxWidth()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                if (section.kind == ChaptersSectionKind.ERROR) {
+                                    "The chapter list couldn't be loaded. " +
+                                        (state.chaptersError ?: "")
+                                } else {
+                                    "No chapters were found on the source — " +
+                                        "the book is in your library, but its " +
+                                        "chapter list came back empty."
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (section.kind ==
+                                    ChaptersSectionKind.ERROR
+                                ) {
+                                    app.xreader.ui.theme.errorTextColor()
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                            state.recheckNote?.let { note ->
+                                Text(
+                                    note,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (state.recheckBusy) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Text(
+                                        "Checking the source…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            XreaderPrimaryButton(
+                                text = if (state.recheckBusy) {
+                                    "Re-checking…"
+                                } else {
+                                    "Re-check now"
+                                },
+                                onClick = { viewModel.recheck() },
+                                enabled = !state.recheckBusy,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            androidx.compose.foundation.layout.FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                if (section.canOpenSourcePage) {
+                                    TextButton(
+                                        onClick = {
+                                            uriHandler.openUri(
+                                                section.sourcePageUrl!!
+                                            )
+                                        }
+                                    ) { Text("Open the source's page") }
+                                }
+                                if (section.canGoToRepair) {
+                                    TextButton(
+                                        onClick = {
+                                            book.extensionId?.let {
+                                                onOpenSourceDetails(it)
+                                            }
+                                        }
+                                    ) { Text("Go to Repair") }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -588,6 +714,72 @@ fun BookDetailScreen(
                 }
             }
         )
+    }
+
+    // v1.0.5 (B2/E6): the Download choices sheet — the three
+    // ranges a reader actually picks, each showing the count it
+    // will queue (BookDownloadRanges computes both the sheet's
+    // numbers and the tap's queue, so they can't disagree).
+    if (downloadSheetOpen) {
+        val counts = BookDownloadRanges.counts(state.chapters)
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { downloadSheetOpen = false },
+            sheetState = androidx.compose.material3
+                .rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                Modifier
+                    .verticalScroll(
+                        androidx.compose.foundation.rememberScrollState()
+                    )
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "Download chapters",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                GlassSheetActionRow(
+                    icon = Icons.Filled.Download,
+                    label = "Whole book",
+                    caption = "${counts[BookDownloadChoice.ALL] ?: 0} " +
+                        "chapters not on this phone yet",
+                    enabled = (counts[BookDownloadChoice.ALL] ?: 0) > 0,
+                    onClick = {
+                        downloadSheetOpen = false
+                        viewModel.downloadChoice(BookDownloadChoice.ALL)
+                    }
+                )
+                GlassSheetActionRow(
+                    icon = Icons.Filled.FastForward,
+                    label = "Next ${BookDownloadRanges.NEXT_COUNT}",
+                    caption = "The next " +
+                        "${counts[BookDownloadChoice.NEXT_10] ?: 0} " +
+                        "chapters in reading order",
+                    enabled = (counts[BookDownloadChoice.NEXT_10] ?: 0) > 0,
+                    onClick = {
+                        downloadSheetOpen = false
+                        viewModel.downloadChoice(BookDownloadChoice.NEXT_10)
+                    }
+                )
+                GlassSheetActionRow(
+                    icon = Icons.Filled.FiberNew,
+                    label = "Up to the latest unread",
+                    caption = "${counts[BookDownloadChoice.UP_TO_LATEST_UNREAD] ?: 0} " +
+                        "chapters you haven't read yet",
+                    enabled = (counts[
+                        BookDownloadChoice.UP_TO_LATEST_UNREAD
+                    ] ?: 0) > 0,
+                    onClick = {
+                        downloadSheetOpen = false
+                        viewModel.downloadChoice(
+                            BookDownloadChoice.UP_TO_LATEST_UNREAD
+                        )
+                    }
+                )
+                Spacer(Modifier.height(16.dp))
+            }
+        }
     }
 }
 
@@ -1142,31 +1334,46 @@ private fun BookCleanupActions(
         )
     }
     if (confirmRemove) {
+        // v1.0.5 (D2): the two remove choices stack full-width in
+        // the BODY (DialogDangerOption) and "Keep the book" sits
+        // alone in the button row — the v1.0.4 layout crammed a
+        // Column of long buttons into the confirm slot, where
+        // "Remove book and downloaded chapters (0.0 MB)" wrapped
+        // and crowded the dismiss (the user's screenshot).
         AlertDialog(
             onDismissRequest = { confirmRemove = false },
             title = { Text("Remove “$bookTitle”?") },
             text = {
-                Text(
-                    "Removing the book also removes its reading progress and " +
-                        "bookmarks. Your original file (if you imported one) " +
-                        "stays exactly where it is — only Xreader's own copies " +
-                        "can be deleted, and only if you choose that below."
-                )
-            },
-            confirmButton = {
-                Column {
-                    TextButton(onClick = {
-                        confirmRemove = false
-                        viewModel.removeFromLibrary(deleteFiles = false) { onRemoved() }
-                    }) { Text("Remove book only") }
-                    TextButton(onClick = {
-                        confirmRemove = false
-                        viewModel.removeFromLibrary(deleteFiles = true) { onRemoved() }
-                    }) {
-                        Text("Remove book and downloaded chapters (${formatMb(sizeBytes)})")
-                    }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Removing the book also removes its reading progress and " +
+                            "bookmarks. Your original file (if you imported one) " +
+                            "stays exactly where it is — only Xreader's own copies " +
+                            "can be deleted, and only if you choose that below."
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    app.xreader.ui.common.DialogDangerOption(
+                        label = "Remove book only",
+                        onClick = {
+                            confirmRemove = false
+                            viewModel.removeFromLibrary(deleteFiles = false) {
+                                onRemoved()
+                            }
+                        }
+                    )
+                    app.xreader.ui.common.DialogDangerOption(
+                        label = "Remove book and downloaded chapters " +
+                            "(${formatMb(sizeBytes)})",
+                        onClick = {
+                            confirmRemove = false
+                            viewModel.removeFromLibrary(deleteFiles = true) {
+                                onRemoved()
+                            }
+                        }
+                    )
                 }
             },
+            confirmButton = {},
             dismissButton = {
                 TextButton(onClick = { confirmRemove = false }) { Text("Keep the book") }
             }

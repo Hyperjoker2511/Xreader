@@ -32,6 +32,16 @@ data class BookDetailUiState(
      * failure are VISIBLE, never a silent blank list. */
     val chaptersLoading: Boolean = false,
     val chaptersError: String? = null,
+    /** v1.0.5 (B1): this book's source is a link source — the
+     * Chapters section may offer its "Go to Repair" door (Repair
+     * lives on the source's Details page and works on the link
+     * contract). Resolved once from the extension record. */
+    val isLinkSource: Boolean = false,
+    /** v1.0.5 (B1/E2): the Re-check door's honest-drive outcome —
+     * busy while the source's test-drive runs, then the verdict
+     * in plain words (or null when no check has run). */
+    val recheckBusy: Boolean = false,
+    val recheckNote: String? = null,
     /** v1.0.1 provider enrichment: null = source doesn't offer it;
      * empty = offered but nothing there yet. */
     /** v1.0.1: per-book status + Track toggle (BookMeta sidecar). */
@@ -167,6 +177,9 @@ class BookDetailViewModel(
             bookMeta = metas[bookId] ?: app.xreader.data.library.BookMeta(),
             chaptersLoading = story.chaptersLoading,
             chaptersError = story.chaptersError,
+            isLinkSource = story.isLinkSource,
+            recheckBusy = story.recheckBusy,
+            recheckNote = story.recheckNote,
             reviews = story.reviews,
             comments = story.comments,
             related = story.related,
@@ -361,6 +374,19 @@ class BookDetailViewModel(
             state.first { it.book != null }
             primeAiSuggestionsState(state.value.book!!)
         }
+        // v1.0.5 (B1): resolve once whether this book's source is
+        // a link source — it decides the Chapters section's
+        // "Go to Repair" door (Repair works on link contracts).
+        viewModelScope.launch {
+            val book = container.database.bookDao().getById(bookId)
+                ?: return@launch
+            val extensionId = book.extensionId ?: return@launch
+            val extension = container.database.installedExtensionDao()
+                .getById(extensionId) ?: return@launch
+            storyLocal.value = storyLocal.value.copy(
+                isLinkSource = extension.packageId.startsWith("link.")
+            )
+        }
     }
 
     private val _messages = kotlinx.coroutines.flow.MutableSharedFlow<String>(
@@ -441,6 +467,56 @@ class BookDetailViewModel(
         }
     }
 
+    /**
+     * v1.0.5 (B1/E2): the Chapters section's "Re-check now" door.
+     * It re-runs BOTH halves of the truth: this book's chapter
+     * fetch (via [refreshChapters]) and the source's honest
+     * test-drive (the same ContractTester the source's Details
+     * page runs). The drive's verdict lands in state as plain
+     * words — when a core step failed, its detail is named, and
+     * the section's "Go to Repair" door sits right beside it.
+     */
+    fun recheck() {
+        if (storyLocal.value.recheckBusy) return
+        refreshChapters()
+        viewModelScope.launch {
+            storyLocal.value = storyLocal.value.copy(
+                recheckBusy = true, recheckNote = null
+            )
+            val note = recheckNote()
+            storyLocal.value = storyLocal.value.copy(
+                recheckBusy = false, recheckNote = note
+            )
+        }
+    }
+
+    private suspend fun recheckNote(): String {
+        val book = container.database.bookDao().getById(bookId)
+            ?: return "The source couldn't be checked — the book is gone."
+        val extensionId = book.extensionId
+            ?: return "This book has no source to check."
+        val (sourceId, _) = app.xreader.data.extension.SourceBookIds
+            .decode(book.remoteId)
+            ?: return "This book's source couldn't be identified for a check."
+        val handle = when (
+            val found = container.extensionService.source(extensionId, sourceId)
+        ) {
+            is app.xreader.core.error.AppResult.Ok -> found.value
+            is app.xreader.core.error.AppResult.Err ->
+                return "The source couldn't be reached for a check."
+        }
+        val verdict = container.contractTester.test(handle)
+        val failed = verdict.results.firstOrNull {
+            !it.ok && it.capability in
+                app.xreader.data.extension.ContractVerdict.READING_CORE
+        }
+        return if (failed == null) {
+            "Source check: ${verdict.summaryLine()}."
+        } else {
+            "Source check: ${verdict.summaryLine()} — ${failed.detail}"
+        }
+    }
+
     /** C: the reader's own status for this book. */
     fun setReadingStatus(status: app.xreader.data.library.ReadingStatus) {
         viewModelScope.launch {
@@ -458,12 +534,23 @@ class BookDetailViewModel(
 
     // ── v1.0.1 recommendations B + E ───────────────────────────────
 
+    /** v1.0.5 (B2/E6): the book page Download sheet's entry point.
+     * All three choices are computed by [BookDownloadRanges] — the
+     * counts the sheet shows are exactly what gets queued here. */
+    fun downloadChoice(choice: BookDownloadChoice) {
+        when (choice) {
+            BookDownloadChoice.ALL -> downloadAllChapters()
+            BookDownloadChoice.NEXT_10 -> downloadNextTen()
+            BookDownloadChoice.UP_TO_LATEST_UNREAD -> downloadAllUnread()
+        }
+    }
+
     /** "Next 10": queue the next ten undownloaded chapters. */
     fun downloadNextTen() {
         viewModelScope.launch {
-            val next = state.value.chapters
-                .filter { it.downloadState != DownloadState.READY && !it.remoteId.isNullOrBlank() }
-                .take(10)
+            val next = BookDownloadRanges.range(
+                state.value.chapters, BookDownloadChoice.NEXT_10
+            )
             next.forEach { container.downloadController.enqueueChapter(bookId, it.id) }
             if (next.isNotEmpty()) {
                 _messages.tryEmit("Downloading the next ${next.size} chapters")
@@ -471,14 +558,17 @@ class BookDetailViewModel(
         }
     }
 
-    /** "All unread": queue every undownloaded, unread chapter. */
+    /** "All unread": queue every undownloaded chapter that hasn't
+     * been read. v1.0.5: the range is the unread set itself
+     * ([BookDownloadRanges]) — the chapter you're part-way through
+     * counts as unread until it's finished, so it's included; the
+     * old progress-index cut skipped it even when it wasn't on the
+     * device yet. */
     fun downloadAllUnread() {
         viewModelScope.launch {
-            val progressIndex = state.value.progress?.chapterIndex ?: -1
-            val unread = state.value.chapters.filter {
-                it.downloadState != DownloadState.READY &&
-                    !it.remoteId.isNullOrBlank() && it.index > progressIndex
-            }
+            val unread = BookDownloadRanges.range(
+                state.value.chapters, BookDownloadChoice.UP_TO_LATEST_UNREAD
+            )
             unread.forEach { container.downloadController.enqueueChapter(bookId, it.id) }
             if (unread.isNotEmpty()) {
                 _messages.tryEmit("Downloading ${unread.size} unread chapters")

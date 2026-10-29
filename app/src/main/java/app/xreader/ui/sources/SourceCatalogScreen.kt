@@ -51,6 +51,7 @@ import coil.compose.AsyncImage
  * paging. Covers load straight from the source's site; tapping a book
  * adds it to the library (details + chapter list) and opens it.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun SourceCatalogScreen(
     viewModel: SourceCatalogViewModel,
@@ -93,7 +94,12 @@ fun SourceCatalogScreen(
             TextButton(onClick = onLogin) { Text("Log in") }
         }
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // v1.0.5 (B3): a FlowRow — the three mode chips wrap
+        // instead of ever squeezing on narrow screens.
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             CatalogMode.entries.forEach { mode ->
                 ModeChip(
                     label = when (mode) {

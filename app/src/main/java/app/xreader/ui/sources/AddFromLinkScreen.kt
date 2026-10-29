@@ -51,6 +51,8 @@ fun AddFromLinkScreen(
     val aiAvailable by viewModel.aiAvailable.collectAsStateWithLifecycle()
     val engineLabel by viewModel.engineLabel.collectAsStateWithLifecycle()
     var url by remember { mutableStateOf("") }
+    // v1.0.5 (E5): "Copy details" confirmation on the failure card.
+    var detailsCopied by remember { mutableStateOf(false) }
 
     LaunchedEffect(viewModel) {
         sessionSaved.collect { key -> viewModel.onSessionSaved(key) }
@@ -178,9 +180,34 @@ fun AddFromLinkScreen(
                         )
                     } else {
                         Text(
-                            "Search couldn't be set up for this site yet. " +
-                                "You can still save it — browsing and reading work, " +
-                                "and the source's page has a “Set up search” button.",
+                            // v1.0.5 (A5): name WHY search failed
+                            // its proof when the drive knows.
+                            drive.searchFailure?.let {
+                                "Search isn't proven yet: $it. " +
+                                    "You can still save it — browsing and reading work, " +
+                                    "and the source's page has a “Set up search” button."
+                            } ?: (
+                                "Search couldn't be set up for this site yet. " +
+                                    "You can still save it — browsing and reading work, " +
+                                    "and the source's page has a “Set up search” button."
+                                ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (drive.lockedChapterCount > 0) {
+                        Text(
+                            "${drive.lockedChapterCount} of the chapters are paid or " +
+                                "locked on the site — those can't be read.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    // v1.0.5 (A6): a missing cover is flagged
+                    // here, never a silent surprise later.
+                    if (drive.coverWarning != null) {
+                        Text(
+                            drive.coverWarning!!,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -255,6 +282,28 @@ fun AddFromLinkScreen(
                         onClick = { viewModel.reset() },
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Start over") }
+                    // v1.0.5 (E5): one-tap problem details —
+                    // the failure as compact plain text on the
+                    // clipboard (site, reason, app version).
+                    val clipboard = androidx.compose.ui.platform
+                        .LocalClipboardManager.current
+                    TextButton(
+                        onClick = {
+                            clipboard.setText(
+                                androidx.compose.ui.text.AnnotatedString(
+                                    app.xreader.data.extension.ProblemDetails.format(
+                                        host = app.xreader.data.extension
+                                            .CookieParsing.hostOf(url),
+                                        failingStep = null,
+                                        reason = current.message,
+                                        appVersion = app.xreader.BuildConfig.VERSION_NAME
+                                    )
+                                )
+                            )
+                            detailsCopied = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (detailsCopied) "Copied ✓" else "Copy details") }
                 }
             }
             is LinkAddUiState.Saving -> {

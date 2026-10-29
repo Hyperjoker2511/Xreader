@@ -313,6 +313,7 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -397,8 +398,15 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             // Theme mode (moved here from the old Appearance door —
             // R07: one Customise home, "Appearance" no longer exists
             // as a separate destination).
+            // v1.0.5 (B3): every chip/swatch row on this screen is a
+            // FlowRow — fixed Rows crushed long labels ("Book page
+            // + reader controls") on narrow screens; wrapping rows
+            // can never crush.
             Text("Theme mode", style = MaterialTheme.typography.bodyLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = appearance.themeMode ==
                         app.xreader.data.prefs.ThemeMode.FOLLOW_SYSTEM,
@@ -475,7 +483,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     Text("True black", style = MaterialTheme.typography.titleSmall)
                     Text(
                         "In dark mode, backgrounds become pure black — " +
-                            "kinder to AMOLED screens and batteries.",
+                            "kinder to AMOLED screens and batteries. " +
+                            "It also turns the frosted-glass glow off: " +
+                            "with nothing behind the glass, every screen " +
+                            "— Library included — rests on plain black.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -493,7 +504,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 "Make your own — tap a colour and Xreader builds a theme from it.",
                 style = MaterialTheme.typography.titleSmall
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 listOf(
                     0xFF7C5CD6L to "My violet", 0xFF2E7CF6L to "My blue",
                     0xFF12A594L to "My teal", 0xFF1FA36BL to "My green",
@@ -630,7 +644,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         }
 
         CustomiseSection("Library layout") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = library.layout == LibraryLayout.GRID,
                     onClick = { viewModel.setLayout(LibraryLayout.GRID) },
@@ -649,7 +666,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             }
             if (library.layout == LibraryLayout.GRID) {
                 Text("Columns across", style = MaterialTheme.typography.bodyLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     listOf(2, 3, 4).forEach { columns ->
                         FilterChip(
                             selected = library.gridColumns == columns,
@@ -675,7 +695,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
 
         CustomiseSection("Navigation") {
             Text("Bottom bar style", style = MaterialTheme.typography.bodyLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = library.navBarStyle == NavBarStyle.FLOATING_PILL,
                     onClick = { viewModel.setNavBarStyle(NavBarStyle.FLOATING_PILL) },
@@ -688,7 +711,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 )
             }
             Text("Tab labels", style = MaterialTheme.typography.bodyLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = library.tabLabelStyle == TabLabelStyle.ALWAYS,
                     onClick = { viewModel.setTabLabelStyle(TabLabelStyle.ALWAYS) },
@@ -706,7 +732,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 )
             }
             Text("Start screen", style = MaterialTheme.typography.bodyLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = library.startScreen == StartScreen.LIBRARY,
                     onClick = { viewModel.setStartScreen(StartScreen.LIBRARY) },
@@ -787,7 +816,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 onChange = { v -> viewModel.updateReader { it.copy(autoScrollEnabled = v) } }
             )
             Text("Tap zones", style = MaterialTheme.typography.bodyLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = reader.tapZoneLayout == TapZoneLayout.STANDARD,
                     onClick = { viewModel.updateReader { it.copy(tapZoneLayout = TapZoneLayout.STANDARD) } },
@@ -810,7 +842,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 )
             }
             Text("Page order", style = MaterialTheme.typography.bodyLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = reader.pagedDirection == PagedDirection.LTR,
                     onClick = { viewModel.updateReader { it.copy(pagedDirection = PagedDirection.LTR) } },
@@ -868,7 +903,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = appearance.bookColours ==
                         app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_ONLY,
@@ -915,7 +953,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = appearance.performanceMode ==
                         app.xreader.data.prefs.PerformanceMode.AUTOMATIC,
@@ -965,7 +1006,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 "When a book exists on several sources, “Best source” picks by:",
                 style = MaterialTheme.typography.bodyMedium
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = state.bestSourcePriority ==
                         app.xreader.data.extension.BestSourcePriority.DOWNLOADED_FIRST,
@@ -1284,13 +1328,17 @@ private fun CustomThemeEditorRow(
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun SeedSwatchRow(
     selected: Long?,
     onPick: (Long?) -> Unit,
     allowNone: Boolean = false
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    androidx.compose.foundation.layout.FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         if (allowNone) {
             Box(
                 Modifier

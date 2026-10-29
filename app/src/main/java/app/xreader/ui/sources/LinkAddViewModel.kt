@@ -73,7 +73,11 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
         lastUrl = rawUrl
         _state.value = LinkAddUiState.Probing
         viewModelScope.launch {
-            _state.value = when (val outcome = container.linkProber.probe(rawUrl)) {
+            // v1.0.5 (A10): the failure copy may only mention
+            // the AI detector when its button will render.
+            _state.value = when (val outcome = container.linkProber.probe(
+                rawUrl, aiAvailable = aiAvailable.value
+            )) {
                 is LinkProber.Outcome.Ready -> LinkAddUiState.Ready(
                     draft = outcome.draft,
                     sourceName = outcome.draft.config.name

@@ -372,6 +372,7 @@ fun VocabScreen(
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun VocabWordCard(
     word: VocabWord,
@@ -409,7 +410,12 @@ private fun VocabWordCard(
             if (showMeaning && word.definition.isNotBlank()) {
                 Text(word.definition, style = MaterialTheme.typography.bodyMedium)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            // v1.0.5 (B3): a FlowRow — "Show meaning / I know
+            // this / Forgot / Remove word" crowded one fixed row.
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 if (reviewing) {
                     if (!showMeaning) {
                         TextButton(onClick = { showMeaning = true }) {

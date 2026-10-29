@@ -73,6 +73,7 @@ private fun LoreType.label(): String = when (this) {
  * glossary, and generated art. Everything here is editable — the
  * reader's corrections lock and outrank the AI's (§7).
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun LoreScreen(
     viewModel: LoreViewModel,
@@ -184,7 +185,13 @@ fun LoreScreen(
                         label = { Text("Name") },
                         singleLine = true
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // v1.0.5 (B3): a FlowRow — all five lore types
+                    // as text buttons in one fixed Row crushed
+                    // inside this dialog on narrow screens.
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         LoreType.entries.forEach { candidate ->
                             TextButton(onClick = { type = candidate }) {
                                 Text(

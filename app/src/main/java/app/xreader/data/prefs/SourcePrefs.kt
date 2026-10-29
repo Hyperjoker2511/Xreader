@@ -130,6 +130,32 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    // ── Heal-my-library sweep (v1.0.5, E1) ───────────────────────
+    //
+    // A versioned one-time flag: the sweep runs once per app
+    // version code, so a future engine improvement can re-heal
+    // older sources again. Plus the sweep's one calm report line,
+    // shown on the Me page until dismissed.
+
+    val healSweepDoneForCode: Flow<Int> =
+        store.data.map { it[KEY_HEAL_DONE_FOR] ?: 0 }
+
+    suspend fun setHealSweepDoneForCode(versionCode: Int) {
+        store.edit { it[KEY_HEAL_DONE_FOR] = versionCode }
+    }
+
+    val healNote: Flow<String?> = store.data.map { it[KEY_HEAL_NOTE] }
+
+    suspend fun setHealNote(note: String?) {
+        store.edit { prefs ->
+            if (note == null) {
+                prefs.remove(KEY_HEAL_NOTE)
+            } else {
+                prefs[KEY_HEAL_NOTE] = note
+            }
+        }
+    }
+
     private fun decodeHealth(raw: String?): Map<String, SourceHealthRecord> {
         if (raw.isNullOrBlank()) return emptyMap()
         return runCatching {
@@ -202,6 +228,9 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         val KEY_RECENT_SEARCHES = stringPreferencesKey("search.recent")
         val KEY_SAVED_SEARCHES = stringPreferencesKey("search.saved")
         val KEY_SOURCE_HEALTH = stringPreferencesKey("source.health_map")
+        val KEY_HEAL_DONE_FOR =
+            androidx.datastore.preferences.core.intPreferencesKey("heal.sweep_done_for_code")
+        val KEY_HEAL_NOTE = stringPreferencesKey("heal.note")
         const val MAX_RECENT_REPOS = 8
         const val MAX_RECENT_SEARCHES = 12
     }

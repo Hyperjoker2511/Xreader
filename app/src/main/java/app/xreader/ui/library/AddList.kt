@@ -164,6 +164,7 @@ class AddListViewModel(private val container: AppContainer) : ViewModel() {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun AddListScreen(viewModel: AddListViewModel, onBack: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -196,7 +197,12 @@ fun AddListScreen(viewModel: AddListViewModel, onBack: () -> Unit) {
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // v1.0.5 (B3): a FlowRow — up to six source-name chips
+            // in one fixed Row crushed long source names.
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 state.sources.take(6).forEachIndexed { index, handle ->
                     androidx.compose.material3.FilterChip(
                         selected = state.selectedSourceIndex == index,

@@ -1,4 +1,5 @@
 package app.xreader.ui.common
+import app.xreader.ui.theme.errorTextColor
 import app.xreader.ui.theme.primaryTextColor
 
 import androidx.compose.animation.core.RepeatMode
@@ -19,9 +20,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -148,6 +152,96 @@ fun GlassCard(
         ) {
             Column(Modifier.padding(contentPadding)) { content() }
         }
+    }
+}
+
+/**
+ * v1.0.5 (D1): one action inside a bottom sheet — a glass row with
+ * an icon and a label, never a bare text line floating in a tall
+ * black sheet (the v1.0.4 Library long-press sheet was exactly
+ * that). Built on [GlassCard], so a sheet consumes glass exactly
+ * the way every other surface does — the same frostedGlass path,
+ * the same specular border, and the Apple bounce press (D5).
+ * [caption] carries the honest extra (a chapter count, a size);
+ * [destructive] tints icon and label with the error colour so a
+ * dangerous row reads as dangerous before it's tapped.
+ */
+@Composable
+fun GlassSheetActionRow(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    caption: String? = null,
+    destructive: Boolean = false,
+    enabled: Boolean = true
+) {
+    val labelColor = if (destructive) {
+        errorTextColor()
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    GlassCard(
+        modifier = modifier.fillMaxWidth(),
+        onClick = if (enabled) onClick else ({}),
+        bouncePress = true,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = if (destructive) {
+                    errorTextColor()
+                } else {
+                    MaterialTheme.colorScheme.primary
+                }
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (enabled) {
+                        labelColor
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+                if (caption != null) {
+                    Text(
+                        caption,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * v1.0.5 (D2): one destructive choice inside a confirmation
+ * dialog's BODY — full-width and left-aligned, stacked vertically
+ * with its sibling choices — instead of an action crammed into
+ * the dialog's button row. The v1.0.4 Remove dialog put a Column
+ * of two long TextButtons in the confirm slot beside the dismiss
+ * button, and "Remove book and downloaded chapters (0.0 MB)"
+ * wrapped and crowded "Keep the book" (the user's screenshot).
+ * With this pattern the choices stack in the body and the calm
+ * way out sits ALONE in the button row, never wrapped.
+ */
+@Composable
+fun DialogDangerOption(label: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            label,
+            color = errorTextColor(),
+            modifier = Modifier.weight(1f),
+            textAlign = TextAlign.Start
+        )
     }
 }
 

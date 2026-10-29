@@ -284,6 +284,41 @@ class AppContainer(context: Context) {
         )
     }
 
+    /** v1.0.5 (E1): the heal-my-library sweep — once per app
+     * version it re-drives every link source with the honest
+     * engine, repairs the failures and refreshes their books.
+     * Triggered quietly from the shell's startup effect. */
+    val healSweep: app.xreader.data.extension.HealSweep by lazy {
+        app.xreader.data.extension.HealSweep(
+            extensionDao = database.installedExtensionDao(),
+            bookDao = database.bookDao(),
+            extensionService = extensionService,
+            contractTester = contractTester,
+            linkProber = linkProber,
+            repoManager = repoManager,
+            extensionStore = extensionStore,
+            sourcePrefs = sourcePrefs,
+            sourceBookSync = sourceBookSync,
+            networkGate = networkGate,
+            battery = {
+                val manager = appContext.getSystemService(
+                    android.os.BatteryManager::class.java
+                )
+                app.xreader.data.extension.HealSweep.Battery(
+                    percent = manager?.getIntProperty(
+                        android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY
+                    ) ?: -1,
+                    isCharging = manager?.getIntProperty(
+                        android.os.BatteryManager.BATTERY_PROPERTY_STATUS
+                    )?.let { status ->
+                        status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                            status == android.os.BatteryManager.BATTERY_STATUS_FULL
+                    } ?: false
+                )
+            }
+        )
+    }
+
     // -- Phase 5: Gemini AI layer & sync -------------------------------------
 
     /** App-lifetime scope for best-effort background work (lore

@@ -8,6 +8,9 @@ import app.xreader.extensionapi.SourceChapter
 import app.xreader.extensionapi.SourceChapterContent
 import app.xreader.extensionapi.SourceContext
 import app.xreader.extensionapi.SourceException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -96,9 +99,21 @@ class DeclarativeSource(
             fetchDoc(url)
         }
         val books = selectChained(doc, spec.results).mapNotNull { el ->
-            val title = readSpec(el, spec.title)?.trim().orEmpty()
+            val rawTitle = readSpec(el, spec.title)?.trim().orEmpty()
             val link = readSpec(el, spec.link)?.trim().orEmpty()
-            if (title.isEmpty() || link.isEmpty()) return@mapNotNull null
+            if (rawTitle.isEmpty() || link.isEmpty()) return@mapNotNull null
+            // v1.0.5 (A7): listing titles get the shared hygiene —
+            // trailing date stamps stripped, and a date-only title
+            // (the extractor read the date element) falls back to
+            // the book's URL slug instead of naming the book after
+            // a calendar day (D25).
+            val cleaned = TitleCleaner.clean(rawTitle)
+            val title = when {
+                cleaned.isBlank() -> rawTitle
+                TitleCleaner.isDateOnly(cleaned) ->
+                    TitleCleaner.slugTitle(absolute(link, url)) ?: return@mapNotNull null
+                else -> cleaned
+            }
             SourceBook(
                 id = absolute(link, url),
                 title = title,
@@ -119,7 +134,7 @@ class DeclarativeSource(
         val doc = fetchDoc(bookPageUrl(book))
         val spec = config.details
         return book.copy(
-            title = spec.title?.let { readDocSpec(doc, it) }?.ifBlank { null } ?: book.title,
+            title = readTitle(doc, spec.title) ?: book.title,
             author = spec.author?.let { readDocSpec(doc, it) }?.ifBlank { null } ?: book.author,
             description = spec.description?.let { readDocSpec(doc, it) }?.ifBlank { null }
                 ?: book.description,
@@ -170,9 +185,17 @@ class DeclarativeSource(
         val url = bookPageUrl(book)
         val doc = fetchDoc(url)
         return selectChained(doc, spec.results).mapNotNull { el ->
-            val title = readSpec(el, spec.title)?.trim().orEmpty()
+            val rawTitle = readSpec(el, spec.title)?.trim().orEmpty()
             val link = readSpec(el, spec.link)?.trim().orEmpty()
-            if (title.isEmpty() || link.isEmpty()) return@mapNotNull null
+            if (rawTitle.isEmpty() || link.isEmpty()) return@mapNotNull null
+            // v1.0.5 (A7): same title hygiene as listings.
+            val cleaned = TitleCleaner.clean(rawTitle)
+            val title = when {
+                cleaned.isBlank() -> rawTitle
+                TitleCleaner.isDateOnly(cleaned) ->
+                    TitleCleaner.slugTitle(absolute(link, url)) ?: return@mapNotNull null
+                else -> cleaned
+            }
             SourceBook(
                 id = absolute(link, url),
                 title = title,
@@ -189,7 +212,7 @@ class DeclarativeSource(
         val doc = fetchDoc(url)
         val spec = config.details
         val filled = book.copy(
-            title = spec.title?.let { readDocSpec(doc, it) }?.ifBlank { null } ?: book.title,
+            title = readTitle(doc, spec.title) ?: book.title,
             author = spec.author?.let { readDocSpec(doc, it) }?.ifBlank { null } ?: book.author,
             description = spec.description?.let { readDocSpec(doc, it) }?.ifBlank { null }
                 ?: book.description,
@@ -212,13 +235,61 @@ class DeclarativeSource(
                 number = ChapterNumbers.parse(chapterName)
             )
         }
-        return if (spec.reverse) chapters.asReversed() else chapters
+        // v1.0.5 (E3): sites that show a "latest chapters" block
+        // AND the full list on the same page (Novelight: 10 + 51
+        // rows under one selector) would otherwise hand back the
+        // overlap twice. One entry per chapter URL, first
+        // occurrence wins, order preserved — the COMPLETE list.
+        val unique = chapters.distinctBy { it.id }
+        return if (spec.reverse) unique.asReversed() else unique
+    }
+
+    /**
+     * v1.0.5 (A3): the ids of this book's chapters whose list
+     * ROW is lock-marked (paid/premium) — one extra book-page
+     * fetch, used by the test-drives so their text sampling can
+     * skip locked chapters instead of condemning the source.
+     */
+    fun lockedChapterIds(book: SourceBook): Set<String> {
+        val url = bookPageUrl(book)
+        val doc = fetchDoc(url)
+        val spec = config.details.chapters
+        val locked = mutableSetOf<String>()
+        for (el in selectChained(doc, spec.list)) {
+            if (!ChapterLocks.rowIsLocked(el)) continue
+            val link = readSpec(el, spec.link)?.trim().orEmpty()
+            if (link.isNotEmpty()) locked += absolute(link, url)
+        }
+        return locked
+    }
+
+    /**
+     * v1.0.5 (A7): a details title read with the shared hygiene —
+     * trailing date stamps stripped; a date-only read is rejected
+     * (null) so the caller keeps the title the book already had.
+     */
+    private fun readTitle(doc: Document, rawSpec: String?): String? {
+        val raw = rawSpec?.let { readDocSpec(doc, it) }?.trim()?.ifBlank { null }
+            ?: return null
+        val cleaned = TitleCleaner.clean(raw)
+        if (cleaned.isBlank() || TitleCleaner.isDateOnly(cleaned)) return null
+        return cleaned
     }
 
     // ── chapter content ─────────────────────────────────────────────
 
     override fun chapterContent(chapter: SourceChapter): SourceChapterContent {
         val spec = config.chapter
+        // v1.0.5 Stage 1.5: AJAX text mode — when the config
+        // declares it AND this chapter's URL yields a numeric id,
+        // the text comes from the JSON endpoint instead of the
+        // (shell) chapter page. When either doesn't hold, the
+        // static path below runs exactly as it always has.
+        val ajax = spec.ajax
+        if (ajax != null) {
+            val endpoint = ajax.endpointFor(chapter.id)
+            if (endpoint != null) return ajaxChapterContent(chapter, ajax, endpoint)
+        }
         var url: String? = chapter.id
         val fragments = mutableListOf<String>()
         var title: String? = null
@@ -255,6 +326,58 @@ class DeclarativeSource(
         val doc = Jsoup.parseBodyFragment(combined, chapter.id)
         contentCache[chapter.id] = HtmlToContent.fromDocument(doc, chapter.id)
         return SourceChapterContent(html = combined, title = title)
+    }
+
+    /**
+     * The AJAX text mode's read (v1.0.5 Stage 1.5): fetch the
+     * declared endpoint through the source's own HTTP context —
+     * the declared headers ride along, and the whitelist, login
+     * session and rate limit apply exactly as for any other fetch
+     * this source makes — then take the configured JSON field as
+     * the chapter's HTML and run the chapter spec's ordinary
+     * extraction/cleanup over it (the [ChapterSpec.content]
+     * selector applies inside the payload when it matches; the
+     * payload IS the chapter container when it doesn't, which is
+     * the verified shape: `{"content": "<div class=…>prose</div>"}`).
+     *
+     * An endpoint that answers with no readable text — field
+     * missing, field blank, or HTML whose text is empty — is how
+     * these sites mark a paid/locked chapter, so it surfaces as
+     * the typed empty-text failure the test-drives already
+     * understand (they sample another chapter, or report the
+     * paid/locked state), never as a silent empty chapter.
+     */
+    private fun ajaxChapterContent(
+        chapter: SourceChapter,
+        ajax: ChapterTextAjax,
+        endpoint: String
+    ): SourceChapterContent {
+        val spec = config.chapter
+        val response = context.http.get(endpoint, ajax.headers)
+        if (response.status !in 200..299) {
+            throw SourceException("the site answered HTTP ${response.status}")
+        }
+        val root = runCatching {
+            ajaxJson.parseToJsonElement(response.body)
+        }.getOrNull() as? JsonObject
+        val payload = (root?.get(ajax.jsonContentField) as? JsonPrimitive)
+            ?.content?.takeIf { it.isNotBlank() }
+            ?: throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
+        val fragment = Jsoup.parseBodyFragment(payload, chapter.id)
+        val title = spec.title?.let { readDocSpec(fragment, it) }?.ifBlank { null }
+        val element = firstChainedMatch(fragment, spec.content)?.first
+            ?: fragment.body()
+        val clone = element.clone()
+        for (removeSel in spec.remove) {
+            for (candidate in SelectorChains.split(removeSel)) {
+                runCatching { clone.select(candidate).remove() }
+            }
+        }
+        if (clone.text().isBlank()) throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
+        val html = clone.html()
+        val doc = Jsoup.parseBodyFragment(html, chapter.id)
+        contentCache[chapter.id] = HtmlToContent.fromDocument(doc, chapter.id)
+        return SourceChapterContent(html = html, title = title)
     }
 
     // ── helpers ─────────────────────────────────────────────────────
@@ -375,6 +498,18 @@ class DeclarativeSource(
     companion object {
         /** Multi-page chapter chaining cap (§5: no runaway pagination). */
         const val MAX_CHAPTER_PAGES = 10
+
+        /** v1.0.5 Stage 1.5: the AJAX endpoint answered but carried
+         * no readable text — the paid/locked signal for this mode,
+         * worded so the test-drives' sampling reports it plainly. */
+        const val AJAX_TEXT_EMPTY_MESSAGE =
+            "the chapter's text came back empty — the chapter is " +
+                "paid or locked, or the site changed how it serves " +
+                "chapter text"
+
+        /** The AJAX mode's JSON reader: the tree's existing
+         * kotlinx.serialization (no new dependency). */
+        private val ajaxJson = Json { ignoreUnknownKeys = true; isLenient = true }
     }
 }
 

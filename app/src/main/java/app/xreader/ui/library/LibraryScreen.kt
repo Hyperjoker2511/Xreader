@@ -36,6 +36,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.PlaylistRemove
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,8 +67,10 @@ import app.xreader.core.motion.itemEnter
 import app.xreader.core.motion.itemExit
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.core.motion.pressBounce
+import app.xreader.ui.common.DialogDangerOption
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.GlassSheetActionRow
 import app.xreader.ui.common.pressTilt
 import app.xreader.ui.common.ScreenHeader
 import app.xreader.ui.common.StatusPill
@@ -81,8 +94,6 @@ fun LibraryScreen(
     onOpenBook: (Long) -> Unit,
     onContinueReading: (bookId: Long, chapterIndex: Int) -> Unit,
     onProfile: () -> Unit = {},
-    onHistory: () -> Unit = {},
-    onOpenUpdates: () -> Unit = {},
     /** v1.0.2 (R27): paste-a-list import. */
     onOpenAddList: () -> Unit = {},
     coverGlow: Boolean = false
@@ -93,7 +104,9 @@ fun LibraryScreen(
     var query by remember { mutableStateOf("") }
     var sort by remember { mutableStateOf(app.xreader.data.library.LibrarySort.RECENTLY_READ) }
     var statusFilter by remember { mutableStateOf("ALL") }
-    var sortMenuOpen by remember { mutableStateOf(false) }
+    // v1.0.5 (C1/D20): status + sort + check-for-updates live in
+    // ONE Filter sheet now — the toolbar keeps a single chip row.
+    var filterSheetOpen by remember { mutableStateOf(false) }
     var removeTarget by remember { mutableStateOf<ShelfBook?>(null) }
     // v1.0.2 (R21/R23): quick actions, multi-select, shelf dialogs.
     var quickActionsFor by remember { mutableStateOf<ShelfBook?>(null) }
@@ -279,8 +292,9 @@ fun LibraryScreen(
             return@Column
         }
 
-        // v1.0.1 toolbar: search, updates, history, sort — visible
-        // and labelled, one row each, nothing in an overflow menu.
+        // The Library's chrome (v1.0.5, C1): header, search, ONE
+        // chip row, then books — nothing else stands between the
+        // reader and their shelves.
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -289,88 +303,40 @@ fun LibraryScreen(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        // v1.0.4 (D2/D9): the toolbar is a horizontally scrolling
-        // row of glass chips (the user's Library mock independently
-        // chose the same fix). The v1.0.3 TextButton row starved its
-        // last items — "Add a list" crushed letter-by-letter, Sort
-        // pushed off screen. Chips are single-line and the row
-        // scrolls, so nothing can crush or clip.
+        // v1.0.5 (C1/D20): the Library decluttered to ONE chip row.
+        // History and Updates left the toolbar — they are bottom-
+        // nav tabs already. The shelf rail below is the only row:
+        // a Filter chip first (status + sort + Check for updates
+        // live in its sheet), then the shelves, then "+ Shelf" and
+        // "+ Add a list" trailing. The row scrolls sideways, so
+        // nothing can crush here either (D2's property, kept).
+        Spacer(Modifier.height(10.dp))
         androidx.compose.foundation.lazy.LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            item(key = "action-check") {
-                LibraryActionChip(
-                    label = if (state.checkingUpdates) "Checking…" else "Check for updates",
-                    onClick = { viewModel.checkForUpdates() },
-                    enabled = !state.checkingUpdates
-                )
-            }
-            item(key = "action-history") {
-                LibraryActionChip(label = "History", onClick = onHistory)
-            }
-            item(key = "action-updates") {
-                LibraryActionChip(label = "Updates", onClick = onOpenUpdates)
-            }
-            item(key = "action-addlist") {
-                LibraryActionChip(label = "Add a list", onClick = onOpenAddList)
-            }
-            item(key = "action-sort") {
-                Box {
-                    LibraryActionChip(
-                        label = "Sort: ${sortLabel(effectiveSort)}",
-                        onClick = { sortMenuOpen = true }
-                    )
-                    DropdownMenu(
-                        expanded = sortMenuOpen,
-                        onDismissRequest = { sortMenuOpen = false }
-                    ) {
-                        app.xreader.data.library.LibrarySort.entries.forEach { option ->
-                            DropdownMenuItem(
-                                text = { Text(sortLabel(option)) },
-                                onClick = {
-                                    sort = option
-                                    // R21: a user shelf remembers its sort.
-                                    selectedUserShelf?.let {
-                                        viewModel.setShelfSort(it.id, option)
-                                    }
-                                    sortMenuOpen = false
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        // v1.0.4 (D2/D5): the status row scrolls horizontally too
-        // (six chips never fit a narrow phone side by side) and the
-        // chips take the bounce press.
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf(
-                "ALL" to "All", "READING" to "Reading",
-                "COMPLETED" to "Completed", "ON_HOLD" to "On hold",
-                "DROPPED" to "Dropped", "NOT_STARTED" to "Not started"
-            ).forEach { (value, label) ->
-                val chipInteraction = remember {
+            item(key = "filter") {
+                val filterInteraction = remember {
                     androidx.compose.foundation.interaction.MutableInteractionSource()
                 }
+                val activeStatus = statusOptions.firstOrNull {
+                    it.first == statusFilter && statusFilter != "ALL"
+                }
                 FilterChip(
-                    selected = statusFilter == value,
-                    onClick = { statusFilter = value },
-                    label = { Text(label) },
-                    interactionSource = chipInteraction,
-                    modifier = Modifier.pressBounce(chipInteraction)
+                    selected = statusFilter != "ALL",
+                    onClick = { filterSheetOpen = true },
+                    label = {
+                        Text(
+                            if (activeStatus != null) {
+                                "Filter · ${activeStatus.second}"
+                            } else {
+                                "Filter"
+                            }
+                        )
+                    },
+                    interactionSource = filterInteraction,
+                    modifier = Modifier.pressBounce(filterInteraction)
                 )
             }
-        }
-        // v1.0.2 (R21): the shelf rail — one tap, labelled, counts
-        // visible. All is permanent; built-ins can be hidden from
-        // the manage dialog; "+ Shelf" creates and manages.
-        androidx.compose.foundation.lazy.LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
             items(shelfChips, key = { "shelf-${it.ref}" }) { chip ->
                 val chipInteraction = remember {
                     androidx.compose.foundation.interaction.MutableInteractionSource()
@@ -395,18 +361,37 @@ fun LibraryScreen(
                     modifier = Modifier.pressBounce(addInteraction)
                 )
             }
+            item(key = "add-list") {
+                val listInteraction = remember {
+                    androidx.compose.foundation.interaction.MutableInteractionSource()
+                }
+                FilterChip(
+                    selected = false,
+                    onClick = onOpenAddList,
+                    label = { Text("+ Add a list") },
+                    interactionSource = listInteraction,
+                    modifier = Modifier.pressBounce(listInteraction)
+                )
+            }
         }
+        Spacer(Modifier.height(6.dp))
         // v1.0.2 (R23): multi-select action bar.
+        // v1.0.5 (B3): both rows SCROLL sideways — as fixed rows
+        // their seven labelled buttons crowded narrow phones (the
+        // same crush family as D2/D25); the count keeps its place
+        // at the start of the first row instead of a weight, which
+        // a scrolling row can't honour.
         selection?.let { picked ->
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Text(
                         "${picked.size} selected",
                         style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.padding(end = 8.dp)
                     )
                     TextButton(onClick = { shelfPickerFor = picked }) {
                         Text("Add to shelf")
@@ -416,7 +401,10 @@ fun LibraryScreen(
                     }) { Text("Favourite") }
                     TextButton(onClick = { selection = null }) { Text("Done") }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     TextButton(onClick = { viewModel.bulkDownload(picked) }) {
                         Text("Download")
                     }
@@ -677,62 +665,106 @@ fun LibraryScreen(
 
         // v1.0.2 (R21/R23): long-press quick actions — everything
         // labelled, nothing buried; Remove keeps its honest dialog.
+        // v1.0.5 (D1): the sheet is GLASS now — icon+label rows on
+        // GlassSheetActionRow (the shared glass path), hugging its
+        // content via skipPartiallyExpanded instead of stretching
+        // into a tall, mostly-empty black sheet of bare text lines.
         quickActionsFor?.let { target ->
             val isFavourite = target.book.id in state.favourites
             androidx.compose.material3.ModalBottomSheet(
-                onDismissRequest = { quickActionsFor = null }
+                onDismissRequest = { quickActionsFor = null },
+                sheetState = androidx.compose.material3
+                    .rememberModalBottomSheetState(skipPartiallyExpanded = true)
             ) {
                 Column(
-                    Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 24.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
                         target.book.title,
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 2
                     )
-                    TextButton(onClick = {
-                        quickActionsFor = null
-                        onBookClick(target)
-                    }) { Text("Open") }
-                    TextButton(onClick = {
-                        viewModel.setFavourite(target.book.id, !isFavourite)
-                        quickActionsFor = null
-                    }) {
-                        Text(
-                            if (isFavourite) "Remove from Favourites"
-                            else "Add to Favourites"
-                        )
-                    }
-                    TextButton(onClick = {
-                        shelfPickerFor = setOf(target.book.id)
-                        quickActionsFor = null
-                    }) { Text("Add to shelf…") }
+                    GlassSheetActionRow(
+                        icon = Icons.Filled.MenuBook,
+                        label = "Open",
+                        onClick = {
+                            quickActionsFor = null
+                            onBookClick(target)
+                        }
+                    )
+                    GlassSheetActionRow(
+                        icon = if (isFavourite) {
+                            Icons.Filled.Favorite
+                        } else {
+                            Icons.Filled.FavoriteBorder
+                        },
+                        label = if (isFavourite) {
+                            "Remove from Favourites"
+                        } else {
+                            "Add to Favourites"
+                        },
+                        onClick = {
+                            viewModel.setFavourite(target.book.id, !isFavourite)
+                            quickActionsFor = null
+                        }
+                    )
+                    GlassSheetActionRow(
+                        icon = Icons.Filled.PlaylistAdd,
+                        label = "Add to shelf…",
+                        onClick = {
+                            shelfPickerFor = setOf(target.book.id)
+                            quickActionsFor = null
+                        }
+                    )
                     selectedUserShelf?.takeIf {
                         it.kind == app.xreader.data.db.ShelfKind.MANUAL
                     }?.let { shelf ->
-                        TextButton(onClick = {
-                            viewModel.removeBookFromShelf(target.book.id, shelf.id)
-                            quickActionsFor = null
-                        }) { Text("Remove from “${shelf.name}”") }
+                        GlassSheetActionRow(
+                            icon = Icons.Filled.PlaylistRemove,
+                            label = "Remove from “${shelf.name}”",
+                            onClick = {
+                                viewModel.removeBookFromShelf(target.book.id, shelf.id)
+                                quickActionsFor = null
+                            }
+                        )
                     }
-                    TextButton(onClick = {
-                        viewModel.bulkDownload(listOf(target.book.id))
-                        quickActionsFor = null
-                    }) { Text("Download book") }
-                    TextButton(onClick = {
-                        viewModel.bulkDeleteDownloads(listOf(target.book.id))
-                        quickActionsFor = null
-                    }) { Text("Delete downloads") }
-                    TextButton(onClick = {
-                        selection = setOf(target.book.id)
-                        quickActionsFor = null
-                    }) { Text("Select") }
-                    TextButton(onClick = {
-                        removeTarget = target
-                        quickActionsFor = null
-                    }) { Text("Remove from library…") }
-                    Spacer(Modifier.height(16.dp))
+                    GlassSheetActionRow(
+                        icon = Icons.Filled.Download,
+                        label = "Download book",
+                        onClick = {
+                            viewModel.bulkDownload(listOf(target.book.id))
+                            quickActionsFor = null
+                        }
+                    )
+                    GlassSheetActionRow(
+                        icon = Icons.Filled.DeleteSweep,
+                        label = "Delete downloads",
+                        onClick = {
+                            viewModel.bulkDeleteDownloads(listOf(target.book.id))
+                            quickActionsFor = null
+                        }
+                    )
+                    GlassSheetActionRow(
+                        icon = Icons.Filled.CheckBox,
+                        label = "Select",
+                        onClick = {
+                            selection = setOf(target.book.id)
+                            quickActionsFor = null
+                        }
+                    )
+                    GlassSheetActionRow(
+                        icon = Icons.Filled.RemoveCircleOutline,
+                        label = "Remove from library…",
+                        destructive = true,
+                        onClick = {
+                            removeTarget = target
+                            quickActionsFor = null
+                        }
+                    )
+                    Spacer(Modifier.height(24.dp))
                 }
             }
         }
@@ -772,6 +804,102 @@ fun LibraryScreen(
             )
         }
 
+        // v1.0.5 (C1/D20): the Filter sheet — everything that
+        // left the toolbar lives here, in ONE place: reading
+        // status, sort order, and Check for updates. Choices are
+        // chips in wrapping rows, so nothing can crush here
+        // either, and picking one applies it immediately.
+        if (filterSheetOpen) {
+            androidx.compose.material3.ModalBottomSheet(
+                onDismissRequest = { filterSheetOpen = false },
+                sheetState = androidx.compose.material3
+                    .rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 8.dp)
+                        .padding(bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        "Filter & sort",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Text(
+                        "Reading status",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        statusOptions.forEach { (value, label) ->
+                            val chipInteraction = remember {
+                                androidx.compose.foundation.interaction
+                                    .MutableInteractionSource()
+                            }
+                            FilterChip(
+                                selected = statusFilter == value,
+                                onClick = { statusFilter = value },
+                                label = { Text(label) },
+                                interactionSource = chipInteraction,
+                                modifier = Modifier.pressBounce(chipInteraction)
+                            )
+                        }
+                    }
+                    Text(
+                        "Sort by",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        app.xreader.data.library.LibrarySort.entries.forEach { option ->
+                            val chipInteraction = remember {
+                                androidx.compose.foundation.interaction
+                                    .MutableInteractionSource()
+                            }
+                            FilterChip(
+                                selected = effectiveSort == option,
+                                onClick = {
+                                    sort = option
+                                    // R21: a user shelf remembers its sort.
+                                    selectedUserShelf?.let {
+                                        viewModel.setShelfSort(it.id, option)
+                                    }
+                                },
+                                label = { Text(sortLabel(option)) },
+                                interactionSource = chipInteraction,
+                                modifier = Modifier.pressBounce(chipInteraction)
+                            )
+                        }
+                    }
+                    GlassSheetActionRow(
+                        icon = Icons.Filled.Refresh,
+                        label = if (state.checkingUpdates) {
+                            "Checking for updates…"
+                        } else {
+                            "Check for updates"
+                        },
+                        caption = "Look for new chapters on every source",
+                        enabled = !state.checkingUpdates,
+                        onClick = {
+                            viewModel.checkForUpdates()
+                            filterSheetOpen = false
+                        }
+                    )
+                    TextButton(
+                        onClick = { filterSheetOpen = false },
+                        modifier = Modifier.align(Alignment.End)
+                    ) { Text("Done") }
+                }
+            }
+        }
+
         if (manageShelvesOpen) {
             ManageShelvesDialog(
                 state = state,
@@ -797,34 +925,43 @@ fun LibraryScreen(
                 bulkRemoveSize =
                     app.xreader.data.files.StorageMeter.formatBytes(bytes)
             }
+            // v1.0.5 (D2): choices stack full-width in the body;
+            // "Keep them" sits alone in the button row (same fix
+            // as the single-book Remove dialog below).
             AlertDialog(
                 onDismissRequest = { bulkRemoveOpen = false },
                 title = { Text("Remove ${picked.size} book(s)?") },
                 text = {
-                    Text(
-                        "Removing also removes reading progress and bookmarks. " +
-                            "Downloaded chapters take " +
-                            (bulkRemoveSize ?: "…") + "."
-                    )
-                },
-                confirmButton = {
-                    Column {
-                        TextButton(onClick = {
-                            bulkRemoveOpen = false
-                            selection = null
-                            viewModel.bulkRemoveBooks(
-                                pickedBooks.map { it.book }, deleteFiles = false
-                            )
-                        }) { Text("Remove books only") }
-                        TextButton(onClick = {
-                            bulkRemoveOpen = false
-                            selection = null
-                            viewModel.bulkRemoveBooks(
-                                pickedBooks.map { it.book }, deleteFiles = true
-                            )
-                        }) { Text("Remove books and downloads") }
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "Removing also removes reading progress and bookmarks. " +
+                                "Downloaded chapters take " +
+                                (bulkRemoveSize ?: "…") + "."
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        DialogDangerOption(
+                            label = "Remove books only",
+                            onClick = {
+                                bulkRemoveOpen = false
+                                selection = null
+                                viewModel.bulkRemoveBooks(
+                                    pickedBooks.map { it.book }, deleteFiles = false
+                                )
+                            }
+                        )
+                        DialogDangerOption(
+                            label = "Remove books and downloads",
+                            onClick = {
+                                bulkRemoveOpen = false
+                                selection = null
+                                viewModel.bulkRemoveBooks(
+                                    pickedBooks.map { it.book }, deleteFiles = true
+                                )
+                            }
+                        )
                     }
                 },
+                confirmButton = {},
                 dismissButton = {
                     TextButton(onClick = { bulkRemoveOpen = false }) {
                         Text("Keep them")
@@ -839,33 +976,41 @@ fun LibraryScreen(
                 val bytes = viewModel.downloadedSizeBytes(target.book)
                 removeSizeMb = "%.1f MB".format(bytes / 1_000_000.0)
             }
+            // v1.0.5 (D2): the dialog from the user's screenshot —
+            // its choices used to be a Column crammed into the
+            // confirm slot, so "Remove book and downloaded
+            // chapters (0.0 MB)" wrapped against "Keep the book".
+            // Now the choices stack full-width in the body and
+            // Keep sits alone in the button row.
             AlertDialog(
                 onDismissRequest = { removeTarget = null },
                 title = { Text("Remove “${target.book.title}”?") },
                 text = {
-                    Text(
-                        "Removing the book also removes its reading progress and " +
-                            "bookmarks. Your original file (if you imported one) " +
-                            "stays where it is."
-                    )
-                },
-                confirmButton = {
-                    Column {
-                        TextButton(onClick = {
-                            removeTarget = null
-                            viewModel.removeBook(target.book, deleteFiles = false)
-                        }) { Text("Remove book only") }
-                        TextButton(onClick = {
-                            removeTarget = null
-                            viewModel.removeBook(target.book, deleteFiles = true)
-                        }) {
-                            Text(
-                                "Remove book and downloaded chapters" +
-                                    (removeSizeMb?.let { " ($it)" } ?: "")
-                            )
-                        }
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "Removing the book also removes its reading progress and " +
+                                "bookmarks. Your original file (if you imported one) " +
+                                "stays where it is."
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        DialogDangerOption(
+                            label = "Remove book only",
+                            onClick = {
+                                removeTarget = null
+                                viewModel.removeBook(target.book, deleteFiles = false)
+                            }
+                        )
+                        DialogDangerOption(
+                            label = "Remove book and downloaded chapters" +
+                                (removeSizeMb?.let { " ($it)" } ?: ""),
+                            onClick = {
+                                removeTarget = null
+                                viewModel.removeBook(target.book, deleteFiles = true)
+                            }
+                        )
                     }
                 },
+                confirmButton = {},
                 dismissButton = {
                     TextButton(onClick = { removeTarget = null }) { Text("Keep the book") }
                 }
@@ -875,39 +1020,15 @@ fun LibraryScreen(
 }
 
 /**
- * v1.0.4 (D2/D9): one action in the Library toolbar — a glass chip
- * in the horizontally scrolling action row, with the Apple bounce
- * press (D5). Single-line label at a fixed chip height: nothing in
- * the row can crush vertically or push a sibling off screen (the
- * v1.0.3 TextButton row did both). A disabled action (an update
- * check already running) renders dimmed and swallows taps —
- * GlassCard has no disabled state of its own.
+ * v1.0.5 (C1/D20): the reading-status choices, shared by the
+ * Filter chip's active label and the Filter sheet's choice row.
+ * The values are the filter keys the list logic has always used.
  */
-@Composable
-private fun LibraryActionChip(
-    label: String,
-    onClick: () -> Unit,
-    enabled: Boolean = true
-) {
-    GlassCard(
-        onClick = if (enabled) onClick else ({}),
-        bouncePress = true,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            horizontal = 16.dp, vertical = 8.dp
-        )
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            maxLines = 1,
-            color = if (enabled) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            }
-        )
-    }
-}
+private val statusOptions: List<Pair<String, String>> = listOf(
+    "ALL" to "All", "READING" to "Reading",
+    "COMPLETED" to "Completed", "ON_HOLD" to "On hold",
+    "DROPPED" to "Dropped", "NOT_STARTED" to "Not started"
+)
 
 private fun sortLabel(sort: app.xreader.data.library.LibrarySort): String = when (sort) {
     app.xreader.data.library.LibrarySort.RECENTLY_READ -> "Recently read"

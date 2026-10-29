@@ -58,14 +58,42 @@ class ContractTester(private val service: ExtensionService) {
             ?.maxByOrNull { it.length }
             ?: "the"
         val searchResult = service.guarded(handle) { it.search(probeWord, 1) }
-        record(
-            SourceCapability.SEARCH, searchResult,
-            if (searchResult is AppResult.Ok) {
-                "searching “$probeWord” found ${searchResult.value.books.size} book(s)"
-            } else {
-                ""
-            }
-        )
+        // v1.0.5 (A5): finding books is not enough — the search
+        // must provably FILTER. A nonsense control word must
+        // return fewer results, and the real results must differ
+        // from the unfiltered list (SearchFilterProof).
+        val controlResult = service.guarded(handle) {
+            it.search(SearchFilterProof.NONSENSE_TERM, 1)
+        }
+        val searchVerdict = if (searchResult is AppResult.Ok) {
+            SearchFilterProof.judge(
+                searchResult.value.books.map { it.id }.toSet(),
+                (controlResult as? AppResult.Ok)?.value?.books
+                    ?.map { it.id }?.toSet() ?: emptySet(),
+                (listResult as? AppResult.Ok)?.value?.books
+                    ?.map { it.id }?.toSet()
+            )
+        } else {
+            null
+        }
+        if (searchResult is AppResult.Ok && searchVerdict?.verified == false) {
+            results += CapabilityResult(
+                capability = SourceCapability.SEARCH,
+                ok = false,
+                detail = searchVerdict.reason ?: "search results couldn't be judged"
+            )
+        } else {
+            record(
+                SourceCapability.SEARCH, searchResult,
+                if (searchResult is AppResult.Ok) {
+                    "searching “$probeWord” found " +
+                        "${searchResult.value.books.size} book(s) — and the " +
+                        "nonsense control word found fewer, so it filters"
+                } else {
+                    ""
+                }
+            )
+        }
 
         if (firstBook == null) {
             // Without a book, the remaining core steps cannot run —
@@ -95,7 +123,12 @@ class ContractTester(private val service: ExtensionService) {
         record(
             SourceCapability.DETAILS, detailsResult,
             if (detailsResult is AppResult.Ok) {
-                "author: ${detailsResult.value.author ?: "—"}"
+                "author: ${detailsResult.value.author ?: "—"}, " +
+                    if (detailsResult.value.coverUrl != null) {
+                        "cover found"
+                    } else {
+                        "no cover found (the book will show a letter tile)"
+                    }
             } else {
                 ""
             }
@@ -103,46 +136,98 @@ class ContractTester(private val service: ExtensionService) {
         val detailed = (detailsResult as? AppResult.Ok)?.value ?: firstBook
 
         // CHAPTERS — the list must exist and be non-empty.
+        // v1.0.5 (A1): an Ok-but-EMPTY list fails this step with
+        // its own name — it used to pass silently and let the
+        // text step report a misleading "no chapter to read".
         val chaptersResult = service.guarded(handle) { it.chapters(detailed) }
         val chapters = (chaptersResult as? AppResult.Ok)?.value
-        record(
-            SourceCapability.CHAPTERS, chaptersResult,
-            if (chapters != null) "${chapters.size} chapter(s)" else ""
-        )
-
-        // TEXT — the first chapter must produce readable text.
-        val firstChapter = chapters?.firstOrNull()
-        if (firstChapter == null) {
+        if (chapters != null && chapters.isEmpty()) {
             results += CapabilityResult(
+                capability = SourceCapability.CHAPTERS,
+                ok = false,
+                detail = "the book page listed 0 chapters"
+            )
+        } else {
+            record(
+                SourceCapability.CHAPTERS, chaptersResult,
+                if (chapters != null) "${chapters.size} chapter(s)" else ""
+            )
+        }
+
+        // TEXT — a chapter must produce readable text.
+        // v1.0.5 (A3): sample an UNLOCKED chapter — chapters
+        // whose names mark them paid/locked are skipped, the
+        // sampler steps forward when one chapter is individually
+        // unreadable, and when nothing unlocked exists (or every
+        // sample is a paywall notice) the step reports the
+        // distinct paid/locked state instead of "unreadable".
+        val chapterList = chapters ?: emptyList()
+        val unlockedChapters = chapterList.filterNot {
+            ChapterLocks.nameSuggestsLocked(it.name)
+        }
+        when {
+            chapters == null -> results += CapabilityResult(
                 capability = SourceCapability.TEXT,
                 ok = false,
                 detail = "no chapter to read"
             )
-        } else {
-            proofChapter = firstChapter.name
-            val textResult = service.guarded(handle) {
-                it.chapterContent(firstChapter)
-            }
-            val plain = (textResult as? AppResult.Ok)?.value?.html
-                ?.replace(Regex("<[^>]+>"), " ")
-                ?.replace(Regex("\\s+"), " ")
-                ?.trim()
-            proofFirstLine = plain?.take(120) ?: ""
-            results += CapabilityResult(
+            chapterList.isEmpty() -> results += CapabilityResult(
                 capability = SourceCapability.TEXT,
-                ok = textResult is AppResult.Ok && !plain.isNullOrBlank(),
-                detail = if (textResult is AppResult.Ok) {
-                    if (plain.isNullOrBlank()) {
-                        "the chapter opened but its text was empty"
-                    } else {
-                        "${plain.length} characters read"
-                    }
-                } else {
-                    (textResult as AppResult.Err).error.detail
-                        ?: "the chapter text didn't load"
-                }
+                ok = false,
+                detail = "not checked — the chapter list was empty"
             )
+            unlockedChapters.isEmpty() -> results += CapabilityResult(
+                capability = SourceCapability.TEXT,
+                ok = false,
+                detail = "all ${chapterList.size} chapter(s) are marked paid or " +
+                    "locked on this site — locked chapters can't be sampled"
+            )
+            else -> {
+                var sampledName = ""
+                var sampledPlain: String? = null
+                var sampledError: String? = null
+                var paywalled = false
+                for (candidate in unlockedChapters.take(3)) {
+                    val textResult = service.guarded(handle) {
+                        it.chapterContent(candidate)
+                    }
+                    val plain = (textResult as? AppResult.Ok)?.value?.html
+                        ?.replace(Regex("<[^>]+>"), " ")
+                        ?.replace(Regex("\\s+"), " ")
+                        ?.trim()
+                    if (plain != null &&
+                        (sampledPlain == null || plain.length > sampledPlain.length)
+                    ) {
+                        sampledPlain = plain
+                        sampledName = candidate.name
+                    }
+                    if (textResult is AppResult.Err && sampledError == null) {
+                        sampledError = textResult.error.detail
+                    }
+                    if (ChapterLocks.pageSuggestsLocked(plain ?: "")) paywalled = true
+                    if (!plain.isNullOrBlank()) break
+                }
+                proofChapter = sampledName
+                proofFirstLine = sampledPlain?.take(120) ?: ""
+                results += CapabilityResult(
+                    capability = SourceCapability.TEXT,
+                    ok = !sampledPlain.isNullOrBlank(),
+                    detail = when {
+                        !sampledPlain.isNullOrBlank() ->
+                            "${sampledPlain.length} characters read from " +
+                                "'${sampledName.take(40)}'"
+                        paywalled ->
+                            "the chapters sampled ask for payment or sign-in " +
+                                "instead of showing text"
+                        sampledError != null ->
+                            sampledError ?: "the chapter text didn't load"
+                        else ->
+                            "the chapter opened but its text was empty"
+                    }
+                )
+            }
         }
+
 
         // R24: the account bookshelf, when the source declares one.
         // Read through the user's login session; a failure here is a

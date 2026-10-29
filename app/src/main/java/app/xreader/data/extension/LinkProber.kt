@@ -24,11 +24,14 @@ import java.net.URI
  * selector retries smarter on sites these heuristics can't read —
  * and faces the very same test-drive before anything is saved.
  *
- * Proposer order (v1.0.4, D15): the built-in templates and
- * [LinkInference] first (Madara fast-path, cluster rules), then
- * [HeuristicProposer] (density + clustering, still no AI), and only
- * then — as a separate user tap — the AI selector. A site readable
- * without AI never waits for AI.
+ * Proposer order (v1.0.4, D15; v1.0.5, A11/A4): the known-sites
+ * fast lane ([KnownSites]) for recognised domains first, then the
+ * built-in templates and [LinkInference] (Madara fast-path,
+ * cluster rules), then [HeuristicProposer] (density + clustering,
+ * still no AI), and only then — as a separate user tap — the AI
+ * selector. Repair ([probe] with tryAllProposers) test-drives
+ * EVERY automatic candidate and keeps the best passing one. A
+ * site readable without AI never waits for AI.
  */
 class LinkProber(
     private val contextFactory: HostContextFactory,
@@ -53,7 +56,22 @@ class LinkProber(
         val provenChapters: List<Pair<String, String>> = emptyList(),
         /** v1.0.1: the probe found a reviews section on the book
          * page (the source will offer Reviews on Book Detail). */
-        val reviewsFound: Boolean = false
+        val reviewsFound: Boolean = false,
+        /** v1.0.5 (A5): WHY search failed its filtering proof, in
+         * plain words ("search doesn't filter — …"). Null when
+         * search verified or the source has no search at all. */
+        val searchFailure: String? = null,
+        /** v1.0.5 (A3): how many of the book's chapters are
+         * lock-marked (paid) on the site. The sampled chapter is
+         * always an unlocked one. */
+        val lockedChapterCount: Int = 0,
+        /** v1.0.5 (A6): the driven book page carried a cover the
+         * source can show. False is surfaced as a warning, never
+         * silently (D19's letter tiles). */
+        val coverFound: Boolean = true,
+        /** v1.0.5 (A6): plain-words cover warning when
+         * [coverFound] is false. */
+        val coverWarning: String? = null
     )
 
     /** The distinctive search word for verification: the longest
@@ -78,7 +96,21 @@ class LinkProber(
         data class Failed(val message: String) : Outcome
     }
 
-    suspend fun probe(rawUrl: String): Outcome {
+    /**
+     * Probe a pasted link. [aiAvailable] (v1.0.5, A10) only
+     * chooses the failure COPY: the AI detector is mentioned
+     * solely when its button will actually render on the
+     * Add-from-link screen; otherwise the copy points at
+     * Providers & keys or a book-page link instead.
+     * [tryAllProposers] (v1.0.5, A4 — Repair) test-drives every
+     * automatic candidate, not just the first that analyses, and
+     * keeps the best passing one.
+     */
+    suspend fun probe(
+        rawUrl: String,
+        aiAvailable: Boolean = false,
+        tryAllProposers: Boolean = false
+    ): Outcome {
         val url = normaliseUrl(rawUrl)
             ?: return Outcome.Failed("That doesn't look like a web address — check the link and try again.")
         val host = CookieParsing.hostOf(url)
@@ -111,6 +143,109 @@ class LinkProber(
                 "The site answered with an error (HTTP ${firstResponse.status}), so Xreader couldn't look at the page."
             )
         }
+        // v1.0.5 (A9): a JavaScript app shell can't be read by
+        // ANY static pipeline — refuse plainly, install nothing,
+        // and never imply the AI detector would have saved it
+        // (it reads the same fetched HTML).
+        if (LinkInference.isJsShell(bookDoc)) {
+            return Outcome.Failed(
+                "This site loads its pages with JavaScript — Xreader can't read it yet, " +
+                    "so no source was added. The page only exists after the site's own " +
+                    "scripts run, which no automatic detector can follow."
+            )
+        }
+
+        // ── Candidate bookkeeping (A4) ──────────────────────────
+        // Every proposer's candidate is test-driven and scored;
+        // the best passing one wins, and when none pass, the
+        // failure that got FURTHEST is the one reported (so the
+        // message names the step that actually broke).
+        var bestDraft: Draft? = null
+        var bestRank: List<Int>? = null
+        var bestFailure: Pair<Int, String>? = null
+        fun consider(config: DeclarativeConfig, driveBookUrl: String, drive: ScoredDrive) {
+            when (val result = drive.result) {
+                is AppResult.Ok -> {
+                    val rank = listOf(
+                        if (result.value.searchVerified) 1 else 0,
+                        result.value.chapterCount,
+                        result.value.chapterTextLength
+                    )
+                    val current = bestRank
+                    if (current == null || rankIsBetter(rank, current)) {
+                        bestRank = rank
+                        bestDraft = Draft(
+                            config = config.copy(
+                                searchNeedsSetup = config.search == null ||
+                                    !result.value.searchVerified
+                            ),
+                            testDrive = result.value.copy(
+                                reviewsFound = config.reviews != null
+                            ),
+                            bookUrl = driveBookUrl,
+                            host = host
+                        )
+                    }
+                }
+                is AppResult.Err -> {
+                    val failure = bestFailure
+                    if (failure == null || drive.steps > failure.first) {
+                        bestFailure = drive.steps to badFileReason(result.error)
+                    }
+                }
+            }
+        }
+
+        // A failure further down must never discard a candidate
+        // that already passed its drive (the fast lane in Repair
+        // mode): prefer the passing draft. And when an earlier
+        // candidate failed DEEP into its drive (the text step),
+        // its precise reason beats a vaguer local one.
+        fun failOrDraft(message: String): Outcome =
+            bestDraft?.let { Outcome.Ready(it) } ?: Outcome.Failed(
+                bestFailure?.takeIf { it.first >= 2 }?.second ?: message
+            )
+
+        // ── v1.0.5 (A11): the known-sites fast lane ─────────────
+        // A recognised domain's known-good shape is driven FIRST,
+        // against the pasted book page (or the catalogue's first
+        // book when another page of the site was pasted). A failed
+        // lane drive never blocks the ordinary pipeline below.
+        val entry = KnownSites.entryFor(host)
+        if (entry != null &&
+            LinkInference.analyseChapterPage(bookDoc, bookUrl) == null
+        ) {
+            val laneConfig = KnownSites.fullConfig(
+                entry = entry,
+                id = sourceIdFor(host, bookUrl),
+                name = LinkInference.siteName(bookDoc) ?: host,
+                baseUrl = baseOf(bookUrl)
+            )
+            if (laneConfig != null) {
+                val sample = if (KnownSites.looksLikeBookPage(entry, bookUrl)) {
+                    bookUrl
+                } else {
+                    runCatching {
+                        DeclarativeSource(laneConfig, context)
+                            .popular(1).books.firstOrNull()?.id
+                    }.getOrNull()
+                }
+                if (sample != null) {
+                    val laneFull = laneConfig.copy(
+                        id = sourceIdFor(host, sample),
+                        sampleBookUrl = sample
+                    )
+                    consider(
+                        laneFull, sample,
+                        testDriveScored(laneFull, sample, context)
+                    )
+                }
+            }
+        }
+        // The add path stops at a passing lane drive; Repair
+        // (tryAllProposers) keeps going and lets every candidate
+        // compete on rank (A4).
+        bestDraft?.let { if (!tryAllProposers) return Outcome.Ready(it) }
 
         var analysis = LinkInference.analyseBookPage(bookDoc, bookUrl)
 
@@ -136,7 +271,7 @@ class LinkProber(
                     analysis = HeuristicProposer.analyseBookPage(bookDoc, bookUrl)
                 }
                 if (analysis == null) {
-                    return Outcome.Failed(
+                    return failOrDraft(
                         "That link opened a chapter, but Xreader couldn't find the book's own page " +
                             "from it. Paste the book's main page (the one with the whole chapter list) instead."
                     )
@@ -149,11 +284,17 @@ class LinkProber(
                 // test-drive below as every other proposer.
                 analysis = HeuristicProposer.analyseBookPage(bookDoc, bookUrl)
                 if (analysis == null) {
-                    return Outcome.Failed(
-                        "Xreader couldn't spot a chapter list or readable chapter text on that page. " +
-                            "It may use a layout the automatic detector can't read — if you have a " +
-                            "Gemini key saved, try the AI detector below; it reads pages the way " +
-                            "a person would."
+                    return failOrDraft(
+                        if (aiAvailable) {
+                            "Xreader couldn't spot a chapter list or readable chapter text on that page. " +
+                                "It may use a layout the automatic detector can't read — try the AI " +
+                                "detector below; it reads pages the way a person would."
+                        } else {
+                            "Xreader couldn't spot a chapter list or readable chapter text on that page. " +
+                                "It may use a layout the automatic detector can't read. Two things can " +
+                                "help: paste the book's own page (the one with the whole chapter list), " +
+                                "or add an AI key in More → Providers & keys and use the AI detector."
+                        }
                     )
                 }
             }
@@ -170,18 +311,27 @@ class LinkProber(
         } else {
             inferred
         }
+        // v1.0.5 (A4): Repair drives EVERY proposer's candidate —
+        // the heuristic reading joins as a second candidate when
+        // it genuinely reads the page differently.
+        val heuristicAlt = if (tryAllProposers) {
+            HeuristicProposer.analyseBookPage(bookDoc, bookUrl)
+                ?.takeIf { it.chapterListSelector != book.chapterListSelector }
+        } else {
+            null
+        }
 
         // Fetch the first chapter and check its text is readable.
         val chapterFetch = probeClient.get(book.firstChapterUrl)
         val chapterResponse = when (chapterFetch) {
-            is AppResult.Err -> return Outcome.Failed(
+            is AppResult.Err -> return failOrDraft(
                 "Xreader found the chapter list but couldn't open a chapter. " +
                     (chapterFetch.error.detail ?: "")
             )
             is AppResult.Ok -> chapterFetch.value
         }
         if (chapterResponse.status !in 200..299) {
-            return Outcome.Failed(
+            return failOrDraft(
                 "Xreader found the chapter list, but the chapter page answered with an error " +
                     "(HTTP ${chapterResponse.status})."
             )
@@ -189,42 +339,79 @@ class LinkProber(
         val chapterDoc = Jsoup.parse(chapterResponse.body, chapterResponse.finalUrl)
         val chapterAnalysis = LinkInference.analyseChapterPage(
             chapterDoc, chapterResponse.finalUrl
-        ) ?: return Outcome.Failed(
-            "Xreader found the chapter list, but the chapter pages don't show readable text " +
-                "it can use. If you have a Gemini key saved, try the AI detector below."
+        ) ?: return failOrDraft(
+            if (aiAvailable) {
+                "Xreader found the chapter list, but the chapter pages don't show readable text " +
+                    "it can use. Try the AI detector below."
+            } else {
+                "Xreader found the chapter list, but the chapter pages don't show readable text " +
+                    "it can use. Adding an AI key in More → Providers & keys would let the " +
+                    "AI detector try reading it."
+            }
         )
 
         // Optional catalogue pieces (best effort, never blocking).
-        // v1.0.1 search overhaul: candidates in order — Madara
-        // fast-path, the page's own search forms (GET and POST), then
-        // the documented site conventions (SearchCandidates). Each
-        // candidate is judged on its OWN results page (search pages
-        // often list books differently from the catalogue), and the
-        // final verdict comes from the test-drive below.
+        // v1.0.5 (A5): a search candidate is only ACCEPTED when it
+        // provably FILTERS — a real word must return results and a
+        // nonsense control word must return fewer (SearchFilterProof).
+        // Order: the site's OWN search form first (A5a — the form
+        // is a fact about the site; templates are guesses), then
+        // the Madara template when the page carries Madara
+        // markers, then the documented conventions. A candidate
+        // that lists books but doesn't filter is remembered only
+        // as a last-resort fallback — the test-drive's own
+        // filtering proof has the final word either way.
         val baseUrlEarly = baseOf(bookUrl)
         val searchWord = distinctiveWord(book.title ?: "")
-        suspend fun analyseResultsPage(
+        suspend fun analyseResults(
             fetch: suspend () -> Pair<String, String>?
         ): LinkInference.ListingAnalysis? {
             val (body, finalUrl) = fetch() ?: return null
             val doc = Jsoup.parse(body, finalUrl)
-            return LinkInference.analyseListingPage(doc, finalUrl, bookUrl)
-                ?: LinkInference.analyseListingPage(doc, finalUrl, null)
+            return LinkInference.analyseSearchResultsPage(doc, finalUrl, bookUrl)
+        }
+        fun specIds(spec: ListSpec, query: String): Set<String> {
+            val checker = DeclarativeSource(
+                DeclarativeConfig(
+                    id = "search-check",
+                    name = "search check",
+                    baseUrl = baseUrlEarly,
+                    search = spec,
+                    details = DetailsSpec(
+                        chapters = ChapterListSpec(
+                            list = "a", name = "@text", link = "@href"
+                        )
+                    ),
+                    chapter = ChapterSpec(content = "body")
+                ),
+                context
+            )
+            return runCatching {
+                checker.search(query, 1).books.map { it.id }.toSet()
+            }.getOrDefault(emptySet())
+        }
+        fun filters(spec: ListSpec): Boolean {
+            val real = specIds(spec, searchWord)
+            if (real.isEmpty()) return false
+            val control = specIds(spec, SearchFilterProof.NONSENSE_TERM)
+            return SearchFilterProof.judge(real, control, null).verified
         }
         var searchSpec: ListSpec? = null
+        var unprovenSpec: ListSpec? = null
+        fun accept(spec: ListSpec?) {
+            if (spec == null || searchSpec != null) return
+            if (filters(spec)) {
+                searchSpec = spec
+            } else if (unprovenSpec == null) {
+                unprovenSpec = spec
+            }
+        }
         if (LinkInference.isMadaraPage(bookDoc)) {
-            searchSpec = runCatching {
-                val template = LinkInference.madaraSearchTemplate(baseUrlEarly)
-                val verifyUrl = template.replace(
-                    "{query}", java.net.URLEncoder.encode(searchWord, "UTF-8")
-                )
-                val fetched = probeClient.get(verifyUrl)
-                if (fetched is AppResult.Ok && fetched.value.status in 200..299) {
+            accept(
+                runCatching {
                     LinkInference.madaraSearchSpec(baseUrlEarly)
-                } else {
-                    null
-                }
-            }.getOrNull()
+                }.getOrNull()
+            )
         }
         if (searchSpec == null) {
             val forms = runCatching {
@@ -232,7 +419,7 @@ class LinkProber(
             }.getOrDefault(emptyList())
             for (form in forms) {
                 if (searchSpec != null) break
-                searchSpec = runCatching {
+                val spec = runCatching {
                     if (form.method == "POST") {
                         val fetched = probeClient.post(
                             form.actionUrl,
@@ -241,19 +428,19 @@ class LinkProber(
                         )
                         if (fetched is AppResult.Ok && fetched.value.status in 200..299) {
                             val doc = Jsoup.parse(fetched.value.body, fetched.value.finalUrl)
-                            (LinkInference.analyseListingPage(doc, fetched.value.finalUrl, bookUrl)
-                                ?: LinkInference.analyseListingPage(doc, fetched.value.finalUrl, null))
-                                ?.let { listing ->
-                                    ListSpec(
-                                        url = form.actionUrl,
-                                        results = listing.resultsSelector,
-                                        title = listing.titleSpec,
-                                        link = listing.linkSpec,
-                                        cover = listing.coverSpec,
-                                        method = "POST",
-                                        body = "${form.inputName}={query}"
-                                    )
-                                }
+                            LinkInference.analyseSearchResultsPage(
+                                doc, fetched.value.finalUrl, bookUrl
+                            )?.let { listing ->
+                                ListSpec(
+                                    url = form.actionUrl,
+                                    results = listing.resultsSelector,
+                                    title = listing.titleSpec,
+                                    link = listing.linkSpec,
+                                    cover = listing.coverSpec,
+                                    method = "POST",
+                                    body = "${form.inputName}={query}"
+                                )
+                            }
                         } else {
                             null
                         }
@@ -262,7 +449,7 @@ class LinkProber(
                         val verifyUrl = template.replace(
                             "{query}", SearchCandidates.encodeQuery(searchWord)
                         ).replace("{page}", "1")
-                        val listing = analyseResultsPage {
+                        val listing = analyseResults {
                             val fetched = probeClient.get(verifyUrl)
                             if (fetched is AppResult.Ok && fetched.value.status in 200..299) {
                                 fetched.value.body to fetched.value.finalUrl
@@ -281,14 +468,16 @@ class LinkProber(
                         }
                     }
                 }.getOrNull()
+                accept(spec)
             }
             if (searchSpec == null) {
                 // Conventions: try each documented shape on its own
-                // results page; the first that lists books wins.
+                // results page; the first that lists books AND
+                // provably filters wins.
                 for (candidateUrl in SearchCandidates.conventionUrls(baseUrlEarly, searchWord)) {
                     if (searchSpec != null) break
-                    searchSpec = runCatching {
-                        val listing = analyseResultsPage {
+                    val spec = runCatching {
+                        val listing = analyseResults {
                             val fetched = probeClient.get(candidateUrl)
                             if (fetched is AppResult.Ok && fetched.value.status in 200..299) {
                                 fetched.value.body to fetched.value.finalUrl
@@ -308,13 +497,15 @@ class LinkProber(
                             )
                         }
                     }.getOrNull()
+                    accept(spec)
                 }
             }
-            if (searchSpec == null && forms.isNotEmpty()) {
-                // Best effort: keep the site's own form as the spec —
-                // the test-drive verdict decides the honest flag.
+            if (searchSpec == null && unprovenSpec == null && forms.isNotEmpty()) {
+                // Best effort: keep the site's own form as the
+                // spec — the test-drive verdict decides the honest
+                // flag (and now says WHY search failed its proof).
                 val form = forms.first()
-                searchSpec = if (form.method == "POST") {
+                unprovenSpec = if (form.method == "POST") {
                     ListSpec(
                         url = form.actionUrl,
                         results = "a",
@@ -333,6 +524,7 @@ class LinkProber(
                 }
             }
         }
+        if (searchSpec == null) searchSpec = unprovenSpec
         val baseUrl = baseOf(bookUrl)
         val popularSpec = runCatching {
             val homeFetch = probeClient.get(baseUrl)
@@ -353,53 +545,79 @@ class LinkProber(
             }
         }.getOrNull()
 
-        val config = DeclarativeConfig(
-            id = sourceIdFor(host, bookUrl),
-            name = LinkInference.siteName(bookDoc) ?: host,
-            lang = "en",
-            baseUrl = baseUrl,
-            search = searchSpec,
-            sampleBookUrl = bookUrl,
-            popular = popularSpec,
-            latest = null,
-            details = DetailsSpec(
-                title = book.titleSpec,
-                author = book.authorSpec,
-                description = book.descriptionSpec,
-                cover = book.coverUrl?.let { "meta[property=og:image]@content" },
-                chapters = ChapterListSpec(
-                    list = book.chapterListSelector,
-                    name = book.chapterNameSpec,
-                    link = book.chapterLinkSpec,
-                    reverse = book.newestFirst
-                )
-            ),
-            chapter = ChapterSpec(
-                content = chapterAnalysis.contentSelector,
-                title = chapterAnalysis.titleSpec,
-                nextPage = chapterAnalysis.nextPageSelector
-            ),
-            reviews = runCatching { LinkInference.detectReviews(bookDoc) }.getOrNull()
-        )
-
-        // ── The mandatory test-drive: run the real engine ──────────
-        // (Shared with Phase 5's AI selector — an AI-proposed config
-        // faces exactly this gate before it can be saved.)
-        return when (val drive = testDrive(config, bookUrl, context)) {
-            is AppResult.Err -> Outcome.Failed(badFileReason(drive.error))
-            is AppResult.Ok -> Outcome.Ready(
-                Draft(
-                    config = config.copy(
-                        searchNeedsSetup = config.search == null || !drive.value.searchVerified
-                    ),
-                    testDrive = drive.value.copy(
-                        reviewsFound = config.reviews != null
-                    ),
-                    bookUrl = bookUrl,
-                    host = host
-                )
+        val reviewsSpec = runCatching {
+            LinkInference.detectReviews(bookDoc)
+        }.getOrNull()
+        val candidates = listOfNotNull(book, heuristicAlt)
+        for (candidate in candidates) {
+            var config = DeclarativeConfig(
+                id = sourceIdFor(host, bookUrl),
+                name = LinkInference.siteName(bookDoc) ?: host,
+                lang = "en",
+                baseUrl = baseUrl,
+                search = searchSpec,
+                sampleBookUrl = bookUrl,
+                popular = popularSpec,
+                latest = null,
+                details = DetailsSpec(
+                    // v1.0.5 (A7): a slug-derived title has no
+                    // honest spec — store none, so the engine
+                    // keeps the listing's title for the book.
+                    title = if (candidate.titleFromSlug) {
+                        null
+                    } else {
+                        candidate.titleSpec
+                    },
+                    author = candidate.authorSpec,
+                    description = candidate.descriptionSpec,
+                    // v1.0.5 (A6): the spec that actually
+                    // reproduces the found cover — never a
+                    // hardcoded og:image guess.
+                    cover = candidate.coverSpec,
+                    chapters = ChapterListSpec(
+                        list = candidate.chapterListSelector,
+                        name = candidate.chapterNameSpec,
+                        link = candidate.chapterLinkSpec,
+                        reverse = candidate.newestFirst
+                    )
+                ),
+                chapter = ChapterSpec(
+                    content = chapterAnalysis.contentSelector,
+                    title = chapterAnalysis.titleSpec,
+                    nextPage = chapterAnalysis.nextPageSelector
+                ),
+                reviews = reviewsSpec
             )
+            if (entry != null) {
+                config = KnownSites.applyOverrides(entry, config)
+            }
+            consider(config, bookUrl, testDriveScored(config, bookUrl, context))
+            bestDraft?.let { draft ->
+                // The add path stops at the first passing
+                // candidate (today's behaviour); Repair
+                // (tryAllProposers) drives them all and keeps
+                // the best.
+                if (!tryAllProposers) return Outcome.Ready(draft)
+            }
         }
+
+        // ── The mandatory test-drive has spoken ─────────────────
+        bestDraft?.let { return Outcome.Ready(it) }
+        return Outcome.Failed(
+            bestFailure?.second
+                ?: "Xreader couldn't read that page well enough to build a source from it."
+        )
+    }
+
+    /** True when candidate rank [a] beats [b]: search proof
+     * first, then chapter count, then readable text length.
+     * Ties keep the EARLIER proposer (the caller only replaces
+     * on a strict win). */
+    private fun rankIsBetter(a: List<Int>, b: List<Int>): Boolean {
+        for (i in a.indices) {
+            if (a[i] != b[i]) return a[i] > b[i]
+        }
+        return false
     }
 
     /**
@@ -453,86 +671,206 @@ class LinkProber(
         return testDrive(config.copy(sampleBookUrl = first.id), first.id, context)
     }
 
+    /** A test-drive outcome plus how far it got (v1.0.5, A4):
+     * steps 0 = page/title, 1 = chapter list, 2 = chapter text,
+     * 3 = passed. When several candidates fail, the failure with
+     * the most steps is the honest one to report. */
+    private data class ScoredDrive(
+        val steps: Int,
+        val result: AppResult<TestDriveResult>
+    )
+
     private suspend fun testDrive(
         config: DeclarativeConfig,
         bookUrl: String,
         context: SourceContext
-    ): AppResult<TestDriveResult> {
+    ): AppResult<TestDriveResult> = testDriveScored(config, bookUrl, context).result
+
+    /**
+     * The scored test-drive (v1.0.5: A1 honest steps, A3
+     * locked-aware sampling, A5 filtering proof, A6 cover flag).
+     * The chapter-list step FAILS on an empty list (it previously
+     * could pass and let the text step take the blame, D17); the
+     * text step samples an UNLOCKED chapter — the first in
+     * reading order, falling forward when a chapter is
+     * individually unreadable — and reports the distinct
+     * paid/locked state when no unlocked chapter exists.
+     */
+    private suspend fun testDriveScored(
+        config: DeclarativeConfig,
+        bookUrl: String,
+        context: SourceContext
+    ): ScoredDrive {
         val source = DeclarativeSource(config, context)
         val testBook = SourceBook(id = bookUrl, title = "")
-        return runCatching {
-            val (details, chapters) = source.detailsAndChapters(testBook)
-            if (details.title.isBlank()) {
-                return AppResult.Err(
-                    AppError.BadFile("The test read found the page but not the book's title.")
-                )
-            }
-            if (chapters.isEmpty()) {
-                return AppResult.Err(
-                    AppError.BadFile("The test read couldn't build a chapter list from that page.")
-                )
-            }
-            val firstChapter = chapters.first()
-            source.chapterContent(firstChapter)
-            val content = source.contentOf(firstChapter.id)
-            val text = content?.blocks?.joinToString("\n") { block ->
-                when (block) {
-                    is app.xreader.domain.content.ChapterBlock.Paragraph -> block.text
-                    is app.xreader.domain.content.ChapterBlock.Heading -> block.text
-                    else -> ""
-                }
-            }?.trim().orEmpty()
-            if (text.length < LinkInference.MIN_READABLE_CHARS) {
-                return AppResult.Err(
-                    AppError.BadFile(
-                        "The test read opened a chapter but only found ${text.length} characters " +
-                            "of text — that's not a readable chapter."
+        val fetched = runCatching { source.detailsAndChapters(testBook) }
+            .getOrElse { e ->
+                return ScoredDrive(
+                    0,
+                    AppResult.Err(
+                        AppError.BadFile(
+                            "The test read failed: " +
+                                (e.message?.take(160)
+                                    ?: "the site didn't answer as expected")
+                        )
                     )
                 )
             }
-            // v1.0.1: search is verified HERE, in the one test-drive
-            // every config (heuristic, AI, converted) must pass: one
-            // real search with a distinctive word from the book's own
-            // title, and at least one result must resolve back to a
-            // book page on the same site.
-            var searchVerified = false
-            var searchProof: String? = null
-            if (config.search != null) {
-                val word = distinctiveWord(details.title)
-                runCatching {
-                    val page = source.search(word, 1)
-                    val host = CookieParsing.hostOf(config.baseUrl)
-                    val resolving = page.books.count { candidate ->
-                        val candidateHost = CookieParsing.hostOf(candidate.id)
-                        candidateHost != null && candidateHost == host &&
-                            candidate.id != config.search.url
+        val (details, chapters) = fetched
+        if (details.title.isBlank()) {
+            return ScoredDrive(
+                0,
+                AppResult.Err(
+                    AppError.BadFile(
+                        "The test read found the page but not the book's title."
+                    )
+                )
+            )
+        }
+        if (chapters.isEmpty()) {
+            return ScoredDrive(
+                1,
+                AppResult.Err(
+                    AppError.BadFile(
+                        "The test read couldn't build a chapter list from that page."
+                    )
+                )
+            )
+        }
+        // A3: skip lock-marked chapters when sampling text.
+        val lockedIds = runCatching { source.lockedChapterIds(testBook) }
+            .getOrDefault(emptySet())
+        val unlocked = chapters.filter { it.id !in lockedIds }
+        if (unlocked.isEmpty()) {
+            return ScoredDrive(
+                2,
+                AppResult.Err(
+                    AppError.BadFile(
+                        "The test read found ${chapters.size} chapters, but every one " +
+                            "is paid or locked on this site — Xreader can't read locked " +
+                            "chapters, so the source can't be proven. Signing in on the " +
+                            "source's page (if you have an account) may unlock them."
+                    )
+                )
+            )
+        }
+        var sampled: app.xreader.extensionapi.SourceChapter? = null
+        var bestText = ""
+        var lockedEvidence = false
+        var firstError: Throwable? = null
+        for (candidate in unlocked.take(MAX_TEXT_SAMPLES)) {
+            val text = runCatching {
+                source.chapterContent(candidate)
+                source.contentOf(candidate.id)?.blocks?.joinToString("\n") { block ->
+                    when (block) {
+                        is app.xreader.domain.content.ChapterBlock.Paragraph -> block.text
+                        is app.xreader.domain.content.ChapterBlock.Heading -> block.text
+                        else -> ""
                     }
-                    if (resolving >= 1) {
-                        searchVerified = true
-                        searchProof = "Search works — ‘$word’ found " +
-                            "${page.books.size} book(s)"
+                }?.trim().orEmpty()
+            }.getOrElse { e ->
+                if (firstError == null) firstError = e
+                ""
+            }
+            if (text.length > bestText.length) bestText = text
+            if (text.length >= LinkInference.MIN_READABLE_CHARS) {
+                sampled = candidate
+                break
+            }
+            if (ChapterLocks.pageSuggestsLocked(text)) lockedEvidence = true
+        }
+        val provenChapter = sampled ?: return ScoredDrive(
+            2,
+            AppResult.Err(
+                AppError.BadFile(
+                    when {
+                        lockedEvidence ->
+                            "The test read opened a chapter, but it asks for payment " +
+                                "or sign-in instead of showing text — the readable " +
+                                "chapters on this site appear to be locked."
+                        bestText.isEmpty() && firstError != null ->
+                            "The test read failed: " +
+                                (firstError!!.message?.take(160)
+                                    ?: "the site didn't answer as expected")
+                        else ->
+                            "The test read opened a chapter but only found " +
+                                "${bestText.length} characters of text — that's not " +
+                                "a readable chapter."
                     }
+                )
+            )
+        )
+        val text = bestText
+        // v1.0.5 (A5): search must PROVE it filters — a real word
+        // from the book's title, a nonsense control word, and the
+        // unfiltered catalogue, judged by SearchFilterProof.
+        var searchVerified = false
+        var searchProof: String? = null
+        var searchFailure: String? = null
+        if (config.search != null) {
+            val word = distinctiveWord(details.title)
+            runCatching {
+                val page = source.search(word, 1)
+                val host = CookieParsing.hostOf(config.baseUrl)
+                val resolving = page.books.count { candidate ->
+                    val candidateHost = CookieParsing.hostOf(candidate.id)
+                    candidateHost != null && candidateHost == host &&
+                        candidate.id != config.search.url
+                }
+                val controlIds = runCatching {
+                    source.search(SearchFilterProof.NONSENSE_TERM, 1)
+                        .books.map { it.id }.toSet()
+                }.getOrDefault(emptySet())
+                val catalogueIds = if (config.popular != null || config.latest != null) {
+                    runCatching {
+                        source.popular(1).books.map { it.id }.toSet()
+                    }.getOrNull()
+                } else {
+                    null
+                }
+                val verdict = SearchFilterProof.judge(
+                    page.books.map { it.id }.toSet(), controlIds, catalogueIds
+                )
+                if (resolving >= 1 && verdict.verified) {
+                    searchVerified = true
+                    searchProof = "Search works — ‘$word’ found " +
+                        "${page.books.size} book(s)"
+                } else {
+                    searchFailure = verdict.reason
+                        ?: "search results didn't lead back to a book page"
                 }
             }
+            if (!searchVerified && searchFailure == null) {
+                searchFailure = "search couldn't be checked — the site didn't answer it"
+            }
+        }
+        // v1.0.5 (A6): a missing cover is a flagged warning,
+        // never a silent letter tile.
+        val coverFound = details.coverUrl != null
+        return ScoredDrive(
+            3,
             AppResult.Ok(
                 TestDriveResult(
                     bookTitle = details.title,
                     chapterCount = chapters.size,
-                    firstChapterTitle = firstChapter.name,
+                    firstChapterTitle = provenChapter.name,
                     chapterTextPreview = text.take(LinkInference.PREVIEW_CHARS),
                     chapterTextLength = text.length,
                     searchVerified = searchVerified,
                     searchProof = searchProof,
-                    provenChapters = chapters.map { it.id to it.name }
+                    searchFailure = searchFailure,
+                    provenChapters = chapters.map { it.id to it.name },
+                    lockedChapterCount = lockedIds.size,
+                    coverFound = coverFound,
+                    coverWarning = if (coverFound) {
+                        null
+                    } else {
+                        "No cover image was found on the book page — this book will " +
+                            "show a plain letter tile until the site gives it one."
+                    }
                 )
             )
-        }.getOrElse { e ->
-            AppResult.Err(
-                AppError.BadFile(
-                    "The test read failed: ${e.message?.take(160) ?: "the site didn't answer as expected"}"
-                )
-            )
-        }
+        )
     }
 
     /**
@@ -608,6 +946,9 @@ class LinkProber(
     }
 
     companion object {
+        /** Chapters sampled for readable text per drive (A3). */
+        const val MAX_TEXT_SAMPLES = 3
+
         fun normaliseUrl(raw: String): String? {
             var candidate = raw.trim()
             if (candidate.isEmpty()) return null

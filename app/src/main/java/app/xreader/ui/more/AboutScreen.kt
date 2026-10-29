@@ -66,6 +66,94 @@ fun AboutScreen(onBack: () -> Unit) {
                     style = MaterialTheme.typography.titleMedium
                 )
                 listOf(
+                    // v1.0.5 Stage 1 (the honest-engine round).
+                    "Sources are proven honestly now: the test read " +
+                        "fails when a book page lists no chapters, " +
+                        "instead of blaming the wrong step — and it " +
+                        "says exactly what it proved.",
+                    "Locked chapters are skipped, not misread: the " +
+                        "test read samples a free chapter, and when " +
+                        "every chapter is paid or locked it says so " +
+                        "plainly.",
+                    "Repair works harder and explains itself: it " +
+                        "tries every way of reading the site (and the " +
+                        "AI detector, if you have a key), keeps the " +
+                        "best one that passes, and tells you which " +
+                        "step failed when none can.",
+                    "Search is proven, not assumed: a source's " +
+                        "search only counts as working when a real " +
+                        "word finds books and a nonsense word " +
+                        "doesn't — a search that just lists " +
+                        "everything is called out.",
+                    "Covers bind properly: books get their real " +
+                        "cover from the book page, and when a site " +
+                        "truly has none, you're told at add time — " +
+                        "no more silent letter tiles.",
+                    "Known sites are faster: big novel sites are " +
+                        "recognised and read with their known shape " +
+                        "first — still proven by the same test read.",
+                    "Sites that only exist as JavaScript apps are " +
+                        "refused plainly at add time instead of " +
+                        "being installed broken.",
+                    // v1.0.5 Stage 1.5 (the ajax text mode).
+                    "Sites that load their chapter text in the " +
+                        "background — Novelight is one — now read " +
+                        "properly: Xreader fetches the text the way " +
+                        "the site itself does, and locked chapters " +
+                        "are still called out as locked.",
+                    // v1.0.5 Stage 2 (the book-page round).
+                    "Every book page has a proper Chapters section " +
+                        "now — with the chapter count when there is " +
+                        "a list, and when a source returns none, real " +
+                        "next steps instead of a dead end: Re-check " +
+                        "now (which also test-runs the source), open " +
+                        "the book's own page on the site, or go to " +
+                        "Repair.",
+                    "Downloading sits right beside Start reading on " +
+                        "the book page, with the choices in one " +
+                        "sheet: the whole book, the next 10 chapters, " +
+                        "or everything up to the latest chapter you " +
+                        "haven't read — each with its count.",
+                    "Long-pressing a book in the Library opens a " +
+                        "glass action sheet with icons, and the " +
+                        "Remove dialogs stack their choices clearly " +
+                        "instead of squeezing them into one row.",
+                    "Fixed: chips and buttons can no longer be " +
+                        "crushed into vertical letter stacks on " +
+                        "narrow screens — they wrap or scroll " +
+                        "instead (the book page's “Dropped” chip was " +
+                        "the worst case).",
+                    // v1.0.5 Stage 3 (Library, Browse, healing).
+                    "The Library is calmer: History and Updates left " +
+                        "its toolbar (they're tabs already), and the " +
+                        "shelf row is the only chip row now. Status, " +
+                        "sorting and Check for updates live behind " +
+                        "one Filter chip.",
+                    "Browse is a tidy list: your sources — link " +
+                        "sources and library servers together — are " +
+                        "compact rows with a small health dot (green " +
+                        "working, amber needs setup, red broken, grey " +
+                        "never checked). Details shows when a source " +
+                        "was last checked.",
+                    "Adding has its own screen — repository, site " +
+                        "link or Legado file, each with its form — " +
+                        "and repositories live in a Source store " +
+                        "screen of their own, so Browse never grows " +
+                        "a form in the middle again.",
+                    "Your older link sources were quietly re-checked " +
+                        "with the new test read: any that failed were " +
+                        "repaired automatically and their books " +
+                        "refreshed. If anything was fixed, the Me " +
+                        "page says so — once, not as a nag.",
+                    "When a source fails its test read, “Copy " +
+                        "details” puts a short plain summary — the " +
+                        "site, the failing step, the reason — on " +
+                        "your clipboard, so a problem can be shared " +
+                        "without a screenshot.",
+                    "True black now says what it does: it turns " +
+                        "the frosted-glass glow off on every screen, " +
+                        "Library included — pure black is the point " +
+                        "of the setting.",
                     // v1.0.4 Stage 1 (the Liquid round). Stages 2–3
                     // extend this list before the version ships.
                     "Real frosted glass: with Frosted on, cards and the " +

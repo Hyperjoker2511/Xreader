@@ -218,6 +218,29 @@ fun ParserRulesEditorScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = errorTextColor()
                 )
+                // v1.0.5 (E5): one-tap problem details. (A
+                // message still on this screen is always a
+                // failure — success closes the editor with a
+                // snackbar instead.)
+                val clipboard = androidx.compose.ui.platform
+                    .LocalClipboardManager.current
+                var detailsCopied by remember { mutableStateOf(false) }
+                androidx.compose.material3.TextButton(onClick = {
+                    clipboard.setText(
+                        androidx.compose.ui.text.AnnotatedString(
+                            app.xreader.data.extension.ProblemDetails.format(
+                                host = app.xreader.data.extension
+                                    .CookieParsing.hostOf(config.baseUrl),
+                                failingStep = "Test read of the edited rules",
+                                reason = text,
+                                appVersion = app.xreader.BuildConfig.VERSION_NAME
+                            )
+                        )
+                    )
+                    detailsCopied = true
+                }) {
+                    Text(if (detailsCopied) "Copied ✓" else "Copy details")
+                }
             }
             XreaderPrimaryButton(
                 text = if (saving) "Testing…" else "Test and save",

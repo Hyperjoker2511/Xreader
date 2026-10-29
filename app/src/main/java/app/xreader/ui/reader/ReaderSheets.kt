@@ -86,6 +86,7 @@ import kotlin.math.roundToInt
 // re-renders the reader behind the sheet — the preview is the book itself.
 // ---------------------------------------------------------------------------
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ReaderSettingsSheet(
     config: ReaderConfig,
@@ -118,8 +119,14 @@ fun ReaderSettingsSheet(
 
         // R18 scope: visible at the TOP of the sheet, labelled in
         // plain words — never a buried preference.
+        // v1.0.5 (B3): every chip row in these sheets is a FlowRow
+        // — fixed Rows crushed the long labels ("Pull for next",
+        // "End of chapter") on narrow screens; wrapping rows can't.
         SheetSection("Apply colours & text size to") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = settingsScope == ReaderSettingsScope.ALL_BOOKS,
                     onClick = { onScopeChange(ReaderSettingsScope.ALL_BOOKS) },
@@ -144,7 +151,10 @@ fun ReaderSettingsSheet(
         }
 
         SheetSection("Reading mode") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = config.mode == ReaderMode.PAGED,
                     onClick = { onUpdate { it.copy(mode = ReaderMode.PAGED) } },
@@ -358,7 +368,10 @@ fun ReaderSettingsSheet(
         }
 
         SheetSection("Moving between chapters") {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 listOf(
                     app.xreader.domain.reader.ChapterTransition.CONTINUOUS to "Continuous",
                     app.xreader.domain.reader.ChapterTransition.CHAPTER_BY_CHAPTER to
@@ -393,7 +406,10 @@ fun ReaderSettingsSheet(
                 "Keyboard control",
                 style = MaterialTheme.typography.bodyMedium
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 listOf(
                     app.xreader.domain.reader.KeyboardPreset.STANDARD to "Arrows + space",
                     app.xreader.domain.reader.KeyboardPreset.PAGE_KEYS to "Page keys",
@@ -436,7 +452,10 @@ fun ReaderSettingsSheet(
                 "Tap zones",
                 style = MaterialTheme.typography.bodyMedium
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = config.tapZoneLayout == TapZoneLayout.STANDARD,
                     onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.STANDARD) } },
@@ -462,7 +481,10 @@ fun ReaderSettingsSheet(
                 "Page order",
                 style = MaterialTheme.typography.bodyMedium
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = config.pagedDirection == PagedDirection.LTR,
                     onClick = { onUpdate { it.copy(pagedDirection = PagedDirection.LTR) } },
@@ -477,8 +499,9 @@ fun ReaderSettingsSheet(
         }
 
         SheetSection("Font") {
-            Row(
+            androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 FilterChip(
@@ -559,7 +582,10 @@ fun ReaderSettingsSheet(
         )
 
         SheetSection("Alignment") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = config.alignment == ReaderAlignment.LEFT,
                     onClick = { onUpdate { it.copy(alignment = ReaderAlignment.LEFT) } },
@@ -585,7 +611,10 @@ fun ReaderSettingsSheet(
         )
 
         SheetSection("Page turns") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = config.turnOverride == PageTurnOverride.AUTO,
                     onClick = {
@@ -789,6 +818,7 @@ private fun SheetSwitch(label: String, checked: Boolean, onChange: (Boolean) -> 
 // Listen (PLAN §6 hybrid TTS + Media Overlay transport)
 // ---------------------------------------------------------------------------
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ListenSheet(
     ttsState: ReadAloudController.State,
@@ -901,7 +931,10 @@ fun ListenSheet(
         }
 
         SheetSection("Speed") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 for (rate in listOf(0.75f, 1f, 1.25f, 1.5f, 2f)) {
                     FilterChip(
                         selected = speechRate == rate,
@@ -913,7 +946,10 @@ fun ListenSheet(
         }
 
         SheetSection("Sleep timer") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(
                     selected = ttsState.sleepMode == SleepMode.Off,
                     onClick = { onSleepChange(SleepMode.Off) },
@@ -1168,6 +1204,7 @@ fun TocSheet(
 // Focus timer (PLAN §2.4 #28)
 // ---------------------------------------------------------------------------
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun FocusSheet(
     focus: FocusUiState,
@@ -1210,7 +1247,10 @@ fun FocusSheet(
                     onChange = { customMinutes = it }
                 )
                 SheetSection("Soundscape") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         for (sound in Soundscape.entries) {
                             FilterChip(
                                 selected = soundscape == sound,
