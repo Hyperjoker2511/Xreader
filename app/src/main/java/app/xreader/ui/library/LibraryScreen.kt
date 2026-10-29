@@ -84,8 +84,10 @@ import java.io.File
  * the import sheet (below the list) confirms each picked file with its
  * real format before anything is parsed.
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
+)
 @Composable
 fun LibraryScreen(
     viewModel: LibraryViewModel,
