@@ -37,7 +37,7 @@ class ProviderDiscoveryTest {
             ) {
                 FakeTransport.ok(openAiModels)
             } else {
-                FakeTransport.response(404, "nope")
+                AppResult.Ok(FakeTransport.response(404, "nope"))
             }
         }
         val probe = ProviderDiscovery(transport).probe("gateway.example", "key-1")
@@ -56,7 +56,7 @@ class ProviderDiscoveryTest {
     @Test
     fun `401 without a key is needs-key, not failure`() = runBlocking {
         val transport = FakeTransport {
-            FakeTransport.response(401, """{"error":{"message":"missing key"}}""")
+            AppResult.Ok(FakeTransport.response(401, """{"error":{"message":"missing key"}}"""))
         }
         val probe = ProviderDiscovery(transport).probe("https://gateway.example", null)
         assertTrue(probe is ProviderDiscovery.Probe.NeedsKey)
@@ -65,7 +65,7 @@ class ProviderDiscoveryTest {
     @Test
     fun `401 with a key is a plain refusal and adds nothing`() = runBlocking {
         val transport = FakeTransport {
-            FakeTransport.response(401, """{"error":{"message":"bad key"}}""")
+            AppResult.Ok(FakeTransport.response(401, """{"error":{"message":"bad key"}}"""))
         }
         val probe = ProviderDiscovery(transport).probe("https://gateway.example", "wrong")
         assertTrue(probe is ProviderDiscovery.Probe.NotProvider)
@@ -82,7 +82,7 @@ class ProviderDiscoveryTest {
                 request.url == "https://claude-gateway.example/v1/models" &&
                     request.headers.containsKey("x-api-key") ->
                     FakeTransport.ok(anthropicModels)
-                else -> FakeTransport.response(404, "nope")
+                else -> AppResult.Ok(FakeTransport.response(404, "nope"))
             }
         }
         val probe = ProviderDiscovery(transport)
@@ -99,7 +99,7 @@ class ProviderDiscoveryTest {
             if (request.url == "https://openrouter.example/api/v1/models") {
                 FakeTransport.ok(openAiModels)
             } else {
-                FakeTransport.response(404, "nope")
+                AppResult.Ok(FakeTransport.response(404, "nope"))
             }
         }
         val probe = ProviderDiscovery(transport).probe("openrouter.example", "sk-or")

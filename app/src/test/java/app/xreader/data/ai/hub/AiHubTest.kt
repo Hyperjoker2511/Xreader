@@ -96,7 +96,7 @@ class AiHubTest {
             when {
                 request.url.contains("api.openai.com") ->
                     FakeTransport.ok(openAiBody("from openai"))
-                else -> FakeTransport.response(500, "unused")
+                else -> AppResult.Ok(FakeTransport.response(500, "unused"))
             }
         }
         rig.vault.put(KeyVault.OPENAI_KEY, "sk-test")
@@ -112,12 +112,12 @@ class AiHubTest {
         val rig = rig { request ->
             when {
                 request.url.contains("generativelanguage") ->
-                    FakeTransport.response(
+                    AppResult.Ok(FakeTransport.response(
                         500, """{"error":{"message":"boom"}}"""
-                    )
+                    ))
                 request.url.contains("api.openai.com") ->
                     FakeTransport.ok(openAiBody("second answer"))
-                else -> FakeTransport.response(404, "nope")
+                else -> AppResult.Ok(FakeTransport.response(404, "nope"))
             }
         }
         rig.vault.put(KeyVault.GEMINI_KEY, "gemini-key")
@@ -133,9 +133,9 @@ class AiHubTest {
             val rig = rig { request ->
                 when {
                     request.url.contains("api.openai.com") ->
-                        FakeTransport.response(
+                        AppResult.Ok(FakeTransport.response(
                             401, """{"error":{"message":"bad key"}}"""
-                        )
+                        ))
                     else -> FakeTransport.ok(geminiBody("gemini answer"))
                 }
             }

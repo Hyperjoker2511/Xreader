@@ -56,14 +56,14 @@ class HubClientsTest {
     @Test
     fun `openai client maps 401 to auth failed and 429 to rate limited`() = runBlocking {
         val unauthorized = FakeTransport {
-            FakeTransport.response(401, """{"error":{"message":"bad key"}}""")
+            AppResult.Ok(FakeTransport.response(401, """{"error":{"message":"bad key"}}"""))
         }
         val authResult = openAiClient(unauthorized).generateText("hi")
         assertTrue(authResult is AppResult.Err)
         assertTrue((authResult as AppResult.Err).error is AppError.AuthFailed)
 
         val limited = FakeTransport {
-            FakeTransport.response(429, """{"error":{"message":"slow down"}}""")
+            AppResult.Ok(FakeTransport.response(429, """{"error":{"message":"slow down"}}"""))
         }
         val rateResult = openAiClient(limited).generateText("hi")
         assertTrue((rateResult as AppResult.Err).error is AppError.RateLimited)
