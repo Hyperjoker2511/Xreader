@@ -11,6 +11,9 @@ import app.xreader.data.extension.ExtensionPermissions.Companion.encode
 import app.xreader.data.net.HttpTransport
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * Repositories and installs (PLAN §5/§9.1):
@@ -50,6 +53,8 @@ class RepoManager(
         ) : IndexFetch
     }
 
+    private val repoJson = Json { ignoreUnknownKeys = true; isLenient = true }
+
     // ── repos ───────────────────────────────────────────────────────
 
     /** What adding a repository URL turned out to be (v1.0.1). */
@@ -66,22 +71,115 @@ class RepoManager(
      * Detection-aware repo add (v1.0.1): the fetched text is
      * classified FIRST ([RepoFormatDetector]) — a Mihon / LNReader /
      * Legado / generic foreign index is never a raw format error.
+     *
+     * v1.0.9: the paste is normalised FIRST ([RepoLinkNormaliser])
+     * and the candidate index URLs are walked in order — a repo
+     * page link, a directory link, an `owner/repo` shorthand and
+     * every sibling index shape resolve to the same repo. A stub
+     * index (upgrade nags only) never ends the walk; it is the
+     * answer only when nothing better exists.
      */
     suspend fun addRepoOrDetect(name: String, indexUrl: String): AddRepoOutcome {
-        val body = when (val raw = fetchRaw(indexUrl)) {
+        val candidates = RepoLinkNormaliser.candidates(indexUrl)
+            .ifEmpty { listOf(indexUrl) }
+        var stub: RepoFormat.ForeignRepo? = null
+        var firstFailure: AddRepoOutcome.Failed? = null
+        for (candidate in candidates) {
+            val outcome = detectCandidate(name, candidate, hops = 0)
+            when (outcome) {
+                is AddRepoOutcome.Added -> return outcome
+                is AddRepoOutcome.Foreign -> {
+                    if (outcome.format.stubIndex) {
+                        if (stub == null) stub = outcome.format
+                    } else {
+                        return outcome
+                    }
+                }
+                is AddRepoOutcome.Failed ->
+                    if (firstFailure == null) firstFailure = outcome
+            }
+        }
+        stub?.let { return AddRepoOutcome.Foreign(it) }
+        return firstFailure ?: AddRepoOutcome.Failed(
+            AppError.ParseFailed("repository", "the link couldn't be read")
+        )
+    }
+
+    /** One candidate index URL: fetch + classify, following the
+     * pointer files (repo.json's index_v2, a tachiyomix
+     * extensionListUrl, an index.pb pointer) up to two hops. */
+    private suspend fun detectCandidate(
+        name: String,
+        url: String,
+        hops: Int
+    ): AddRepoOutcome {
+        if (url.endsWith(".pb")) {
+            val bytes = when (val raw = downloadBytes(url)) {
+                is AppResult.Err -> return AddRepoOutcome.Failed(raw.error)
+                is AppResult.Ok -> raw.value
+            }
+            if (bytes.size > MAX_INDEX_BYTES) {
+                return AddRepoOutcome.Failed(
+                    AppError.ProviderDown("repository", detail = "the list was too large")
+                )
+            }
+            val index = PbIndexReader.read(bytes)
+            val pointer = index?.extensionListUrl
+            if (index != null && index.extensions.isEmpty() &&
+                !pointer.isNullOrBlank() && hops < 2
+            ) {
+                return detectCandidate(name, pointer, hops + 1)
+            }
+            return when (val format = RepoFormatDetector.detectPb(bytes)) {
+                null -> AddRepoOutcome.Failed(
+                    AppError.ParseFailed(
+                        "repository",
+                        "the binary index (index.pb) couldn't be read"
+                    )
+                )
+                else -> AddRepoOutcome.Foreign(format)
+            }
+        }
+        val body = when (val raw = fetchRaw(url)) {
             is AppResult.Err -> return AddRepoOutcome.Failed(raw.error)
             is AppResult.Ok -> raw.value
+        }
+        // Pointer files: repo.json names the real (v2) index; a
+        // tachiyomix JSON index may likewise point at a separate
+        // extension-list file. Follow either, once or twice.
+        if (hops < 2) {
+            pointerTarget(body)?.let { target ->
+                return detectCandidate(name, target, hops + 1)
+            }
         }
         return when (val format = RepoFormatDetector.detect(body)) {
             is RepoFormat.ForeignRepo -> AddRepoOutcome.Foreign(format)
             is RepoFormat.Unknown ->
                 AddRepoOutcome.Failed(AppError.ParseFailed("repository", format.reason))
             RepoFormat.XreaderIndex ->
-                when (val added = addRepo(name, indexUrl)) {
+                when (val added = addRepo(name, url)) {
                     is AppResult.Ok -> AddRepoOutcome.Added(added.value)
                     is AppResult.Err -> AddRepoOutcome.Failed(added.error)
                 }
         }
+    }
+
+    /** The URL a pointer body names, or null when [body] isn't a
+     * pointer: repo.json's `index_v2`, or a tachiyomix object's
+     * `extensionListUrl` when it carries no inline list. */
+    private fun pointerTarget(body: String): String? {
+        val root = runCatching {
+            repoJson.parseToJsonElement(body) as? JsonObject
+        }.getOrNull() ?: return null
+        (root["index_v2"] as? JsonPrimitive)?.contentOrNull
+            ?.takeIf { it.startsWith("http") }
+            ?.let { return it }
+        if (root["extensionList"] == null) {
+            (root["extensionListUrl"] as? JsonPrimitive)?.contentOrNull
+                ?.takeIf { it.startsWith("http") }
+                ?.let { return it }
+        }
+        return null
     }
 
     /** Raw text fetch (v1.0.1: the Legado import path reads source
@@ -478,6 +576,133 @@ class RepoManager(
         service.invalidate(row.id)
         return AppResult.Ok(row)
     }
+
+    /**
+     * Install a Live Source (v1.0.9): the user's pasted link
+     * becomes a source that derives its catalogue / book /
+     * reader views live from the site's pages — there is no
+     * probe and no failure state at install time; the worst a
+     * site can do is read poorly on a specific page, in place.
+     * Display identity (name, icon) is discovered from the
+     * site's own manifest / meta tags, falling back to its
+     * host name. Re-installing the same host replaces the row.
+     */
+    suspend fun installLiveSource(rawUrl: String): AppResult<InstalledExtension> {
+        val startUrl = rawUrl.trim()
+        val uri = runCatching { java.net.URI(startUrl) }.getOrNull()
+        val host = uri?.host?.takeIf { it.isNotBlank() }
+            ?: return AppResult.Err(
+                AppError.ParseFailed("link", "that link doesn't name a website")
+            )
+        val baseUrl = "${uri.scheme ?: "https"}://$host" +
+            if (uri.port != -1) ":${uri.port}" else ""
+        // v1.0.9: a seeded catalogue name beats the bare host
+        // when the site's own pages don't name it better.
+        var name = SeedCatalog.nameFor(host) ?: host.removePrefix("www.")
+        var iconUrl: String? = "$baseUrl/favicon.ico"
+        var namedByManifest = false
+        // Best-effort identity discovery — the install never
+        // waits on it and never fails because of it.
+        val pageText = (fetchRaw(startUrl) as? AppResult.Ok)?.value
+        if (pageText != null) {
+            runCatching {
+                val doc = org.jsoup.Jsoup.parse(pageText, startUrl)
+                val manifestHref = doc.selectFirst("link[rel=manifest]")
+                    ?.attr("abs:href")?.ifBlank { null }
+                val manifestText = manifestHref?.let {
+                    (fetchRaw(it) as? AppResult.Ok)?.value
+                }
+                if (manifestText != null) {
+                    val manifest = repoJson.parseToJsonElement(manifestText)
+                        as? JsonObject
+                    val manifestName = manifest?.let {
+                        (it["name"] as? JsonPrimitive)?.contentOrNull
+                            ?: (it["short_name"] as? JsonPrimitive)?.contentOrNull
+                    }?.ifBlank { null }
+                    if (manifestName != null) {
+                        name = manifestName
+                        namedByManifest = true
+                    }
+                    val icons = (manifest?.get("icons") as? kotlinx.serialization.json.JsonArray)
+                    val bestIcon = icons?.mapNotNull { element ->
+                        val icon = element as? JsonObject ?: return@mapNotNull null
+                        val src = (icon["src"] as? JsonPrimitive)?.contentOrNull
+                            ?: return@mapNotNull null
+                        val size = (icon["sizes"] as? JsonPrimitive)?.contentOrNull
+                            ?.substringBefore("x")?.toIntOrNull() ?: 0
+                        size to src
+                    }?.maxByOrNull { it.first }
+                    if (bestIcon != null) {
+                        iconUrl = java.net.URI(manifestHref)
+                            .resolve(bestIcon.second).toString()
+                    }
+                }
+                if (!namedByManifest) {
+                    val siteName = doc.selectFirst("meta[property=og:site_name]")
+                        ?.attr("content")?.ifBlank { null }
+                    val title = doc.title().ifBlank { null }
+                    name = siteName ?: title?.take(48) ?: name
+                }
+                val touchIcon = doc.selectFirst("link[rel=apple-touch-icon]")
+                    ?.attr("abs:href")?.ifBlank { null }
+                val icon = doc.selectFirst("link[rel=icon]")
+                    ?.attr("abs:href")?.ifBlank { null }
+                if (manifestText == null) iconUrl = touchIcon ?: icon ?: iconUrl
+            }
+        }
+        val spec = LiveSourceSpec(
+            id = "live." + host.replace('.', '-'),
+            name = name,
+            baseUrl = baseUrl,
+            startUrl = startUrl,
+            iconUrl = iconUrl
+        )
+        val repo = linkRepo()
+        val packageId = "live.$host"
+        val fingerprint = Hashes.sha256Hex(spec.encode())
+        val permissions = ExtensionPermissions(domains = listOf(host))
+        store.writeText(store.definitionFile(packageId), spec.encode())
+        val now = nowMs()
+        val existing = extensionDao.getByPackageId(packageId)
+        val row = if (existing != null) {
+            existing.copy(
+                displayName = spec.name,
+                kind = app.xreader.data.db.ExtensionKind.LIVE,
+                versionCode = existing.versionCode + 1,
+                sha256 = fingerprint,
+                sourceIds = spec.id,
+                permissionsJson = permissions.encode(),
+                trustState = TrustState.TRUSTED,
+                enabled = true,
+                updatedAt = now
+            ).also { extensionDao.update(it) }
+        } else {
+            InstalledExtension(
+                repoId = repo.id,
+                displayName = spec.name,
+                packageId = packageId,
+                versionName = "1.0",
+                versionCode = 1,
+                kind = app.xreader.data.db.ExtensionKind.LIVE,
+                artifactPath = null,
+                sha256 = fingerprint,
+                apiLevel = app.xreader.extensionapi.ExtensionApi.API_LEVEL,
+                languages = spec.lang,
+                sourceIds = spec.id,
+                enabled = true,
+                trustState = TrustState.TRUSTED,
+                permissionsJson = permissions.encode(),
+                installedAt = now,
+                updatedAt = now
+            ).let { it.copy(id = extensionDao.insert(it)) }
+        }
+        service.invalidate(row.id)
+        return AppResult.Ok(row)
+    }
+
+    /** Raw bytes for a URL (v1.0.9: site icons for home-screen
+     * shortcuts) through the same capped download path repos use. */
+    suspend fun fetchBytes(url: String): AppResult<ByteArray> = downloadBytes(url)
 
     private suspend fun linkRepo(): ExtensionRepo {
         val repos = repoDaoSnapshot()

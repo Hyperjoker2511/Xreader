@@ -25,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -105,6 +106,26 @@ fun AddFromLinkScreen(
                     onClick = { viewModel.probe(url) },
                     enabled = url.isNotBlank(),
                     modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Or skip the test read entirely:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(
+                    onClick = { viewModel.installLive(url) },
+                    enabled = url.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Install as a Live Source — works for any site")
+                }
+                Text(
+                    "A Live Source is read fresh from the site every time you open " +
+                        "it, in Xreader's own screens — nothing is saved that can go " +
+                        "stale, and it can be pinned to your home screen like an app.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             is LinkAddUiState.Probing -> {
@@ -296,11 +317,24 @@ fun AddFromLinkScreen(
                         Spacer(Modifier.height(6.dp))
                     }
                     XreaderPrimaryButton(
-                        text = "Try again",
-                        onClick = { viewModel.probe(url) },
+                        text = "Install as a Live Source instead",
+                        onClick = { viewModel.installLive(url) },
                         enabled = url.isNotBlank(),
                         modifier = Modifier.fillMaxWidth()
                     )
+                    Text(
+                        "A Live Source skips the test read: it's installed as-is " +
+                            "and read fresh from the site each time, in Xreader's " +
+                            "own screens.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    TextButton(
+                        onClick = { viewModel.probe(url) },
+                        enabled = url.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Try again") }
                     TextButton(
                         onClick = { viewModel.reset() },
                         modifier = Modifier.fillMaxWidth()
@@ -383,6 +417,70 @@ fun AddFromLinkScreen(
                             text = "Open the book",
                             onClick = { onOpenBook(current.bookId) },
                             modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+                        Text("Back to Sources")
+                    }
+                }
+            }
+            is LinkAddUiState.InstallingLive -> {
+                Column(
+                    Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator()
+                    Text(
+                        "Installing the Live Source…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            is LinkAddUiState.LiveInstalled -> {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                val scope = androidx.compose.runtime.rememberCoroutineScope()
+                var pinFailed by remember { mutableStateOf(false) }
+                GlassCard {
+                    Text("Live Source installed", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "“${current.name}” is in Browse like any other source, and it " +
+                            "reads the site fresh every time — in Xreader's own screens. " +
+                            "You can also pin it to your home screen, where it opens " +
+                            "in its own window like an app.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    if (current.bookId != null) {
+                        XreaderPrimaryButton(
+                            text = "Open the book",
+                            onClick = { onOpenBook(current.bookId) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                val bytes = viewModel.liveIconBytes(current.iconUrl)
+                                pinFailed = !SiteShortcut.requestPin(
+                                    context = context,
+                                    extensionId = current.extensionId,
+                                    sourceId = current.sourceId,
+                                    name = current.name,
+                                    iconBytes = bytes
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Add to home screen") }
+                    if (pinFailed) {
+                        Text(
+                            "Your launcher doesn't allow pinning from apps — " +
+                                "the source is still in Browse.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {

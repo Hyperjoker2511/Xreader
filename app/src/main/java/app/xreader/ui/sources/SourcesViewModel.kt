@@ -226,6 +226,53 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    /**
+     * "Install ready source" on a foreign-repo site row whose
+     * LNReader plugin belongs to a templated family (v1.0.9):
+     * the family's reading logic is already known, so the
+     * source is generated from the family's template + the
+     * plugin's own constructor options and saved directly —
+     * no probe, no test read. The plugin file is fetched only
+     * for its options bag; when that fetch fails, the family
+     * defaults apply (most plugins change nothing else).
+     */
+    fun installFamilySource(site: app.xreader.data.extension.ForeignSite) {
+        val family = site.family ?: return
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                val pluginText = site.pluginUrl?.let { pluginUrl ->
+                    (manager.fetchText(pluginUrl) as? AppResult.Ok)?.value
+                }
+                val options = pluginText?.let {
+                    app.xreader.data.extension.JsConstructorOptions.extractOptions(it)
+                } ?: emptyMap()
+                val config = app.xreader.data.extension.FamilyTemplates.configFor(
+                    family = family,
+                    pluginId = site.pluginId ?: site.name,
+                    site = site.baseUrl,
+                    name = site.name,
+                    lang = site.lang,
+                    options = options
+                )
+                if (config == null) {
+                    say("“${site.name}” couldn't be prepared as a ready source.")
+                    return@launch
+                }
+                val host = app.xreader.data.extension.CookieParsing
+                    .hostOf(config.baseUrl) ?: ""
+                when (val saved = manager.saveLinkSource(config, host)) {
+                    is AppResult.Ok ->
+                        say("Installed the ready source “${site.name}”. Find it under My link sources.")
+                    is AppResult.Err ->
+                        say("The source couldn't be saved: ${saved.error.detail ?: "a storage problem"}")
+                }
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
     /** Legado import from pasted/file text (v1.0.1): convert each
      * source, test-drive the converted ones, save the passes, and
      * report every source plainly. */

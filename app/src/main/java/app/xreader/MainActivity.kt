@@ -47,6 +47,38 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleWidgetIntent(intent, (application as XreaderApp).container)
+        handleSourceShortcut(intent, (application as XreaderApp).container)
+    }
+
+    /** Live Source home-screen shortcuts (v1.0.9) carry the
+     * source's ids; the shell observes
+     * [AppContainer.pendingOpenSource] and opens its catalogue.
+     * The task is labelled with the site's name, so the window
+     * the shortcut opened presents as that site's app in
+     * Recents. */
+    private fun handleSourceShortcut(
+        intent: android.content.Intent?,
+        container: AppContainer
+    ) {
+        val extId = intent?.getLongExtra(
+            app.xreader.ui.sources.SiteShortcut.EXTRA_SOURCE_EXT, -1L
+        ) ?: -1L
+        val sourceId = intent?.getStringExtra(
+            app.xreader.ui.sources.SiteShortcut.EXTRA_SOURCE_ID
+        )
+        if (extId > 0 && !sourceId.isNullOrBlank()) {
+            container.pendingOpenSource.value = extId to sourceId
+            val name = intent.getStringExtra(
+                app.xreader.ui.sources.SiteShortcut.EXTRA_SOURCE_NAME
+            )
+            if (!name.isNullOrBlank()) {
+                runCatching {
+                    setTaskDescription(
+                        android.app.ActivityManager.TaskDescription(name)
+                    )
+                }
+            }
+        }
     }
 
     /** Home-screen widget taps (Phase 6) carry the current book's
@@ -67,6 +99,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val container = (application as XreaderApp).container
         handleWidgetIntent(intent, container)
+        handleSourceShortcut(intent, container)
         // A previous crash outranks onboarding (PLAN §1.5): recovery first.
         val crashNote = container.unseenCrashNote()
         setContent {

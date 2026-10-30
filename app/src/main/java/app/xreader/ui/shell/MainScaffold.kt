@@ -228,6 +228,16 @@ fun MainScaffold(container: AppContainer, appearance: AppearanceState) {
             }
         }
     }
+    // v1.0.9: a pinned Live Source shortcut opens that source's
+    // catalogue in this window.
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        container.pendingOpenSource.collect { target ->
+            if (target != null) {
+                container.pendingOpenSource.value = null
+                navController.navigate("source/${target.first}/${target.second}")
+            }
+        }
+    }
 
     // Import picker (SAF): multiple documents, any type — the sniffer
     // decides what each file really is.

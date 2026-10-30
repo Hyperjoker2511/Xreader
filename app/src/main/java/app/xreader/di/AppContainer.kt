@@ -851,6 +851,12 @@ class AppContainer(context: Context) {
     val pendingOpenBook =
         kotlinx.coroutines.flow.MutableStateFlow<Long?>(null)
 
+    /** Site-shortcut → app handoff (v1.0.9): the (extension row
+     * id, source id) a pinned Live Source shortcut should open,
+     * set by MainActivity from the shortcut's intent. */
+    val pendingOpenSource =
+        kotlinx.coroutines.flow.MutableStateFlow<Pair<Long, String>?>(null)
+
     val migrationService: app.xreader.data.migration.MigrationService =
         app.xreader.data.migration.MigrationService(
             bookDao = database.bookDao(),

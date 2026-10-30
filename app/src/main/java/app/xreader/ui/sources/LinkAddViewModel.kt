@@ -41,6 +41,18 @@ sealed interface LinkAddUiState {
     ) : LinkAddUiState
     data object Saving : LinkAddUiState
     data class Saved(val bookId: Long?, val bookTitle: String) : LinkAddUiState
+    /** v1.0.9: a Live Source install is running (identity
+     * discovery + row write — no probe, no test read). */
+    data object InstallingLive : LinkAddUiState
+    /** v1.0.9: the Live Source is installed. [bookId] is set
+     * when the pasted book also opened into the Library. */
+    data class LiveInstalled(
+        val extensionId: Long,
+        val sourceId: String,
+        val name: String,
+        val iconUrl: String?,
+        val bookId: Long?
+    ) : LinkAddUiState
     /** Phase 5: Gemini is studying the page after the automatic
      * detector failed — same mandatory test-drive afterwards. */
     data object AiProbing : LinkAddUiState
@@ -237,6 +249,65 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
                 }
             }
         }
+    }
+
+    /**
+     * Install the pasted link as a Live Source (v1.0.9): no
+     * probe, no test read, no failure state — the site is
+     * installed as-is and read live from then on. When the
+     * link is a book page, the book is also opened into the
+     * Library so the user lands on something real (a failed
+     * open doesn't unpick the install — the source is in
+     * Browse either way).
+     */
+    fun installLive(rawUrl: String) {
+        val url = rawUrl.trim()
+        if (url.isBlank()) return
+        _state.value = LinkAddUiState.InstallingLive
+        viewModelScope.launch {
+            when (val installed = container.repoManager.installLiveSource(url)) {
+                is AppResult.Err -> {
+                    _state.value = LinkAddUiState.Failed(
+                        "The Live Source couldn't be installed: " +
+                            (installed.error.detail ?: "a storage problem")
+                    )
+                }
+                is AppResult.Ok -> {
+                    val row = installed.value
+                    val sourceId = row.sourceIds.substringBefore(",")
+                    val handle = container.extensionService
+                        .source(row.id, sourceId).getOrNull()
+                    val bookId = if (handle != null) {
+                        container.sourceBookSync.openBook(
+                            handle,
+                            SourceBook(id = url, title = row.displayName)
+                        ).getOrNull()?.id
+                    } else {
+                        null
+                    }
+                    _state.value = LinkAddUiState.LiveInstalled(
+                        extensionId = row.id,
+                        sourceId = sourceId,
+                        name = row.displayName,
+                        iconUrl = (handle?.source as?
+                            app.xreader.data.extension.LiveSource)
+                            ?.spec?.iconUrl,
+                        bookId = bookId
+                    )
+                    _messages.tryEmit(
+                        "Live Source installed — “${row.displayName}”"
+                    )
+                }
+            }
+        }
+    }
+
+    /** The installed Live Source's icon bytes, for the
+     * home-screen shortcut (best effort; null = use the
+     * generated letter icon). */
+    suspend fun liveIconBytes(iconUrl: String?): ByteArray? {
+        if (iconUrl.isNullOrBlank()) return null
+        return container.repoManager.fetchBytes(iconUrl).getOrNull()
     }
 
     fun reset() {

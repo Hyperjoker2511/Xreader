@@ -367,6 +367,9 @@ private val LICENCES = listOf(
         "Google APIs Terms of Service — used only with your key / sign-in, never bundled credentials",
     "CameraX (AndroidX)" to "Apache Licence 2.0",
     "Focus soundscapes (Rain / Fireplace / Forest)" to "Generated for Xreader — public domain (CC0)",
+    "LNReader multisrc family templates (madara / lightnovelwp / readnovelfull, " +
+        "ported reading logic)" to
+        "MIT Licence — Copyright (c) 2021 Rajarshee Chatterjee (LNReader)",
     "Plus Jakarta Sans" to "SIL Open Font Licence 1.1",
     "Inter" to "SIL Open Font Licence 1.1",
     "Literata (TypeTogether)" to "SIL Open Font Licence 1.1"

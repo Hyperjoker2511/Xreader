@@ -40,7 +40,16 @@ import kotlinx.serialization.json.contentOrNull
 data class ForeignSite(
     val name: String,
     val lang: String = "",
-    val baseUrl: String
+    val baseUrl: String,
+    /** v1.0.9: for LNReader entries, the plugin file's URL and
+     * the multisrc family its filename declares ([family] tag),
+     * when it carries one — a templated family installs as a
+     * ready-made source instead of going through the probe. */
+    val pluginUrl: String? = null,
+    val family: String? = null,
+    /** v1.0.9: the plugin's id inside its repo index (LNReader),
+     * the stable half of a family install's identity. */
+    val pluginId: String? = null
 )
 
 sealed interface RepoFormat {
@@ -60,7 +69,19 @@ sealed interface RepoFormat {
          * the UI explains the plugin instead of inviting the
          * user to pick from a list that isn't there.
          */
-        val pluginIndex: Boolean = false
+        val pluginIndex: Boolean = false,
+        /**
+         * v1.0.9: the index is a STUB — every entry in it is an
+         * upgrade nag ("Outdated App", "Update to …") pointing
+         * at the ecosystem's own website, published so old
+         * clients stop instead of showing an empty repo
+         * (tachiyomix repos ship exactly this as their
+         * index.min.json now that the real catalogue lives in
+         * index.json / index.pb). The repo-add walk treats a
+         * stub as "keep looking at the sibling files"; it is
+         * only ever shown when nothing better was found.
+         */
+        val stubIndex: Boolean = false
     ) : RepoFormat
 
     /** The text matches nothing we recognise. */
@@ -83,8 +104,8 @@ object RepoFormatDetector {
         // in a format Xreader can't read yet.
         if (text.count { it == '�' } > 8) {
             return RepoFormat.Unknown(
-                "the list was a binary data file (a protobuf-style index), " +
-                    "which Xreader can't read yet"
+                "the list was a binary data file (a protobuf-style index) " +
+                    "that couldn't be read"
             )
         }
         val root = runCatching { json.parseToJsonElement(text) }.getOrElse {
@@ -120,6 +141,12 @@ object RepoFormatDetector {
         }
         // A single declarative config saved on its own.
         if (looksLikeDeclarativeConfig(root)) return RepoFormat.XreaderIndex
+
+        // v1.0.9: the tachiyomix JSON index (Novel Sourcery's
+        // index.json is the verified shape — the JSON twin of
+        // index.pb): an object whose extensionList.extensions[]
+        // carry sources with homeUrl fields.
+        detectTachiyomix(root)?.let { return it }
 
         // Entries nested under a collection key, or a dictionary of
         // entry objects, or the object itself as a single entry.
@@ -162,6 +189,63 @@ object RepoFormatDetector {
             ?: detectGeneric(entries)
 
     // ── per-ecosystem detectors ─────────────────────────────────────
+
+    /**
+     * The tachiyomix JSON index (v1.0.9): the object form of the
+     * protobuf index — `extensionList.extensions[]`, each
+     * extension carrying `sources[]` with `name` / `language` /
+     * `homeUrl` (verified verbatim against Novel Sourcery's
+     * published index.json: 171 extensions, 180 sources). The
+     * repository names itself in the top-level `name`.
+     */
+    private fun detectTachiyomix(root: JsonObject): RepoFormat.ForeignRepo? {
+        val list = root["extensionList"] as? JsonObject ?: return null
+        val extensions = list["extensions"] as? JsonArray ?: return null
+        val sites = mutableListOf<ForeignSite>()
+        for (element in extensions) {
+            val extension = element as? JsonObject ?: continue
+            val sources = extension["sources"] as? JsonArray ?: continue
+            for (sourceElement in sources) {
+                val source = sourceElement as? JsonObject ?: continue
+                val homeUrl = stringValue(source, "homeUrl") ?: continue
+                if (!isHttpUrl(homeUrl)) continue
+                sites += ForeignSite(
+                    name = stringValue(source, "name") ?: "",
+                    lang = stringValue(source, "language") ?: "",
+                    baseUrl = homeUrl
+                )
+            }
+        }
+        if (sites.isEmpty()) return null
+        val repoName = stringValue(root, "name") ?: "Novel Sourcery"
+        return RepoFormat.ForeignRepo(repoName, dedupe(sites))
+    }
+
+    /**
+     * The tachiyomix BINARY index (v1.0.9): raw `index.pb` bytes
+     * in, the same [RepoFormat.ForeignRepo] out — the site list
+     * is all Xreader takes from any of these repos. Null when
+     * the bytes aren't a readable index or hold no sites.
+     */
+    fun detectPb(bytes: ByteArray): RepoFormat.ForeignRepo? {
+        val index = PbIndexReader.read(bytes) ?: return null
+        val sites = index.extensions.flatMap { extension ->
+            extension.sources.mapNotNull { source ->
+                if (!isHttpUrl(source.homeUrl)) {
+                    null
+                } else {
+                    ForeignSite(
+                        name = source.name,
+                        lang = source.language,
+                        baseUrl = source.homeUrl
+                    )
+                }
+            }
+        }
+        if (sites.isEmpty()) return null
+        val repoName = index.name.ifBlank { "Novel Sourcery" }
+        return RepoFormat.ForeignRepo(repoName, dedupe(sites))
+    }
 
     private fun detectLegado(entries: List<JsonObject>): RepoFormat.ForeignRepo? {
         val sites = entries.mapNotNull { entry ->
@@ -207,7 +291,9 @@ object RepoFormatDetector {
         }
         if (sites.isNotEmpty()) {
             return if (isMihon) {
-                RepoFormat.ForeignRepo("Mihon", dedupe(sites))
+                RepoFormat.ForeignRepo(
+                    "Mihon", dedupe(sites), stubIndex = isStubIndex(entries)
+                )
             } else {
                 null
             }
@@ -227,6 +313,22 @@ object RepoFormatDetector {
         }
         if (!isMihon) return null
         return RepoFormat.ForeignRepo("Mihon", dedupe(sites))
+    }
+
+    /**
+     * A stub index (v1.0.9): EVERY entry is an upgrade nag —
+     * "Outdated App", "Update to <app> …" — the shape
+     * tachiyomix repos publish as index.min.json now that the
+     * real catalogue moved to index.json / index.pb (verified
+     * verbatim: Novel Sourcery's two entries). A real extension
+     * entry never carries either name.
+     */
+    private fun isStubIndex(entries: List<JsonObject>): Boolean {
+        if (entries.isEmpty()) return false
+        return entries.all { entry ->
+            val name = stringValue(entry, "name")?.lowercase() ?: return@all false
+            name.contains("outdated") || name.startsWith("update to ")
+        }
     }
 
     /** Which app a plugin index belongs to, read from its
@@ -287,10 +389,25 @@ object RepoFormatDetector {
             }
             else -> null
         } ?: return null
+        // v1.0.9: the plugin file itself, when the entry names
+        // one — its [family] filename tag decides whether this
+        // site installs ready-made (see FamilyTemplates). Only
+        // when a real site address exists separately: an entry
+        // whose only URL is the plugin file has no site to
+        // install a source for.
+        val pluginUrl = if (siteUrl != null) {
+            stringValue(entry, "url")
+                ?.takeIf { isHttpUrl(it) && it.endsWith(".js") }
+        } else {
+            null
+        }
         return ForeignSite(
             name = name,
             lang = stringValue(entry, "lang") ?: "",
-            baseUrl = url
+            baseUrl = url,
+            pluginUrl = pluginUrl,
+            family = pluginUrl?.let { FamilyTemplates.familyOf(it) },
+            pluginId = stringValue(entry, "id")
         )
     }
 

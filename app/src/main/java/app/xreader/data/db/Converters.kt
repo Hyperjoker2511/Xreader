@@ -12,7 +12,7 @@ enum class DownloadState { NONE, QUEUED, DOWNLOADING, READY, FAILED }
 
 enum class TrustState { TRUSTED, CHANGED_REQUIRES_RETRUST }
 
-enum class ExtensionKind { DECLARATIVE, JS, DEX }
+enum class ExtensionKind { DECLARATIVE, JS, DEX, LIVE }
 
 enum class DownloadKind { CHAPTER, PREFETCH, EXPORT }
 

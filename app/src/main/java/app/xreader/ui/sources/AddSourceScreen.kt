@@ -211,28 +211,39 @@ fun AddSourceScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            // v1.0.8.3: a plugin index lists no
-                            // sites — its sources are code inside
-                            // one plugin file. Say that plainly
-                            // instead of inviting a pick from a
-                            // list that isn't there.
-                            if (foreign.pluginIndex) {
-                                "Its sources live inside a single plugin file made for " +
-                                    (if (foreign.ecosystemName == "another reader app") {
-                                        "another reader app"
-                                    } else {
-                                        foreign.ecosystemName
-                                    }) +
-                                    ". Xreader can't run another app's plugin file, and " +
-                                    "the index doesn't list its sites separately — so " +
-                                    "there's nothing here it can install. If there's a " +
-                                    "site you read there, add it with Add from link " +
-                                    "instead: Xreader will test-read it and build its " +
-                                    "own source."
-                            } else {
-                                "Xreader can't install extensions made for other apps, " +
-                                    "but it can build its own source for the same sites. " +
-                                    "Pick a site below and Xreader will test-read it first."
+                            // v1.0.9: a stub index is only an
+                            // upgrade note — the walk already
+                            // looked for the real list beside it
+                            // and found nothing better.
+                            when {
+                                foreign.stubIndex ->
+                                    "This repository's list has moved to a newer format — " +
+                                        "what's published at this link now is just a note " +
+                                        "telling older apps to update, and Xreader already " +
+                                        "looked for the real list next to it. The sites in " +
+                                        "that note aren't real sources."
+                                // v1.0.8.3: a plugin index lists no
+                                // sites — its sources are code inside
+                                // one plugin file. Say that plainly
+                                // instead of inviting a pick from a
+                                // list that isn't there.
+                                foreign.pluginIndex ->
+                                    "Its sources live inside a single plugin file made for " +
+                                        (if (foreign.ecosystemName == "another reader app") {
+                                            "another reader app"
+                                        } else {
+                                            foreign.ecosystemName
+                                        }) +
+                                        ". Xreader can't run another app's plugin file, and " +
+                                        "the index doesn't list its sites separately — so " +
+                                        "there's nothing here it can install. If there's a " +
+                                        "site you read there, add it with Add from link " +
+                                        "instead: Xreader will test-read it and build its " +
+                                        "own source."
+                                else ->
+                                    "Xreader can't install extensions made for other apps, " +
+                                        "but it can build its own source for the same sites. " +
+                                        "Pick a site below and Xreader will test-read it first."
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -248,16 +259,31 @@ fun AddSourceScreen(
                                     Text(
                                         listOfNotNull(
                                             site.lang.takeIf { it.isNotBlank() },
+                                            site.family?.let { "LNReader family · $it" },
                                             site.baseUrl
                                         ).joinToString(" · "),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                TextButton(
-                                    onClick = { viewModel.createSourceFromSite(site) },
-                                    enabled = !state.busy
-                                ) { Text("Create Xreader source") }
+                                if (app.xreader.data.extension.FamilyTemplates
+                                        .hasTemplate(site.family)
+                                ) {
+                                    // v1.0.9: the family's reading
+                                    // logic is already known — the
+                                    // source installs ready-made.
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.installFamilySource(site)
+                                        },
+                                        enabled = !state.busy
+                                    ) { Text("Install ready source") }
+                                } else {
+                                    TextButton(
+                                        onClick = { viewModel.createSourceFromSite(site) },
+                                        enabled = !state.busy
+                                    ) { Text("Create Xreader source") }
+                                }
                             }
                         }
                         if (foreign.sites.size > 40) {

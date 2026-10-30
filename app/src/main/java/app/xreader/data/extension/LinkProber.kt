@@ -270,6 +270,16 @@ class LinkProber(
             )
             return Outcome.Failed("That doesn't look like a web address — check the link and try again.")
         }
+        // v1.0.9: a seeded site is named in the diagnostics —
+        // the seed is a head-start only; the probe still
+        // test-reads the site live like any other.
+        SeedCatalog.nameFor(host)?.let { seedName ->
+            DiagnosticLog.record(
+                "add from link",
+                "Known site: $seedName ($host) — a seeded catalogue " +
+                    "entry; the probe still test-reads it live."
+            )
+        }
         // v1.0.6 (W2/TR1): probes escalate — a page that arrives
         // as a JavaScript shell is re-fetched through the browser
         // view once, and the RENDERED page is what gets studied

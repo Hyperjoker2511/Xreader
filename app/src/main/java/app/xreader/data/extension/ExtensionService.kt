@@ -108,7 +108,9 @@ class ExtensionService(
         // would render as a package (its configs never carry the
         // marker — only the probe/Repair write it, into link rows).
         val rawDefinition: String? =
-            if (row.kind == app.xreader.data.db.ExtensionKind.DECLARATIVE) {
+            if (row.kind == app.xreader.data.db.ExtensionKind.DECLARATIVE ||
+                row.kind == app.xreader.data.db.ExtensionKind.LIVE
+            ) {
                 store.readText(store.definitionFile(row.packageId))
             } else {
                 null
@@ -121,7 +123,12 @@ class ExtensionService(
             packageId = row.packageId,
             label = row.displayName,
             permissions = { permissions },
-            needsRendering = { declarativeConfigs.any { it.needsRendering } },
+            // v1.0.9: a Live Source always may escalate to the
+            // hidden browser — app-shell sites are its home turf.
+            needsRendering = {
+                row.kind == app.xreader.data.db.ExtensionKind.LIVE ||
+                    declarativeConfigs.any { it.needsRendering }
+            },
             // v1.0.8.2: the same up-front decode supplies the
             // wait-for-content hint, so a saved app-shell
             // source's own fetches wait for their content just
@@ -146,6 +153,13 @@ class ExtensionService(
                 }
                 app.xreader.data.db.ExtensionKind.JS -> loadJs(row, context)
                 app.xreader.data.db.ExtensionKind.DEX -> loadDex(row, context)
+                app.xreader.data.db.ExtensionKind.LIVE -> {
+                    val spec = rawDefinition?.let { LiveSourceSpec.decode(it) }
+                        ?: throw SourceException(
+                            "its live-source file is missing or unreadable"
+                        )
+                    listOf(LiveSource(spec, context))
+                }
             }
         } catch (e: Exception) {
             return AppResult.Err(
