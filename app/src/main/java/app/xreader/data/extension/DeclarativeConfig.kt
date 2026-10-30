@@ -151,8 +151,34 @@ data class ChapterListPagination(
     val jsonHtmlField: String? = null,
     val headers: Map<String, String> = mapOf(
         "X-Requested-With" to "XMLHttpRequest"
-    )
+    ),
+    /** v1.0.8: a CSS selector for a <select> on the book page
+     * whose option values run 1..N — the site's own page
+     * count for this book's chapter list (novelight renders
+     * one). Knowing the last page up front is what lets a
+     * REVERSED list load progressively: the walk starts at
+     * the last page (the oldest chapters = reading chapter
+     * 1) and descends. Null (every config written before
+     * v1.0.8) = the total is unknown; reversed lists then
+     * keep the complete-on-open walk. */
+    val totalPagesSelector: String? = null
 ) {
+
+    /** The page count a book page's pagination select
+     * declares: the largest numeric option value, or the
+     * option count when values aren't numeric. Null when
+     * no selector is configured or the select is absent. */
+    fun totalPagesIn(doc: org.jsoup.nodes.Document): Int? {
+        val selector = totalPagesSelector?.takeIf { it.isNotBlank() }
+            ?: return null
+        val select = runCatching { doc.select(selector).firstOrNull() }
+            .getOrNull() ?: return null
+        val values = select.select("option")
+            .mapNotNull { it.attr("value").trim().toIntOrNull() }
+        if (values.isNotEmpty()) return values.max()
+        val count = select.select("option").size
+        return count.takeIf { it > 0 }
+    }
     /** The endpoint URL for one page of the walk. */
     fun endpointFor(bookId: String, page: Int): String =
         urlTemplate

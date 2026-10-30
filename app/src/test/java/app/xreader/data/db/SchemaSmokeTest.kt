@@ -26,9 +26,11 @@ class SchemaSmokeTest {
         // expected tables still come from XreaderDatabase itself.
         // v1.0.6.3: the pin moves to schema 4 (chapters.dateText) —
         // the table SET is unchanged, only the version moves.
+        // v1.0.8: the pin moves to schema 5 (books carry the
+        // progressive chapter-list walk state) — same discipline.
         val candidates = listOf(
-            File("schemas/app.xreader.data.db.XreaderDatabase/4.json"),
-            File("app/schemas/app.xreader.data.db.XreaderDatabase/4.json")
+            File("schemas/app.xreader.data.db.XreaderDatabase/5.json"),
+            File("app/schemas/app.xreader.data.db.XreaderDatabase/5.json")
         )
         val file = candidates.firstOrNull { it.isFile }
         assertTrue(
@@ -42,7 +44,7 @@ class SchemaSmokeTest {
     fun `database declares every planned table`() {
         val root = Json.parseToJsonElement(schemaJson()).jsonObject
         val database = root.getValue("database").jsonObject
-        assertEquals(4, database.getValue("version").jsonPrimitive.content.toInt())
+        assertEquals(5, database.getValue("version").jsonPrimitive.content.toInt())
         val tables = database.getValue("entities").jsonArray
             .map { it.jsonObject.getValue("tableName").jsonPrimitive.content }
             .toSet()

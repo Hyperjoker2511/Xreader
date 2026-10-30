@@ -61,24 +61,7 @@ object ChapterReconciler {
     )
 
     fun reconcile(existing: List<Chapter>, fetched: List<SourceChapter>): Plan {
-        val used = mutableSetOf<Long>()
-        val updates = mutableListOf<Update>()
-        val inserts = mutableListOf<Insert>()
-
-        fun free(row: Chapter) = row.id !in used
-
-        fetched.forEachIndexed { index, chapter ->
-            val match = findMatch(existing, chapter, index, ::free)
-            if (match == null) {
-                inserts += Insert(index, chapter)
-            } else {
-                used += match.id
-                updates += Update(
-                    match, index, chapter.name, chapter.id,
-                    newDateText = chapter.dateText ?: match.dateText
-                )
-            }
-        }
+        val (updates, inserts, used) = matchAll(existing, fetched)
 
         val stale = existing.filter { it.id !in used }.sortedBy { it.index }
         val dropped = mutableListOf<Chapter>()
@@ -97,6 +80,53 @@ object ChapterReconciler {
             }
         }
         return Plan(updates, inserts, dropped, keptStale)
+    }
+
+    /**
+     * v1.0.8: the append-only merge for a PROGRESSIVE load.
+     * [fetched] is a reading-order PREFIX of the book's real
+     * list, so a stored row the prefix doesn't mention is not
+     * stale — it simply hasn't been re-confirmed yet. The plan
+     * therefore carries no drops and no kept-stale moves:
+     * matched rows update in place, new rows insert at their
+     * prefix positions, and every other stored row is left
+     * exactly as it is. A later full [reconcile] settles the
+     * whole list when the walk completes.
+     */
+    fun reconcilePartial(
+        existing: List<Chapter>,
+        fetched: List<SourceChapter>
+    ): Plan {
+        val (updates, inserts, _) = matchAll(existing, fetched)
+        return Plan(updates, inserts, emptyList(), emptyList())
+    }
+
+    /** The shared matching loop: pairs every fetched chapter
+     * with at most one stored row (multi-key, see [findMatch])
+     * and reports which stored rows were claimed. */
+    private fun matchAll(
+        existing: List<Chapter>,
+        fetched: List<SourceChapter>
+    ): Triple<List<Update>, List<Insert>, Set<Long>> {
+        val used = mutableSetOf<Long>()
+        val updates = mutableListOf<Update>()
+        val inserts = mutableListOf<Insert>()
+
+        fun free(row: Chapter) = row.id !in used
+
+        fetched.forEachIndexed { index, chapter ->
+            val match = findMatch(existing, chapter, index, ::free)
+            if (match == null) {
+                inserts += Insert(index, chapter)
+            } else {
+                used += match.id
+                updates += Update(
+                    match, index, chapter.name, chapter.id,
+                    newDateText = chapter.dateText ?: match.dateText
+                )
+            }
+        }
+        return Triple(updates, inserts, used)
     }
 
     /** A stored row is disposable only when the user has nothing in

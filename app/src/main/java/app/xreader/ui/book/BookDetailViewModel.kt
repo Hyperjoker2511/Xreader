@@ -302,7 +302,75 @@ class BookDetailViewModel(
     }
 
     fun downloadAllChapters() {
-        viewModelScope.launch { container.downloadController.enqueueBook(bookId) }
+        viewModelScope.launch {
+            // v1.0.8: on a partially loaded book, "all" must
+            // mean all — finish loading the chapter list first
+            // (the one explicit complete-the-list action), then
+            // queue every chapter it found.
+            val book = container.database.bookDao().getById(bookId)
+                ?: return@launch
+            if (!book.chapterListComplete) {
+                container.sourceBookSync.completeChapters(book)
+            }
+            container.downloadController.enqueueBook(bookId)
+        }
+    }
+
+    private var edgeJob: kotlinx.coroutines.Job? = null
+
+    /** v1.0.8: the chapter list composed a row near the loaded
+     * edge — grow the list ahead of the user (and only then;
+     * a book he never scrolls into never loads further). */
+    fun onChapterNearEdge(index: Int) {
+        val current = state.value
+        val book = current.book ?: return
+        if (book.chapterListComplete) return
+        if (index < current.chapters.size -
+            app.xreader.data.extension.SourceBookSync.EDGE_TRIGGER
+        ) {
+            return
+        }
+        if (edgeJob?.isActive == true) return
+        val target = current.chapters.size +
+            app.xreader.data.extension.SourceBookSync.EDGE_TARGET
+        edgeJob = viewModelScope.launch {
+            container.sourceBookSync.ensureChapters(book, target)
+        }
+    }
+
+    /** v1.0.8: the auto-load for a progressive book whose first
+     * chunk didn't land at open — retry the CHUNK, not a full
+     * refresh (the whole point is not loading everything). */
+    private fun loadFirstChunk() {
+        viewModelScope.launch {
+            val book = container.database.bookDao().getById(bookId)
+                ?: return@launch
+            if (book.sourceType != app.xreader.data.db.SourceType.EXTENSION) {
+                return@launch
+            }
+            storyLocal.value = storyLocal.value.copy(
+                chaptersLoading = true, chaptersError = null
+            )
+            when (
+                val result = container.sourceBookSync.ensureChapters(
+                    book,
+                    app.xreader.data.extension.SourceBookSync.FIRST_CHUNK_MIN
+                )
+            ) {
+                is app.xreader.core.error.AppResult.Ok -> {
+                    storyLocal.value = storyLocal.value.copy(
+                        chaptersLoading = false
+                    )
+                }
+                is app.xreader.core.error.AppResult.Err -> {
+                    storyLocal.value = storyLocal.value.copy(
+                        chaptersLoading = false,
+                        chaptersError = app.xreader.core.error.ErrorText
+                            .displayText(result.error)
+                    )
+                }
+            }
+        }
     }
 
     fun downloadChapter(chapter: Chapter) {
@@ -397,7 +465,14 @@ class BookDetailViewModel(
                     book.sourceType == app.xreader.data.db.SourceType.EXTENSION
                 ) {
                     autoLoadTried = true
-                    refreshChapters()
+                    // v1.0.8: a partially loaded book retries
+                    // its first chunk; a complete book keeps
+                    // the full auto-refresh it always had.
+                    if (!book.chapterListComplete) {
+                        loadFirstChunk()
+                    } else {
+                        refreshChapters()
+                    }
                 }
             }
         }

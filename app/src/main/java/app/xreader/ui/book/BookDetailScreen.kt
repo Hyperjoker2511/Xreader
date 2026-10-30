@@ -781,6 +781,12 @@ fun BookDetailScreen(
                 }
             }
             items(visibleChapters, key = { "chapter-${it.id}" }) { chapter ->
+                // v1.0.8: composing a row near the loaded edge
+                // of a partially loaded book grows the list —
+                // scrolling IS the demand signal.
+                LaunchedEffect(chapter.id) {
+                    viewModel.onChapterNearEdge(chapter.index)
+                }
                 ChapterRow(
                     chapter = chapter,
                     isCurrent = chapter.index == state.continueChapterIndex && state.progress != null,

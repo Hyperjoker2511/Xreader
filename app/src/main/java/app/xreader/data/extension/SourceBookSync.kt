@@ -14,7 +14,10 @@ import app.xreader.data.download.FailoverOrder
 import app.xreader.data.files.BookStorage
 import app.xreader.data.net.HttpTransport
 import app.xreader.extensionapi.SourceBook
+import app.xreader.extensionapi.SourceChapter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -37,10 +40,18 @@ class SourceBookSync(
     private val nowMs: () -> Long = { System.currentTimeMillis() }
 ) {
 
+    /** v1.0.8: progressive chapter walks are serialised — the
+     * reader trigger and the list trigger can ask at the same
+     * moment, and two walks growing one list would race the
+     * (bookId, index) unique index. Walks are short; a single
+     * mutex is the honest cost. */
+    private val walkMutex = Mutex()
+
     /** Open (or create) the library book for a catalogue [ref]. */
     suspend fun openBook(handle: SourceHandle, ref: SourceBook): AppResult<Book> {
         val encoded = SourceBookIds.encode(handle.source.id, ref.id)
         var book = bookDao.findByExtensionRemote(handle.extension.id, encoded)
+        val created = book == null
         if (book == null) {
             val now = nowMs()
             val id = bookDao.insert(
@@ -65,6 +76,35 @@ class SourceBookSync(
         // must not turn into "book not available". The detail page
         // sees the book, auto-loads its chapters, and shows a plain
         // error + Retry in the chapters section if the site is down.
+        val stored = bookDao.getById(book.id) ?: book
+        // v1.0.8: a book that is already in the library WITH its
+        // chapters opens from the device — no network at all.
+        // (The full re-walk on every Browse re-tap was most of
+        // the "tap a novel, wait forever" complaint for big
+        // books; the detail page's Refresh stays the explicit
+        // re-check, exactly as the v1.0.1 design intended.)
+        if (!created && chapterDao.forBook(stored.id).isNotEmpty()) {
+            return AppResult.Ok(stored)
+        }
+        // v1.0.8: a progressive source opens after its FIRST
+        // chunk (details + the first chapters — one site page),
+        // and the list grows afterwards only as far as the user
+        // reads (ensureChapters). Everything else keeps the
+        // complete-on-open refresh below.
+        val declarative = handle.source as? DeclarativeSource
+        if (declarative != null && declarative.supportsProgressiveChapters()) {
+            val chunk = withContext(Dispatchers.IO) {
+                service.guarded(handle) {
+                    (it as DeclarativeSource).chaptersFirst(ref, FIRST_CHUNK_MIN)
+                }
+            }
+            return when (chunk) {
+                is AppResult.Err ->
+                    AppResult.Ok(bookDao.getById(book.id) ?: stored)
+                is AppResult.Ok ->
+                    AppResult.Ok(applyChunk(stored, chunk.value))
+            }
+        }
         return when (val refreshed = refresh(book, handle)) {
             is AppResult.Err -> AppResult.Ok(bookDao.getById(book.id) ?: book)
             is AppResult.Ok -> AppResult.Ok(bookDao.getById(book.id) ?: refreshed.value)
@@ -147,7 +187,13 @@ class SourceBookSync(
         val current = bookDao.getById(book.id) ?: book
         var updated = BookInfoMerge.apply(current, details).copy(
             totalChapters = chapters.size,
-            updatedAt = now
+            updatedAt = now,
+            // v1.0.8: a full refresh IS the complete list — the
+            // progressive walk state resets.
+            chapterListComplete = true,
+            chapterWalkNextPage = 0,
+            chapterWalkTotalPages = 0,
+            chapterWalkPageSize = 0
         )
         // Cover: fetch once (or when the book has none yet).
         // v1.0.6.3 (P4 heal): a coverPath whose FILE is gone from
@@ -176,10 +222,23 @@ class SourceBookSync(
         // anymore" defect). Stale rows with user content survive.
         val existing = chapterDao.forBook(book.id)
         val plan = ChapterReconciler.reconcile(existing, chapters)
+        applyPlan(book.id, plan, now)
+        runCatching { buildFailoverMaps(updated, chapters) }
+        return AppResult.Ok(updated)
+    }
+
+    /** Apply a reconciler plan to the chapter table. Two-phase
+     * index moves: park every moving row at a unique negative
+     * index first, so the unique (bookId, index) index can never
+     * collide mid-swap. Shared by the full refresh and the
+     * progressive chunk merge (whose plans simply carry no
+     * drops or kept-stale moves). */
+    private suspend fun applyPlan(
+        bookId: Long,
+        plan: ChapterReconciler.Plan,
+        now: Long
+    ) {
         plan.dropped.forEach { chapterDao.delete(it) }
-        // Two-phase index moves: park every moving row at a unique
-        // negative index first, so the unique (bookId, index) index
-        // can never collide mid-swap.
         val moves = (plan.updates + plan.keptStale)
             .filter { it.row.index != it.newIndex }
         moves.forEachIndexed { i, update ->
@@ -205,7 +264,7 @@ class SourceBookSync(
         plan.inserts.forEach { insert ->
             chapterDao.insert(
                 Chapter(
-                    bookId = book.id,
+                    bookId = bookId,
                     index = insert.index,
                     title = insert.fetched.name,
                     remoteId = insert.fetched.id,
@@ -214,8 +273,131 @@ class SourceBookSync(
                 )
             )
         }
-        runCatching { buildFailoverMaps(updated, chapters) }
-        return AppResult.Ok(updated)
+    }
+
+    /**
+     * v1.0.8: grow a partially loaded chapter list to at least
+     * [atLeast] chapters — the ONLY way a progressive list
+     * grows after its first chunk. Demand-driven by design
+     * (the user's rule: some days he reads one chapter; the
+     * app must not load the whole book behind his back). A
+     * complete book, a non-source book, or a book whose list
+     * already reaches [atLeast] returns untouched. Passing
+     * [Int.MAX_VALUE] completes the list (Download-all's
+     * explicit ask).
+     */
+    suspend fun ensureChapters(book: Book, atLeast: Int): AppResult<Book> =
+        walkMutex.withLock { ensureChaptersLocked(book, atLeast) }
+
+    /** Grow the list until it is complete (Download-all). */
+    suspend fun completeChapters(book: Book): AppResult<Book> =
+        ensureChapters(book, Int.MAX_VALUE)
+
+    private suspend fun ensureChaptersLocked(
+        book: Book,
+        atLeast: Int
+    ): AppResult<Book> {
+        val fresh = bookDao.getById(book.id) ?: return AppResult.Err(
+            AppError.StorageFailed("finding the book")
+        )
+        if (fresh.chapterListComplete) return AppResult.Ok(fresh)
+        val existing = chapterDao.forBook(fresh.id)
+        if (existing.size >= atLeast) return AppResult.Ok(fresh)
+        val extensionId = fresh.extensionId ?: return AppResult.Ok(fresh)
+        val (sourceId, remoteId) = SourceBookIds.decode(fresh.remoteId)
+            ?: return AppResult.Err(
+                AppError.ExtensionFailed(
+                    "source", "the book's source link is damaged"
+                )
+            )
+        val resolved = when (
+            val found = service.source(extensionId, sourceId)
+        ) {
+            is AppResult.Err -> return found
+            is AppResult.Ok -> found.value
+        }
+        val declarative = resolved.source as? DeclarativeSource
+            ?: return AppResult.Ok(fresh)
+        if (!declarative.supportsProgressiveChapters()) {
+            return AppResult.Ok(fresh)
+        }
+        val ref = SourceBook(
+            id = remoteId,
+            title = fresh.title,
+            author = fresh.author.ifBlank { null },
+            description = fresh.description.ifBlank { null }
+        )
+        val have = existing.sortedBy { it.index }.map { row ->
+            SourceChapter(
+                id = row.remoteId ?: "",
+                name = row.title,
+                number = ChapterNumbers.parse(row.title),
+                dateText = row.dateText
+            )
+        }
+        val walk = DeclarativeSource.ChapterWalk(
+            nextPage = fresh.chapterWalkNextPage,
+            totalPages = fresh.chapterWalkTotalPages,
+            pageSize = fresh.chapterWalkPageSize
+        )
+        val chunk = withContext(Dispatchers.IO) {
+            service.guarded(resolved) {
+                (it as DeclarativeSource)
+                    .chaptersMore(ref, have, atLeast, walk)
+            }
+        }
+        return when (chunk) {
+            is AppResult.Err -> chunk
+            is AppResult.Ok -> AppResult.Ok(applyChunk(fresh, chunk.value))
+        }
+    }
+
+    /** Merge one progressive chunk into the library: details
+     * (first chunk only), the cover, and the append-only
+     * partial reconcile. The walk state lands on the Book row
+     * so the next demand resumes exactly here. Failover maps
+     * build only once the list is complete — mapping a
+     * prefix against other sources would write half a map. */
+    private suspend fun applyChunk(
+        book: Book,
+        chunk: DeclarativeSource.ChapterChunk
+    ): Book {
+        val now = nowMs()
+        val current = bookDao.getById(book.id) ?: book
+        var updated = if (chunk.details != null) {
+            BookInfoMerge.apply(current, chunk.details)
+        } else {
+            current
+        }
+        updated = updated.copy(
+            totalChapters = chunk.chapters.size,
+            updatedAt = now,
+            chapterListComplete = chunk.complete,
+            chapterWalkNextPage = chunk.walk.nextPage,
+            chapterWalkTotalPages = chunk.walk.totalPages,
+            chapterWalkPageSize = chunk.walk.pageSize
+        )
+        val coverUrl = chunk.details?.coverUrl
+        val storedCover = updated.coverPath
+        if (storedCover != null &&
+            !runCatching { storage.resolve(storedCover).exists() }
+                .getOrDefault(false)
+        ) {
+            updated = updated.copy(coverPath = null)
+        }
+        if (updated.coverPath == null && !coverUrl.isNullOrBlank()) {
+            fetchCover(updated, coverUrl)?.let { relative ->
+                updated = updated.copy(coverPath = relative)
+            }
+        }
+        bookDao.update(updated)
+        val existing = chapterDao.forBook(book.id)
+        val plan = ChapterReconciler.reconcilePartial(existing, chunk.chapters)
+        applyPlan(book.id, plan, now)
+        if (chunk.complete) {
+            runCatching { buildFailoverMaps(updated, chunk.chapters) }
+        }
+        return bookDao.getById(book.id) ?: updated
     }
 
     /** Match this book's chapters against other sources' copies. */
@@ -292,6 +474,22 @@ class SourceBookSync(
             file.writeBytes(bytes)
             relative
         }.getOrNull()
+    }
+
+    companion object {
+        /** v1.0.8: how many chapters a progressive book opens
+         * with (the user's number). A site page is one request
+         * and usually carries more rows than this — the chunk
+         * grows in whole pages, never in sliced rows. */
+        const val FIRST_CHUNK_MIN = 10
+
+        /** v1.0.8: how close to the loaded edge the reader /
+         * chapter list may get before the next chunk loads. */
+        const val EDGE_TRIGGER = 20
+
+        /** v1.0.8: how far past the current position a demand
+         * load aims, so reading never waits at the edge. */
+        const val EDGE_TARGET = 60
     }
 }
 

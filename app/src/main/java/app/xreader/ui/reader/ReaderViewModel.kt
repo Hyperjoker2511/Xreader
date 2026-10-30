@@ -348,6 +348,36 @@ class ReaderViewModel(
         launchLoad { loadChapter(_state.value.chapterIndex - 1, 0, 0f, PageHint.LAST) }
     }
 
+    private var growJob: kotlinx.coroutines.Job? = null
+
+    /** v1.0.8: reading near the loaded edge of a partially
+     * loaded book grows the chapter list ahead of the reader —
+     * and only then (a book he reads one chapter of never loads
+     * more). When the list grows, the reader's snapshot refreshes
+     * so Next unlocks onto the new chapters seamlessly. */
+    private fun maybeGrowChapterList(index: Int, loadedCount: Int) {
+        if (index < loadedCount -
+            app.xreader.data.extension.SourceBookSync.EDGE_TRIGGER
+        ) {
+            return
+        }
+        if (growJob?.isActive == true) return
+        growJob = viewModelScope.launch {
+            val book = container.database.bookDao().getById(bookId)
+                ?: return@launch
+            if (book.chapterListComplete) return@launch
+            container.sourceBookSync.ensureChapters(
+                book,
+                loadedCount +
+                    app.xreader.data.extension.SourceBookSync.EDGE_TARGET
+            )
+            val fresh = container.database.chapterDao().forBook(bookId)
+            if (fresh.size > _state.value.chapters.size) {
+                _state.value = _state.value.copy(chapters = fresh)
+            }
+        }
+    }
+
     private suspend fun loadChapter(
         index: Int,
         restoreOffset: Int,
@@ -364,6 +394,7 @@ class ReaderViewModel(
             )
             return
         }
+        maybeGrowChapterList(index, chapters.size)
         readAloudStopIfLoaded()
         if (overlayPlayerLazy.isInitialized()) overlayPlayer.release()
         overlaySync = null

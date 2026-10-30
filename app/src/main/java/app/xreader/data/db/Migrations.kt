@@ -55,6 +55,35 @@ val MIGRATION_3_4: Migration = object : Migration(3, 4) {
     }
 }
 
+/**
+ * 4 → 5 (v1.0.8): books carry their progressive chapter-list
+ * state — whether the stored list is complete, and the walk
+ * cursor (next site page + the site's page count) that lets a
+ * partially loaded list resume exactly where it stopped.
+ * Existing books were fully synced by construction, so the
+ * completeness flag defaults to 1 (true) and the cursors to 0.
+ */
+val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `books` ADD COLUMN `chapterListComplete` " +
+                "INTEGER NOT NULL DEFAULT 1"
+        )
+        db.execSQL(
+            "ALTER TABLE `books` ADD COLUMN `chapterWalkNextPage` " +
+                "INTEGER NOT NULL DEFAULT 0"
+        )
+        db.execSQL(
+            "ALTER TABLE `books` ADD COLUMN `chapterWalkTotalPages` " +
+                "INTEGER NOT NULL DEFAULT 0"
+        )
+        db.execSQL(
+            "ALTER TABLE `books` ADD COLUMN `chapterWalkPageSize` " +
+                "INTEGER NOT NULL DEFAULT 0"
+        )
+    }
+}
+
 val MIGRATION_2_3: Migration = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE `books` ADD COLUMN `mergedIntoId` INTEGER")

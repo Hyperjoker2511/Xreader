@@ -63,7 +63,8 @@ class AppContainer(context: Context) {
     ).addMigrations(
         app.xreader.data.db.MIGRATION_1_2,
         app.xreader.data.db.MIGRATION_2_3,
-        app.xreader.data.db.MIGRATION_3_4
+        app.xreader.data.db.MIGRATION_3_4,
+        app.xreader.data.db.MIGRATION_4_5
     ).build()
 
     val appearancePrefs: AppearancePrefs = AppearancePrefs(

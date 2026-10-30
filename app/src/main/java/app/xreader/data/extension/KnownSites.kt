@@ -203,7 +203,13 @@ object KnownSites {
                     pagination = ChapterListPagination(
                         urlTemplate = "$base/book/ajax/chapter-pagination?book_id={bookId}&page={page}",
                         bookIdPattern = "BOOK_ID\\s*=\\s*\"(\\d+)\"",
-                        jsonHtmlField = "html"
+                        jsonHtmlField = "html",
+                        // v1.0.8: the book page's own pagination
+                        // select lists every page (verified live
+                        // 2026-10-30: TCF carries 34 options) —
+                        // the total the progressive walk needs
+                        // to start from the oldest chapters.
+                        totalPagesSelector = "#select-pagination-chapter"
                     )
                 )
             ),

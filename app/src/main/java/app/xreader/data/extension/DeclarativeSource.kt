@@ -210,15 +210,342 @@ class DeclarativeSource(
     fun detailsAndChapters(book: SourceBook): Pair<SourceBook, List<SourceChapter>> {
         val url = bookPageUrl(book)
         val doc = fetchDoc(url)
+        return readDetails(book, doc, url) to parseAllChapters(doc, url)
+    }
+
+    private fun readDetails(
+        book: SourceBook,
+        doc: Document,
+        url: String
+    ): SourceBook {
         val spec = config.details
-        val filled = book.copy(
+        return book.copy(
             title = readTitle(doc, spec.title) ?: book.title,
             author = spec.author?.let { readDocSpec(doc, it) }?.ifBlank { null } ?: book.author,
             description = readDescription(doc, spec) ?: book.description,
             coverUrl = spec.cover?.let { readDocSpec(doc, it) }?.ifBlank { null }
                 ?.let { absolute(it, url) } ?: book.coverUrl
         )
-        return filled to parseAllChapters(doc, url)
+    }
+
+    // ── v1.0.8: progressive chapter loading ─────────────────────
+
+    /** The resumable position of a progressive chapter-list
+     * walk, persisted on the Book row between calls.
+     * [nextPage] is the next SITE page to fetch — ascending
+     * for normal lists, descending for reversed ones; 0 = no
+     * walk in progress. [totalPages] is the site's own page
+     * count when the book page declares one. [pageSize] is
+     * the row count of a full endpoint page, learned from the
+     * walk's first fetched page: the ascending short-page =
+     * last-page rule needs it across resumes, or a resumed
+     * walk could never recognise its final page. */
+    data class ChapterWalk(
+        val nextPage: Int = 0,
+        val totalPages: Int = 0,
+        val pageSize: Int = 0
+    )
+
+    /** One slice of a progressive load: the book's details
+     * (first call only), the cumulative READING-order chapter
+     * prefix known so far, the walk's new position, and
+     * whether the list is now complete. A chunk that ends on
+     * a FAILED page reports complete = false with the cursor
+     * still on that page, so a later call retries it — a
+     * failure is never mistaken for the end of the book. */
+    data class ChapterChunk(
+        val details: SourceBook?,
+        val chapters: List<SourceChapter>,
+        val walk: ChapterWalk,
+        val complete: Boolean
+    )
+
+    /** True when this source's chapter list can grow a chunk
+     * at a time: it paginates, and — for reversed lists —
+     * the book page declares its page count, because the
+     * walk must start from the LAST page to hand back
+     * reading chapter 1 first. Everything else keeps the
+     * complete-on-open walk. */
+    fun supportsProgressiveChapters(): Boolean {
+        val spec = config.details.chapters
+        val pagination = spec.pagination ?: return false
+        return !spec.reverse || pagination.totalPagesSelector != null
+    }
+
+    /** The first chunk of a book: details + at least
+     * [minCount] chapters (one site page is the natural
+     * unit — slicing a fetched page's rows would not save
+     * a single request). */
+    fun chaptersFirst(book: SourceBook, minCount: Int): ChapterChunk {
+        val url = bookPageUrl(book)
+        val doc = fetchDoc(url)
+        val filled = readDetails(book, doc, url)
+        val session = WalkSession(doc, url)
+        session.startFresh()
+        session.growTo(minCount)
+        return ChapterChunk(
+            filled, session.readingRows(), session.walk(), session.complete
+        )
+    }
+
+    /** Grow a previously started walk to at least [minTotal]
+     * chapters. [haveReading] is the stored reading-order
+     * prefix; [walk] is the persisted cursor. */
+    fun chaptersMore(
+        book: SourceBook,
+        haveReading: List<SourceChapter>,
+        minTotal: Int,
+        walk: ChapterWalk
+    ): ChapterChunk {
+        val url = bookPageUrl(book)
+        val doc = fetchDoc(url)
+        val session = WalkSession(doc, url)
+        session.resume(haveReading, walk)
+        session.growTo(minTotal)
+        return ChapterChunk(
+            null, session.readingRows(), session.walk(), session.complete
+        )
+    }
+
+    /** One resumable pass over a paginated chapter list.
+     * Accumulates rows in SITE order; [readingRows] applies
+     * the shared dedupe + reverse finishing, so the caller
+     * always receives a reading-order PREFIX — for reversed
+     * lists each newly fetched (older) page PREPENDS in site
+     * order, which extends the reading prefix at its end and
+     * never moves a stored chapter's position. */
+    private inner class WalkSession(
+        private val bookDoc: Document,
+        private val pageUrl: String
+    ) {
+        private val pagination: ChapterListPagination? =
+            config.details.chapters.pagination
+        private val reversed: Boolean = config.details.chapters.reverse
+        private val bookPageRows: List<SourceChapter> =
+            parseChapterRows(bookDoc, pageUrl)
+        private val rows = mutableListOf<SourceChapter>()
+        private val seen = HashSet<String>()
+        private var bookId: String? = null
+        private var nextPage = 0
+        private var totalPages = 0
+        private var firstPageSize = -1
+        private var fetchedPages = 0
+        private var failed = false
+        var complete = false
+            private set
+
+        fun startFresh() {
+            val p = pagination
+            if (p == null) {
+                completeWithBookPageRows()
+                return
+            }
+            bookId = p.bookIdIn(bookIdHaystack(bookDoc))
+            if (bookId == null) {
+                // The pre-F1 behaviour: no id, no walk — the
+                // book page's rows are the whole list.
+                completeWithBookPageRows()
+                return
+            }
+            if (reversed) {
+                totalPages = p.totalPagesIn(bookDoc) ?: 0
+                if (totalPages <= 0) {
+                    // The selector stopped answering (the site
+                    // changed shape): degrade to today's full
+                    // walk rather than a list that can never
+                    // finish loading.
+                    legacyFullWalk(p)
+                    return
+                }
+                nextPage = totalPages
+            } else {
+                rows += bookPageRows
+                seen += bookPageRows.map { it.id }
+                nextPage = 2
+            }
+        }
+
+        fun resume(haveReading: List<SourceChapter>, walk: ChapterWalk) {
+            val p = pagination
+            if (p == null) {
+                completeWithBookPageRows()
+                return
+            }
+            bookId = p.bookIdIn(bookIdHaystack(bookDoc))
+            if (bookId == null) {
+                // Can't walk right now; hand back what is
+                // stored and stay incomplete so a later call
+                // can retry. The stored reading prefix flipped
+                // (reversed) or as-is (normal) is exactly the
+                // accumulated site-order rows.
+                val siteRows =
+                    if (reversed) haveReading.asReversed() else haveReading
+                rows += siteRows
+                seen += rows.map { it.id }
+                nextPage = walk.nextPage
+                totalPages = walk.totalPages
+                if (walk.pageSize > 0) firstPageSize = walk.pageSize
+                failed = true
+                return
+            }
+            val siteRows =
+                if (reversed) haveReading.asReversed() else haveReading
+            rows += siteRows
+            seen += rows.map { it.id }
+            nextPage = walk.nextPage
+            totalPages = walk.totalPages
+            if (walk.pageSize > 0) firstPageSize = walk.pageSize
+            if (nextPage <= 0) complete = true
+        }
+
+        fun growTo(minCount: Int) {
+            var guard = 0
+            while (!complete && !failed &&
+                readingRows().size < minCount && guard < MAX_LIST_PAGES
+            ) {
+                if (!step()) break
+                guard++
+            }
+        }
+
+        fun readingRows(): List<SourceChapter> = finishChapterRows(rows)
+
+        fun walk(): ChapterWalk = ChapterWalk(
+            nextPage = if (complete) 0 else nextPage,
+            totalPages = totalPages,
+            pageSize = if (firstPageSize > 0) firstPageSize else 0
+        )
+
+        private fun completeWithBookPageRows() {
+            rows += bookPageRows
+            seen += bookPageRows.map { it.id }
+            nextPage = 0
+            complete = true
+        }
+
+        private fun legacyFullWalk(p: ChapterListPagination) {
+            val merged = bookPageRows.toMutableList()
+            walkChapterPages(bookDoc, pageUrl, p, merged)
+            rows += merged
+            seen += rows.map { it.id }
+            nextPage = 0
+            complete = true
+        }
+
+        /** Fetch exactly one more page in the walk's
+         * direction. False = no progress was possible (the
+         * walk ended, or the page failed). */
+        private fun step(): Boolean {
+            if (complete || failed) return false
+            val p = pagination ?: run {
+                complete = true
+                return false
+            }
+            val id = bookId ?: run {
+                complete = true
+                return false
+            }
+            if (reversed) return stepDescending(p, id)
+            // Ascending: the F1 walk's stop conditions, one
+            // page at a time.
+            if (fetchedPages >= MAX_LIST_PAGES) {
+                complete = true
+                return false
+            }
+            val fragmentRows = fetchListPage(p, id, nextPage)
+            if (fragmentRows == null) {
+                failed = true
+                return false
+            }
+            fetchedPages++
+            if (fragmentRows.isEmpty()) {
+                complete = true
+                return false
+            }
+            val fresh = fragmentRows.filter { it.id !in seen }
+            if (fresh.isEmpty()) {
+                complete = true
+                return false
+            }
+            rows += fresh
+            seen += fresh.map { it.id }
+            if (firstPageSize < 0) {
+                firstPageSize = fragmentRows.size
+            } else if (fragmentRows.size < firstPageSize) {
+                nextPage = 0
+                complete = true
+                return true
+            }
+            nextPage++
+            return true
+        }
+
+        private fun stepDescending(
+            p: ChapterListPagination,
+            id: String
+        ): Boolean {
+            if (nextPage <= 0) {
+                complete = true
+                return false
+            }
+            if (nextPage == 1) {
+                // Site page 1 is the book page itself — its
+                // rows are the newest slice, prepended last.
+                prependFresh(bookPageRows)
+                nextPage = 0
+                complete = true
+                return true
+            }
+            val fragmentRows = fetchListPage(p, id, nextPage)
+            if (fragmentRows == null) {
+                failed = true
+                return false
+            }
+            if (fragmentRows.isEmpty()) {
+                // The declared total overshot the real list
+                // (the site shrank): settle with the book
+                // page's rows instead of spinning incomplete
+                // forever; a manual Refresh re-derives truth.
+                prependFresh(bookPageRows)
+                nextPage = 0
+                complete = true
+                return true
+            }
+            prependFresh(fragmentRows.filter { it.id !in seen })
+            nextPage--
+            return true
+        }
+
+        private fun prependFresh(fresh: List<SourceChapter>) {
+            if (fresh.isEmpty()) return
+            rows.addAll(0, fresh)
+            seen += fresh.map { it.id }
+        }
+
+        /** One pagination-endpoint page, or null when the
+         * fetch failed (HTTP error, unparseable body) — the
+         * resumable walk's failure signal, distinct from an
+         * empty page's end-of-list. */
+        private fun fetchListPage(
+            p: ChapterListPagination,
+            id: String,
+            page: Int
+        ): List<SourceChapter>? {
+            val url = resolveUrl(p.endpointFor(id, page))
+            return runCatching {
+                val response = context.http.get(url, p.headers)
+                if (response.status !in 200..299) return@runCatching null
+                val html = paginationFragmentHtml(response.body, p)
+                    ?: return@runCatching null
+                val fragment = Jsoup.parseBodyFragment(html, pageUrl)
+                rowsFromElements(selectFragmentRows(fragment), pageUrl)
+            }.getOrElse { error ->
+                if (error is kotlinx.coroutines.CancellationException) {
+                    throw error
+                }
+                null
+            }
+        }
     }
 
     /** The COMPLETE chapter list (v1.0.6.2, F1): the book page's

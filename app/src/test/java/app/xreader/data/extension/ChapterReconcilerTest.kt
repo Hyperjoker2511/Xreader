@@ -138,4 +138,31 @@ class ChapterReconcilerTest {
             plan.keptStale.map { it.newIndex }
         assertEquals(targets.size, targets.toSet().size)
     }
+
+    @Test
+    fun `partial reconcile leaves rows past the prefix untouched`() {
+        // v1.0.8: a progressive chunk is a PREFIX — the stored
+        // row at index 7 is not stale, just not re-confirmed
+        // yet. It must appear nowhere in the plan.
+        val existing = listOf(
+            row(1, 0, "a/1", "Chapter 1", contentPath = "f/1", read = true),
+            row(2, 1, "a/2", "Chapter 2"),
+            row(8, 7, "a/8", "Chapter 8")
+        )
+        val plan = ChapterReconciler.reconcilePartial(
+            existing,
+            listOf(
+                fetched("a/1", "Chapter 1"),
+                fetched("a/2", "Chapter 2 (revised)"),
+                fetched("a/3", "Chapter 3")
+            )
+        )
+        assertTrue(plan.dropped.isEmpty())
+        assertTrue(plan.keptStale.isEmpty())
+        assertEquals(listOf(1L, 2L), plan.updates.map { it.row.id })
+        assertEquals("Chapter 2 (revised)", plan.updates[1].newTitle)
+        assertEquals(1, plan.inserts.size)
+        assertEquals(2, plan.inserts[0].index)
+        assertEquals("a/3", plan.inserts[0].fetched.id)
+    }
 }

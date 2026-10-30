@@ -42,7 +42,7 @@ import androidx.room.TypeConverters
         TagFollow::class,
         VocabWord::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

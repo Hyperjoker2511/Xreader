@@ -38,7 +38,23 @@ data class Book(
      * Library lists and its chapters join the survivor's canonical
      * list. Setting it back to null (Unmerge) restores the entry
      * exactly; nothing is ever deleted by a merge. */
-    val mergedIntoId: Long? = null
+    val mergedIntoId: Long? = null,
+    /** v1.0.8 (progressive chapter loading): false while a
+     * source book's chapter list is still a partial prefix that
+     * grows as the user reads. Every book synced before v1.0.8
+     * holds its complete list, hence the true default. */
+    val chapterListComplete: Boolean = true,
+    /** v1.0.8: the progressive walk's next SITE page to fetch
+     * (ascending for normal lists, descending for reversed
+     * ones); 0 = no walk in progress. */
+    val chapterWalkNextPage: Int = 0,
+    /** v1.0.8: the site's own chapter-list page count when the
+     * book page declared one (reversed walks start there). */
+    val chapterWalkTotalPages: Int = 0,
+    /** v1.0.8: the row count of a full chapter-list endpoint
+     * page, learned on the walk's first fetch — a resumed
+     * ascending walk needs it to recognise its last page. */
+    val chapterWalkPageSize: Int = 0
 )
 
 @Entity(
