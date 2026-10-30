@@ -366,7 +366,11 @@ private fun shellImmersive(navController: NavHostController): Boolean {
  * AMOLED schemes) keeps its promise — no glow, black base.
  */
 @Composable
-private fun MeshBackdrop(modifier: Modifier = Modifier) {
+private fun MeshBackdrop(
+    modifier: Modifier = Modifier,
+    bloom: Boolean = false,
+    backgroundFile: File? = null
+) {
     val glass = LocalGlassSettings.current
     val haze = LocalHazeState.current
     val scheme = MaterialTheme.colorScheme
@@ -381,11 +385,17 @@ private fun MeshBackdrop(modifier: Modifier = Modifier) {
         modifier
             .background(base)
             .drawBehind {
-                if (glass.frosted && !pureBlack) {
-                    val glow = if (dark) {
-                        NeonPurple.copy(alpha = 0.40f)
-                    } else {
-                        ElectricPurple.copy(alpha = 0.10f)
+                // v1.0.7 (AnymeX port): BLOOM — with bloom on, the
+                // glows burn in the ACTIVE SCHEME's own primary /
+                // tertiary and also appear under tinted/solid
+                // glass (weaker). With bloom off this block is the
+                // original v1.0.4 mesh, byte for byte in effect.
+                if ((glass.frosted || bloom) && !pureBlack) {
+                    val glow = when {
+                        bloom && dark -> scheme.primary.copy(alpha = 0.40f)
+                        dark -> NeonPurple.copy(alpha = 0.40f)
+                        bloom -> scheme.primary.copy(alpha = 0.14f)
+                        else -> ElectricPurple.copy(alpha = 0.10f)
                     }
                     drawRect(
                         brush = Brush.radialGradient(
@@ -394,10 +404,11 @@ private fun MeshBackdrop(modifier: Modifier = Modifier) {
                             radius = size.maxDimension * 0.95f
                         )
                     )
-                    val glow2 = if (dark) {
-                        VibrantCyan.copy(alpha = 0.10f)
-                    } else {
-                        ElectricPurple.copy(alpha = 0.05f)
+                    val glow2 = when {
+                        bloom && dark -> scheme.tertiary.copy(alpha = 0.12f)
+                        dark -> VibrantCyan.copy(alpha = 0.10f)
+                        bloom -> scheme.tertiary.copy(alpha = 0.07f)
+                        else -> ElectricPurple.copy(alpha = 0.05f)
                     }
                     drawRect(
                         brush = Brush.radialGradient(
@@ -409,7 +420,63 @@ private fun MeshBackdrop(modifier: Modifier = Modifier) {
                 }
             }
             .let { if (haze != null) it.hazeSource(haze) else it }
-    )
+    ) {
+        // v1.0.7 Liquid background: the user's own picture fills
+        // the stage (the glass above still samples it through
+        // the haze source — it lives in the same subtree), under
+        // a scheme-coloured scrim that keeps text honest.
+        if (backgroundFile != null && !pureBlack) {
+            coil.compose.AsyncImage(
+                model = backgroundFile,
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(base.copy(alpha = 0.62f))
+            )
+        }
+    }
+}
+
+/**
+ * v1.0.7 (AnymeX port): the film-grain overlay — one fixed-seed
+ * noise tile, drawn tiled at the user's strength. Deliberately
+ * dumb: a static Canvas, no animation, no pointer input; the
+ * shells only mount it when the grain is on, the performance
+ * tier allows it, and the route is not immersive (reading
+ * pages never get grain).
+ */
+@Composable
+private fun GrainOverlay(intensity: Float, modifier: Modifier = Modifier) {
+    val tile = remember {
+        val size = 144
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            size, size, android.graphics.Bitmap.Config.ARGB_8888
+        )
+        val pixels = IntArray(size * size)
+        val random = kotlin.random.Random(20261030)
+        for (i in pixels.indices) {
+            val v = random.nextInt(256)
+            pixels[i] = android.graphics.Color.rgb(v, v, v)
+        }
+        bitmap.setPixels(pixels, 0, size, 0, 0, size, size)
+        androidx.compose.ui.graphics.asImageBitmap(bitmap)
+    }
+    androidx.compose.foundation.Canvas(modifier.fillMaxSize()) {
+        val step = 144f
+        var x = 0f
+        while (x < size.width) {
+            var y = 0f
+            while (y < size.height) {
+                drawImage(tile, topLeft = Offset(x, y), alpha = intensity)
+                y += step
+            }
+            x += step
+        }
+    }
 }
 
 @Composable
@@ -452,14 +519,33 @@ private fun PhoneShell(
         // v1.0.4 (D1): the mesh backdrop fills the whole scaffold
         // (behind the bottom bar too, so the nav's blur has the
         // stage to sample); the NavHost sits above it, padded.
+        // v1.0.7: the backdrop also carries bloom + the liquid
+        // background; grain floats over the content (never over
+        // immersive routes, never on the MINIMAL tier / SMOOTH).
+        val backdropFile = appearance.backgroundImage?.let { name ->
+            File(container.bookStorage.filesDir, "backgrounds/$name")
+        }
+        val grainOn = appearance.grain && !shellImmersive(navController) &&
+            appearance.performanceMode !=
+                app.xreader.data.prefs.PerformanceMode.SMOOTH &&
+            app.xreader.data.prefs.PerformancePolicy.tierForRam(
+                container.totalRamMb()
+            ) != app.xreader.data.prefs.PerfTier.MINIMAL
         Box(Modifier.fillMaxSize()) {
-            MeshBackdrop(Modifier.fillMaxSize())
+            MeshBackdrop(
+                Modifier.fillMaxSize(),
+                bloom = appearance.bloom,
+                backgroundFile = backdropFile
+            )
             XreaderNavHost(
                 navController, container, Modifier.fillMaxSize().padding(padding),
                 appearance.reduceMotion, onPhaseNote,
                 libraryViewModel, downloadsViewModel, opdsViewModel,
                 sourcesViewModel, linkAddViewModel, onAddBook, onExport
             )
+            if (grainOn) {
+                GrainOverlay(appearance.grainIntensity, Modifier.fillMaxSize())
+            }
         }
     }
 }
@@ -483,8 +569,22 @@ private fun RailShell(
 ) {
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
         // v1.0.4 (D1): same backdrop stage as the phone shell.
+        // v1.0.7: same bloom / background / grain treatment.
+        val backdropFile = appearance.backgroundImage?.let { name ->
+            File(container.bookStorage.filesDir, "backgrounds/$name")
+        }
+        val grainOn = appearance.grain && !shellImmersive(navController) &&
+            appearance.performanceMode !=
+                app.xreader.data.prefs.PerformanceMode.SMOOTH &&
+            app.xreader.data.prefs.PerformancePolicy.tierForRam(
+                container.totalRamMb()
+            ) != app.xreader.data.prefs.PerfTier.MINIMAL
         Box(Modifier.fillMaxSize()) {
-            MeshBackdrop(Modifier.fillMaxSize())
+            MeshBackdrop(
+                Modifier.fillMaxSize(),
+                bloom = appearance.bloom,
+                backgroundFile = backdropFile
+            )
             Row(Modifier.fillMaxSize().padding(padding)) {
                 AnimatedVisibility(
                     visible = !shellImmersive(navController),
@@ -506,6 +606,9 @@ private fun RailShell(
                     libraryViewModel, downloadsViewModel, opdsViewModel,
                     sourcesViewModel, linkAddViewModel, onAddBook, onExport
                 )
+            }
+            if (grainOn) {
+                GrainOverlay(appearance.grainIntensity, Modifier.fillMaxSize())
             }
         }
     }

@@ -23,40 +23,77 @@ import kotlin.math.abs
  */
 object CustomSchemeGenerator {
 
+    /**
+     * v1.0.7 (AnymeX port): the flavour recipes — AnymeX offers
+     * Material's scheme VARIANTS per seed; these are ours, as
+     * scalings of the one HSL recipe. TONAL's numbers reproduce
+     * the original recipe EXACTLY (scale 1, grounds 0.07/0.96,
+     * no extra hue rotation, tertiary at +300°), so every scheme
+     * saved before v1.0.7 renders bit-identically.
+     */
+    private data class FlavourProfile(
+        val satScale: Float,
+        val darkBgL: Float,
+        val lightBgL: Float,
+        val endHueExtra: Float,
+        val tertiaryShift: Float
+    )
+
+    private fun profileFor(
+        flavour: app.xreader.data.prefs.SchemeFlavour
+    ): FlavourProfile = when (flavour) {
+        app.xreader.data.prefs.SchemeFlavour.TONAL ->
+            FlavourProfile(1.0f, 0.07f, 0.96f, 0f, 300f)
+        app.xreader.data.prefs.SchemeFlavour.VIBRANT ->
+            FlavourProfile(1.3f, 0.07f, 0.95f, 0f, 300f)
+        app.xreader.data.prefs.SchemeFlavour.SOFT ->
+            FlavourProfile(0.62f, 0.09f, 0.97f, 0f, 300f)
+        app.xreader.data.prefs.SchemeFlavour.EXPRESSIVE ->
+            FlavourProfile(1.15f, 0.07f, 0.96f, 60f, 200f)
+        app.xreader.data.prefs.SchemeFlavour.MONO ->
+            FlavourProfile(0.12f, 0.07f, 0.96f, 0f, 300f)
+    }
+
     fun generate(spec: CustomSchemeSpec): AppScheme {
+        val profile = profileFor(spec.flavour)
+        val scale = profile.satScale
         val seed = Color(spec.seedArgb.toInt())
         val (h, s, _) = seed.toHsl()
-        val endHue = spec.endArgb?.let { Color(it.toInt()).toHsl().first } ?: (h + 40f) % 360f
-        val sat = s.coerceIn(0.25f, 0.9f)
+        val endHue = (
+            (spec.endArgb?.let { Color(it.toInt()).toHsl().first }
+                ?: (h + 40f) % 360f) + profile.endHueExtra
+            ) % 360f
+        val sat = (s.coerceIn(0.25f, 0.9f) * scale).coerceIn(0.04f, 0.95f)
+        val tertiaryHue = (h + profile.tertiaryShift) % 360f
 
         // Dark family: deep tinted grounds, vivid fills.
-        val darkBg = hsl(h, sat * 0.55f, 0.07f)
+        val darkBg = hsl(h, sat * 0.55f, profile.darkBgL)
         val darkSurface = hsl(h, sat * 0.5f, 0.11f)
         val darkHigh = hsl(h, sat * 0.5f, 0.16f)
-        val darkText = hsl(h, 0.18f, 0.93f)
+        val darkText = hsl(h, 0.18f * scale, 0.93f)
         // Muted sits on surfaceVariant (= darkHigh): guarantee the
         // pair by construction, not by lightness guesswork — luminous
         // hues (yellow) make tinted grounds brighter than expected.
         val darkMuted = Contrast.ensureContrast(
-            hsl(h, 0.25f, 0.68f), darkHigh, Color.White
+            hsl(h, 0.25f * scale, 0.68f), darkHigh, Color.White
         )
         val darkHair = hsl(h, sat * 0.45f, 0.26f)
-        val darkPrimary = darkFill(h, 0.78f, 0.62f)
-        val darkSecondary = darkFill(endHue, 0.55f, 0.5f)
-        val darkTertiary = darkFill((h + 300f) % 360f, 0.6f, 0.66f)
+        val darkPrimary = darkFill(h, (0.78f * scale).coerceAtMost(0.95f), 0.62f)
+        val darkSecondary = darkFill(endHue, 0.55f * scale, 0.5f)
+        val darkTertiary = darkFill(tertiaryHue, 0.6f * scale, 0.66f)
 
         // Light family: near-white tinted grounds, deep fills.
-        val lightBg = hsl(h, sat * 0.6f, 0.96f)
+        val lightBg = hsl(h, sat * 0.6f, profile.lightBgL)
         val lightSurface = Color.White
         val lightHigh = hsl(h, sat * 0.55f, 0.89f)
-        val lightText = hsl(h, 0.28f, 0.12f)
+        val lightText = hsl(h, 0.28f * scale, 0.12f)
         val lightMuted = Contrast.ensureContrast(
-            hsl(h, 0.3f, 0.34f), lightHigh, Color.Black
+            hsl(h, 0.3f * scale, 0.34f), lightHigh, Color.Black
         )
         val lightHair = hsl(h, sat * 0.45f, 0.78f)
-        val lightPrimary = hsl(h, 0.72f, 0.4f)
-        val lightSecondary = hsl(endHue, 0.5f, 0.36f)
-        val lightTertiary = hsl((h + 300f) % 360f, 0.55f, 0.44f)
+        val lightPrimary = hsl(h, 0.72f * scale, 0.4f)
+        val lightSecondary = hsl(endHue, 0.5f * scale, 0.36f)
+        val lightTertiary = hsl(tertiaryHue, 0.55f * scale, 0.44f)
 
         fun textToken(base: Color, grounds: List<Color>, toward: Color): Color =
             grounds.fold(base) { c, bg -> Contrast.ensureContrast(c, bg, toward) }
@@ -72,20 +109,20 @@ object CustomSchemeGenerator {
                 lightBg, lightSurface, lightHigh, lightText, lightMuted, lightHair
             ),
             primaryTextDark = textToken(
-                hsl(h, 0.75f, 0.78f), listOf(darkSurface, darkBg, darkHigh),
+                hsl(h, 0.75f * scale, 0.78f), listOf(darkSurface, darkBg, darkHigh),
                 toward = Color.White
             ),
             primaryTextLight = textToken(
-                hsl(h, 0.7f, 0.32f), listOf(lightSurface, lightBg, lightHigh),
+                hsl(h, 0.7f * scale, 0.32f), listOf(lightSurface, lightBg, lightHigh),
                 toward = Color.Black
             ),
             aiTextDark = textToken(
-                hsl((h + 300f) % 360f, 0.65f, 0.8f),
+                hsl(tertiaryHue, 0.65f * scale, 0.8f),
                 listOf(darkSurface, darkBg, darkHigh),
                 toward = Color.White
             ),
             aiTextLight = textToken(
-                hsl((h + 300f) % 360f, 0.6f, 0.36f),
+                hsl(tertiaryHue, 0.6f * scale, 0.36f),
                 listOf(lightSurface, lightBg, lightHigh),
                 toward = Color.Black
             ),

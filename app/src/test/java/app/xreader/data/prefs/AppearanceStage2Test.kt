@@ -18,7 +18,7 @@ import org.junit.Test
  * fresh installs get Electric Violet (v1.0.6.2 F8b — was Violet
  * Night until the final-build plan made the user's own palette
  * the default), upgraders keep their look, via
- * existing-data presence), the three-custom-scheme cap, and the
+ * existing-data presence), the custom-scheme cap (3 → 12 in v1.0.7), and the
  * R05/R06/R07 state defaults.
  */
 class AppearanceStage2Test {
@@ -70,17 +70,23 @@ class AppearanceStage2Test {
     }
 
     @Test
-    fun `custom scheme cap is three for new schemes, replace is free`() {
-        val a = CustomSchemeSpec("a", "A", 0xFF000001L)
-        val b = CustomSchemeSpec("b", "B", 0xFF000002L)
-        val c = CustomSchemeSpec("c", "C", 0xFF000003L)
-        val d = CustomSchemeSpec("d", "D", 0xFF000004L)
-        val three = listOf(a, b, c)
-        assertNull(AppearanceValidation.addCustomScheme(three, d))
-        val replaced = AppearanceValidation.addCustomScheme(three, b.copy(name = "B2"))
-        assertEquals(3, replaced!!.size)
-        assertEquals("B2", replaced.first { it.id == "b" }.name)
-        assertEquals(2, AppearanceValidation.addCustomScheme(listOf(a), b)!!.size)
+    fun `custom scheme cap is twelve for new schemes, replace is free`() {
+        // v1.0.7: the cap was 3 under the old 1–3 options rule;
+        // the owner lifted that rule for theming depth on
+        // 2026-10-30 (full AnymeX-style customisation), so the
+        // boundary this test pins moved from 3 to 12 with it.
+        fun spec(i: Int) = CustomSchemeSpec("s$i", "S$i", 0xFF000001L + i)
+        val twelve = (1..12).map { spec(it) }
+        assertNull(AppearanceValidation.addCustomScheme(twelve, spec(13)))
+        val replaced = AppearanceValidation.addCustomScheme(
+            twelve, spec(2).copy(name = "B2")
+        )
+        assertEquals(12, replaced!!.size)
+        assertEquals("B2", replaced.first { it.id == "s2" }.name)
+        assertEquals(
+            2,
+            AppearanceValidation.addCustomScheme(listOf(spec(1)), spec(2))!!.size
+        )
     }
 
     @Test

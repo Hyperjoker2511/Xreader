@@ -46,6 +46,15 @@ enum class PerformanceMode { AUTOMATIC, SMOOTH, BEST_LOOKING }
  * Stored in DataStore as `id|name|seed|end|version` rows; the same
  * shape is the sync payload field (R02).
  */
+/**
+ * The flavour a custom scheme's seed is cooked with (v1.0.7,
+ * AnymeX port): AnymeX offers Material's scheme variants per
+ * seed; ours are recipes of our own HSL generator. TONAL is the
+ * original v1.0.2 recipe — every scheme saved before v1.0.7 IS
+ * tonal, bit-identical output.
+ */
+enum class SchemeFlavour { TONAL, VIBRANT, SOFT, EXPRESSIVE, MONO }
+
 data class CustomSchemeSpec(
     val id: String,
     val name: String,
@@ -53,7 +62,11 @@ data class CustomSchemeSpec(
     val seedArgb: Long,
     /** Optional second colour (cover-aura gradient end); null = seed only. */
     val endArgb: Long? = null,
-    val version: Int = 1
+    val version: Int = 1,
+    /** v1.0.7: the generator flavour. Stored as a sixth field on
+     * the spec row; rows written before v1.0.7 have five fields
+     * and read back as TONAL. */
+    val flavour: SchemeFlavour = SchemeFlavour.TONAL
 )
 
 /**
@@ -92,7 +105,22 @@ data class AppearanceState(
     /** "Move card with phone" (v1.0.2, R29): device-motion tilt for
      * the Me identity card. Default off; registered only while Me
      * is visible. */
-    val meCardMotionTilt: Boolean = false
+    val meCardMotionTilt: Boolean = false,
+    /** Bloom (v1.0.7, AnymeX port): the shell backdrop glows in
+     * the ACTIVE SCHEME's own colours, also under tinted glass.
+     * Default off — today's fixed mesh stays the default look. */
+    val bloom: Boolean = false,
+    /** Film grain (v1.0.7, AnymeX port): a fine noise overlay
+     * over the app's content. Default off; the shell suppresses
+     * it on the MINIMAL performance tier and on immersive
+     * (reader) routes regardless. */
+    val grain: Boolean = false,
+    /** Grain strength 0.02–0.20 (v1.0.7). */
+    val grainIntensity: Float = 0.08f,
+    /** Liquid background (v1.0.7, AnymeX port): the user's own
+     * picture behind the glass — a file NAME inside
+     * filesDir/backgrounds, null = none. */
+    val backgroundImage: String? = null
 )
 
 /**
@@ -121,6 +149,15 @@ object AppearanceValidation {
     fun clampElevationScale(value: Float): Float =
         if (value.isNaN()) DEFAULT_ELEVATION_SCALE
         else value.coerceIn(ELEVATION_SCALE_RANGE.start, ELEVATION_SCALE_RANGE.endInclusive)
+
+    /** v1.0.7: grain strength bounds — visible texture, never a
+     * snowstorm over the words. */
+    val GRAIN_INTENSITY_RANGE = 0.02f..0.20f
+    const val DEFAULT_GRAIN_INTENSITY = 0.08f
+
+    fun clampGrainIntensity(value: Float): Float =
+        if (value.isNaN()) DEFAULT_GRAIN_INTENSITY
+        else value.coerceIn(GRAIN_INTENSITY_RANGE.start, GRAIN_INTENSITY_RANGE.endInclusive)
 
     fun parseThemeMode(raw: String?): ThemeMode =
         runCatching { ThemeMode.valueOf(raw ?: "") }.getOrDefault(ThemeMode.FOLLOW_SYSTEM)
@@ -169,8 +206,12 @@ object AppearanceValidation {
      * data keeps the look it had (Ember unless the user chose). */
     const val ESTABLISHED_INSTALL_SCHEME = "Ember"
 
-    /** R04: at most three named make-your-own schemes. */
-    const val MAX_CUSTOM_SCHEMES = 3
+    /** R04: the make-your-own scheme cap. Was 3 under the old
+     * 1–3 options rule; the owner lifted that rule for theming
+     * depth on 2026-10-30 (full AnymeX-style customisation), so
+     * the cap is 12 now — generous, still bounded for the
+     * picker's sake. */
+    const val MAX_CUSTOM_SCHEMES = 12
 
     /**
      * Add or replace a custom scheme under the [MAX_CUSTOM_SCHEMES]
@@ -201,24 +242,28 @@ object AppearanceValidation {
     }
 
     /** Serialise custom scheme specs for DataStore (one row per line:
-     * `id|name|seedArgb|endArgbOrBlank|version`). Names are stripped
-     * of the separators so the format can never corrupt. */
+     * `id|name|seedArgb|endArgbOrBlank|version|flavour`). Names are
+     * stripped of the separators so the format can never corrupt.
+     * v1.0.7 appends the flavour as a sixth field; the decoder
+     * accepts the five-field rows written before it. */
     fun encodeCustomSchemes(schemes: List<CustomSchemeSpec>): String =
         schemes.joinToString("\n") { spec ->
             val safeName = spec.name.replace('|', ' ').replace('\n', ' ').trim()
             listOf(
                 spec.id, safeName, spec.seedArgb.toString(),
-                spec.endArgb?.toString() ?: "", spec.version.toString()
+                spec.endArgb?.toString() ?: "", spec.version.toString(),
+                spec.flavour.name
             ).joinToString("|")
         }
 
     /** Parse stored custom scheme rows; malformed rows are skipped,
-     * never fatal (PLAN §1.5). */
+     * never fatal (PLAN §1.5). Five-field rows (pre-v1.0.7) read
+     * as TONAL; an unknown flavour name also falls back to TONAL. */
     fun decodeCustomSchemes(raw: String?): List<CustomSchemeSpec> {
         if (raw.isNullOrBlank()) return emptyList()
         return raw.lines().mapNotNull { line ->
             val parts = line.split('|')
-            if (parts.size != 5) return@mapNotNull null
+            if (parts.size != 5 && parts.size != 6) return@mapNotNull null
             val id = parts[0].trim()
             val seed = parts[2].toLongOrNull() ?: return@mapNotNull null
             if (id.isBlank()) return@mapNotNull null
@@ -227,7 +272,10 @@ object AppearanceValidation {
                 name = parts[1].ifBlank { "My theme" },
                 seedArgb = seed,
                 endArgb = parts[3].toLongOrNull(),
-                version = parts[4].toIntOrNull() ?: 1
+                version = parts[4].toIntOrNull() ?: 1,
+                flavour = parts.getOrNull(5)?.let { rawFlavour ->
+                    SchemeFlavour.entries.firstOrNull { it.name == rawFlavour.trim() }
+                } ?: SchemeFlavour.TONAL
             )
         }
     }
@@ -258,7 +306,8 @@ object AppearanceValidation {
     fun validate(state: AppearanceState): AppearanceState = state.copy(
         glassOpacity = clampGlassOpacity(state.glassOpacity),
         glassRadiusScale = clampRadiusScale(state.glassRadiusScale),
-        glassElevationScale = clampElevationScale(state.glassElevationScale)
+        glassElevationScale = clampElevationScale(state.glassElevationScale),
+        grainIntensity = clampGrainIntensity(state.grainIntensity)
     )
 }
 
@@ -320,7 +369,12 @@ class AppearancePrefs(
                 appTextSizePercent = AppearanceValidation.clampAppTextSize(
                     prefs[KEY_TEXT_SIZE] ?: 100
                 ),
-                meCardMotionTilt = prefs[KEY_ME_MOTION_TILT] ?: false
+                meCardMotionTilt = prefs[KEY_ME_MOTION_TILT] ?: false,
+                bloom = prefs[KEY_BLOOM] ?: false,
+                grain = prefs[KEY_GRAIN] ?: false,
+                grainIntensity = prefs[KEY_GRAIN_INTENSITY]
+                    ?: AppearanceValidation.DEFAULT_GRAIN_INTENSITY,
+                backgroundImage = prefs[KEY_BACKGROUND_IMAGE]
             )
         )
     }
@@ -376,6 +430,24 @@ class AppearancePrefs(
     suspend fun setMeCardMotionTilt(value: Boolean) =
         store.edit { it[KEY_ME_MOTION_TILT] = value }
 
+    /** v1.0.7 (AnymeX port): bloom / grain / liquid background. */
+    suspend fun setBloom(value: Boolean) =
+        store.edit { it[KEY_BLOOM] = value }
+
+    suspend fun setGrain(value: Boolean) =
+        store.edit { it[KEY_GRAIN] = value }
+
+    suspend fun setGrainIntensity(value: Float) =
+        store.edit {
+            it[KEY_GRAIN_INTENSITY] = AppearanceValidation.clampGrainIntensity(value)
+        }
+
+    suspend fun setBackgroundImage(name: String?) =
+        store.edit { prefs ->
+            if (name == null) prefs.remove(KEY_BACKGROUND_IMAGE)
+            else prefs[KEY_BACKGROUND_IMAGE] = name
+        }
+
     /**
      * Reset customisation (R07): appearance, motion, and glass return
      * to defaults. Books, sources, repos, keys, shelves, tags, custom
@@ -398,6 +470,10 @@ class AppearancePrefs(
             prefs.remove(KEY_PERF_MODE)
             prefs.remove(KEY_TEXT_SIZE)
             prefs.remove(KEY_ME_MOTION_TILT)
+            prefs.remove(KEY_BLOOM)
+            prefs.remove(KEY_GRAIN)
+            prefs.remove(KEY_GRAIN_INTENSITY)
+            prefs.remove(KEY_BACKGROUND_IMAGE)
             prefs.remove(KEY_SCHEME_PRIMED)
         }
         primeDefaultScheme()
@@ -419,6 +495,10 @@ class AppearancePrefs(
         val KEY_PERF_MODE = stringPreferencesKey("appearance.performance_mode")
         val KEY_TEXT_SIZE = intPreferencesKey("appearance.app_text_size")
         val KEY_ME_MOTION_TILT = booleanPreferencesKey("appearance.me_motion_tilt")
+        val KEY_BLOOM = booleanPreferencesKey("appearance.bloom")
+        val KEY_GRAIN = booleanPreferencesKey("appearance.grain")
+        val KEY_GRAIN_INTENSITY = floatPreferencesKey("appearance.grain_intensity")
+        val KEY_BACKGROUND_IMAGE = stringPreferencesKey("appearance.background_image")
     }
 }
 

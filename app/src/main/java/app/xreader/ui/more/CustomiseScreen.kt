@@ -276,6 +276,89 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    /** v1.0.7 (AnymeX port): recook a saved scheme in a flavour. */
+    fun setCustomSchemeFlavour(
+        id: String,
+        flavour: app.xreader.data.prefs.SchemeFlavour
+    ) {
+        viewModelScope.launch {
+            val current = state.value.appearance.customSchemes
+            container.appearancePrefs.setCustomSchemes(
+                current.map {
+                    if (it.id == id) it.copy(flavour = flavour) else it
+                }
+            )
+        }
+    }
+
+    fun setBloom(value: Boolean) {
+        viewModelScope.launch { container.appearancePrefs.setBloom(value) }
+    }
+
+    fun setGrain(value: Boolean) {
+        viewModelScope.launch { container.appearancePrefs.setGrain(value) }
+    }
+
+    fun setGrainIntensity(value: Float) {
+        viewModelScope.launch {
+            container.appearancePrefs.setGrainIntensity(value)
+        }
+    }
+
+    /** v1.0.7 Liquid background: copy the picked picture into
+     * filesDir/backgrounds (downscaled to at most 1080 px wide —
+     * the 2 GB tablet rule), then point the preference at it.
+     * A failed copy changes nothing and says nothing. */
+    fun setBackgroundImage(context: android.content.Context, uri: android.net.Uri) {
+        viewModelScope.launch(container.ioDispatcher) {
+            val name = runCatching {
+                val dir = java.io.File(
+                    container.bookStorage.filesDir, "backgrounds"
+                ).apply { mkdirs() }
+                val target = java.io.File(dir, "background.jpg")
+                val decoded = context.applicationContext.contentResolver
+                    .openInputStream(uri)?.use { input ->
+                        android.graphics.BitmapFactory.decodeStream(input)
+                    } ?: return@runCatching null
+                val scale = minOf(
+                    1f, 1080f / decoded.width.coerceAtLeast(1)
+                )
+                val out = if (scale < 1f) {
+                    android.graphics.Bitmap.createScaledBitmap(
+                        decoded,
+                        (decoded.width * scale).toInt().coerceAtLeast(1),
+                        (decoded.height * scale).toInt().coerceAtLeast(1),
+                        true
+                    )
+                } else {
+                    decoded
+                }
+                target.outputStream().use { stream ->
+                    out.compress(
+                        android.graphics.Bitmap.CompressFormat.JPEG,
+                        85, stream
+                    )
+                }
+                target.name
+            }.getOrNull()
+            if (name != null) {
+                container.appearancePrefs.setBackgroundImage(name)
+            }
+        }
+    }
+
+    fun clearBackgroundImage() {
+        viewModelScope.launch(container.ioDispatcher) {
+            runCatching {
+                java.io.File(
+                    container.bookStorage.filesDir,
+                    "backgrounds/background.jpg"
+                ).delete()
+            }
+            container.appearancePrefs.setBackgroundImage(null)
+        }
+    }
+
     fun setGlassStyle(style: GlassStyle) {
         viewModelScope.launch { container.appearancePrefs.setGlassStyle(style) }
     }
@@ -341,6 +424,13 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
     val appearance = state.appearance
     val library = state.library
     val reader = state.reader
+    // v1.0.7: the liquid-background picture picker.
+    val screenContext = LocalContext.current
+    val backgroundPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) viewModel.setBackgroundImage(screenContext, uri)
+    }
     Column(
         Modifier
             .fillMaxSize()
@@ -529,16 +619,15 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 "Make your own — tap a colour and Xreader builds a theme from it.",
                 style = MaterialTheme.typography.titleSmall
             )
+            // v1.0.7 (AnymeX port): the seed grid is AnymeX's 17
+            // Material colours — one tap makes a theme from that
+            // colour (the old 8 house chips retire into it; any
+            // theme already made from them is untouched).
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                listOf(
-                    0xFF7C5CD6L to "My violet", 0xFF2E7CF6L to "My blue",
-                    0xFF12A594L to "My teal", 0xFF1FA36BL to "My green",
-                    0xFFE0A800L to "My gold", 0xFFF76B15L to "My orange",
-                    0xFFE5484DL to "My red", 0xFFD6409FL to "My pink"
-                ).forEach { (seed, name) ->
+                app.xreader.ui.theme.SeedPresets.forEach { (name, seed) ->
                     Box(
                         Modifier
                             .size(36.dp)
@@ -547,6 +636,16 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             .clickable { viewModel.addCustomScheme(seed, name) }
                     )
                 }
+            }
+            if (appearance.customSchemes.size >=
+                app.xreader.data.prefs.AppearanceValidation.MAX_CUSTOM_SCHEMES
+            ) {
+                Text(
+                    "You've saved ${appearance.customSchemes.size} of your own " +
+                        "themes — remove one to add more.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             appearance.customSchemes.forEach { spec ->
                 val generated = CustomSchemeGenerator.generate(spec)
@@ -586,9 +685,134 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     }
                 }
             }
+            // v1.0.7 (AnymeX port): the SELECTED custom scheme's
+            // flavour — the same seed, recooked five ways.
+            val selectedCustom = appearance.customSchemes.firstOrNull {
+                appearance.colourScheme == CUSTOM_SCHEME_PREFIX + it.id
+            }
+            if (selectedCustom != null) {
+                Text(
+                    "Flavour of “${selectedCustom.name}” — the same colour, cooked differently.",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    app.xreader.data.prefs.SchemeFlavour.entries.forEach { flavour ->
+                        FilterChip(
+                            selected = selectedCustom.flavour == flavour,
+                            onClick = {
+                                viewModel.setCustomSchemeFlavour(
+                                    selectedCustom.id, flavour
+                                )
+                            },
+                            label = {
+                                Text(
+                                    when (flavour) {
+                                        app.xreader.data.prefs.SchemeFlavour.TONAL ->
+                                            "Tonal"
+                                        app.xreader.data.prefs.SchemeFlavour.VIBRANT ->
+                                            "Vibrant"
+                                        app.xreader.data.prefs.SchemeFlavour.SOFT ->
+                                            "Soft"
+                                        app.xreader.data.prefs.SchemeFlavour.EXPRESSIVE ->
+                                            "Expressive"
+                                        app.xreader.data.prefs.SchemeFlavour.MONO ->
+                                            "Mono"
+                                    }
+                                )
+                            }
+                        )
+                    }
+                }
+            }
         }
 
         CustomiseSection("Glass & surfaces") {
+            // v1.0.7 (AnymeX port): bloom, grain, liquid background.
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .selectable(selected = appearance.bloom) {
+                        viewModel.setBloom(!appearance.bloom)
+                    }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Bloom", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "A soft glow in your theme's own colours behind the glass. " +
+                            "True black turns it off — black stays black.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = appearance.bloom,
+                    onCheckedChange = { viewModel.setBloom(it) }
+                )
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .selectable(selected = appearance.grain) {
+                        viewModel.setGrain(!appearance.grain)
+                    }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Film grain", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "A fine film-grain texture over the app. It rests on " +
+                            "weaker devices and never covers your reading pages.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = appearance.grain,
+                    onCheckedChange = { viewModel.setGrain(it) }
+                )
+            }
+            if (appearance.grain) {
+                CustomiseSlider(
+                    label = "Grain strength",
+                    value = appearance.grainIntensity,
+                    range = app.xreader.data.prefs.AppearanceValidation
+                        .GRAIN_INTENSITY_RANGE,
+                    onChange = { viewModel.setGrainIntensity(it) }
+                )
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Background picture", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Your own picture behind the glass, on every main screen. " +
+                        "It's copied into the app (shrunk to fit) — the original stays yours.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { backgroundPicker.launch("image/*") }) {
+                        Text(
+                            if (appearance.backgroundImage != null) {
+                                "Change picture"
+                            } else {
+                                "Choose a picture"
+                            }
+                        )
+                    }
+                    if (appearance.backgroundImage != null) {
+                        TextButton(onClick = { viewModel.clearBackgroundImage() }) {
+                            Text("Remove")
+                        }
+                    }
+                }
+            }
             GlassStyle.entries.forEach { style ->
                 Row(
                     Modifier
