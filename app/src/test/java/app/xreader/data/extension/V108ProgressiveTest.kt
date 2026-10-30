@@ -97,8 +97,12 @@ class V108ProgressiveTest {
                 when {
                     failPage2 &&
                         request.url == "$BASE/ajax/pages?book_id=77&page=2" ->
-                        FakeTransport.response(500, "boom")
-                    body == null -> FakeTransport.response(404, "not found")
+                        app.xreader.core.error.AppResult.Ok(
+                            FakeTransport.response(500, "boom")
+                        )
+                    body == null -> app.xreader.core.error.AppResult.Ok(
+                        FakeTransport.response(404, "not found")
+                    )
                     else -> FakeTransport.ok(body)
                 }
             }

@@ -492,16 +492,22 @@ class V107FurnitureTest {
                 "</body></html>"
         }
 
-        fun transport() = FakeTransport { url ->
+        fun transport() = FakeTransport { request ->
+            val url = request.url
             when {
-                url == HOME_URL || url == BASE -> SHELL_HOME
-                url == BOOK_URL -> STATIC_BOOK
+                url == HOME_URL || url == BASE ->
+                    FakeTransport.ok(SHELL_HOME)
+                url == BOOK_URL -> FakeTransport.ok(STATIC_BOOK)
                 url.startsWith("$BOOK_URL/chapter-") ->
-                    chapterPage(
-                        url.substringAfterLast("chapter-")
-                            .toIntOrNull() ?: 1
+                    FakeTransport.ok(
+                        chapterPage(
+                            url.substringAfterLast("chapter-")
+                                .toIntOrNull() ?: 1
+                        )
                     )
-                else -> null
+                else -> app.xreader.core.error.AppResult.Ok(
+                    FakeTransport.response(404, "not found")
+                )
             }
         }
 
