@@ -470,6 +470,15 @@ class RepoManager(
                     )
                 DeclarativeFingerprints.of(DeclarativeFingerprints.decode(raw))
             }
+            // v1.0.9: a Live Source's pin is its stored spec,
+            // hashed exactly as installLiveSource pinned it.
+            app.xreader.data.db.ExtensionKind.LIVE -> {
+                val raw = store.readText(store.definitionFile(row.packageId))
+                    ?: return AppResult.Err(
+                        AppError.ExtensionFailed(row.displayName, "its live-source file is missing")
+                    )
+                Hashes.sha256Hex(raw)
+            }
             else -> store.hashFile(store.artifactFile(row.packageId))
                 ?: return AppResult.Err(
                     AppError.ExtensionFailed(row.displayName, "its file is missing")

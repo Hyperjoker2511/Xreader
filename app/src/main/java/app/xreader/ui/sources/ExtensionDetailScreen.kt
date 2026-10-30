@@ -1031,4 +1031,9 @@ private fun kindOf(dbKind: app.xreader.data.db.ExtensionKind): ExtensionKind? =
         app.xreader.data.db.ExtensionKind.DECLARATIVE -> ExtensionKind.DECLARATIVE
         app.xreader.data.db.ExtensionKind.JS -> ExtensionKind.JS
         app.xreader.data.db.ExtensionKind.DEX -> ExtensionKind.DEX
+        // v1.0.9: a Live Source has no package-API kind — the
+        // detail screen shows its generic rows (the Kind row
+        // falls back to the stored name, "LIVE") and none of
+        // the kind-specific sections apply.
+        app.xreader.data.db.ExtensionKind.LIVE -> null
     }
