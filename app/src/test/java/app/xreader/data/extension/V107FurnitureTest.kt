@@ -514,9 +514,18 @@ class V107FurnitureTest {
         }
 
         fun renderer() = FakeRenderedFetcher { url ->
-            when (url) {
-                HOME_URL, BASE -> RENDERED_HOME
-                BOOK_URL -> RENDERED_BOOK
+            when {
+                url == HOME_URL || url == BASE -> RENDERED_HOME
+                url == BOOK_URL -> RENDERED_BOOK
+                // A forced pass renders EVERY fetch, chapter
+                // text included — the fake browser must serve
+                // the chapter pages too, or the test-drive's
+                // text step can never pass.
+                url.startsWith("$BOOK_URL/chapter-") ->
+                    chapterPage(
+                        url.substringAfterLast("chapter-")
+                            .toIntOrNull() ?: 1
+                    )
                 else -> null
             }
         }
