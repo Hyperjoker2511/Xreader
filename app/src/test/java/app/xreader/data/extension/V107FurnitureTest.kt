@@ -458,6 +458,71 @@ class V107FurnitureTest {
             )
         }
 
+    // Ladder over the D3 failure's own record — each rung is
+    // a yes/no question the run list answers by name.
+    private suspend fun d3Failure(): LinkProber.Outcome.Failed {
+        val prober = LinkProber(
+            factory(
+                ShellHomeSite.transport(),
+                ShellHomeSite.renderer(),
+                runtime()
+            ),
+            testSessionStore()
+        )
+        val outcome = prober.probe(
+            ShellHomeSite.BOOK_URL, forceRender = true
+        )
+        return outcome as? LinkProber.Outcome.Failed
+            ?: throw AssertionError("not a failure: $outcome")
+    }
+
+    @Test
+    fun `diag D4 the inference proposer was tried`() = runBlocking {
+        assertTrue(d3Failure().proposersTried.contains("inference"))
+    }
+
+    @Test
+    fun `diag D5 the drive died at the chapter list step`() =
+        runBlocking {
+            assertTrue(
+                d3Failure().stageLines.any {
+                    it.step == "chapter list"
+                }
+            )
+        }
+
+    @Test
+    fun `diag D6 the drive died at the chapter text step`() =
+        runBlocking {
+            assertTrue(
+                d3Failure().stageLines.any {
+                    it.step == "chapter text"
+                }
+            )
+        }
+
+    @Test
+    fun `diag D7 the failure is the furniture guard`() = runBlocking {
+        assertTrue(
+            d3Failure().message.contains("other books")
+        )
+    }
+
+    @Test
+    fun `diag D8 the failure is the feed shape gate`() = runBlocking {
+        assertTrue(
+            d3Failure().message.contains("look like posts")
+        )
+    }
+
+    @Test
+    fun `diag D9 the failure is the empty chapter list`() =
+        runBlocking {
+            assertTrue(
+                d3Failure().message.contains("couldn't build a chapter list")
+            )
+        }
+
     /** A shell home page, a rendered listing, a book that
      * only exists after rendering. */
     object ShellHomeSite {
