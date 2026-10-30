@@ -109,7 +109,16 @@ class LinkProber(
         /** v1.0.6.2 (F5): the listing titles the semantic gate
          * judged (up to a small sample) — carried out so the
          * borderline AI check can be shown what the drive saw. */
-        val sampleTitles: List<String> = emptyList()
+        val sampleTitles: List<String> = emptyList(),
+        /** v1.0.9 (gate fix): when the drive's self-heal
+         * repaired the candidate's chapter rules mid-drive,
+         * the healed config — the probe flow has always
+         * adopted it from the scored drive; the public result
+         * now carries it too, so EVERY save path (AI
+         * proposals, Legado imports, the parser editor)
+         * saves the rules that actually passed. Null when
+         * no heal happened. */
+        val healedConfig: DeclarativeConfig? = null
     )
 
     /** v1.0.6.2 (F5): what a test-drive's semantic gate made of
@@ -1497,7 +1506,15 @@ class LinkProber(
         config: DeclarativeConfig,
         bookUrl: String,
         context: SourceContext
-    ): AppResult<TestDriveResult> = testDriveScored(config, bookUrl, context).result
+    ): AppResult<TestDriveResult> {
+        val scored = testDriveScored(config, bookUrl, context)
+        val healed = scored.healedConfig ?: return scored.result
+        return when (val result = scored.result) {
+            is AppResult.Ok ->
+                AppResult.Ok(result.value.copy(healedConfig = healed))
+            is AppResult.Err -> result
+        }
+    }
 
     /** The search filtering proof's outcome (A5), shared by
      * the fully-proven drive result and the v1.0.6

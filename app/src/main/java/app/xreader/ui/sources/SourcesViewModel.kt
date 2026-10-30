@@ -301,9 +301,16 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                                 .testDriveFromCatalogue(conversion.config)
                             when {
                                 drive is AppResult.Ok -> {
+                                    // v1.0.9 gate fix: save the
+                                    // rules that passed — the
+                                    // healed config when the
+                                    // drive repaired them.
+                                    val effective =
+                                        drive.value.healedConfig
+                                            ?: conversion.config
                                     val host = CookieParsing
-                                        .hostOf(conversion.config.baseUrl) ?: ""
-                                    when (manager.saveLinkSource(conversion.config, host)) {
+                                        .hostOf(effective.baseUrl) ?: ""
+                                    when (manager.saveLinkSource(effective, host)) {
                                         is AppResult.Ok -> rows += LegadoImportRow(
                                             source.name, source.url,
                                             "Converted and saved — the test read found " +

@@ -952,10 +952,16 @@ class ExtensionDetailViewModel(
                             is AppResult.Ok -> {
                                 // Mirror the probe's own bookkeeping:
                                 // search counts as set up only when
-                                // the test read verified it.
-                                val proven = candidate.copy(
+                                // the test read verified it. And
+                                // v1.0.9 gate fix: when the drive
+                                // healed the candidate's chapter
+                                // rules, the healed rules are
+                                // what gets saved.
+                                val driven =
+                                    drive.value.healedConfig ?: candidate
+                                val proven = driven.copy(
                                     searchNeedsSetup =
-                                        candidate.search == null ||
+                                        driven.search == null ||
                                             !drive.value.searchVerified
                                 )
                                 val host = app.xreader.data.extension
