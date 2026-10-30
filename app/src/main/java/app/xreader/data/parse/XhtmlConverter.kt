@@ -79,6 +79,21 @@ class XhtmlConverter(
         // wild (chapters separated by <br/><br/>), not a line break.
         var lastWasBr = false
 
+        fun flushParagraph() {
+            // Trim edge whitespace from the assembled spans.
+            while (spans.isNotEmpty() && spans.first().text.isBlank()) spans.removeAt(0)
+            while (spans.isNotEmpty() && spans.last().text.isBlank()) spans.removeAt(spans.lastIndex)
+            if (spans.isNotEmpty()) {
+                val first = spans.first()
+                spans[0] = first.copy(text = first.text.trimStart())
+                val last = spans.last()
+                spans[spans.lastIndex] = last.copy(text = last.text.trimEnd())
+                blocks += ChapterBlock.Paragraph(spans.toList(), paragraphId)
+            }
+            spans.clear()
+            paragraphId = null
+        }
+
         fun appendSpanText(text: String) {
             val bold = boldDepth > 0
             val italic = italicDepth > 0
@@ -111,20 +126,6 @@ class XhtmlConverter(
             }
         }
 
-        fun flushParagraph() {
-            // Trim edge whitespace from the assembled spans.
-            while (spans.isNotEmpty() && spans.first().text.isBlank()) spans.removeAt(0)
-            while (spans.isNotEmpty() && spans.last().text.isBlank()) spans.removeAt(spans.lastIndex)
-            if (spans.isNotEmpty()) {
-                val first = spans.first()
-                spans[0] = first.copy(text = first.text.trimStart())
-                val last = spans.last()
-                spans[spans.lastIndex] = last.copy(text = last.text.trimEnd())
-                blocks += ChapterBlock.Paragraph(spans.toList(), paragraphId)
-            }
-            spans.clear()
-            paragraphId = null
-        }
 
         var headingCapture: StringBuilder? = null
         var headingLevel = 1

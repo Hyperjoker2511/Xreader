@@ -77,7 +77,7 @@ fun Modifier.readerTapToggle(
                             )
                         }
                     }
-                    change.changedToUp() || change.isCanceled -> finished = true
+                    !change.pressed -> finished = true
                 }
             }
         }

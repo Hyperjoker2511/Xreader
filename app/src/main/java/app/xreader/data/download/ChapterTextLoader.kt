@@ -139,6 +139,6 @@ class ChapterTextLoader(
     }
 
     /** The stored copy only — never fetches. */
-    fun storedContent(bookId: Long, chapterId: Long): ChapterContent? =
+    suspend fun storedContent(bookId: Long, chapterId: Long): ChapterContent? =
         storage.readChapterContent(bookId, chapterId).getOrNull()
 }

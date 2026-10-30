@@ -61,6 +61,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -358,7 +359,7 @@ fun LibraryScreen(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .androidx.compose.ui.focus.focusRequester(searchFocus)
+                    .focusRequester(searchFocus)
             )
             Spacer(Modifier.height(10.dp))
         }
