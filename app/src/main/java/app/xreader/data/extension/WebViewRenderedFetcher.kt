@@ -81,7 +81,7 @@ class WebViewRenderedFetcher(
         permissions: ExtensionPermissions,
         waitForSelector: String?
     ): AppResult<HostResponse> {
-        val host = CookieParsing.hostOf(url)
+        val host = CookieParsing.hostOf(url).orEmpty()
         if (host.isEmpty() || !permissions.allows(host)) {
             return AppResult.Err(
                 AppError.AuthFailed(
