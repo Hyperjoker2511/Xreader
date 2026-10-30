@@ -255,7 +255,11 @@ class DeclarativeSource(
             SourceChapter(
                 id = absolute(link, pageUrl),
                 name = chapterName,
-                number = ChapterNumbers.parse(chapterName)
+                number = ChapterNumbers.parse(chapterName),
+                // v1.0.6.3: the row's release date when the spec
+                // declares one (novelight's ".date@text"); rides
+                // the pagination walk too — it shares this builder.
+                dateText = spec.date?.let { readSpec(el, it)?.trim()?.ifEmpty { null } }
             )
         }
     }

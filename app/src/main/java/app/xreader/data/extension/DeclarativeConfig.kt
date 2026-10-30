@@ -99,6 +99,11 @@ data class ChapterListSpec(
     val list: String,
     val name: String,
     val link: String,
+    /** v1.0.6.3: per-row release-date selector (same selector
+     * grammar as [name]/[link] — e.g. ".date@text" for novelight's
+     * DD.MM.YYYY spans). Null = the site prints no dates; stored
+     * specs without the field keep working unchanged. */
+    val date: String? = null,
     val reverse: Boolean = false,
     val pagination: ChapterListPagination? = null
 )

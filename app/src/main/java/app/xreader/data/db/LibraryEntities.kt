@@ -66,7 +66,13 @@ data class Chapter(
     val wordCount: Int = 0,
     val downloadState: DownloadState = DownloadState.NONE,
     val read: Boolean = false,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** v1.0.6.3: the release date the source printed for this
+     * chapter (e.g. "09.09.2026"), null when the source prints
+     * none. Last field + defaulted: every existing construction
+     * (imports, OPDS, tests) stays untouched. Added by
+     * MIGRATION_3_4 as a plain TEXT column. */
+    val dateText: String? = null
 )
 
 /** Multi-source failover mapping (Phase 3): this chapter also exists on

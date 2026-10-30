@@ -43,6 +43,18 @@ val MIGRATION_1_2: Migration = object : Migration(1, 2) {
  * additive. Runs rehearsed on the v2 schema shape by the gate's
  * migration fixtures (Stage 3).
  */
+/**
+ * 3 → 4 (v1.0.6.3): chapters learn the release date their source
+ * printed (novelight's DD.MM.YYYY row dates) so the book page can
+ * show "3 days ago" and a latest-chapter freshness line. One
+ * nullable TEXT column; no row is rewritten.
+ */
+val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `chapters` ADD COLUMN `dateText` TEXT")
+    }
+}
+
 val MIGRATION_2_3: Migration = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE `books` ADD COLUMN `mergedIntoId` INTEGER")

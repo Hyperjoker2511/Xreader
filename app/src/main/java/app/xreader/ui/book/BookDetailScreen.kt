@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -281,18 +282,45 @@ fun BookDetailScreen(
                             }
                             // Phase 6: time-to-read for the rest of
                             // the book at the reader's own pace.
-                            val remainingWords = state.chapters
-                                .filter { !it.read }
-                                .sumOf { it.wordCount }
-                            if (remainingWords > 0) {
+                            // v1.0.6.3 (P3): the estimate now counts
+                            // un-downloaded chapters at this book's
+                            // own average chapter length instead of
+                            // zero words (the "≈21 min left" lie on
+                            // a 759-chapter book).
+                            val remainingEstimate =
+                                app.xreader.domain.reader.WpmEstimator
+                                    .estimateRemainingMinutes(
+                                        state.chapters.map {
+                                            app.xreader.domain.reader
+                                                .WpmEstimator.ChapterWords(
+                                                    it.read, it.wordCount
+                                                )
+                                        },
+                                        state.wpm
+                                    )
+                            if (remainingEstimate.first > 0) {
                                 Text(
                                     app.xreader.domain.reader.WpmEstimator
-                                        .formatMinutes(
-                                            (remainingWords / state.wpm)
-                                                .toInt().coerceAtLeast(1)
-                                        ) + " left in this book",
+                                        .formatMinutes(remainingEstimate.first) +
+                                        " left in this book",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.tertiary
+                                )
+                            }
+                            // v1.0.6.3 (P5): when the latest
+                            // chapter landed, from the sources'
+                            // own printed dates.
+                            val latestChapterLabel = remember(state.chapters) {
+                                app.xreader.domain.reader.ChapterDateText
+                                    .latestRelative(
+                                        state.chapters.map { it.dateText }
+                                    )
+                            }
+                            if (latestChapterLabel != null) {
+                                Text(
+                                    "Latest chapter · $latestChapterLabel",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             // Sweep addendum: the rhythm line —
@@ -1100,15 +1128,24 @@ private fun ChapterRow(
         ) {
             Column(Modifier.weight(1f)) {
                 Text(chapter.title, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+                // v1.0.6.3 (P5): the chapter's release date rides
+                // the same subtitle line, relatively ("· 3 days
+                // ago") — absent when the source prints no date.
+                val statusLine = when {
+                    chapter.read -> "Read"
+                    isCurrent -> "Continue here" +
+                        (minutesLeft?.let { " · ≈$it min left" } ?: "")
+                    chapter.wordCount > 0 -> "${chapter.wordCount} words" +
+                        (minutesLeft?.let { " · ≈$it min" } ?: "")
+                    else -> ""
+                }
+                val dateLine = app.xreader.domain.reader.ChapterDateText
+                    .relative(chapter.dateText)
                 Text(
-                    when {
-                        chapter.read -> "Read"
-                        isCurrent -> "Continue here" +
-                            (minutesLeft?.let { " · ≈$it min left" } ?: "")
-                        chapter.wordCount > 0 -> "${chapter.wordCount} words" +
-                            (minutesLeft?.let { " · ≈$it min" } ?: "")
-                        else -> ""
-                    },
+                    listOfNotNull(
+                        statusLine.ifEmpty { null },
+                        dateLine
+                    ).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

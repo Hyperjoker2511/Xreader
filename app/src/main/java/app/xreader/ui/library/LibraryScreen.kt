@@ -219,7 +219,7 @@ fun LibraryScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(horizontal = 24.dp, vertical = 10.dp)
     ) {
         ScreenHeader(
             title = "Your library",
@@ -289,11 +289,30 @@ fun LibraryScreen(
                             contentDescription = "Search your library"
                         )
                     }
-                    XreaderPrimaryButton(text = "+ Add a book", onClick = onAddBook)
                 }
             }
         )
-        Spacer(Modifier.height(16.dp))
+        // v1.0.6.3 (P1): "+ Add a book" lives in its OWN full-width
+        // row under the header. Inside the header's action row it
+        // was starved by the Level pill + search icon until its
+        // label folded into a tall one-word-per-line pill. The
+        // primary action of the whole app gets a full row, always.
+        // (Hidden only when the empty state owns the screen — it
+        // carries its own Add action.)
+        if (!app.xreader.data.library.LibraryEmptyState.show(
+                loading = state.loading,
+                bookCount = state.books.size,
+                candidateCount = candidates.size
+            )
+        ) {
+            Spacer(Modifier.height(10.dp))
+            XreaderPrimaryButton(
+                text = "+ Add a book",
+                onClick = onAddBook,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Spacer(Modifier.height(12.dp))
 
         // v1.0.4 (D3): the empty decision is the pure predicate in
         // LibraryEmptyState (unit-tested), and when it fires the
@@ -1221,28 +1240,33 @@ private fun ContinueReadingHero(
             bouncePress = true
         ) {
         Row(Modifier.fillMaxWidth()) {
+            // v1.0.6.3 (P2): the hero is COMPACT now — a slimmer
+            // cover, one title line, no full button row inside
+            // (the whole card already IS the Continue tap). The
+            // Library's books start visibly higher on the screen.
             AsyncImage(
                 model = coverFile(hero.book.coverPath),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.size(width = 76.dp, height = 110.dp)
+                modifier = Modifier.size(width = 60.dp, height = 88.dp)
             )
             Column(
                 Modifier
                     .weight(1f)
                     .padding(start = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 StatusPill(
                     text = hero.book.localFormat.name,
                     color = MaterialTheme.colorScheme.primary
                 )
-                Text(hero.book.title, style = MaterialTheme.typography.titleLarge, maxLines = 2)
+                Text(hero.book.title, style = MaterialTheme.typography.titleLarge, maxLines = 1)
                 if (hero.book.author.isNotBlank()) {
                     Text(
                         hero.book.author,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
                     )
                 }
                 LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
@@ -1252,7 +1276,11 @@ private fun ContinueReadingHero(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                XreaderPrimaryButton(text = "Continue", onClick = onContinue)
+                Text(
+                    "Continue ›",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
         }
         }

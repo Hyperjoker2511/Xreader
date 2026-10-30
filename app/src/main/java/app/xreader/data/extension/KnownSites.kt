@@ -177,11 +177,21 @@ object KnownSites {
                 title = "h1",
                 author = null,
                 description = "meta[name=description]@content",
-                cover = null,
+                // v1.0.6.3 (P4): the book's OWN poster is the img
+                // inside the page's .poster container (verified
+                // against the live book page 2026-10-30 — every
+                // .image-cover img on the page is another book or
+                // the translator team's avatar). This was null, so
+                // book covers never resolved at all.
+                cover = ".poster img@src",
                 chapters = ChapterListSpec(
                     list = ".chapters a.chapter",
                     name = ".title@text",
                     link = "@href",
+                    // v1.0.6.3 (P5): every chapter row carries its
+                    // release date in a .date span (DD.MM.YYYY,
+                    // verified in the pagination capture).
+                    date = ".date@text",
                     reverse = true,
                     // v1.0.6.2 (F1): the book page renders only
                     // the newest 50 rows; the rest come from the

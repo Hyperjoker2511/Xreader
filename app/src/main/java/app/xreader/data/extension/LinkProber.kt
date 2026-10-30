@@ -588,6 +588,42 @@ class LinkProber(
                     tryAllProposers, semanticVerifier
                 )
                 if (walked != null) return walked
+                // v1.0.6.3 (P6): ONE more hop — a home page may
+                // link to a catalogue page instead of to books
+                // directly. Follow the first catalogue-smelling
+                // link and walk in from THERE: same fetcher, same
+                // same-host rule, and never a second hop (the
+                // inner walk-in probes with walkedIn = true, so
+                // this block cannot re-enter itself).
+                if (siteRoot) {
+                    val catalogueUrl = pickCatalogueLink(bookDoc, host)
+                    if (catalogueUrl != null && catalogueUrl != bookUrl) {
+                        val catFetch = fetcher.get(catalogueUrl)
+                        if (catFetch is AppResult.Ok &&
+                            catFetch.value.status in 200..299
+                        ) {
+                            val catUrl = catFetch.value.finalUrl
+                                .ifBlank { catalogueUrl }
+                            val catDoc = Jsoup.parse(
+                                catFetch.value.body, catUrl
+                            )
+                            val catListing = runCatching {
+                                LinkInference.analyseListingPage(
+                                    catDoc, catUrl, null
+                                )
+                            }.getOrNull()
+                            if (catListing != null) {
+                                val walkedCatalogue = walkInFromListing(
+                                    catListing, catDoc, host, aiAvailable,
+                                    tryAllProposers, semanticVerifier
+                                )
+                                if (walkedCatalogue != null) {
+                                    return walkedCatalogue
+                                }
+                            }
+                        }
+                    }
+                }
             }
             if (chapterAnalysis != null) {
                 var rescuedBookPage = false
@@ -1258,10 +1294,22 @@ class LinkProber(
             .getOrDefault(emptyList())
             .take(LIST_SHAPE_SAMPLE)
         val titles = books.map { it.title }
+        // v1.0.6.3 (P6): a config that DECLARES a list (this
+        // function runs only when popular/latest exists) but
+        // whose list reads back EMPTY is broken, not clean — it
+        // used to sail through as CLEAN and get saved. One book
+        // stays unjudged: a tiny catalogue is plausible and a
+        // single title shows no shape either way.
+        if (titles.isEmpty()) {
+            return SemanticShape(ListShapeVerdict.FEED, titles)
+        }
         if (titles.size < 2) {
             return SemanticShape(ListShapeVerdict.CLEAN, titles)
         }
-        val hits = titles.count { RELATIVE_TIME_TITLE.containsMatchIn(it) }
+        val hits = titles.count {
+            RELATIVE_TIME_TITLE.containsMatchIn(it) ||
+                RELATIVE_TIME_ANYWHERE.containsMatchIn(it)
+        }
         if (hits * 2 >= titles.size) {
             return SemanticShape(ListShapeVerdict.FEED, titles)
         }
@@ -1474,10 +1522,18 @@ class LinkProber(
                 1,
                 AppResult.Err(
                     AppError.BadFile(
-                        "The test read found the site's list, but the items in it " +
-                            "look like posts, not books — names with times like " +
-                            "‘just now’ where book titles should be. Rules built " +
-                            "from a list like that weren't saved."
+                        // v1.0.6.3 (P6): an EMPTY list and a POST
+                        // list are different failures and say so.
+                        if (shape.sampleTitles.isEmpty()) {
+                            "The test read found the site's list page, but no books " +
+                                "in it — the list these rules read comes back empty. " +
+                                "Rules like that weren't saved."
+                        } else {
+                            "The test read found the site's list, but the items in it " +
+                                "look like posts, not books — names with times like " +
+                                "‘just now’ where book titles should be. Rules built " +
+                                "from a list like that weren't saved."
+                        }
                     )
                 )
             )
@@ -1824,6 +1880,52 @@ class LinkProber(
             "^\\S+\\s+(?:just now|\\d{1,3}\\s*[mhdw]\\s*ago|yesterday|·)",
             RegexOption.IGNORE_CASE
         )
+
+        /** v1.0.6.3 (P6): the looser sibling — feed furniture
+         * ANYWHERE in the title ("· 2h", "just now" mid-string).
+         * Only ever counted toward the ≥half threshold, and the
+         * borderline band still earns a book-page proof, so a
+         * novel honestly titled with a time word can't fail on
+         * this alone. */
+        private val RELATIVE_TIME_ANYWHERE = Regex(
+            "(?:·\\s*\\d|\\bjust now\\b|\\b\\d{1,3}\\s*[mhdw]\\s+ago\\b)",
+            RegexOption.IGNORE_CASE
+        )
+
+        /** v1.0.6.3 (P6): first path segments that smell like a
+         * book catalogue, for the home-page hop. */
+        private val CATALOGUE_SEGMENTS = setOf(
+            "novels", "novel", "books", "book", "catalog",
+            "catalogue", "library", "series", "browse"
+        )
+
+        private val CATALOGUE_WORDS =
+            listOf("novel", "book", "catalog", "library")
+
+        /** v1.0.6.3 (P6): the home-page hop's target — the first
+         * same-host link that smells like a catalogue: a first
+         * path segment from the catalogue family, or link text
+         * naming novels/books/a catalogue. Null when nothing
+         * qualifies. Pure over the parsed page: unit-tested. */
+        fun pickCatalogueLink(doc: Document, host: String): String? {
+            for (anchor in doc.select("a[href]")) {
+                val href = anchor.absUrl("href")
+                    .ifBlank { anchor.attr("href") }
+                if (href.isBlank()) continue
+                if (CookieParsing.hostOf(href) != host) continue
+                val firstSegment = runCatching { URI(href).path }
+                    .getOrNull()
+                    ?.trim('/')
+                    ?.split('/')
+                    ?.firstOrNull()
+                    ?.lowercase()
+                    .orEmpty()
+                if (firstSegment in CATALOGUE_SEGMENTS) return href
+                val text = anchor.text().trim().lowercase()
+                if (CATALOGUE_WORDS.any { text.contains(it) }) return href
+            }
+            return null
+        }
 
         /** v1.0.6: the plain-words failure when the CONNECTION
          * gave up mid-drive — the site is never blamed for a

@@ -40,7 +40,12 @@ data class SourceChapter(
     val id: String,
     val name: String,
     /** Chapter number when the source knows it (1, 2, 10.5…). */
-    val number: Float? = null
+    val number: Float? = null,
+    /** Release date text when the source prints one (v1.0.6.3 —
+     * e.g. novelight's "09.09.2026"). Defaulted so existing
+     * extensions stay source-compatible; the host stores it on
+     * the chapter row and renders it relatively ("3 days ago"). */
+    val dateText: String? = null
 )
 
 /** One chapter's readable content: an HTML fragment (the host converts

@@ -213,7 +213,19 @@ class GeminiClient(
                     lastModelError = outcome.error
                     continue
                 }
-                is CallOutcome.Failure -> return AppResult.Err(outcome.error)
+                is CallOutcome.Failure -> {
+                    // v1.0.6.3 (P7): a quota 429 on ONE image model
+                    // no longer aborts the whole cascade — image
+                    // models carry separate quotas, so the next
+                    // model gets its turn. When every model is
+                    // quota-blocked, the surfaced error is the last
+                    // 429 WITH Google's own quota words in it.
+                    if (outcome.error is AppError.RateLimited) {
+                        lastModelError = outcome.error
+                        continue
+                    }
+                    return AppResult.Err(outcome.error)
+                }
             }
         }
         return AppResult.Err(
@@ -277,7 +289,11 @@ class GeminiClient(
             GeminiModels.isKeyInvalid(code, body) || code == 401 ->
                 AppError.AuthFailed(SERVICE_ID, detail)
             code == 403 -> AppError.AuthFailed(SERVICE_ID, detail)
-            code == 429 -> AppError.RateLimited(SERVICE_ID)
+            // v1.0.6.3 (P7): a 429 keeps Google's own words in the
+            // detail — "quota exceeded, check your plan" is the
+            // TRUTH an Illustrate failure must show, not a bare
+            // "busy right now" for what is really a plan limit.
+            code == 429 -> AppError.RateLimited(SERVICE_ID, detail)
             code in 500..599 -> AppError.ProviderDown(SERVICE_ID, code, true, detail)
             else -> AppError.ProviderDown(SERVICE_ID, code, false, detail)
         }

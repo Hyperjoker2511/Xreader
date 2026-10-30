@@ -150,7 +150,17 @@ class SourceBookSync(
             updatedAt = now
         )
         // Cover: fetch once (or when the book has none yet).
+        // v1.0.6.3 (P4 heal): a coverPath whose FILE is gone from
+        // disk (cleaner apps, storage moves) counts as no cover —
+        // otherwise the book shows its letter tile forever, since
+        // the fetch below only ever ran for a null path.
         val coverUrl = details.coverUrl
+        val storedCover = updated.coverPath
+        if (storedCover != null &&
+            !runCatching { storage.resolve(storedCover).exists() }.getOrDefault(false)
+        ) {
+            updated = updated.copy(coverPath = null)
+        }
         if (updated.coverPath == null && !coverUrl.isNullOrBlank()) {
             fetchCover(updated, coverUrl)?.let { relative ->
                 updated = updated.copy(coverPath = relative)
@@ -178,14 +188,16 @@ class SourceBookSync(
         (plan.updates + plan.keptStale).forEach { update ->
             val changed = update.row.index != update.newIndex ||
                 update.row.title != update.newTitle ||
-                update.row.remoteId != update.newRemoteId
+                update.row.remoteId != update.newRemoteId ||
+                update.row.dateText != update.newDateText
             if (changed) {
                 chapterDao.update(
                     update.row.copy(
                         index = update.newIndex,
                         title = update.newTitle,
                         remoteId = update.newRemoteId,
-                        updatedAt = now
+                        updatedAt = now,
+                        dateText = update.newDateText
                     )
                 )
             }
@@ -197,7 +209,8 @@ class SourceBookSync(
                     index = insert.index,
                     title = insert.fetched.name,
                     remoteId = insert.fetched.id,
-                    updatedAt = now
+                    updatedAt = now,
+                    dateText = insert.fetched.dateText
                 )
             )
         }

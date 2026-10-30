@@ -41,7 +41,12 @@ object ChapterReconciler {
         val row: Chapter,
         val newIndex: Int,
         val newTitle: String,
-        val newRemoteId: String
+        val newRemoteId: String,
+        /** v1.0.6.3: the release date after this refresh — the
+         * fetched chapter's date when it carries one, otherwise
+         * the stored row's (a refresh that stops printing dates
+         * must not erase the ones already known). */
+        val newDateText: String? = null
     )
 
     data class Insert(val index: Int, val fetched: SourceChapter)
@@ -68,7 +73,10 @@ object ChapterReconciler {
                 inserts += Insert(index, chapter)
             } else {
                 used += match.id
-                updates += Update(match, index, chapter.name, chapter.id)
+                updates += Update(
+                    match, index, chapter.name, chapter.id,
+                    newDateText = chapter.dateText ?: match.dateText
+                )
             }
         }
 
@@ -83,7 +91,8 @@ object ChapterReconciler {
                     row = row,
                     newIndex = fetched.size + keptStale.size,
                     newTitle = row.title,
-                    newRemoteId = row.remoteId ?: ""
+                    newRemoteId = row.remoteId ?: "",
+                    newDateText = row.dateText
                 )
             }
         }

@@ -268,7 +268,16 @@ fun XreaderPrimaryButton(
         ),
         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp)
     ) {
-        Text(text, style = MaterialTheme.typography.labelLarge)
+        // v1.0.6.3 (P1): a primary button's label NEVER wraps —
+        // a starved row must shrink elsewhere, not fold the
+        // words into a tall pill (the Library "Add / a / boo / k"
+        // defect).
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            softWrap = false
+        )
     }
 }
 
