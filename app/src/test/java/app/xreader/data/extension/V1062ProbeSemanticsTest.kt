@@ -1,7 +1,10 @@
 package app.xreader.data.extension
 
 import app.xreader.core.error.AppResult
+import app.xreader.data.FakeExtensionRepoDao
+import app.xreader.data.FakeInstalledExtensionDao
 import app.xreader.data.FakeTransport
+import app.xreader.data.extension.LinkProber.ListShapeVerdict
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -217,7 +220,7 @@ class V1062ProbeSemanticsTest {
 
     // ── F2: the contract tester's page-2 proof ─────────────────
 
-    private fun testerVerdict(
+    private suspend fun testerVerdict(
         config: DeclarativeConfig,
         transport: FakeTransport
     ): ContractVerdict {
