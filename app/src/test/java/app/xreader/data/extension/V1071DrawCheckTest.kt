@@ -42,6 +42,7 @@ class V1071DrawCheckTest {
         <h1 class="book-title">Some Book</h1>
         ${if (withBlock) "<div class=\"synopsis\">$fullSynopsis</div>" else ""}
         <ul class="chapters">
+          <li><a href="/book/some/chapter-3">Chapter 3</a></li>
           <li><a href="/book/some/chapter-2">Chapter 2</a></li>
           <li><a href="/book/some/chapter-1">Chapter 1</a></li>
         </ul>

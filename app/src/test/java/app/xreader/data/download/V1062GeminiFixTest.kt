@@ -112,10 +112,13 @@ class V1062GeminiFixTest {
             QueueState.PAUSED, queueDao.getById(pausedItem.id)!!.state
         )
         // v1.0.7.1 (user rule, deliberate pin change): a live
-        // READ caches the text but is NOT a download — the
-        // state stays NONE until the user taps Download.
+        // READ caches the text but does NOT complete a
+        // download — this chapter was QUEUED by the user
+        // before the read, and QUEUED is exactly where the
+        // read leaves it (never READY; only the engine's
+        // Download promotes, instantly from this cache).
         assertEquals(
-            DownloadState.NONE, chapterDao.getById(chapterId)!!.downloadState
+            DownloadState.QUEUED, chapterDao.getById(chapterId)!!.downloadState
         )
         assertTrue(chapterDao.getById(chapterId)!!.contentPath != null)
     }

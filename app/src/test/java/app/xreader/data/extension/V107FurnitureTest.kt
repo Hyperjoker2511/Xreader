@@ -375,7 +375,8 @@ class V107FurnitureTest {
             val prober = LinkProber(
                 factory(
                     ShellHomeSite.transport(),
-                    ShellHomeSite.renderer()
+                    ShellHomeSite.renderer(),
+                    runtime()
                 ),
                 testSessionStore()
             )
@@ -394,7 +395,8 @@ class V107FurnitureTest {
             val prober = LinkProber(
                 factory(
                     ShellHomeSite.transport(),
-                    ShellHomeSite.renderer()
+                    ShellHomeSite.renderer(),
+                    runtime()
                 ),
                 testSessionStore()
             )
