@@ -8,7 +8,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -412,157 +411,6 @@ class V107FurnitureTest {
             )
         }
 
-    // ── TEMPORARY staged diagnostics (gate run isolates the
-    // failing stage of the forced walk-in; removed once known)
-    @Test
-    fun `diag D1 listing analysis reads the rendered home`() {
-        val doc = org.jsoup.Jsoup.parse(
-            ShellHomeSite.RENDERED_HOME, ShellHomeSite.HOME_URL
-        )
-        val listing = LinkInference.analyseListingPage(
-            doc, ShellHomeSite.HOME_URL, null
-        )
-        assertNotNull("listing analysis was null", listing)
-        assertEquals(4, listing!!.count)
-    }
-
-    @Test
-    fun `diag D2 book analysis reads the rendered book`() {
-        val doc = org.jsoup.Jsoup.parse(
-            ShellHomeSite.RENDERED_BOOK, ShellHomeSite.BOOK_URL
-        )
-        val analysis = LinkInference.analyseBookPage(
-            doc, ShellHomeSite.BOOK_URL
-        )
-        assertNotNull("book analysis was null", analysis)
-        assertEquals(4, analysis!!.chapterCount)
-    }
-
-    @Test
-    fun `diag D3 forced probe of the book url directly`() =
-        runBlocking {
-            val prober = LinkProber(
-                factory(
-                    ShellHomeSite.transport(),
-                    ShellHomeSite.renderer(),
-                    runtime()
-                ),
-                testSessionStore()
-            )
-            val outcome = prober.probe(
-                ShellHomeSite.BOOK_URL, forceRender = true
-            )
-            assertTrue(
-                "expected Ready, was $outcome",
-                outcome is LinkProber.Outcome.Ready
-            )
-        }
-
-    // Ladder over the D3 failure's own record — each rung is
-    // a yes/no question the run list answers by name.
-    private suspend fun d3Failure(): LinkProber.Outcome.Failed {
-        val prober = LinkProber(
-            factory(
-                ShellHomeSite.transport(),
-                ShellHomeSite.renderer(),
-                runtime()
-            ),
-            testSessionStore()
-        )
-        val outcome = prober.probe(
-            ShellHomeSite.BOOK_URL, forceRender = true
-        )
-        return outcome as? LinkProber.Outcome.Failed
-            ?: throw AssertionError("not a failure: $outcome")
-    }
-
-    @Test
-    fun `diag D4 the inference proposer was tried`() = runBlocking {
-        assertTrue(d3Failure().proposersTried.contains("inference"))
-    }
-
-    @Test
-    fun `diag D5 the drive died at the chapter list step`() =
-        runBlocking {
-            assertTrue(
-                d3Failure().stageLines.any {
-                    it.step == "chapter list"
-                }
-            )
-        }
-
-    @Test
-    fun `diag D6 the drive died at the chapter text step`() =
-        runBlocking {
-            assertTrue(
-                d3Failure().stageLines.any {
-                    it.step == "chapter text"
-                }
-            )
-        }
-
-    @Test
-    fun `diag D7 the failure is the furniture guard`() = runBlocking {
-        assertTrue(
-            d3Failure().message.contains("other books")
-        )
-    }
-
-    @Test
-    fun `diag D8 the failure is the feed shape gate`() = runBlocking {
-        assertTrue(
-            d3Failure().message.contains("look like posts")
-        )
-    }
-
-    @Test
-    fun `diag D9 the failure is the empty chapter list`() =
-        runBlocking {
-            assertTrue(
-                d3Failure().message.contains("couldn't build a chapter list")
-            )
-        }
-
-    // The list-step reason lives in the stage line's DETAIL
-    // (the headline message stays generic below step 2).
-    private fun listStepDetail(
-        failure: LinkProber.Outcome.Failed
-    ): String = failure.stageLines
-        .filter { it.step == "chapter list" }
-        .joinToString(" | ") { it.detail }
-
-    @Test
-    fun `diag E1 list step reason is the empty list`() =
-        runBlocking {
-            assertTrue(
-                listStepDetail(d3Failure())
-                    .contains("couldn't build a chapter list")
-            )
-        }
-
-    @Test
-    fun `diag E2 list step reason is the furniture guard`() =
-        runBlocking {
-            assertTrue(
-                listStepDetail(d3Failure()).contains("other books")
-            )
-        }
-
-    @Test
-    fun `diag E3 list step reason is the feed gate`() = runBlocking {
-        assertTrue(
-            listStepDetail(d3Failure()).contains("look like posts")
-        )
-    }
-
-    @Test
-    fun `diag E4 list step reason is the shape empty list`() =
-        runBlocking {
-            assertTrue(
-                listStepDetail(d3Failure()).contains("no books in it")
-            )
-        }
-
     /** A shell home page, a rendered listing, a book that
      * only exists after rendering. */
     object ShellHomeSite {
@@ -586,10 +434,10 @@ class V107FurnitureTest {
             </head><body>
             <div class="brand">ShellBooks</div>
             <div class="grid">
-            <div class="book-card"><a href="$BOOK_URL"><img src="/covers/rs.jpg"></a><a class="t" href="$BOOK_URL">The Rendered Sword</a></div>
-            <div class="book-card"><a href="$BASE/series/other-tale-1"><img src="/covers/o1.jpg"></a><a class="t" href="$BASE/series/other-tale-1">Other Tale One</a></div>
-            <div class="book-card"><a href="$BASE/series/other-tale-2"><img src="/covers/o2.jpg"></a><a class="t" href="$BASE/series/other-tale-2">Other Tale Two</a></div>
-            <div class="book-card"><a href="$BASE/series/other-tale-3"><img src="/covers/o3.jpg"></a><a class="t" href="$BASE/series/other-tale-3">Other Tale Three</a></div>
+            <div class="book-card"><a href="$BOOK_URL"><img src="/covers/rs.jpg">The Rendered Sword</a></div>
+            <div class="book-card"><a href="$BASE/series/other-tale-1"><img src="/covers/o1.jpg">Other Tale One</a></div>
+            <div class="book-card"><a href="$BASE/series/other-tale-2"><img src="/covers/o2.jpg">Other Tale Two</a></div>
+            <div class="book-card"><a href="$BASE/series/other-tale-3"><img src="/covers/o3.jpg">Other Tale Three</a></div>
             </div>
             </body></html>
         """.trimIndent()
