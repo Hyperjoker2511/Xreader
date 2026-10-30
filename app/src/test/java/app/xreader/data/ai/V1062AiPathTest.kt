@@ -77,12 +77,15 @@ class V1062AiPathTest {
         val content = ChapterContent(
             listOf(ChapterBlock.Paragraph.plain("The stored chapter text."))
         )
-        val saved = storage.writeChapterContent(1L, 11L, content)
-        assertTrue(saved is AppResult.Ok)
-        val relative = (saved as AppResult.Ok).value
         val chapterId = chapterDao.insert(
             Chapter(bookId = 1L, index = 0, title = "One", updatedAt = 0L)
         )
+        // Production-shaped fixture: a chapter's stored copy is
+        // always written under that chapter's own id (the G1 loader
+        // reads it back by id, like the engine writes it).
+        val saved = storage.writeChapterContent(1L, chapterId, content)
+        assertTrue(saved is AppResult.Ok)
+        val relative = (saved as AppResult.Ok).value
         chapterDao.setContent(chapterId, relative, 4, DownloadState.READY)
         val chapter = chapterDao.getById(chapterId)!!
 
