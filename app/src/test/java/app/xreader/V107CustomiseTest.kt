@@ -17,9 +17,9 @@ import org.junit.Test
  *   (bit-identical themes), and an unknown flavour name falls
  *   back to TONAL instead of killing the row.
  * - EVERY flavour × a battery of seeds (incl. pure white, pure
- *   black, pure yellow) passes the same on*/fill contrast pairs
- *   the preset gate pins — flavours change the cooking, never
- *   the readability discipline.
+ *   black, pure yellow) passes the same on-colour and fill
+ *   contrast pairs the preset gate pins — flavours change the
+ *   cooking, never the readability discipline.
  * - Flavours actually differ: VIBRANT is not TONAL, and MONO's
  *   primary is nearly grey.
  * - Grain strength clamps to its range.
