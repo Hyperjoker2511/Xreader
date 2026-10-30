@@ -105,7 +105,16 @@ object LinkInference {
         if (body.select("a[href]").size >= 5) return false
         val mount = doc.select("div, main, section").any { el ->
             el.id().lowercase() in JS_MOUNT_IDS &&
-                el.children().isEmpty() && el.text().isBlank()
+                // v1.0.6: a mount whose only element children are
+                // script/style is still an EMPTY mount — real
+                // SvelteKit shells (chikari.moe) park their inline
+                // bootstrap <script> INSIDE #app-root, so requiring
+                // zero children missed the exact shell shape the
+                // browser view exists for. Scripts mount nothing
+                // readable; the blank-text check still applies.
+                el.children().all { child ->
+                    child.tagName() == "script" || child.tagName() == "style"
+                } && el.text().isBlank()
         }
         if (mount) return true
         val noscript = doc.select("noscript").any {

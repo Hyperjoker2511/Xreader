@@ -392,7 +392,12 @@ class V106StageBTest {
         val chapters = source.chapters(
             SourceBook(id = NovelightSite.BOOK_URL, title = "Lord of Talents")
         )
-        assertTrue(chapters.size >= 50)
+        // The fixture book page carries exactly 5 unique chapter
+        // rows — the count the rest of the suite pins for this
+        // fixture (V105ProbeTest, V1051LaneGateTest,
+        // V106StageATest). The live site's newest-50 list is not
+        // what this fixture models.
+        assertEquals(5, chapters.size)
         assertTrue(renderer.calls.isEmpty())
         assertTrue(transport.requests.isNotEmpty())
     }
