@@ -417,10 +417,18 @@ class RepoManager(
      */
     suspend fun saveLinkSource(
         config: DeclarativeConfig,
-        probeHost: String
+        probeHost: String,
+        // v1.0.6.1 (P5): a Repair save writes into the EXISTING
+        // row's package (the row's packageId), never a package
+        // derived from the rebuilt config's id — a rebuilt id
+        // that differs from the original would fork the source
+        // into a second package. Repair callers pass the row's
+        // packageId; new-source saves leave this null and keep
+        // the derived package.
+        packageIdOverride: String? = null
     ): AppResult<InstalledExtension> {
         val repo = linkRepo()
-        val packageId = "link.${config.id}"
+        val packageId = packageIdOverride ?: "link.${config.id}"
         val existing = extensionDao.getByPackageId(packageId)
         val fingerprint = DeclarativeFingerprints.of(listOf(config))
         val permissions = ExtensionPermissions(

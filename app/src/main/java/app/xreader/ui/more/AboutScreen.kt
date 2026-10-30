@@ -66,6 +66,27 @@ fun AboutScreen(onBack: () -> Unit) {
                     style = MaterialTheme.typography.titleMedium
                 )
                 listOf(
+                    // v1.0.6.1 (honest verdicts, forgiving links,
+                    // self-evidencing problem reports).
+                    "Adding a site from a link is more forgiving: " +
+                        "an address copied with extra text around " +
+                        "it, or with hidden marks from a share " +
+                        "sheet, is understood instead of refused.",
+                    "After a Repair, the Health card clears its " +
+                        "old verdict and shows it's checking " +
+                        "instead of showing results for rules that " +
+                        "no longer exist.",
+                    "Repair picks its test book by looking at " +
+                        "the pages themselves, so broken old rules " +
+                        "can't mislead it into testing the wrong " +
+                        "book.",
+                    "Test-drives can no longer mistake page " +
+                        "clutter for chapter text — and when a " +
+                        "site won't show which chapters are " +
+                        "locked, the result says so plainly.",
+                    "Copy details now includes a short history " +
+                        "of recent problems from this session, so " +
+                        "a fault report carries its own evidence.",
                     // v1.0.6 (repair records, the browser view,
                     // the Library look).
                     "Repair now picks a fair test book from the " +

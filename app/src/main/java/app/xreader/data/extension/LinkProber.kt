@@ -79,6 +79,17 @@ class LinkProber(
          * In candidate ranking a pass with this limit ranks
          * below any fully-proven pass. */
         val allChaptersLocked: Boolean = false,
+        /** v1.0.6.1 (P4): the drive could not READ the book's
+         * lock marks (the lock read itself failed), so no chapter
+         * could be proven unlocked; the candidate passed only
+         * because its sampled text passed the prose gate. The
+         * limit is recorded so the verdict stays honest — the
+         * text was read directly, the locks were never checked.
+         * In candidate ranking a pass with this limit ranks below
+         * a clean fully-proven pass and above an all-locked
+         * pass-with-limits. The curated fast lane never carries
+         * it (hand-verified configs are exempt from the gate). */
+        val lockStateUnknown: Boolean = false,
         /** v1.0.5 (A6): the driven book page carried a cover the
          * source can show. False is surfaced as a warning, never
          * silently (D19's letter tiles). */
@@ -188,9 +199,28 @@ class LinkProber(
         tryAllProposers: Boolean = false
     ): Outcome {
         val url = normaliseUrl(rawUrl)
-            ?: return Outcome.Failed("That doesn't look like a web address — check the link and try again.")
+        if (url == null) {
+            // v1.0.6.1 (P1/P6): the refusal stays word for word;
+            // the rejected input's fingerprint (length, invisible
+            // code points) goes to the diagnostic log instead, so
+            // the next refusal arrives with its evidence attached
+            // in Copy details.
+            DiagnosticLog.record(
+                "add from link",
+                "That doesn't look like a web address — check the link and try again.",
+                inputDiagnostics(rawUrl)
+            )
+            return Outcome.Failed("That doesn't look like a web address — check the link and try again.")
+        }
         val host = CookieParsing.hostOf(url)
-            ?: return Outcome.Failed("That doesn't look like a web address — check the link and try again.")
+        if (host == null) {
+            DiagnosticLog.record(
+                "add from link",
+                "That doesn't look like a web address — check the link and try again.",
+                inputDiagnostics(rawUrl)
+            )
+            return Outcome.Failed("That doesn't look like a web address — check the link and try again.")
+        }
         // v1.0.6 (W2/TR1): probes escalate — a page that arrives
         // as a JavaScript shell is re-fetched through the browser
         // view once, and the RENDERED page is what gets studied
@@ -296,22 +326,38 @@ class LinkProber(
         ) {
             when (val result = drive.result) {
                 is AppResult.Ok -> {
-                    stageLines += if (result.value.allChaptersLocked) {
-                        StageLine(
+                    stageLines += when {
+                        result.value.allChaptersLocked -> StageLine(
                             proposer, "chapter text",
                             "all ${result.value.chapterCount} chapters on " +
                                 "the test book are paid or locked, so the " +
                                 "text couldn't be checked — passed with " +
                                 "that limit"
                         )
-                    } else {
-                        StageLine(proposer, "passed", "the test-drive passed")
+                        // v1.0.6.1 (P4): a pass whose lock read
+                        // failed says so — the text was read
+                        // directly, the locks never checked.
+                        result.value.lockStateUnknown -> StageLine(
+                            proposer, "chapter text",
+                            "the chapter locks couldn't be checked — " +
+                                "the text was read directly"
+                        )
+                        else -> StageLine(
+                            proposer, "passed", "the test-drive passed"
+                        )
                     }
                     // Rank: a fully-proven candidate always
                     // beats a pass-with-limits (v1.0.6), then
                     // search proof, chapter count, text length.
+                    // v1.0.6.1 (P4): three proof tiers now — a
+                    // clean pass (2) beats a lock-unchecked pass
+                    // (1), which beats an all-locked pass (0).
                     val rank = listOf(
-                        if (result.value.allChaptersLocked) 0 else 1,
+                        when {
+                            result.value.allChaptersLocked -> 0
+                            result.value.lockStateUnknown -> 1
+                            else -> 2
+                        },
                         if (result.value.searchVerified) 1 else 0,
                         result.value.chapterCount,
                         result.value.chapterTextLength
@@ -418,7 +464,10 @@ class LinkProber(
                     tried("fast lane")
                     consider(
                         "fast lane", laneFull, sample,
-                        testDriveScored(laneFull, sample, context)
+                        // v1.0.6.1 (P4): the fast lane is
+                        // hand-verified — exempt from the
+                        // prose gate.
+                        testDriveScored(laneFull, sample, context, laneVerified = true)
                     )
                 }
             }
@@ -896,6 +945,19 @@ class LinkProber(
      * [MAX_SAMPLE_BOOKS] book-page reads (plus the catalogue
      * itself), each through the same probe client a probe
      * would use.
+     *
+     * v1.0.6.1 (P3): the JUDGING is config-free. v1.0.6 judged
+     * each candidate with the stored config's own chapter
+     * rules — the very rules Repair exists because of — so a
+     * config whose chapter rules were broken rejected every
+     * candidate and the picker fell back to the stored
+     * all-locked sample anyway. Enumeration still runs through
+     * the stored config's catalogue (that parse works even
+     * when the chapter rules are broken); each candidate page
+     * is then read RAW and judged by [LinkInference]'s page
+     * analysis plus a raw [ChapterLocks] scan of the chapter
+     * rows: a cluster means the book lists chapters, an
+     * un-marked row means an unlocked chapter exists.
      */
     suspend fun freshSampleUrl(config: DeclarativeConfig): String? =
         withContext(Dispatchers.Default) {
@@ -910,18 +972,61 @@ class LinkProber(
                 .take(MAX_SAMPLE_BOOKS)
             var firstWithChapters: String? = null
             for (book in books) {
-                val chapters = runCatching { source.chapters(book) }
-                    .getOrDefault(emptyList())
-                if (chapters.isEmpty()) continue
+                val judgement = judgeSamplePage(stack, book.id) ?: continue
                 if (firstWithChapters == null) firstWithChapters = book.id
-                val lockedIds = runCatching { source.lockedChapterIds(book) }
-                    .getOrDefault(emptySet())
-                if (chapters.any { it.id !in lockedIds }) {
+                if (judgement.hasUnlockedChapter) {
                     return@withContext book.id
                 }
             }
             firstWithChapters
         }
+
+    /** v1.0.6.1 (P3): one candidate's config-free verdict —
+     * the page carries a chapter cluster, and whether any of
+     * its rows is free of lock marks. */
+    private data class SampleJudgement(
+        val hasUnlockedChapter: Boolean
+    )
+
+    /**
+     * v1.0.6.1 (P3): judge one candidate book page WITHOUT the
+     * stored config: fetch the page through the probe's own
+     * fetch stack, let [LinkInference.analyseBookPage] find
+     * the chapter cluster on the raw DOM, and scan the
+     * cluster's rows with [ChapterLocks.rowIsLocked]. Null
+     * when the page doesn't read as a book page (no cluster) —
+     * the candidate simply doesn't count.
+     */
+    private suspend fun judgeSamplePage(
+        stack: ProbeStack,
+        bookUrl: String
+    ): SampleJudgement? {
+        val (body, finalUrl) = try {
+            when (val fetched = stack.fetcher.get(bookUrl)) {
+                is AppResult.Err -> return null
+                is AppResult.Ok -> {
+                    if (fetched.value.status !in 200..299) return null
+                    fetched.value.body to fetched.value.finalUrl
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            return null
+        }
+        val doc = try {
+            org.jsoup.Jsoup.parse(body, finalUrl)
+        } catch (t: Throwable) {
+            return null
+        }
+        val analysis = LinkInference.analyseBookPage(doc, finalUrl)
+            ?: return null
+        val rows = doc.select(analysis.chapterListSelector)
+        if (rows.isEmpty()) return null
+        return SampleJudgement(
+            hasUnlockedChapter = rows.any { !ChapterLocks.rowIsLocked(it) }
+        )
+    }
 
     /** A test-drive outcome plus how far it got (v1.0.5, A4):
      * steps 0 = page/title, 1 = chapter list, 2 = chapter text,
@@ -931,6 +1036,16 @@ class LinkProber(
         val steps: Int,
         val result: AppResult<TestDriveResult>
     )
+
+    /** v1.0.6.1 (P4): the outcome of reading a test book's lock
+     * marks. [Detected] carries the locked chapter ids exactly
+     * as read; [DetectionFailed] means the read itself failed
+     * (the lock spec broke, the page errored) — which must
+     * never again be silently read as "nothing is locked". */
+    private sealed interface LockCheck {
+        data class Detected(val lockedIds: Set<String>) : LockCheck
+        data object DetectionFailed : LockCheck
+    }
 
     private suspend fun testDrive(
         config: DeclarativeConfig,
@@ -1031,7 +1146,13 @@ class LinkProber(
     private suspend fun testDriveScored(
         config: DeclarativeConfig,
         bookUrl: String,
-        context: SourceContext
+        context: SourceContext,
+        // v1.0.6.1 (P4): the caller marks a candidate proposed
+        // by the curated KnownSites fast lane. Hand-verified
+        // lane configs are exempt from the prose gate — a lane
+        // candidate whose lock read fails keeps the plain
+        // sampled-text verdict it always had.
+        laneVerified: Boolean = false
     ): ScoredDrive {
         val source = DeclarativeSource(config, context)
         val testBook = SourceBook(id = bookUrl, title = "")
@@ -1086,9 +1207,36 @@ class LinkProber(
             )
         }
         // A3: skip lock-marked chapters when sampling text.
-        val lockedIds = runCatching { source.lockedChapterIds(testBook) }
-            .getOrDefault(emptySet())
-        val unlocked = chapters.filter { it.id !in lockedIds }
+        // v1.0.6.1 (P4): the lock read is TRI-STATE now. It
+        // used to fail OPEN — a thrown lock read became an
+        // empty locked set, so a broken lock spec (or a
+        // spilled boilerplate page) silently became "nothing
+        // is locked" and boilerplate length alone passed the
+        // drive as proven chapter text. Detected(set) keeps
+        // the old meaning; DetectionFailed is kept apart and
+        // the candidate may then pass ONLY through the prose
+        // gate below, carrying the limit on its result.
+        val lockCheck: LockCheck = try {
+            LockCheck.Detected(source.lockedChapterIds(testBook))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            LockCheck.DetectionFailed
+        }
+        val lockDetectionFailed =
+            lockCheck is LockCheck.DetectionFailed && !laneVerified
+        val lockedIds: Set<String> = when (lockCheck) {
+            is LockCheck.Detected -> lockCheck.lockedIds
+            LockCheck.DetectionFailed -> emptySet()
+        }
+        // When the locks couldn't be read, no chapter can be
+        // called locked — sampling runs over the whole list
+        // and the prose gate arbitrates instead.
+        val unlocked = if (lockDetectionFailed) {
+            chapters
+        } else {
+            chapters.filter { it.id !in lockedIds }
+        }
         if (unlocked.isEmpty()) {
             // v1.0.6: PASS WITH LIMITS. The config DID its job —
             // it listed every chapter; the text is unprovable
@@ -1202,6 +1350,25 @@ class LinkProber(
                 )
             )
         )
+        // v1.0.6.1 (P4): when the lock read failed (and this
+        // is not a hand-verified lane candidate), a bare length
+        // pass is not proof — the sampled text must read like
+        // prose. Boilerplate (nav lists, tag clouds, related-
+        // titles blocks) is long but has almost no sentence
+        // punctuation; real story text always does.
+        if (lockDetectionFailed && !isGenuineProse(bestText)) {
+            return ScoredDrive(
+                2,
+                AppResult.Err(
+                    AppError.BadFile(
+                        "The test read opened a chapter, but the text it found " +
+                            "doesn't read like story text — and the site wouldn't " +
+                            "show which chapters are locked, so the chapter " +
+                            "couldn't be proven."
+                    )
+                )
+            )
+        }
         val text = bestText
         val search = verifySearch(source, config, details.title)
         // v1.0.5 (A6): a missing cover is a flagged warning,
@@ -1227,7 +1394,10 @@ class LinkProber(
                     } else {
                         "No cover image was found on the book page — this book will " +
                             "show a plain letter tile until the site gives it one."
-                    }
+                    },
+                    // v1.0.6.1 (P4): a prose-gated pass
+                    // carries its limit on the result.
+                    lockStateUnknown = lockDetectionFailed
                 )
             )
         )
@@ -1356,15 +1526,90 @@ class LinkProber(
             "The connection was too slow to finish checking this site. " +
                 "Try again when your connection is better."
 
+        /** v1.0.6.1 (P1): characters stripped from a pasted
+         * address before parsing — the whitespace/control range
+         * plus the invisible Unicode marks a share sheet or a
+         * notes app copies along (zero-width space U+200B
+         * through the bidi marks U+200F, and the BOM U+FEFF).
+         * trim() removes none of the invisible ones, and one
+         * zero-width char inside the authority makes the URI
+         * parser return a null host — a good address refused,
+         * with nothing visible to blame. */
+        private val INPUT_JUNK = Regex("[\\u0000-\\u0020\\u200B-\\u200F\\uFEFF]")
+
+        /** v1.0.6.1 (P1): a full address token inside pasted
+         * text ("Read this: https://…"). */
+        private val URL_TOKEN =
+            Regex("https?://[a-z0-9.-]+(?::[0-9]+)?(?:/\\S*)?", RegexOption.IGNORE_CASE)
+
+        /** v1.0.6.1 (P1): a bare host token ("novelight.net" or
+         * "novelight.net/book/x") — dot-separated labels ending
+         * in a real-looking TLD, with an optional port/path. */
+        private val BARE_DOMAIN_TOKEN =
+            Regex(
+                "[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.[a-z]{2,}(?::[0-9]+)?(?:/\\S*)?",
+                RegexOption.IGNORE_CASE
+            )
+
+        /**
+         * v1.0.6.1 (P1): accept an address the way people
+         * actually copy it. The raw input is first stripped of
+         * whitespace and invisible marks; then the first full
+         * URL token in it wins (share text, notes, wrapped
+         * pastes); else the first bare-domain token, given the
+         * https scheme; else null. A clean input comes out
+         * byte-identical to before — same trim, same scheme
+         * prepend, same URI/host validation.
+         */
         fun normaliseUrl(raw: String): String? {
-            var candidate = raw.trim()
-            if (candidate.isEmpty()) return null
-            if (!candidate.startsWith("http://") && !candidate.startsWith("https://")) {
-                candidate = "https://$candidate"
-            }
+            val cleaned = INPUT_JUNK.replace(raw, "")
+            if (cleaned.isEmpty()) return null
+            val candidate = URL_TOKEN.find(cleaned)?.value
+                ?: BARE_DOMAIN_TOKEN.find(cleaned)?.value?.let { "https://$it" }
+                ?: return null
             val uri = runCatching { URI(candidate) }.getOrNull() ?: return null
             if (uri.host.isNullOrBlank()) return null
             return candidate
+        }
+
+        /**
+         * v1.0.6.1 (P1/P6): a refused input's fingerprint for
+         * the diagnostic log — its RAW length and the invisible
+         * or non-ASCII code points riding in it (control chars
+         * and anything above plain ASCII), e.g.
+         * "len=23, hidden=[U+200B]". A rejected string whose
+         * length exceeds its visible length names the culprit
+         * class immediately, where the refusal message alone
+         * could not.
+         */
+        fun inputDiagnostics(raw: String): String {
+            val hidden = raw.map { it.code }
+                .filter { it < 0x20 || it == 0x7F || it > 0x7E }
+                .distinct()
+                .take(8)
+            val base = "len=${raw.length}"
+            if (hidden.isEmpty()) return base
+            val points = hidden.joinToString(", ") {
+                "U+" + String.format(java.util.Locale.ROOT, "%04X", it)
+            }
+            return "$base, hidden=[$points]"
+        }
+
+        /**
+         * v1.0.6.1 (P4): does a sampled chapter's text read
+         * like genuine prose? Deterministic and cheap: the
+         * existing readable-length floor plus at least five
+         * sentence-ending marks ('.', '?', '!', '"', '”') —
+         * real story text punctuates; page boilerplate (nav
+         * links, tag clouds, related-title lists) runs long
+         * without ever ending a sentence.
+         */
+        fun isGenuineProse(text: String): Boolean {
+            if (text.length < LinkInference.MIN_READABLE_CHARS) return false
+            val enders = text.count {
+                it == '.' || it == '?' || it == '!' || it == '"' || it == '”'
+            }
+            return enders >= 5
         }
 
         fun baseOf(url: String): String = runCatching {

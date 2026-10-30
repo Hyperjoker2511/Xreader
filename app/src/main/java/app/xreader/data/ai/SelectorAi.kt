@@ -12,6 +12,7 @@ import app.xreader.data.extension.ExtensionHttpClient
 import app.xreader.data.extension.ExtensionPermissions
 import app.xreader.data.extension.HostContextFactory
 import app.xreader.data.extension.LinkInference
+import app.xreader.data.extension.DiagnosticLog
 import app.xreader.data.extension.LinkProber
 import app.xreader.data.extension.ListSpec
 import app.xreader.data.extension.RateLimiter
@@ -54,9 +55,26 @@ class SelectorAi(
             )
         }
         val url = LinkProber.normaliseUrl(rawUrl)
-            ?: return Outcome.Failed("That doesn't look like a web address — check the link.")
+        if (url == null) {
+            // v1.0.6.1 (P1/P6): same treatment as the prober —
+            // the refusal stays word for word; the rejected
+            // input's fingerprint goes to the diagnostic log.
+            DiagnosticLog.record(
+                "AI detector",
+                "That doesn't look like a web address — check the link.",
+                LinkProber.inputDiagnostics(rawUrl)
+            )
+            return Outcome.Failed("That doesn't look like a web address — check the link.")
+        }
         val host = CookieParsing.hostOf(url)
-            ?: return Outcome.Failed("That doesn't look like a web address — check the link.")
+        if (host == null) {
+            DiagnosticLog.record(
+                "AI detector",
+                "That doesn't look like a web address — check the link.",
+                LinkProber.inputDiagnostics(rawUrl)
+            )
+            return Outcome.Failed("That doesn't look like a web address — check the link.")
+        }
         val probeLimiter = RateLimiter(minIntervalMs = 0)
         val probeClient = contextFactory.clientFor(
             sessionKey = ExtensionHttpClient.linkProbeSessionKey(host),

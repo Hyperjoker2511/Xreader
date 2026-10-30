@@ -103,6 +103,16 @@ class ExtensionDetailViewModel(
 
     private val _health = MutableStateFlow(HealthLocal())
 
+    /** v1.0.6.1 (P2): bumped every time Repair saves new rules.
+     * A test-drive captures the epoch (and the config id) it
+     * started under; if either has moved by the time its
+     * verdict lands, the verdict describes rules that no longer
+     * exist and is dropped instead of persisted — the stale
+     * verdict overwriting a fresh Repair was the device case
+     * (Health kept showing the pre-Repair failure). */
+    @Volatile
+    private var healthEpoch = 0
+
     /** v1.0.2 (R24): "Bring my library" scan → preview → import. */
     private data class BringLocal(
         val hasBookshelf: Boolean = false,
@@ -486,6 +496,10 @@ class ExtensionDetailViewModel(
     fun runTestDrive() {
         if (_health.value.testing) return
         _health.value = _health.value.copy(testing = true)
+        // v1.0.6.1 (P2): what this drive is testing — checked
+        // again when the verdict lands (see healthEpoch).
+        val epochAtStart = healthEpoch
+        val testedConfigId = _linkConfig.value?.id
         viewModelScope.launch {
             try {
                 val handles = container.extensionService.sourcesOf(extensionId)
@@ -497,6 +511,21 @@ class ExtensionDetailViewModel(
                 }
                 val verdict = container.contractTester.test(handle)
                 val record = verdict.toRecord()
+                if (epochAtStart != healthEpoch ||
+                    testedConfigId != _linkConfig.value?.id
+                ) {
+                    // The rules changed under this drive (a
+                    // Repair saved while it ran). Its verdict
+                    // describes the OLD rules — persisting it
+                    // would resurrect the stale failure the
+                    // Repair just cleared.
+                    say(
+                        "The rules changed while that test-drive " +
+                            "was running, so its result was set " +
+                            "aside — run the test-drive again."
+                    )
+                    return@launch
+                }
                 container.sourcePrefs.setSourceHealth(
                     app.xreader.data.extension.SourceHealthRecord.key(
                         extensionId, handle.source.id
@@ -506,11 +535,55 @@ class ExtensionDetailViewModel(
                 _health.value = _health.value.copy(
                     record = record, results = verdict.results
                 )
+                // v1.0.6.1 (P6): a drive that found a failing
+                // core step joins the session's problem history,
+                // so its evidence rides along in Copy details.
+                if (record.failedCore.isNotEmpty()) {
+                    app.xreader.data.extension.DiagnosticLog.record(
+                        "test-drive",
+                        record.summaryLine(),
+                        app.xreader.data.extension.CookieParsing
+                            .hostOf(_linkConfig.value?.baseUrl.orEmpty())
+                            ?.let { "site: $it" }
+                            ?: "source: ${handle.source.id}"
+                    )
+                }
                 say("Test-drive finished: ${record.summaryLine()}")
             } finally {
                 _health.value = _health.value.copy(testing = false)
             }
         }
+    }
+
+    /**
+     * v1.0.6.1 (P2): a Repair just saved new rules — the OLD
+     * health verdict describes rules that no longer exist, so
+     * clear it everywhere: the persisted record (under every
+     * identity it may have been stored by — the pre-save record
+     * can sit under the old config's source id) and the
+     * in-memory state, which falls back to the Health card's
+     * existing honest "not checked yet" presentation. The epoch
+     * bump also retires any test-drive still running against
+     * the old rules (see runTestDrive).
+     */
+    private suspend fun clearStaleHealth(oldConfigId: String) {
+        healthEpoch++
+        val candidateIds = buildSet {
+            add(oldConfigId)
+            _linkConfig.value?.id?.let { add(it) }
+            container.extensionService.sourcesOf(extensionId).getOrNull()
+                ?.firstOrNull()?.source?.id?.let { add(it) }
+        }
+        candidateIds.forEach { sourceId ->
+            runCatching {
+                container.sourcePrefs.clearSourceHealth(
+                    app.xreader.data.extension.SourceHealthRecord.key(
+                        extensionId, sourceId
+                    )
+                )
+            }
+        }
+        _health.value = _health.value.copy(record = null, results = emptyList())
     }
 
     /**
@@ -575,11 +648,20 @@ class ExtensionDetailViewModel(
                         repairStageLines = outcome.stageLines.map { it.render() }
                         when (
                             val saved = container.repoManager.saveLinkSource(
-                                outcome.draft.config, outcome.draft.host
+                                outcome.draft.config, outcome.draft.host,
+                                // v1.0.6.1 (P5): write into THIS
+                                // row's package, never one derived
+                                // from the rebuilt config's id.
+                                packageIdOverride = ext.packageId
                             )
                         ) {
                             is AppResult.Ok -> {
                                 _linkConfig.value = outcome.draft.config
+                                // v1.0.6.1 (P2): the old health
+                                // verdict described the old
+                                // rules — clear it before the
+                                // fresh test-drive runs.
+                                clearStaleHealth(config.id)
                                 repairSaved = true
                                 repairNote =
                                     "Repair rebuilt the rules from the live site."
@@ -635,11 +717,19 @@ class ExtensionDetailViewModel(
                                     "the test-drive"
                                 when (
                                     container.repoManager.saveLinkSource(
-                                        aiOutcome.draft.config, aiOutcome.draft.host
+                                        aiOutcome.draft.config, aiOutcome.draft.host,
+                                        // v1.0.6.1 (P5): this
+                                        // row's package (see the
+                                        // probe save above).
+                                        packageIdOverride = ext.packageId
                                     )
                                 ) {
                                     is AppResult.Ok -> {
                                         _linkConfig.value = aiOutcome.draft.config
+                                        // v1.0.6.1 (P2): clear
+                                        // the stale verdict (see
+                                        // the probe save above).
+                                        clearStaleHealth(config.id)
                                         repairSaved = true
                                         repairNote =
                                             "Repair rebuilt the rules with the " +
@@ -740,6 +830,20 @@ class ExtensionDetailViewModel(
                     ),
                     repairRecord
                 )
+                // v1.0.6.1 (P6): a Repair that didn't save joins
+                // the session's problem history — the note and
+                // the site, so Copy details carries what Repair
+                // concluded, not just that it ran.
+                if (!repairSaved && repairNote.isNotBlank()) {
+                    app.xreader.data.extension.DiagnosticLog.record(
+                        "repair",
+                        repairNote,
+                        "site: " + (
+                            app.xreader.data.extension.CookieParsing
+                                .hostOf(config.baseUrl) ?: config.baseUrl
+                            )
+                    )
+                }
                 // v1.0.6 (TR4): a Repair that saved new rules has
                 // answered the "site changed" flag one way or the
                 // other — clear it; if the site still serves

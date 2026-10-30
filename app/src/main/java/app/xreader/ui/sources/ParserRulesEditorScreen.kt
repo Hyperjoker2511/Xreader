@@ -233,7 +233,12 @@ fun ParserRulesEditorScreen(
                                     .CookieParsing.hostOf(config.baseUrl),
                                 failingStep = "Test read of the edited rules",
                                 reason = text,
-                                appVersion = app.xreader.BuildConfig.VERSION_NAME
+                                appVersion = app.xreader.BuildConfig.VERSION_NAME,
+                                // v1.0.6.1 (P6): the session's
+                                // problem history rides along.
+                                recentProblems =
+                                    app.xreader.data.extension
+                                        .DiagnosticLog.entries()
                             )
                         )
                     )

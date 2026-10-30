@@ -392,7 +392,13 @@ fun ExtensionDetailScreen(
                                         // source reads through
                                         // the browser view.
                                         browserView =
-                                            state.linkConfig?.needsRendering == true
+                                            state.linkConfig?.needsRendering == true,
+                                        // v1.0.6.1 (P6): the
+                                        // session's problem
+                                        // history rides along.
+                                        recentProblems =
+                                            app.xreader.data.extension
+                                                .DiagnosticLog.entries()
                                     )
                                 )
                             )
