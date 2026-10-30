@@ -193,7 +193,8 @@ fun ScrollStreamReader(
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(
-                    horizontal = config.marginHorizontalDp.dp,
+                    start = config.marginHorizontalDp.dp,
+                    end = config.marginHorizontalDp.dp,
                     top = config.marginVerticalDp.dp + topInset,
                     bottom = config.marginVerticalDp.dp + bottomInset
                 ),
