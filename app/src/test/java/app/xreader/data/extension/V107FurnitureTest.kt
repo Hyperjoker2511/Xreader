@@ -523,6 +523,46 @@ class V107FurnitureTest {
             )
         }
 
+    // The list-step reason lives in the stage line's DETAIL
+    // (the headline message stays generic below step 2).
+    private fun listStepDetail(
+        failure: LinkProber.Outcome.Failed
+    ): String = failure.stageLines
+        .filter { it.step == "chapter list" }
+        .joinToString(" | ") { it.detail }
+
+    @Test
+    fun `diag E1 list step reason is the empty list`() =
+        runBlocking {
+            assertTrue(
+                listStepDetail(d3Failure())
+                    .contains("couldn't build a chapter list")
+            )
+        }
+
+    @Test
+    fun `diag E2 list step reason is the furniture guard`() =
+        runBlocking {
+            assertTrue(
+                listStepDetail(d3Failure()).contains("other books")
+            )
+        }
+
+    @Test
+    fun `diag E3 list step reason is the feed gate`() = runBlocking {
+        assertTrue(
+            listStepDetail(d3Failure()).contains("look like posts")
+        )
+    }
+
+    @Test
+    fun `diag E4 list step reason is the shape empty list`() =
+        runBlocking {
+            assertTrue(
+                listStepDetail(d3Failure()).contains("no books in it")
+            )
+        }
+
     /** A shell home page, a rendered listing, a book that
      * only exists after rendering. */
     object ShellHomeSite {
