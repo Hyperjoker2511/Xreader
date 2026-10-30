@@ -317,7 +317,12 @@ object KnownSites {
                     // jsoup's ~= — the engine's selectors are
                     // jsoup, not browser CSS). Book links (one
                     // segment) and author links never match.
-                    list = "a[href~='/novels/[^/]+/[0-9]+$']",
+                    // The pattern must stay UNQUOTED: jsoup
+                    // treats quotes as part of the pattern, so a
+                    // quoted regex silently matches nothing
+                    // (v1.0.8.1 gate run 1: 834/835, proven
+                    // against the real jsoup jar locally).
+                    list = "a[href~=/novels/[^/]+/[0-9]+$]",
                     name = "@text",
                     link = "@href",
                     reverse = true,

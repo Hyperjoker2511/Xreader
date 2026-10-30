@@ -97,7 +97,7 @@ class V106StageBTest {
         details = DetailsSpec(
             title = "h1",
             chapters = ChapterListSpec(
-                list = "a[href~='/novels/[^/]+/[0-9]+$']",
+                list = "a[href~=/novels/[^/]+/[0-9]+$]",
                 name = "@text",
                 link = "@href",
                 reverse = true
