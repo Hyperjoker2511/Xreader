@@ -80,28 +80,30 @@ class V106StageBTest {
         onRuntimeShell = onRuntimeShell
     )
 
+    /** v1.0.8.1: the chikari-shaped test config now mirrors the
+     * real rendered shapes (and the production lane's specs) —
+     * bare-anchor cards and chapter rows, <article> prose. */
     private fun chikariConfig(marked: Boolean) = DeclarativeConfig(
         id = "chikari",
         name = "Chikari",
         baseUrl = ChikariSite.BASE,
         popular = ListSpec(
             url = ChikariSite.BASE,
-            results = "div.grid a",
-            title = "@text",
+            results = "a[href*='/novels/']",
+            title = "img@alt",
             link = "@href",
             cover = "img@src"
         ),
         details = DetailsSpec(
             title = "h1",
-            cover = "meta[property=og:image]@content",
             chapters = ChapterListSpec(
-                list = "ul#chapter-list li",
-                name = "a",
-                link = "a@href",
+                list = "a[href~='/novels/[^/]+/[0-9]+$']",
+                name = "@text",
+                link = "@href",
                 reverse = true
             )
         ),
-        chapter = ChapterSpec(content = "#chapter-content"),
+        chapter = ChapterSpec(content = "article"),
         needsRendering = marked
     )
 
@@ -250,6 +252,80 @@ class V106StageBTest {
         assertEquals(45_000L, RenderSettle.hardTimeoutMs(PerfTier.MINIMAL))
         assertEquals(30_000L, RenderSettle.hardTimeoutMs(PerfTier.STANDARD))
         assertEquals(30_000L, RenderSettle.hardTimeoutMs(PerfTier.FULL))
+    }
+
+    // ── RenderSettle v1.0.8.1: content-aware settling ───────
+
+    @Test
+    fun `settle rule refuses a stable loading spinner`() {
+        fun spinner(elapsed: Long) = RenderSettleSample(
+            readyState = "complete", textLength = 50,
+            anchorCount = 1, selectorCount = null, elapsedMs = elapsed
+        )
+        // Perfectly stable, complete, past the dwell — but the
+        // page is still inside the shell band: NOT settled. (The
+        // chikari.moe failure: the spinner sat unchanged from
+        // ~2 s while the data arrived at ~8 s.)
+        assertFalse(
+            RenderSettle.isSettled(listOf(spinner(1_300), spinner(1_700)))
+        )
+        assertFalse(
+            RenderSettle.isSettled(listOf(spinner(9_000), spinner(9_400)))
+        )
+        // The data arrives; the grown page stabilises and settles.
+        fun content(elapsed: Long) = RenderSettleSample(
+            readyState = "complete", textLength = 5_000,
+            anchorCount = 150, selectorCount = null, elapsedMs = elapsed
+        )
+        assertTrue(
+            RenderSettle.isSettled(
+                listOf(
+                    spinner(1_300), spinner(1_700),
+                    content(8_100), content(8_500)
+                )
+            )
+        )
+        // Either band clearing is content: a prose page with
+        // thousands of characters but almost no links settles.
+        fun prose(elapsed: Long) = RenderSettleSample(
+            readyState = "complete", textLength = 5_000,
+            anchorCount = 2, selectorCount = null, elapsedMs = elapsed
+        )
+        assertTrue(
+            RenderSettle.isSettled(listOf(prose(1_300), prose(1_700)))
+        )
+    }
+
+    @Test
+    fun `settle rule honours a wait-for selector until its cap`() {
+        fun waiting(elapsed: Long) = RenderSettleSample(
+            readyState = "complete", textLength = 5_000,
+            anchorCount = 150, selectorCount = 0, elapsedMs = elapsed
+        )
+        // Content-shaped and stable, but the caller's selector
+        // has not matched: not settled.
+        assertFalse(
+            RenderSettle.isSettled(listOf(waiting(1_300), waiting(1_700)))
+        )
+        // Past the wait cap the stability rule takes over — a
+        // selector that never matches must not hang the render.
+        assertTrue(
+            RenderSettle.isSettled(
+                listOf(waiting(25_400), waiting(25_800))
+            )
+        )
+        // The moment the selector matches, the early exit fires.
+        assertTrue(
+            RenderSettle.isSettled(
+                listOf(
+                    RenderSettleSample(
+                        readyState = "interactive", textLength = 300,
+                        anchorCount = 9, selectorCount = 3,
+                        elapsedMs = 500
+                    )
+                )
+            )
+        )
     }
 
     // ── SiteCheck (W4.1) ─────────────────────────────────────────

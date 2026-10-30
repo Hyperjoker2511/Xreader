@@ -21,7 +21,7 @@ import java.net.URI
  */
 object KnownSites {
 
-    enum class Family { MADARA, NOVELFULL, NOVELIGHT }
+    enum class Family { MADARA, NOVELFULL, NOVELIGHT, CHIKARI }
 
     data class Entry(
         val domains: List<String>,
@@ -49,6 +49,18 @@ object KnownSites {
             domains = listOf("novelfull.com", "www.novelfull.com"),
             family = Family.NOVELFULL,
             canSearch = true
+        ),
+        // VERIFIED 2026-10-30 against the live site (rendered
+        // DOM inspection): a SvelteKit app — novels at
+        // /novels/<slug>, chapters at /novels/<slug>/<n>, prose
+        // in <article>, the book page states its chapter total
+        // as plain text. Search exists in the site's UI but its
+        // shape is unverified, so the hint stays off until a
+        // drive proves it.
+        Entry(
+            domains = listOf("chikari.moe", "www.chikari.moe"),
+            family = Family.CHIKARI,
+            canSearch = false
         )
         // MADARA is claimed by page markers, not by domain —
         // see LinkInference.isMadaraPage; it needs no entries.
@@ -79,6 +91,15 @@ object KnownSites {
                 path.endsWith(".html") && !path.contains("/chapter-")
             Family.MADARA ->
                 path.contains("/manga/") || path.contains("/novel/")
+            Family.CHIKARI ->
+                // /novels/<slug> is a book; /novels/<slug>/<n>
+                // is a chapter of it — exactly one segment
+                // under /novels/ means the book's own page.
+                path.startsWith("/novels/") &&
+                    path.removePrefix("/novels/").trim('/')
+                        .isNotEmpty() &&
+                    !path.removePrefix("/novels/").trim('/')
+                        .contains('/')
         }
     }
 
@@ -97,6 +118,7 @@ object KnownSites {
         baseUrl: String
     ): DeclarativeConfig? = when (entry.family) {
         Family.NOVELIGHT -> novelightConfig(id, name, baseUrl)
+        Family.CHIKARI -> chikariConfig(id, name, baseUrl)
         Family.NOVELFULL, Family.MADARA -> null
     }
 
@@ -110,6 +132,7 @@ object KnownSites {
     fun applyOverrides(entry: Entry, config: DeclarativeConfig): DeclarativeConfig =
         when (entry.family) {
             Family.NOVELIGHT -> config
+            Family.CHIKARI -> config
             Family.NOVELFULL -> config.copy(
                 details = config.details.copy(
                     chapters = ChapterListSpec(
@@ -225,6 +248,86 @@ object KnownSites {
                 ajax = ChapterTextAjax(
                     urlTemplate = "$base/book/ajax/read-chapter/{id}"
                 )
+            )
+        )
+    }
+
+    /**
+     * Chikari's verified shape (live rendered-DOM inspection
+     * 2026-10-30). The site is a SvelteKit app: every page is a
+     * shell until its data arrives (~8 s on a fast connection —
+     * the loading state shows ONLY a logo and spinner, no text
+     * or links at all), so the lane is marked needsRendering
+     * and declares the wait selector its content pages carry.
+     * Books live at /novels/<slug>; chapters at
+     * /novels/<slug>/<n>; prose sits in an <article>; the book
+     * page states its total as plain text ("3229 chapters")
+     * while initially rendering only 20 chapter rows, so the
+     * chapter spec completes the list by pattern.
+     *
+     * Known limits, stated plainly: selectors are class-free
+     * (the inspection could verify tags/hrefs/text, not class
+     * names) — href shapes carry the precision instead. The
+     * book page's synopsis has no verified container, so
+     * description stays null rather than guess; covers bind
+     * from the catalogue cards, whose <img alt> is the title.
+     * Chapter rows' own text carries list chrome (relative
+     * dates, a "Mark read" button), so pattern-completed rows
+     * keep generated names — see DeclarativeSource.
+     */
+    private fun chikariConfig(
+        id: String,
+        name: String,
+        baseUrl: String
+    ): DeclarativeConfig {
+        val base = baseUrl.trimEnd('/')
+        // The home page's book cards ARE anchors: the cover's
+        // alt is the book's title, the href its page. Comics
+        // live under /series/ and are not this app's business;
+        // the /novels/ href shape keeps the lane novels-only.
+        val grid = ListSpec(
+            url = base,
+            results = "a[href*='/novels/']",
+            title = "img@alt",
+            link = "@href",
+            cover = "img@src"
+        )
+        return DeclarativeConfig(
+            id = id,
+            name = name,
+            lang = "en",
+            baseUrl = base,
+            search = null,
+            popular = grid,
+            latest = null,
+            needsRendering = true,
+            // The content the lane reads: the chapter article,
+            // or a novels anchor (chapter rows / book cards) —
+            // neither exists in the loading state, so a render
+            // cannot settle on the spinner.
+            renderWaitSelector = "article, a[href*='/novels/']",
+            details = DetailsSpec(
+                title = "h1",
+                author = "a[href*='/authors/']@text",
+                description = null,
+                cover = null,
+                chapters = ChapterListSpec(
+                    // Chapter rows are bare anchors whose href
+                    // ends in the chapter number (the regex is
+                    // jsoup's ~= — the engine's selectors are
+                    // jsoup, not browser CSS). Book links (one
+                    // segment) and author links never match.
+                    list = "a[href~='/novels/[^/]+/[0-9]+$']",
+                    name = "@text",
+                    link = "@href",
+                    reverse = true,
+                    urlPattern = "{bookUrl}/{n}",
+                    totalCountPattern = "([\\d,]+)\\s+chapters"
+                )
+            ),
+            chapter = ChapterSpec(
+                content = "article",
+                title = null
             )
         )
     }

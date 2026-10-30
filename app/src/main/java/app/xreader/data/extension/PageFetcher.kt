@@ -64,7 +64,12 @@ class EscalatingPageFetcher(
      * furniture) — render every fetch first, policy permitting.
      * RenderPolicy's own table is untouched: its PROBE mode
      * still never renders first on its own. */
-    private val forceRender: Boolean = false
+    private val forceRender: Boolean = false,
+    /** v1.0.8.1: the wait-for-content hint handed to every
+     * render through this fetcher — a live read, like
+     * [needsRendering]; the probe's lane drive supplies the
+     * lane's declared selector. Null = no hint. */
+    private val waitForSelector: () -> String? = { null }
 ) : PageFetcher {
 
     private val rendered = AtomicBoolean(false)
@@ -126,7 +131,9 @@ class EscalatingPageFetcher(
     private suspend fun render(url: String): AppResult<HostResponse> {
         rendered.set(true)
         rateLimiter.awaitTurn()
-        return renderedFetcher.fetchRendered(url, sessionKey, permissions())
+        return renderedFetcher.fetchRendered(
+            url, sessionKey, permissions(), waitForSelector()
+        )
     }
 
     /** v1.0.7: could a render actually happen through this

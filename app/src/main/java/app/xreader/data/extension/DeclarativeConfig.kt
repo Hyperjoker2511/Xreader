@@ -34,6 +34,14 @@ data class DeclarativeConfig(
      * decodes unchanged and unmarked.
      */
     val needsRendering: Boolean = false,
+    /** v1.0.8.1: a CSS selector (groups allowed) the browser
+     * view must see before a render of this source's content
+     * pages may count as settled — the wait-for-content hint
+     * for app-shell lanes whose loading spinner can look
+     * stable (chikari.moe: its chapter container / article).
+     * Read by the probe's lane drive; null (every config
+     * written before it existed) = no hint, exactly as before. */
+    val renderWaitSelector: String? = null,
     /** v1.0.1: a book page on this site that probing proved readable
      * — the "Set up search" retry re-detects from this page. */
     val sampleBookUrl: String? = null,
@@ -105,8 +113,44 @@ data class ChapterListSpec(
      * specs without the field keep working unchanged. */
     val date: String? = null,
     val reverse: Boolean = false,
-    val pagination: ChapterListPagination? = null
-)
+    val pagination: ChapterListPagination? = null,
+    /** v1.0.8.1: pattern completion for sites whose book page
+     * renders only a slice of the list but STATES its total and
+     * numbers its chapter URLs (chikari.moe: the page says
+     * "3229 chapters" and chapters live at /novels/<slug>/<n>).
+     * [urlPattern] builds a chapter URL from the book page's
+     * URL — `{bookUrl}` and `{n}` (1-based) are replaced.
+     * [totalCountPattern] is a regex over the book page's
+     * visible text whose group 1 is the stated total (commas
+     * allowed). Both null (every spec written before) = the
+     * rendered rows are the whole list, exactly as before. */
+    val urlPattern: String? = null,
+    val totalCountPattern: String? = null
+) {
+
+    /** The chapter total the book page's visible text states,
+     * per [totalCountPattern]; null when undeclared, unmatched
+     * or unparseable (a broken pattern must never take the
+     * chapter list down with it). */
+    fun statedTotalIn(pageText: String): Int? {
+        val pattern = totalCountPattern?.takeIf { it.isNotBlank() }
+            ?: return null
+        val digits = runCatching { Regex(pattern).find(pageText) }
+            .getOrNull()?.groupValues?.getOrNull(1) ?: return null
+        return digits.replace(",", "").trim().toIntOrNull()
+            ?.takeIf { it > 0 }
+    }
+
+    /** The chapter URL for [n] under [urlPattern], or null
+     * when no pattern is declared. */
+    fun patternUrl(bookPageUrl: String, n: Int): String? {
+        val pattern = urlPattern?.takeIf { it.isNotBlank() }
+            ?: return null
+        return pattern
+            .replace("{bookUrl}", bookPageUrl.trimEnd('/'))
+            .replace("{n}", n.toString())
+    }
+}
 
 /**
  * Chapter-list pagination (v1.0.6.2, F1 — the QuickNovel contract:

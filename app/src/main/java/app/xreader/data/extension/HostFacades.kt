@@ -217,7 +217,8 @@ class HostContextFactory(
         permissions: () -> ExtensionPermissions,
         rateLimiter: RateLimiter,
         onRuntimeShell: (() -> Unit)? = null,
-        forceRender: Boolean = false
+        forceRender: Boolean = false,
+        waitForSelector: () -> String? = { null }
     ): EscalatingPageFetcher? {
         val renderer = renderedFetcher ?: return null
         val runtime = renderRuntime ?: return null
@@ -231,7 +232,8 @@ class HostContextFactory(
             rateLimiter = rateLimiter,
             gate = runtime.gate(),
             onRuntimeShell = onRuntimeShell,
-            forceRender = forceRender
+            forceRender = forceRender,
+            waitForSelector = waitForSelector
         )
     }
 

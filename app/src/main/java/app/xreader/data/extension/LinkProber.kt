@@ -579,13 +579,32 @@ class LinkProber(
                         id = sourceIdFor(host, sample),
                         sampleBookUrl = sample
                     )
+                    // v1.0.8.1: a lane that declares a render
+                    // wait selector (an app-shell lane) drives
+                    // through its own stack carrying the hint,
+                    // so the drive's book/chapter renders cannot
+                    // settle before the content the lane reads
+                    // exists. The sample fetch above stays on
+                    // the plain context — a listing page has no
+                    // chapter container to wait for.
+                    val laneContext = laneConfig.renderWaitSelector
+                        ?.let { selector ->
+                            probeContext(
+                                probeStack(
+                                    host,
+                                    forceRender = forceRender,
+                                    waitForSelector = { selector }
+                                ).fetcher,
+                                host
+                            )
+                        } ?: context
                     tried("fast lane")
                     consider(
                         "fast lane", laneFull, sample,
                         // v1.0.6.1 (P4): the fast lane is
                         // hand-verified — exempt from the
                         // prose gate.
-                        testDriveScored(laneFull, sample, context, laneVerified = true)
+                        testDriveScored(laneFull, sample, laneContext, laneVerified = true)
                     )
                 }
             }
@@ -1892,6 +1911,9 @@ class LinkProber(
     private fun probeStack(
         host: String,
         forceRender: Boolean = false,
+        // v1.0.8.1: the wait-for-content hint for renders
+        // through this stack (a lane's declared selector).
+        waitForSelector: () -> String? = { null },
         // needsRendering stays LAST: three call sites pass it
         // as a trailing lambda.
         needsRendering: () -> Boolean = { false }
@@ -1910,7 +1932,8 @@ class LinkProber(
             needsRendering = needsRendering,
             permissions = { ExtensionPermissions(domains = listOf(host)) },
             rateLimiter = limiter,
-            forceRender = forceRender
+            forceRender = forceRender,
+            waitForSelector = waitForSelector
         )
         return ProbeStack(client, escalating)
     }

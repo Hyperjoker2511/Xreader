@@ -387,17 +387,24 @@ object JsShellSite {
  * (verified against the capture). The static transport serves the
  * shell for EVERY route, like the real SPA.
  *
- * The RENDERED_* pages are the DOM the site's own scripts build —
- * synthetic fixtures in the shapes [LinkInference] provably reads
- * (the LyingSearchSite skeleton), standing in for what the browser
- * view returns. The day the real rendered DOM is captured on a
- * device, these get replaced by it.
+ * The RENDERED_* pages are the DOM the site's own scripts build.
+ * v1.0.8.1: these now model the REAL rendered shapes verified by
+ * live DOM inspection 2026-10-30 (the replacement this comment
+ * always promised): cards are bare <a href="/novels/<slug>">
+ * anchors whose cover <img alt> is the title; the book page
+ * states its total as plain text ("7 chapters" here — the real
+ * book says 3229) and renders only a slice of chapter rows,
+ * bare anchors /novels/<slug>/<n> newest-first whose text
+ * carries a relative date and a nested "Mark read" button;
+ * chapter prose lives in an <article>. Class names could not
+ * be verified by the inspection, so the fixtures — like the
+ * lane — are class-free.
  */
 object ChikariSite {
     const val HOST = "chikari.moe"
     const val BASE = "https://chikari.moe"
     const val BOOK_URL = "$BASE/novels/shadow-slave"
-    const val CHAPTER_1_URL = "$BASE/novels/shadow-slave/chapter-1"
+    const val CHAPTER_1_URL = "$BASE/novels/shadow-slave/1"
 
     val SHELL_PAGE = """
         <!doctype html>
@@ -430,37 +437,49 @@ object ChikariSite {
     }
 
     private fun chapterPage(n: Int): String = """
-        <html><head><title>Chapter $n - Shadow Slave</title></head><body>
-        <h1>Chapter $n</h1>
-        <div id="chapter-content">
+        <html><head><title>Chapter $n — Shadow Slave</title></head><body>
+        <main>
+          <a href="/novels/shadow-slave">Shadow Slave</a>
+          <span>Chapter $n - $n: Nightmare Begins</span>
+          <article>
           ${chapterText.split("\n").joinToString("\n") { "<p>$it</p>" }}
-        </div>
+          </article>
+        </main>
         </body></html>
     """.trimIndent()
 
+    /** The book page states 7 chapters but renders only three
+     * rows (newest slice + the oldest) — the gap the lane's
+     * pattern completion closes. */
     val RENDERED_BOOK_PAGE = """
         <html><head>
-          <title>Shadow Slave - chikari</title>
+          <title>Shadow Slave · chikari.moe</title>
           <meta property="og:title" content="Shadow Slave"/>
-          <meta property="og:image" content="https://chikari.moe/covers/shadow-slave.jpg"/>
           <meta name="description" content="Growing up in poverty, Sunny never expected anything good from life."/>
         </head><body>
-        <form action="/search" method="get"><input type="text" name="q"/></form>
-        <h1>Shadow Slave</h1>
-        <ul id="chapter-list">
-          <li><a href="/novels/shadow-slave/chapter-3">Chapter 3</a></li>
-          <li><a href="/novels/shadow-slave/chapter-2">Chapter 2</a></li>
-          <li><a href="/novels/shadow-slave/chapter-1">Chapter 1</a></li>
-        </ul>
+        <main>
+          <h1>Shadow Slave</h1>
+          <div>9.5 rating (674) 9.7M views 7 chapters</div>
+          <div>TYPE Novel STATUS Releasing AUTHOR <a href="/authors/guiltythree">GuiltyThree</a></div>
+          <img src="https://cdn.chikari.moe/novels/53/cover.webp" alt="Shadow Slave"/>
+          <h2>Chapters</h2>
+          <a href="/novels/shadow-slave/7">Ch. 7 Seventh Night 1 day ago <button>Mark read</button></a>
+          <a href="/novels/shadow-slave/6">Ch. 6 Sixth Night 2 days ago <button>Mark read</button></a>
+          <button>Show all chapters</button>
+          <a href="/novels/shadow-slave/1">Ch. 1 Nightmare Begins 3 years ago <button>Mark read</button></a>
+          <div>
+            <a href="/novels/lord-of-ash"><img src="/covers/ash.jpg" alt="Lord of Ash"/>Lord of Ash</a>
+          </div>
+        </main>
         </body></html>
     """.trimIndent()
 
     val RENDERED_HOME_PAGE = """
-        <html><body><div class="grid">
-          <a href="/novels/shadow-slave"><img src="/covers/shadow-slave.jpg"/>Shadow Slave</a>
-          <a href="/novels/lord-of-ash"><img src="/covers/ash.jpg"/>Lord of Ash</a>
-          <a href="/novels/dim-harbour"><img src="/covers/harbour.jpg"/>Dim Harbour</a>
-        </div></body></html>
+        <html><body><main>
+          <a href="/novels/shadow-slave"><img src="https://cdn.chikari.moe/novels/53/cover.webp" alt="Shadow Slave"/><button>Bookmark</button>Novel 9.5 9.7M Shadow Slave</a>
+          <a href="/novels/lord-of-ash"><img src="/covers/ash.jpg" alt="Lord of Ash"/><button>Bookmark</button>Novel 8.1 1.2M Lord of Ash</a>
+          <a href="/novels/dim-harbour"><img src="/covers/harbour.jpg" alt="Dim Harbour"/><button>Bookmark</button>Novel 7.4 300K Dim Harbour</a>
+        </main></body></html>
     """.trimIndent()
 
     /** The rendered pages the browser view hands back, by URL. */
@@ -472,8 +491,9 @@ object ChikariSite {
 
     /** Fallback for the URL families (chapters, search results). */
     fun renderedFallback(url: String): String? = when {
-        url.startsWith("$BASE/novels/shadow-slave/chapter-") ->
-            chapterPage(url.substringAfterLast("chapter-").toIntOrNull() ?: 1)
+        url.startsWith("$BASE/novels/shadow-slave/") ->
+            url.substringAfterLast('/').toIntOrNull()
+                ?.let { chapterPage(it) }
         url.startsWith("$BASE/search") -> RENDERED_HOME_PAGE
         else -> null
     }

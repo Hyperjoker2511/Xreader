@@ -561,7 +561,59 @@ class DeclarativeSource(
         if (pagination != null) {
             walkChapterPages(doc, pageUrl, pagination, rows)
         }
+        // v1.0.8.1: a pattern-completed list is already in
+        // reading order — it must NOT pass through the reverse
+        // finishing the parsed-rows path uses.
+        val patterned = patternCompletedRows(doc, pageUrl, rows)
+        if (patterned != null) return patterned.distinctBy { it.id }
         return finishChapterRows(rows)
+    }
+
+    /**
+     * v1.0.8.1: pattern completion — when the chapter spec
+     * declares a URL pattern + a stated-total pattern and the
+     * book page states MORE chapters than it renders, the full
+     * list is generated 1..total in reading order. The rendered
+     * rows do NOT lend their names: on the verified site their
+     * text carries list chrome (relative dates, button labels),
+     * so generated "Chapter n" names keep the list uniform —
+     * the parsed rows remain the fallback for a page whose
+     * stated total can't be read. Rendered rows under the
+     * book's own URL that the pattern doesn't know (a prologue,
+     * a special) keep their place at the end rather than being
+     * lost; foreign rows (another book's links) never enter.
+     * Returns null when the pattern doesn't apply or adds
+     * nothing — the parsed rows then stand as the list,
+     * exactly as before.
+     */
+    private fun patternCompletedRows(
+        doc: Document,
+        pageUrl: String,
+        parsedRows: List<SourceChapter>
+    ): List<SourceChapter>? {
+        val spec = config.details.chapters
+        if (spec.urlPattern == null || spec.totalCountPattern == null) {
+            return null
+        }
+        val total = spec.statedTotalIn(doc.body()?.text().orEmpty())
+            ?: return null
+        if (total <= parsedRows.size || total > MAX_PATTERN_CHAPTERS) {
+            return null
+        }
+        val generated = (1..total).map { n ->
+            val url = spec.patternUrl(pageUrl, n) ?: return null
+            SourceChapter(
+                id = absolute(url, pageUrl),
+                name = "Chapter $n",
+                number = n.toFloat()
+            )
+        }
+        val generatedIds = generated.mapTo(HashSet()) { it.id }
+        val bookPrefix = pageUrl.trimEnd('/') + "/"
+        val extras = parsedRows.filter {
+            it.id !in generatedIds && it.id.startsWith(bookPrefix)
+        }
+        return generated + extras
     }
 
     private fun parseChapterRows(doc: Document, pageUrl: String): List<SourceChapter> =
@@ -908,7 +960,7 @@ class DeclarativeSource(
             } else {
                 doc.selectFirst(spec.css) ?: continue
             }
-            val value = readFrom(el, spec)
+            val value = readFrom(textTarget(doc, spec, el), spec)
             if (!seen) {
                 firstValue = value
                 seen = true
@@ -928,7 +980,7 @@ class DeclarativeSource(
             } else {
                 element.selectFirst(spec.css) ?: continue
             }
-            val value = readFrom(target, spec)
+            val value = readFrom(textTarget(element, spec, target), spec)
             if (!seen) {
                 firstValue = value
                 seen = true
@@ -967,6 +1019,35 @@ class DeclarativeSource(
         return null
     }
 
+    /**
+     * v1.0.8.1: the element a TEXT read should actually read.
+     * Catalogue cards whose first matching anchor is a textless
+     * cover link (a common real-world shape — chikari.moe's
+     * cards, and the cover-first cards behind the v1.0.8 F5
+     * failure) made specs like `a@text` read the cover link's
+     * empty text, so every listing item read title-less and was
+     * dropped. When the first match's text is blank, rescan the
+     * SAME selector within the same container for the first
+     * match that carries text. Only text reads are affected:
+     * attribute reads (@href/@src/…) keep the first match
+     * exactly, chains and their first-value fallback are
+     * untouched, and a blank-css self-read never rescans.
+     */
+    private fun textTarget(
+        container: Element,
+        spec: SelectorSpec,
+        first: Element
+    ): Element {
+        if (spec.css.isBlank()) return first
+        if (spec.attr != null && spec.attr != "text") return first
+        if (first.text().isNotBlank()) return first
+        return runCatching {
+            container.select(spec.css).firstOrNull {
+                it.text().isNotBlank()
+            }
+        }.getOrNull() ?: first
+    }
+
     private fun readFrom(element: Element, spec: SelectorSpec): String? {
         if (spec.attr == null) return element.text()
         if (spec.attr == "text") return element.text()
@@ -990,6 +1071,10 @@ class DeclarativeSource(
          * novelight's 50 rows a page this still covers 2,000
          * chapters past the book page's own slice. */
         const val MAX_LIST_PAGES = 40
+
+        /** v1.0.8.1: pattern-completion sanity cap — a stated
+         * total above this is a misread page, not a book. */
+        const val MAX_PATTERN_CHAPTERS = 50_000
 
         /** v1.0.5 Stage 1.5: the AJAX endpoint answered but carried
          * no readable text — the paid/locked signal for this mode,

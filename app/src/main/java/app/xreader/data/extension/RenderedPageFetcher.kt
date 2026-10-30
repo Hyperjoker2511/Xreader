@@ -50,12 +50,26 @@ data class RenderSettleSample(
  * AND its visible text length and anchor count are unchanged across
  * two polls at least [MIN_SETTLE_MS] after load — or, when the caller
  * named a selector, the moment a match exists and the document has
- * left its initial loading state.
+ * left its initial loading state. v1.0.8.1: a sample still inside
+ * the shell band (see [SHELL_TEXT_MIN]) is never settled — a stable
+ * loading spinner is not a finished page.
  */
 object RenderSettle {
 
     const val MIN_SETTLE_MS: Long = 1_200L
     const val POLL_INTERVAL_MS: Long = 400L
+
+    /** v1.0.8.1: the shell band — a page under BOTH limits is
+     * still a loading shell, not a settled page. Mirrors the
+     * numeric bands in LinkInference.isJsShell. */
+    const val SHELL_TEXT_MIN: Int = 120
+    const val SHELL_ANCHORS_MIN: Int = 5
+
+    /** v1.0.8.1: how long a wait-for selector may hold back
+     * settling. App-shell data on a slow connection can take
+     * well over the ~8 s seen on a fast one; the hard timeout
+     * (30–45 s) still bounds the whole render. */
+    const val HINT_WAIT_MAX_MS: Long = 25_000L
 
     /** W5.7: the view is destroyed after this long idle. */
     const val IDLE_DESTROY_MS: Long = 60_000L
@@ -71,6 +85,35 @@ object RenderSettle {
             last.readyState != "loading"
         ) {
             return true
+        }
+        // v1.0.8.1: content-aware settling — stability is not
+        // readiness. A loading spinner is perfectly stable, so a
+        // sample still inside the shell band never counts as
+        // settled, however long it sits unchanged; polling
+        // continues until the hard timeout instead. The bands
+        // are the numeric half of LinkInference.isJsShell's
+        // definition (near-no text AND near-no links — either
+        // one clearing its band means real content is present
+        // and the stability rule below may settle the page).
+        // This is the chikari.moe failure: the old rule declared
+        // the spinner "settled" at ~2 s while the site's data
+        // arrived at ~8 s, and every probe stage studied an
+        // empty page.
+        if (last.textLength < SHELL_TEXT_MIN &&
+            last.anchorCount < SHELL_ANCHORS_MIN
+        ) {
+            return false
+        }
+        // v1.0.8.1: a caller that named a wait-for selector
+        // means "not settled until it matches" — the stability
+        // rule may not fire while the wanted content is absent.
+        // The wait is capped ([HINT_WAIT_MAX_MS]): a selector
+        // that never matches must not hold the render until the
+        // hard timeout on every fetch.
+        if (selectorCount != null && selectorCount <= 0 &&
+            last.elapsedMs < HINT_WAIT_MAX_MS
+        ) {
+            return false
         }
         if (samples.size < 2) return false
         val previous = samples[samples.size - 2]

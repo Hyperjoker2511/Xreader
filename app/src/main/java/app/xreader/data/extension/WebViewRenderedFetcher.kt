@@ -131,6 +131,11 @@ class WebViewRenderedFetcher(
                     // W5.3 timeout rule: a page that ran out of time
                     // still counts if what it built is a real page;
                     // a timed-out SHELL is a failure, not content.
+                    // v1.0.8.1: the same verdict now applies to a
+                    // snapshot that SETTLED while still a shell —
+                    // with content-aware settling that should be
+                    // rare, but a page that still reads as a shell
+                    // is never content, however it got here.
                     val stillShell = withContext(Dispatchers.Default) {
                         runCatching {
                             LinkInference.isJsShell(
@@ -138,7 +143,7 @@ class WebViewRenderedFetcher(
                             )
                         }.getOrDefault(false)
                     }
-                    if (outcome.timedOut && stillShell) {
+                    if (stillShell) {
                         AppResult.Err(
                             AppError.ProviderDown(
                                 "browser view",
@@ -226,6 +231,7 @@ class WebViewRenderedFetcher(
             val samples = mutableListOf<RenderSettleSample>()
             val deadline = SystemClock.uptimeMillis() + timeoutMs
             var timedOut = false
+            var expanderClicked = false
             while (true) {
                 delayOnMain(RenderSettle.POLL_INTERVAL_MS)
                 if (blocked || loadError != null) break
@@ -236,7 +242,26 @@ class WebViewRenderedFetcher(
                     )
                     if (sample != null) {
                         samples += sample
-                        if (RenderSettle.isSettled(samples)) break
+                        // v1.0.8.1: a book page that hides its
+                        // chapter list behind a "show all
+                        // chapters" expander gets ONE click
+                        // before settling is allowed — the click
+                        // changes the DOM, so this poll can no
+                        // longer be the settled one. The latch
+                        // sets on a HIT only: on app-shell sites
+                        // the button does not exist until the
+                        // data arrives, long after the shell
+                        // document first reports "complete".
+                        val clickedNow = if (!expanderClicked) {
+                            clickExpander(view)
+                        } else {
+                            false
+                        }
+                        if (clickedNow) {
+                            expanderClicked = true
+                        } else if (RenderSettle.isSettled(samples)) {
+                            break
+                        }
                     }
                 }
                 if (SystemClock.uptimeMillis() >= deadline) {
@@ -340,6 +365,28 @@ class WebViewRenderedFetcher(
             selectorCount = parts[3].toIntOrNull()?.takeIf { it >= 0 },
             elapsedMs = elapsedMs
         )
+    }
+
+    /**
+     * v1.0.8.1: click the page's chapter-list expander ("show
+     * all…", "load more…") so the snapshot carries the expanded
+     * list. Only buttons and non-navigating anchors are clicked —
+     * a real href would take the view away from the page being
+     * read. Returns true when at least one element was actually
+     * clicked.
+     */
+    private suspend fun clickExpander(view: WebView): Boolean {
+        val script = "(function(){var els=Array.from(" +
+            "document.querySelectorAll('button, a[href=\"#\"], " +
+            "a[href^=\"javascript:\"]'))" +
+            ".filter(function(el){var t=(el.innerText||'')" +
+            ".toLowerCase();return t.indexOf('show all')>=0||" +
+            "t.indexOf('load more')>=0;});" +
+            "els.forEach(function(b){b.click();});" +
+            "return ''+els.length;})()"
+        val decoded = decodeJsString(evaluate(view, script))
+            ?: return false
+        return (decoded.toIntOrNull() ?: 0) > 0
     }
 
     private suspend fun extractHtml(view: WebView): String? {
