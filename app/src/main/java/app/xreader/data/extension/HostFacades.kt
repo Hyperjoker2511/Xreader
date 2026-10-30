@@ -172,7 +172,17 @@ class HostContextFactory(
         permissions: () -> ExtensionPermissions,
         /** v1.0.6: live read of the source's `needsRendering` marker
          * (only declarative sources pass one). */
-        needsRendering: () -> Boolean = { false }
+        needsRendering: () -> Boolean = { false },
+        /** v1.0.8.2: live read of the source's declared
+         * wait-for-content selector (`renderWaitSelector`) —
+         * a saved app-shell source's own fetches must wait for
+         * the content they read, exactly as its probe drive did.
+         * v1.0.8.1 wired the hint into the drive only; on a slow
+         * connection the catalogue render then settled on a
+         * chrome-only intermediate page (header/footer clear the
+         * shell band) and Browse showed an empty catalogue for a
+         * source that had added perfectly. */
+        waitForSelector: () -> String? = { null }
     ): SourceContext {
         val limiter = synchronized(rateLimiters) {
             rateLimiters.getOrPut(extensionRowId) { RateLimiter() }
@@ -192,7 +202,8 @@ class HostContextFactory(
             needsRendering = needsRendering,
             permissions = permissions,
             rateLimiter = limiter,
-            onRuntimeShell = { onRuntimeShell(extensionRowId) }
+            onRuntimeShell = { onRuntimeShell(extensionRowId) },
+            waitForSelector = waitForSelector
         ) ?: client
         return object : SourceContext {
             override val http: HostHttp = HostHttpImpl(fetcher)

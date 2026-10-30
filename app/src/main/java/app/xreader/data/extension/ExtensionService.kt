@@ -121,7 +121,16 @@ class ExtensionService(
             packageId = row.packageId,
             label = row.displayName,
             permissions = { permissions },
-            needsRendering = { declarativeConfigs.any { it.needsRendering } }
+            needsRendering = { declarativeConfigs.any { it.needsRendering } },
+            // v1.0.8.2: the same up-front decode supplies the
+            // wait-for-content hint, so a saved app-shell
+            // source's own fetches wait for their content just
+            // like the drive that proved the source did.
+            waitForSelector = {
+                declarativeConfigs.firstOrNull {
+                    it.renderWaitSelector != null
+                }?.renderWaitSelector
+            }
         )
         val sources: List<Source> = try {
             when (row.kind) {

@@ -48,6 +48,11 @@ class FakeRenderedFetcher(
 
     val calls = mutableListOf<String>()
 
+    /** v1.0.8.2: the wait-for-content hint of each call, in
+     * call order — pins that a source's own fetches carry the
+     * selector its config declares. */
+    val selectors = mutableListOf<String?>()
+
     override suspend fun fetchRendered(
         url: String,
         sessionKey: String,
@@ -55,6 +60,7 @@ class FakeRenderedFetcher(
         waitForSelector: String?
     ): AppResult<HostResponse> {
         calls += url
+        selectors += waitForSelector
         val body = pages[url] ?: fallback(url)
             ?: return AppResult.Err(
                 AppError.ProviderDown(
