@@ -96,13 +96,46 @@ class SelectorAiTest {
 
     @Test
     fun `selectors that do not match the page fail the test drive`() = runBlocking {
-        val wrong = selectorJson.replace("#chapter-content", "#no-such-block")
+        // A chapter LIST selector that matches nothing leaves
+        // the drive with no chapters to read — nothing the
+        // self-heal can repair (it heals chapter TEXT rules),
+        // so the proposal must fail plainly.
+        val wrong = selectorJson.replace("#chapter-list li a", "#no-such-list li a")
         val outcome = selectorAi(wrong).buildFromLink(MoonSite.BOOK_URL)
         assertTrue(
             "an AI config that reads nothing must not be offered for saving, got $outcome",
             outcome is SelectorAi.Outcome.Failed
         )
     }
+
+    @Test
+    fun `a dead chapter selector is healed and the draft carries the healed rules`() =
+        runBlocking {
+            // The v1.0.8.3 self-heal: a chapter TEXT selector
+            // that matches nothing is re-derived from the
+            // chapter page during the drive. The offer is then
+            // legitimate — but ONLY if the saved draft carries
+            // the healed rules, not the dead selector the
+            // model proposed (the v1.0.9 gate caught the AI
+            // path drafting the unhealed original).
+            val wrong = selectorJson.replace("#chapter-content", "#no-such-block")
+            val outcome = selectorAi(wrong).buildFromLink(MoonSite.BOOK_URL)
+            assertTrue(
+                "expected the healed proposal to be Ready, got $outcome",
+                outcome is SelectorAi.Outcome.Ready
+            )
+            val draft = (outcome as SelectorAi.Outcome.Ready).draft
+            assertTrue(
+                "preview must be story text, got: " +
+                    draft.testDrive.chapterTextPreview.take(120),
+                draft.testDrive.chapterTextPreview.contains("The star fell")
+            )
+            assertTrue(
+                "the draft must not keep the dead selector, got " +
+                    draft.config.chapter.content,
+                draft.config.chapter.content?.contains("#no-such-block") != true
+            )
+        }
 
     @Test
     fun `feature off fails before any model call`() = runBlocking {

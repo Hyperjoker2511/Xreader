@@ -167,7 +167,15 @@ class SelectorAi(
             )
             is AppResult.Ok -> Outcome.Ready(
                 LinkProber.Draft(
-                    config = drivenConfig,
+                    // v1.0.9 gate fix: the drive may have HEALED
+                    // the proposal's chapter rules (the v1.0.8.3
+                    // self-heal re-derives them from the chapter
+                    // page). The probe flow adopts the healed
+                    // config into its drafts; the AI path must
+                    // too — drafting the unhealed original would
+                    // save a source that passed its drive yet
+                    // cannot read a chapter.
+                    config = drive.value.healedConfig ?: drivenConfig,
                     testDrive = drive.value,
                     bookUrl = bookUrl,
                     host = host

@@ -244,9 +244,9 @@ object FamilyTemplates {
     // ?{typeParam}={latest|type}&{pageParam}={n}; otherwise
     // the listing TYPE is a PATH segment — popular = the
     // plugin's filters.type.value (extracted as "filterType"),
-    // latest = options.latestPage — paged /{n} when
-    // pageAsPath (the default; page 1 then asks for /1, which
-    // this family serves/redirects) else ?{pageParam}={n}.
+    // latest = options.latestPage — paged ?{pageParam}={n}
+    // by default, or /{n} when the plugin sets pageAsPath
+    // (page 1 then asks for /1, which those sites serve).
     // Item names are the anchors' TITLE ATTRIBUTES; covers
     // prefer data-src, then data-cfsrc, data-original, src.
     // Search = {searchPage}?{searchKey}={q} (POST body when
@@ -268,10 +268,15 @@ object FamilyTemplates {
     ): DeclarativeConfig {
         val latestPage = options["latestPage"]?.trim('/') ?: ""
         val pageParam = options["pageParam"] ?: "page"
-        val pageAsPath = options["pageAsPath"] != "false"
+        // The generator's default is FALSE (its expression is
+        // `pageAsPath !== undefined && pageAsPath`) — most of
+        // the family pages with ?page=; only plugins that set
+        // it explicitly (FreeWebNovel, LibRead) use /{n}.
+        val pageAsPath = options["pageAsPath"] == "true"
         val typeParam = options["typeParam"] ?: "type"
         val listingPath = options["novelListing"]?.trim('/') ?: ""
         val typeValue = options["filterType"]?.trim('/') ?: ""
+        val listClass = options["listClass"]?.trim()?.takeIf { it.isNotBlank() }
         fun pathListing(segment: String): String {
             val root = if (segment.isBlank()) base else "$base/$segment"
             return if (pageAsPath) "$root/{page}" else "$root?$pageParam={page}"
@@ -286,7 +291,11 @@ object FamilyTemplates {
         } else {
             pathListing(if (popular) typeValue else latestPage.ifBlank { typeValue })
         }
-        val resultsSpec = ".list-novel .row, .archive .row, .col-content .row"
+        val resultsSpec = if (listClass != null) {
+            ".$listClass .row, .list-novel .row, .archive .row, .col-content .row"
+        } else {
+            ".list-novel .row, .archive .row, .col-content .row"
+        }
         val titleSpec = "a@title || h3.title a@text || a@text"
         val coverSpec = "img@data-src || img@data-cfsrc || " +
             "img@data-original || img@src"
@@ -314,7 +323,7 @@ object FamilyTemplates {
             baseUrl = base,
             search = ListSpec(
                 url = "$base/$searchPage" +
-                    if (postSearch) "" else "?$searchKey={query}",
+                    if (postSearch) "" else "?$searchKey={query}&$pageParam={page}",
                 results = resultsSpec,
                 title = titleSpec,
                 link = "a@href",
@@ -325,7 +334,8 @@ object FamilyTemplates {
             popular = popularListing,
             latest = latestListing,
             details = DetailsSpec(
-                title = ".books h3@text || .m-imgtxt h3@text || " +
+                title = ".books img@title || .m-imgtxt img@title || " +
+                    ".books h3@text || .m-imgtxt h3@text || " +
                     "h1 || .title",
                 author = "a[href*='/author/']@text",
                 description = ".desc-text@text || .inner@text",

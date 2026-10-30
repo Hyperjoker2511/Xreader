@@ -368,22 +368,44 @@ class V109RepoLiveTest {
                 "filterType" to "most-popular"
             )
         )!!
+        // AllNovel sets no pageAsPath — the generator's
+        // default is query paging (?page=), not path paging.
         assertEquals(
-            "https://novelfull.com/most-popular/{page}",
+            "https://novelfull.com/most-popular?page={page}",
             rnf.popular!!.url
         )
         assertEquals(
-            "https://novelfull.com/latest-release-novel/{page}",
+            "https://novelfull.com/latest-release-novel?page={page}",
             rnf.latest!!.url
         )
         assertEquals(
-            "https://novelfull.com/search?keyword={query}",
+            "https://novelfull.com/search?keyword={query}&page={page}",
             rnf.search!!.url
         )
         assertTrue(rnf.popular!!.title!!.startsWith("a@title"))
         assertEquals(false, rnf.details!!.chapters!!.reverse)
         assertTrue(rnf.chapter.content!!.contains("#chapter-content"))
         assertTrue(rnf.chapter.content!!.contains("#chr-content"))
+
+        // FreeWebNovel's shape: pageAsPath set explicitly,
+        // a listClass container, latest under sort/.
+        val fwn = FamilyTemplates.configFor(
+            family = "readnovelfull", pluginId = "FWN.com",
+            site = "https://freewebnovel.com/", name = "Free Web Novel",
+            lang = "en",
+            options = mapOf(
+                "latestPage" to "sort/latest-release",
+                "filterType" to "sort/most-popular",
+                "pageAsPath" to "true",
+                "listClass" to "ss-custom",
+                "searchPage" to "search"
+            )
+        )!!
+        assertEquals(
+            "https://freewebnovel.com/sort/most-popular/{page}",
+            fwn.popular!!.url
+        )
+        assertTrue(fwn.popular!!.results!!.contains(".ss-custom .row"))
         assertNull(
             FamilyTemplates.configFor(
                 "fictioneer", "x", "https://x.example", "X", "en", emptyMap()

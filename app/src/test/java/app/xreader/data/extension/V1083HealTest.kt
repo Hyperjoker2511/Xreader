@@ -47,15 +47,27 @@ class V1083HealTest {
     fun `conversion sliver falls back to the element's full text`() {
         // The story sits where the structured converter does
         // not walk (a noscript block); only the promo line
-        // converts. Blocks would carry ~50 of ~700 readable
-        // characters — the plain-text reading must win.
+        // converts. Blocks would carry ~50 of ~610 readable
+        // characters — the plain-text reading must win. (The
+        // fixture must clear the guard's 400-char floor with
+        // room to spare: the gate's first run of this test
+        // used a ~330-char fixture that stayed under the
+        // floor, so the guard rightly stayed out and the
+        // test failed on its own arithmetic.)
         val prose = listOf(
             "The lighthouse keeper climbed the tower at dusk, as " +
                 "he had done every evening for thirty years.",
             "Below him the harbour lights came on one by one, " +
                 "and the tide worried at the rocks without rest.",
             "\"Storm by Thursday,\" he told the cat. \"You can " +
-                "feel it in the stairs, same as I can.\""
+                "feel it in the stairs, same as I can.\"",
+            "He lit the lamp, trimmed the wick, and opened the " +
+                "log book to a fresh page.",
+            "Outside, the first rain needled the glass, and the " +
+                "light turned over the black water.",
+            "He wrote the date, the wind, and the state of the " +
+                "sea, in the small careful hand of a man with " +
+                "nowhere else to be."
         )
         val fragment = "<div class=\"chapter-body\"><noscript>" +
             prose.joinToString("") { "<p>$it</p>" } +
