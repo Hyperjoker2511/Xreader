@@ -293,7 +293,7 @@ class GeminiClient(
             // detail — "quota exceeded, check your plan" is the
             // TRUTH an Illustrate failure must show, not a bare
             // "busy right now" for what is really a plan limit.
-            code == 429 -> AppError.RateLimited(SERVICE_ID, detail)
+            code == 429 -> AppError.RateLimited(SERVICE_ID, detail = detail)
             code in 500..599 -> AppError.ProviderDown(SERVICE_ID, code, true, detail)
             else -> AppError.ProviderDown(SERVICE_ID, code, false, detail)
         }

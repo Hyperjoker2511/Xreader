@@ -34,10 +34,16 @@ sealed interface AppError {
         override val detail: String? = null
     ) : AppError
 
-    /** HTTP 429 — the service asked us to slow down. */
+    /** HTTP 429 — the service asked us to slow down. v1.0.7 gate
+     * fix: gains the detail override its siblings have — a quota
+     * 429's truth lives in the provider's own words ("quota
+     * exceeded, check your plan"), and before this the class
+     * could not carry them at all (the interface default is
+     * null), so every 429 rendered as a bare "busy". */
     data class RateLimited(
         val serviceId: String,
-        val retryAfterSeconds: Long? = null
+        val retryAfterSeconds: Long? = null,
+        override val detail: String? = null
     ) : AppError
 
     /** HTTP 401/403: a stored key/password is wrong, expired, or missing. */

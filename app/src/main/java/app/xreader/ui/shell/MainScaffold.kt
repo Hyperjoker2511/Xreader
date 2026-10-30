@@ -107,6 +107,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -463,7 +464,7 @@ private fun GrainOverlay(intensity: Float, modifier: Modifier = Modifier) {
             pixels[i] = android.graphics.Color.rgb(v, v, v)
         }
         bitmap.setPixels(pixels, 0, size, 0, 0, size, size)
-        androidx.compose.ui.graphics.asImageBitmap(bitmap)
+        bitmap.asImageBitmap()
     }
     androidx.compose.foundation.Canvas(modifier.fillMaxSize()) {
         val step = 144f

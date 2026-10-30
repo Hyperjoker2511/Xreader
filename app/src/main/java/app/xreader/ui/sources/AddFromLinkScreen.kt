@@ -13,6 +13,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -58,10 +60,15 @@ fun AddFromLinkScreen(
         sessionSaved.collect { key -> viewModel.onSessionSaved(key) }
     }
 
+    // v1.0.7 gate-fix round: this column SCROLLS. It did not —
+    // a long proof card laid "Save this source" out below the
+    // bottom of the screen with no way to reach it (found
+    // on-device 2026-10-30: "It works" proof, no Add option).
     Column(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
         androidx.compose.foundation.layout.Row(
@@ -366,5 +373,9 @@ fun AddFromLinkScreen(
                 }
             }
         }
+        // Room to scroll the last actions clear of the
+        // floating bottom bar (and of screens whose lowest
+        // strip is hard to reach).
+        Spacer(Modifier.height(96.dp))
     }
 }
