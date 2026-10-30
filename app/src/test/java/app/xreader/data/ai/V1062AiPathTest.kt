@@ -136,10 +136,13 @@ class V1062AiPathTest {
         val loaded = loader.loadContent(1L, chapter)
         assertEquals("Fetched live text.", loaded?.plainText())
         assertEquals(1, fetches)
-        // The direct fetch persisted the chapter's downloaded copy.
+        // The direct fetch persisted the chapter's text — as a
+        // reading cache (v1.0.7.1 user rule, deliberate pin
+        // change): an AI-path fetch is a read, not a download,
+        // so the state stays NONE.
         assertTrue(chapterDao.getById(chapterId)!!.contentPath != null)
         assertEquals(
-            DownloadState.READY, chapterDao.getById(chapterId)!!.downloadState
+            DownloadState.NONE, chapterDao.getById(chapterId)!!.downloadState
         )
     }
 

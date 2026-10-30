@@ -92,9 +92,12 @@ object ChapterListFilter {
             when (state) {
                 State.ALL -> Unit
                 State.UNREAD -> if (chapter.read) return@filterIndexed false
+                // Downloaded means the user tapped Download
+                // (v1.0.7.1 rule) — a reading cache alone
+                // (text on the phone, state untouched) does
+                // NOT count.
                 State.DOWNLOADED -> if (
-                    chapter.downloadState != DownloadState.READY &&
-                    chapter.contentPath == null
+                    chapter.downloadState != DownloadState.READY
                 ) {
                     return@filterIndexed false
                 }

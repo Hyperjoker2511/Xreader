@@ -106,14 +106,18 @@ class V1062GeminiFixTest {
         assertEquals("Live text.", loaded?.plainText())
         assertEquals(1, fetches.get())
         // The queue was never touched: same single row, still
-        // PAUSED; the chapter's READY came from the direct fetch.
+        // PAUSED; the direct fetch supplied the text.
         assertEquals(1, queueDao.items.value.size)
         assertEquals(
             QueueState.PAUSED, queueDao.getById(pausedItem.id)!!.state
         )
+        // v1.0.7.1 (user rule, deliberate pin change): a live
+        // READ caches the text but is NOT a download — the
+        // state stays NONE until the user taps Download.
         assertEquals(
-            DownloadState.READY, chapterDao.getById(chapterId)!!.downloadState
+            DownloadState.NONE, chapterDao.getById(chapterId)!!.downloadState
         )
+        assertTrue(chapterDao.getById(chapterId)!!.contentPath != null)
     }
 
     @Test

@@ -345,9 +345,17 @@ class DownloadEngine(
         // what makes Download-all and Resume strictly
         // continue-where-it-stopped at the engine level, not
         // just at the enqueue level.
-        if (chapter.downloadState == DownloadState.READY &&
-            chapter.contentPath != null
-        ) {
+        // v1.0.7.1 (the user's rule): the same holds for a
+        // chapter held as a READING CACHE (read online, never
+        // downloaded) — tapping Download PROMOTES it where it
+        // stands: state becomes READY, no fetch. Downloaded
+        // means the user asked, and only that.
+        if (chapter.contentPath != null) {
+            if (chapter.downloadState != DownloadState.READY) {
+                chapterDao.setDownloadState(
+                    chapterId, DownloadState.READY
+                )
+            }
             queueDao.update(
                 item.copy(
                     state = QueueState.DONE,

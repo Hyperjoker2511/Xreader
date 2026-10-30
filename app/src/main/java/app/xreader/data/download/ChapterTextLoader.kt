@@ -6,7 +6,6 @@ import app.xreader.core.error.ErrorText
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.ChapterDao
 import app.xreader.data.db.ChapterSourceMapDao
-import app.xreader.data.db.DownloadState
 import app.xreader.data.extension.DiagnosticLog
 import app.xreader.data.files.BookStorage
 import app.xreader.domain.content.ChapterContent
@@ -22,11 +21,16 @@ import kotlinx.coroutines.CancellationException
  * chapter DIRECTLY through the same chapter-source machinery the
  * download engine drains with (the container's chapter-source
  * resolver: failover candidates in order, locks and login states
- * honoured identically), then persist the result as the chapter's
- * downloaded copy — write, READY state, verified-source mark and
- * the chapter-downloaded hook, in the engine's own order. That
- * persisted copy is the silent save F3 promises: the next read,
- * by any feature, is local.
+ * honoured identically), then persist the result as a READING
+ * CACHE — the next read, by any feature, is local.
+ *
+ * v1.0.7.1 (the user's rule, 2026-10-30): reading online is NOT
+ * downloading. This loader never touches the chapter's download
+ * state: a read chapter does not show as downloaded, does not
+ * count as downloaded, and a failed read marks nothing. The
+ * READY state belongs to the download engine alone — the user
+ * taps Download, the engine promotes a cached chapter instantly
+ * (or fetches it), and only then is a chapter "downloaded".
  *
  * v1.0.6.2 (Gemini fix round, G1): the live path used to enqueue
  * through the download queue and poll the database for up to
@@ -72,7 +76,6 @@ class ChapterTextLoader(
         // not trigger a second fetch of a stored chapter.
         val current = chapterDao.getById(chapter.id) ?: chapter
         if (current.contentPath != null) return Outcome.Stored(current)
-        chapterDao.setDownloadState(current.id, DownloadState.DOWNLOADING)
         // The engine's own no-source wording (its processChapterItem
         // empty-candidates case): a chapter nothing can serve
         // fails with exactly this reason.
@@ -91,9 +94,19 @@ class ChapterTextLoader(
                         break
                     }
                     val relativePath = (saved as AppResult.Ok).value
+                    // v1.0.7.1: keep the text as a reading
+                    // cache and preserve the row's download
+                    // state exactly as it stands — re-read
+                    // first: a real download may have landed
+                    // while this fetch was in flight, and its
+                    // READY (and its copy) wins.
+                    val freshRow = chapterDao.getById(current.id)
+                    if (freshRow?.contentPath != null) {
+                        return Outcome.Stored(freshRow)
+                    }
                     chapterDao.setContent(
                         current.id, relativePath, fetched.content.wordCount,
-                        DownloadState.READY
+                        freshRow?.downloadState ?: current.downloadState
                     )
                     try {
                         onChapterDownloaded(bookId, current.id)
@@ -113,10 +126,10 @@ class ChapterTextLoader(
                 is FetchOutcome.Failure -> lastError = fetched.error
             }
         }
-        // The engine's failure bookkeeping, mirrored: the chapter
-        // carries FAILED and the reason joins the session's
-        // problem history for the Copy-details flow.
-        chapterDao.setDownloadState(current.id, DownloadState.FAILED)
+        // v1.0.7.1: a failed READ marks nothing on the chapter
+        // (FAILED belongs to downloads the user asked for);
+        // the reason still joins the session's problem history
+        // for the Copy-details flow.
         DiagnosticLog.record(
             "download", ErrorText.displayText(lastError),
             "chapter ${current.id} · book $bookId"

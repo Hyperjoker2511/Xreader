@@ -105,13 +105,21 @@ class ChapterListFilterTest {
 
     @Test
     fun `state filters keep unread and downloaded apart`() {
+        // D is a READING CACHE: the text is on the phone but
+        // the user never tapped Download (v1.0.7.1 rule) — it
+        // must not count as downloaded.
+        val cached = Chapter(
+            bookId = 1, index = 3, title = "D",
+            contentPath = "content/1/3.json", updatedAt = 0
+        )
         val mixed = listOf(
             chapter(0, "A", read = true),
             chapter(1, "B", downloaded = true),
-            chapter(2, "C")
+            chapter(2, "C"),
+            cached
         )
         assertEquals(
-            listOf("B", "C"),
+            listOf("B", "C", "D"),
             ChapterListFilter.apply(
                 mixed, "", ChapterListFilter.State.UNREAD, null
             ).map { it.title }
