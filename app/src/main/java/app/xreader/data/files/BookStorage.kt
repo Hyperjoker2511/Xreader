@@ -36,9 +36,13 @@ class BookStorage(val filesDir: File) {
     fun coversDir(): File = File(filesDir, "covers").apply { mkdirs() }
     fun downloadsTempDir(): File = File(filesDir, "downloads-temp").apply { mkdirs() }
 
+    /** The import-staging root; per-import subdirs live under it.
+     * Exposed for the storage cleanup flow (G6). */
+    fun importStagingRoot(): File = File(filesDir, "import-staging")
+
     /** A fresh staging directory for one import (caller cleans up). */
     fun importStagingDir(tag: String): File =
-        File(filesDir, "import-staging/$tag-${System.nanoTime()}").apply { mkdirs() }
+        File(importStagingRoot(), "$tag-${System.nanoTime()}").apply { mkdirs() }
 
     fun resolve(relativePath: String): File = File(filesDir, relativePath)
 

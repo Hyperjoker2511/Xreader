@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -961,7 +962,7 @@ private fun ReaderChrome(
                         // the shared extra lift, so nothing sits
                         // at the screen's very bottom edge. The
                         // slider lives inside this padded area.
-                        .androidx.compose.foundation.layout.navigationBarsPadding()
+                        .navigationBarsPadding()
                         .padding(bottom = app.xreader.ui.theme.FloatingChromeLift)
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {

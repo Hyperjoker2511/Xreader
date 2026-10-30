@@ -21,7 +21,12 @@ data class ChapterCandidate(
     /** Human name shown in errors ("the mirror copy"). */
     val label: String = "primary source",
     /** Where the candidate's content lives (URL in Phase 2). */
-    val locator: String = ""
+    val locator: String = "",
+    /** v1.0.6.2 (Gemini fix round, G4): the book this chapter
+     * belongs to, stamped by the resolvers — fetchers that store
+     * chapter assets (web chapter images) need the book's content
+     * dir. 0 = unknown (assets are skipped, text still served). */
+    val bookId: Long = 0
 )
 
 /** What one fetch attempt produced. */
@@ -97,6 +102,11 @@ class RoomChapterSourceResolver(
         )
         return FailoverOrder.order(primary, alternates)
             .filter { it.locator.isNotBlank() }
-            .map { candidate -> ResolvedSource(candidate, fetcherForLocator(candidate.locator)) }
+            .map { candidate ->
+                ResolvedSource(
+                    candidate.copy(bookId = chapter.bookId),
+                    fetcherForLocator(candidate.locator)
+                )
+            }
     }
 }

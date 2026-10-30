@@ -26,8 +26,18 @@ class MarkdownParser : BookParser {
     ): AppResult<ParsedBook> {
         return try {
             val charset = EncodingDetector.detect(staged)
-            val text = staged.readText(charset)
-            val document = MarkdownDocument.parse(text)
+            // v1.0.6.2 (Gemini fix round, G5): stream the file
+            // line by line — a whole book never sits in memory as
+            // one String. Two streaming passes over the file (the
+            // split-level scan, then the block parse), each O(1)
+            // in memory; chapters still flush through
+            // ChapterFileWriter as before.
+            val splitLevel = staged.bufferedReader(charset).useLines { lines ->
+                MarkdownDocument.splitLevel(lines)
+            }
+            val document = staged.bufferedReader(charset).useLines { lines ->
+                MarkdownDocument.parse(lines, splitLevel)
+            }
             if (document.chapters.isEmpty()) {
                 return AppResult.Err(AppError.ParseFailed("Markdown", "the file has no readable text"))
             }
@@ -61,13 +71,19 @@ object MarkdownDocument {
 
     data class Parsed(val title: String?, val chapters: List<Chapter>)
 
-    fun parse(markdown: String): Parsed {
-        val lines = markdown.lines()
-        val splitLevel = when {
-            lines.any { it.startsWith("# ") } -> 1
-            lines.any { it.startsWith("## ") } -> 2
-            else -> 1
-        }
+    /** The chapter split level for a line stream: H1 when any
+     * H1 exists, else H2, else H1. Its own pass, so streaming
+     * callers compute it without holding the text (G5). */
+    fun splitLevel(lines: Sequence<String>): Int = when {
+        lines.any { it.startsWith("# ") } -> 1
+        lines.any { it.startsWith("## ") } -> 2
+        else -> 1
+    }
+
+    fun parse(markdown: String): Parsed =
+        parse(markdown.lineSequence(), splitLevel(markdown.lineSequence()))
+
+    fun parse(lines: Sequence<String>, splitLevel: Int): Parsed {
         var docTitle: String? = null
         val chapters = mutableListOf<Chapter>()
         var currentTitle: String? = null

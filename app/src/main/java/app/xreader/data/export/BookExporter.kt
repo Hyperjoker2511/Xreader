@@ -37,16 +37,35 @@ class BookExporter(
         if (chapters.isEmpty()) {
             return AppResult.Err(AppError.ExportFailed("this book has no chapters yet"))
         }
-        val contents = ArrayList<ChapterContent?>(chapters.size)
+        // v1.0.6.2 (Gemini fix round, G2): the export used to
+        // materialise every chapter's full content up front — on
+        // a ~1,500-chapter book that is the whole book in memory
+        // before the first byte is written, an OOM waiting on the
+        // 2 GB tablet. Now a METADATA pass mines each chapter once
+        // for the lightweight facts assembly needs (asset names in
+        // encounter order, which chapters carry a media overlay,
+        // whether anything is readable) and releases it before the
+        // next; the write pass below re-reads ONE chapter at a
+        // time. Peak memory is one chapter, the chapter contents
+        // are never all held at once, and the refusal below still
+        // happens before any byte is written.
+        val assetNames = LinkedHashSet<String>()
+        val hasOverlay = BooleanArray(chapters.size)
         var anyReadable = false
-        for (chapter in chapters) {
+        chapters.forEachIndexed { index, chapter ->
             val content = if (chapter.contentPath != null) {
                 storage.readChapterContent(book.id, chapter.id).getOrNull()
             } else {
                 null
+            } ?: return@forEachIndexed
+            if (content.blocks.isNotEmpty()) anyReadable = true
+            for (block in content.blocks) {
+                if (block is ChapterBlock.Image) assetNames += block.fileName
             }
-            contents += content
-            if (content != null && content.blocks.isNotEmpty()) anyReadable = true
+            content.mediaOverlay?.let { overlay ->
+                assetNames += overlay.audioFileName
+                hasOverlay[index] = true
+            }
         }
         if (!anyReadable) {
             return AppResult.Err(
@@ -68,15 +87,8 @@ class BookExporter(
 
                 writeEntry(zip, "META-INF/container.xml", CONTAINER_XML)
 
-                // Assets: images + overlay audio, referenced by chapters.
-                val assetNames = LinkedHashSet<String>()
-                for (content in contents) {
-                    content ?: continue
-                    for (block in content.blocks) {
-                        if (block is ChapterBlock.Image) assetNames += block.fileName
-                    }
-                    content.mediaOverlay?.let { assetNames += it.audioFileName }
-                }
+                // Assets: images + overlay audio, referenced by
+                // chapters (names collected by the metadata pass).
                 val contentDir = storage.contentDir(book.id)
                 val assetIds = mutableMapOf<String, String>()
                 for ((index, name) in assetNames.withIndex()) {
@@ -100,10 +112,15 @@ class BookExporter(
                     zip.closeEntry()
                 }
 
-                // Chapter XHTML + SMIL.
+                // Chapter XHTML + SMIL — the streaming pass: load
+                // ONE chapter, write it, release it (G2).
                 val chapterHrefs = chapters.indices.map { "chapter-${it + 1}.xhtml" }
                 chapters.forEachIndexed { index, chapter ->
-                    val content = contents[index] ?: ChapterContent()
+                    val content = if (chapter.contentPath != null) {
+                        storage.readChapterContent(book.id, chapter.id).getOrNull()
+                    } else {
+                        null
+                    } ?: ChapterContent()
                     writeEntry(
                         zip, chapterHrefs[index],
                         chapterXhtml(chapter.title, content, hrefOf)
@@ -120,8 +137,8 @@ class BookExporter(
                 writeEntry(zip, "toc.ncx", ncxXml(book, chapters.map { it.title }, chapterHrefs))
                 writeEntry(
                     zip, "content.opf",
-                    opfXml(book, chapters.map { it.title }, chapterHrefs, contents, assetIds, hrefOf,
-                        coverFile?.isFile == true, coverExt)
+                    opfXml(book, chapters.map { it.title }, chapterHrefs, hasOverlay.toList(),
+                        assetIds, hrefOf, coverFile?.isFile == true, coverExt)
                 )
             }
         }
@@ -250,7 +267,9 @@ class BookExporter(
         book: Book,
         titles: List<String>,
         hrefs: List<String>,
-        contents: List<ChapterContent?>,
+        /** G2: only the overlay PRESENCE per chapter is needed
+         * here — the full contents are never held for assembly. */
+        hasOverlay: List<Boolean>,
         assetIds: Map<String, String>,
         hrefOf: (String) -> String,
         hasCover: Boolean,
@@ -259,13 +278,13 @@ class BookExporter(
         val manifest = StringBuilder()
         val spine = StringBuilder()
         titles.forEachIndexed { index, _ ->
-            val overlay = contents.getOrNull(index)?.mediaOverlay
-            val overlayAttr = if (overlay != null) " media-overlay=\"smil${index + 1}\"" else ""
+            val overlay = hasOverlay.getOrNull(index) == true
+            val overlayAttr = if (overlay) " media-overlay=\"smil${index + 1}\"" else ""
             manifest.append(
                 "<item id=\"ch${index + 1}\" href=\"${hrefs[index]}\" " +
                     "media-type=\"application/xhtml+xml\"$overlayAttr/>"
             )
-            if (overlay != null) {
+            if (overlay) {
                 manifest.append(
                     "<item id=\"smil${index + 1}\" href=\"chapter-${index + 1}.smil\" " +
                         "media-type=\"application/smil+xml\"/>"
@@ -316,8 +335,10 @@ ${book.description?.let { "<dc:description>${escapeXml(it)}</dc:description>" } 
         else -> "image/jpeg"
     }
 
-    /** Export failures speak as ExportFailed, never as a raw crash. */
-    private fun guardExport(block: () -> Unit): AppResult<Unit> = try {
+    /** Export failures speak as ExportFailed, never as a raw crash.
+     * Suspend since G2: the streaming write pass reads chapter
+     * contents inside the guarded block. */
+    private suspend fun guardExport(block: suspend () -> Unit): AppResult<Unit> = try {
         block()
         AppResult.Ok(Unit)
     } catch (e: Exception) {

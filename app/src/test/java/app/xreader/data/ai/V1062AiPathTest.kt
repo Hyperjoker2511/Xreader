@@ -4,27 +4,26 @@ import app.xreader.core.error.AppError
 import app.xreader.core.error.AppResult
 import app.xreader.core.error.ErrorText
 import app.xreader.data.FakeAiSummaryDao
-import app.xreader.data.FakeBookDao
 import app.xreader.data.FakeChapterDao
-import app.xreader.data.FakeDownloadQueueDao
+import app.xreader.data.FakeChapterSourceMapDao
 import app.xreader.data.FakeReadingProgressDao
 import app.xreader.data.FakeTransport
 import app.xreader.data.db.Book
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.DownloadState
 import app.xreader.data.db.ReadingProgress
+import app.xreader.data.download.ChapterCandidate
+import app.xreader.data.download.ChapterFetcher
+import app.xreader.data.download.ChapterSourceResolver
 import app.xreader.data.download.ChapterTextLoader
-import app.xreader.data.download.DownloadController
-import app.xreader.data.download.WorkEnqueuer
+import app.xreader.data.download.FetchOutcome
+import app.xreader.data.download.ResolvedSource
 import app.xreader.data.files.BookStorage
 import app.xreader.data.prefs.AiSettings
 import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import java.io.File
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -35,9 +34,10 @@ import org.junit.rules.TemporaryFolder
 /**
  * v1.0.6.2 (F9): the unified AI content path — features load
  * chapter text the way the reader does (stored copy, else the
- * live download-queue fetch); Catch me up consumes the summaries
- * the summary feature writes; verdicts that aren't failures are
- * NeutralVerdicts and render without any failure prefix.
+ * direct live fetch — G1: no longer the download queue); Catch
+ * me up consumes the summaries the summary feature writes;
+ * verdicts that aren't failures are NeutralVerdicts and render
+ * without any failure prefix.
  */
 class V1062AiPathTest {
 
@@ -54,18 +54,21 @@ class V1062AiPathTest {
     private fun loaderHarness(): Triple<BookStorage, FakeChapterDao, ChapterTextLoader> {
         val storage = BookStorage(tmp.newFolder())
         val chapterDao = FakeChapterDao()
-        val queueDao = FakeDownloadQueueDao()
-        val controller = DownloadController(
-            queueDao = queueDao,
-            chapterDao = chapterDao,
-            bookDao = FakeBookDao(),
-            storage = storage,
-            enqueuer = WorkEnqueuer {},
-            clock = { 1_000L }
-        )
+        // G1: the loader takes the chapter-source resolver, not
+        // the download queue. This harness's resolver serves no
+        // candidates — the stored-copy tests never reach it.
+        val noSources = object : ChapterSourceResolver {
+            override suspend fun candidatesFor(chapter: Chapter) =
+                emptyList<ResolvedSource>()
+        }
         return Triple(
             storage, chapterDao,
-            ChapterTextLoader(storage, controller, chapterDao, queueDao)
+            ChapterTextLoader(
+                storage = storage,
+                resolver = noSources,
+                chapterDao = chapterDao,
+                sourceMapDao = FakeChapterSourceMapDao()
+            )
         )
     }
 
@@ -87,30 +90,54 @@ class V1062AiPathTest {
         assertEquals("The stored chapter text.", loaded?.plainText())
     }
 
-    @Test fun liveChapterIsFetchedThroughTheQueue() = runTest {
-        val (storage, chapterDao, loader) = loaderHarness()
+    // G1 (changed from liveChapterIsFetchedThroughTheQueue): the
+    // old test pinned the queue-polling shape — an enqueue plus a
+    // simulated landing the loader polled for. The live path now
+    // fetches DIRECTLY through the resolver and persists the copy
+    // itself; this test pins that shape instead.
+    @Test fun liveChapterIsFetchedDirectlyThroughTheResolver() = runBlocking {
+        val storage = BookStorage(tmp.newFolder())
+        val chapterDao = FakeChapterDao()
+        var fetches = 0
+        val loader = ChapterTextLoader(
+            storage = storage,
+            resolver = object : ChapterSourceResolver {
+                override suspend fun candidatesFor(chapter: Chapter) = listOf(
+                    ResolvedSource(
+                        ChapterCandidate(locator = "https://src.test/ch1"),
+                        ChapterFetcher {
+                            fetches++
+                            FetchOutcome.Success(
+                                ChapterContent(
+                                    listOf(
+                                        ChapterBlock.Paragraph.plain("Fetched live text.")
+                                    )
+                                )
+                            )
+                        }
+                    )
+                )
+            },
+            chapterDao = chapterDao,
+            sourceMapDao = FakeChapterSourceMapDao()
+        )
         val chapterId = chapterDao.insert(
-            Chapter(bookId = 1L, index = 0, title = "One", updatedAt = 0L)
+            Chapter(
+                bookId = 1L, index = 0, title = "One",
+                remoteId = "https://src.test/ch1", updatedAt = 0L
+            )
         )
         val chapter = chapterDao.getById(chapterId)!!
         assertTrue(chapter.contentPath == null)
 
-        // The "download" lands shortly after the enqueue, the way
-        // the real engine would land it.
-        val landing = launch {
-            delay(500L)
-            val saved = storage.writeChapterContent(
-                1L, chapterId,
-                ChapterContent(
-                    listOf(ChapterBlock.Paragraph.plain("Fetched live text."))
-                )
-            )
-            val relative = (saved as AppResult.Ok).value
-            chapterDao.setContent(chapterId, relative, 3, DownloadState.READY)
-        }
         val loaded = loader.loadContent(1L, chapter)
-        landing.join()
         assertEquals("Fetched live text.", loaded?.plainText())
+        assertEquals(1, fetches)
+        // The direct fetch persisted the chapter's downloaded copy.
+        assertTrue(chapterDao.getById(chapterId)!!.contentPath != null)
+        assertEquals(
+            DownloadState.READY, chapterDao.getById(chapterId)!!.downloadState
+        )
     }
 
     @Test fun catchUpConsumesSummariesWrittenByTheSummaryPath() = runBlocking {

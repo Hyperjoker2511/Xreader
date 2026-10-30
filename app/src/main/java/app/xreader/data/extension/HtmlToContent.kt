@@ -13,8 +13,15 @@ import org.jsoup.nodes.Element
  * [ChapterContent]. The fragment is serialised by jsoup with XML
  * syntax (so the Phase 2 XHTML converter accepts it — scripts and
  * styles are dropped by construction, since the converter only walks
- * readable elements) and image tags are resolved to null: web chapter
- * images aren't downloaded in Phase 3 (noted in the phase report).
+ * readable elements).
+ *
+ * Images: the plain entry points resolve every image tag to null —
+ * the Phase 3 behaviour, kept for the text-only consumers (the
+ * declarative engine's internal conversion, test-drive sampling).
+ * The download path (ExtensionChapterFetcher) calls the
+ * imageResolver overloads instead: it downloads the fragment's
+ * images first, through the source's own session, and the resolver
+ * maps each raw `src` to its stored file name (v1.0.6.2).
  *
  * If the structured conversion somehow yields nothing, the fallback is
  * plain paragraphs from the element's text — a chapter must never come
@@ -27,10 +34,29 @@ object HtmlToContent {
         return fromDocument(doc, baseUrl)
     }
 
-    fun fromDocument(doc: Document, baseUrl: String): ChapterContent {
+    /** Chapter-path conversion: [imageResolver] gets each raw image
+     * `src` and returns the stored content-dir file name, or null
+     * to drop that image (the G4 UrlChapterFetcher contract). */
+    fun fromFragment(
+        fragmentHtml: String,
+        baseUrl: String,
+        imageResolver: (String) -> String?
+    ): ChapterContent {
+        val doc = Jsoup.parseBodyFragment(fragmentHtml, baseUrl)
+        return fromDocument(doc, baseUrl, imageResolver)
+    }
+
+    fun fromDocument(doc: Document, baseUrl: String): ChapterContent =
+        fromDocument(doc, baseUrl) { null }
+
+    fun fromDocument(
+        doc: Document,
+        baseUrl: String,
+        imageResolver: (String) -> String?
+    ): ChapterContent {
         val xml = xmlSerialise(doc)
         val converted = runCatching {
-            XhtmlConverter { null }.convert(xml)
+            XhtmlConverter(imageResolver).convert(xml)
         }.getOrNull()
         if (converted != null && converted.blocks.isNotEmpty()) {
             return ChapterContent(converted.blocks)

@@ -140,6 +140,10 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
                 container.bookStorage.coversDir().listFiles()?.forEach { it.deleteRecursively() }
                 container.bookStorage.downloadsTempDir().listFiles()
                     ?.forEach { it.deleteRecursively() }
+                // G6: stranded import staging is temp too — the
+                // meter counts it there, so clearing removes it.
+                container.bookStorage.importStagingRoot().listFiles()
+                    ?.forEach { it.deleteRecursively() }
             }
             refreshStorage()
         }

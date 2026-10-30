@@ -732,6 +732,7 @@ class ReaderViewModel(
                 )
             }
         }
+        return true
     }
 
     /** The stream reader reports its settled position here. */

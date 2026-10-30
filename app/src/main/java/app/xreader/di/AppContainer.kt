@@ -3,6 +3,7 @@ package app.xreader.di
 import android.app.ActivityManager
 import android.content.Context
 import androidx.room.Room
+import androidx.room.withTransaction
 import app.xreader.core.error.AppResult
 import app.xreader.core.error.CrashGuard
 import app.xreader.core.security.AndroidKeystoreCipher
@@ -194,18 +195,32 @@ class AppContainer(context: Context) {
         chapterDao = database.chapterDao(),
         bookDao = database.bookDao(),
         storage = bookStorage,
-        enqueuer = WorkManagerEnqueuer(appContext)
+        enqueuer = WorkManagerEnqueuer(appContext),
+        // G3: batch enqueues run inside one Room transaction.
+        inTransaction = { block -> database.withTransaction(block) }
     )
 
     /** v1.0.6.2 (F9): the one chapter-text resolution the reader
-     * and every AI feature share (stored copy, else the live
-     * download-queue path). */
+     * and every AI feature share (stored copy, else a direct live
+     * fetch). G1: the live path no longer rides the download
+     * queue, so a paused queue can never stall a read. The
+     * resolver defers to extensionChapterResolver (declared
+     * further down this container) at call time. */
     val chapterTextLoader: app.xreader.data.download.ChapterTextLoader =
         app.xreader.data.download.ChapterTextLoader(
             storage = bookStorage,
-            downloadController = downloadController,
+            resolver = object :
+                app.xreader.data.download.ChapterSourceResolver {
+                override suspend fun candidatesFor(
+                    chapter: app.xreader.data.db.Chapter
+                ): List<app.xreader.data.download.ResolvedSource> =
+                    extensionChapterResolver.candidatesFor(chapter)
+            },
             chapterDao = database.chapterDao(),
-            queueDao = database.downloadQueueDao()
+            sourceMapDao = database.chapterSourceMapDao(),
+            onChapterDownloaded = { bookId, chapterId ->
+                aiChapterHooks.onChapterDownloaded(bookId, chapterId)
+            }
         )
 
     val downloadEngine: DownloadEngine = DownloadEngine(
@@ -799,8 +814,13 @@ class AppContainer(context: Context) {
             service = extensionService,
             cleanerStore = cleanerRuleStore,
             fallback = RoomChapterSourceResolver(database.chapterSourceMapDao()) {
-                UrlChapterFetcher(httpTransport)
-            }
+                // G4: storage set — web chapters keep their images.
+                UrlChapterFetcher(httpTransport, storage = bookStorage)
+            },
+            // v1.0.6.2: storage set — plugin-source chapters keep
+            // their images too (fetched through each source's own
+            // session; see ExtensionService.fetchBytes).
+            storage = bookStorage
         )
 
     // -- Phase 6: gamification, migration, file sync -------------------------

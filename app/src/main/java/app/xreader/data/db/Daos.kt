@@ -66,6 +66,12 @@ interface ChapterDao {
     suspend fun forBook(bookId: Long): List<Chapter>
     @Query("UPDATE chapters SET downloadState = :state WHERE id = :id")
     suspend fun setDownloadState(id: Long, state: DownloadState)
+
+    /** v1.0.6.2 (Gemini fix round, G3): bulk state flip for the
+     * batched download-all enqueue — one UPDATE for the whole
+     * book instead of one per chapter. */
+    @Query("UPDATE chapters SET downloadState = :state WHERE id IN (:ids)")
+    suspend fun setDownloadStateForIds(ids: List<Long>, state: DownloadState)
     @Query("UPDATE chapters SET contentPath = :path, wordCount = :words, downloadState = :state WHERE id = :id")
     suspend fun setContent(id: Long, path: String, words: Int, state: DownloadState)
     @Query("SELECT COUNT(*) FROM chapters WHERE bookId = :bookId AND downloadState = 'READY'")
@@ -188,6 +194,10 @@ interface InstalledExtensionDao {
 @Dao
 interface DownloadQueueDao {
     @Insert suspend fun insert(item: DownloadQueueItem): Long
+    /** v1.0.6.2 (Gemini fix round, G3): batch insert for the
+     * download-all enqueue — the whole book's rows in one call,
+     * run inside one transaction together with the state flips. */
+    @Insert suspend fun insertAll(items: List<DownloadQueueItem>)
     @Update suspend fun update(item: DownloadQueueItem)
     @Delete suspend fun delete(item: DownloadQueueItem)
     @Query("SELECT * FROM download_queue ORDER BY enqueuedAt DESC")

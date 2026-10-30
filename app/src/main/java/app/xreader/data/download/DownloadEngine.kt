@@ -31,10 +31,21 @@ import kotlinx.coroutines.sync.withPermit
  * Fetches a chapter from a URL (Phase 2 alternates): HTML pages go
  * through the shared converter (scripts/styles never reach the
  * content model), anything else is treated as plain text.
+ *
+ * v1.0.6.2 (Gemini fix round, G4): HTML chapters keep their images.
+ * When [storage] is set and the candidate names its book, the
+ * page's images are downloaded through the same transport (same
+ * auth as the text fetch) into the book's content dir — the same
+ * `img-<name>` layout the local HTML import produces and the
+ * reader renders — and the converter resolves each <img> to its
+ * stored file. Every image failure is per-image: skip that image,
+ * keep the text. Without storage (older constructions, most
+ * tests) the fetcher behaves exactly as before.
  */
 class UrlChapterFetcher(
     private val transport: HttpTransport,
-    private val basicAuth: Pair<String, String>? = null
+    private val basicAuth: Pair<String, String>? = null,
+    private val storage: BookStorage? = null
 ) : ChapterFetcher {
 
     override suspend fun fetch(candidate: ChapterCandidate): FetchOutcome {
@@ -53,7 +64,11 @@ class UrlChapterFetcher(
             ?: return FetchOutcome.Failure(AppError.Unknown(IllegalStateException("empty body")))
         val text = bytes.toString(Charsets.UTF_8)
         val content = if (looksLikeHtml(text)) {
-            val converted = XhtmlConverter { null }.convert(text.byteInputStream(Charsets.UTF_8))
+            val imageNames = downloadImages(text, candidate)
+            val converted = XhtmlConverter { src ->
+                resolveImageKey(src, candidate.locator)
+                    ?.let { key -> imageNames[key] }
+            }.convert(text.byteInputStream(Charsets.UTF_8))
             ChapterContent(converted.blocks)
         } else {
             TxtParser.textToContent(text)
@@ -69,6 +84,87 @@ class UrlChapterFetcher(
         val head = text.trimStart().take(512).lowercase()
         return head.startsWith("<!doctype html") || head.startsWith("<html") ||
             head.contains("<body") || head.contains("<p>") || head.contains("<div")
+    }
+
+    /**
+     * Downloads the page's images into the book's content dir;
+     * returns resolved-URL → stored file name (the bare name the
+     * content model carries; the reader prefixes `img-`). Mirrors
+     * the local HTML import's resolution: srcs resolved against
+     * the chapter URL, `data:` and non-web schemes skipped. Every
+     * failure is per-image — a dead image never sinks the text.
+     */
+    private suspend fun downloadImages(
+        html: String, candidate: ChapterCandidate
+    ): Map<String, String> {
+        val store = storage ?: return emptyMap()
+        if (candidate.bookId <= 0) return emptyMap()
+        val doc = runCatching {
+            org.jsoup.Jsoup.parse(html, candidate.locator)
+        }.getOrNull() ?: return emptyMap()
+        val urls = doc.select("img[src]").mapNotNull { element ->
+            element.absUrl("src").takeIf { it.isNotBlank() }
+        }.distinct().take(MAX_CHAPTER_IMAGES)
+        if (urls.isEmpty()) return emptyMap()
+        val usedNames = mutableSetOf<String>()
+        val contentDir = store.contentDir(candidate.bookId)
+        val stored = mutableMapOf<String, String>()
+        for (url in urls) {
+            val uri = runCatching { URI(url) }.getOrNull() ?: continue
+            if (uri.scheme != "http" && uri.scheme != "https") continue
+            val bytes = fetchImageBytes(url) ?: continue
+            val name = app.xreader.data.parse.ZipPaths.assetFileName(
+                uri.path ?: url, usedNames
+            )
+            val target = File(contentDir, "img-$name")
+            if (writeBytesAtomic(target, bytes)) stored[url] = name
+        }
+        return stored
+    }
+
+    /** One image through the same transport (and auth) as the
+     * chapter text; null on any failure — the caller skips it. */
+    private suspend fun fetchImageBytes(url: String): ByteArray? {
+        val response = when (
+            val result = transport.execute(
+                HttpTransport.Request(url = url, basicAuth = basicAuth)
+            )
+        ) {
+            is AppResult.Err -> return null
+            is AppResult.Ok -> result.value
+        }
+        if (response.code !in 200..299) {
+            response.body?.close()
+            return null
+        }
+        return runCatching { response.body?.use { it.readBytes() } }.getOrNull()
+    }
+
+    /** The converter hands over the raw src attribute; resolve it
+     * against the chapter URL exactly as the download pass's
+     * jsoup resolution did, so the stored-name lookup hits. */
+    private fun resolveImageKey(src: String, base: String): String? {
+        val clean = src.substringBefore('#')
+        if (clean.startsWith("data:", ignoreCase = true)) return null
+        return runCatching { URI(base).resolve(clean).toString() }.getOrNull()
+    }
+
+    private fun writeBytesAtomic(target: File, bytes: ByteArray): Boolean =
+        runCatching {
+            target.parentFile?.mkdirs()
+            val temp = File(target.parentFile, target.name + ".tmp")
+            temp.writeBytes(bytes)
+            if (!temp.renameTo(target)) {
+                temp.copyTo(target, overwrite = true)
+                temp.delete()
+            }
+            true
+        }.getOrDefault(false)
+
+    companion object {
+        /** A chapter page's images, capped — a gallery page must
+         * not turn one chapter fetch into an unbounded download. */
+        const val MAX_CHAPTER_IMAGES = 50
     }
 }
 

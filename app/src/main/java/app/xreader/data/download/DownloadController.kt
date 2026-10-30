@@ -29,6 +29,15 @@ class DownloadController(
     private val bookDao: BookDao,
     private val storage: BookStorage,
     private val enqueuer: WorkEnqueuer,
+    /** v1.0.6.2 (Gemini fix round, G3): runs a block of DAO writes
+     * as ONE database transaction, so a batch enqueue lands whole
+     * or not at all. AppContainer wires Room's withTransaction;
+     * tests and other embeddings default to running the block
+     * directly. Declared BEFORE [clock] on purpose: existing
+     * callers pass the clock as a trailing lambda, and a trailing
+     * lambda binds to the LAST function-type parameter. */
+    private val inTransaction: suspend (suspend () -> Unit) -> Unit =
+        { block -> block() },
     private val clock: () -> Long = System::currentTimeMillis
 ) {
 
@@ -58,17 +67,29 @@ class DownloadController(
         val activeChapterIds = queueDao.activeForBook(bookId)
             .mapNotNull { it.chapterId }
             .toSet()
-        for (chapter in chapterDao.forBook(bookId)) {
-            if (chapter.downloadState == DownloadState.READY) continue
-            if (chapter.remoteId.isNullOrBlank()) continue
-            if (chapter.id in activeChapterIds) continue
-            queueDao.insert(
-                DownloadQueueItem(
-                    bookId = bookId, chapterId = chapter.id,
-                    kind = DownloadKind.CHAPTER, enqueuedAt = now, updatedAt = now
+        val toEnqueue = chapterDao.forBook(bookId).filter { chapter ->
+            chapter.downloadState != DownloadState.READY &&
+                !chapter.remoteId.isNullOrBlank() &&
+                chapter.id !in activeChapterIds
+        }
+        // v1.0.6.2 (Gemini fix round, G3): the whole batch lands as
+        // ONE transaction — a single insertAll for the queue rows
+        // plus one bulk state flip — instead of two writes per
+        // chapter racing every other database user on a big book.
+        // A failure mid-batch now rolls back to nothing written.
+        if (toEnqueue.isNotEmpty()) {
+            inTransaction {
+                queueDao.insertAll(toEnqueue.map { chapter ->
+                    DownloadQueueItem(
+                        bookId = bookId, chapterId = chapter.id,
+                        kind = DownloadKind.CHAPTER,
+                        enqueuedAt = now, updatedAt = now
+                    )
+                })
+                chapterDao.setDownloadStateForIds(
+                    toEnqueue.map { it.id }, DownloadState.QUEUED
                 )
-            )
-            chapterDao.setDownloadState(chapter.id, DownloadState.QUEUED)
+            }
         }
         enqueuer.enqueueDrain()
     }

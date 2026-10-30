@@ -29,13 +29,18 @@ object StorageMeter {
         val books = dirSize(File(filesDir, "books"))
         val covers = dirSize(File(filesDir, "covers"))
         val temp = dirSize(File(filesDir, "downloads-temp"))
+        // v1.0.6.2 (Gemini fix round, G6): import staging is temp
+        // too — a crashed import used to strand its staged book
+        // file in the unaccountable "Other" remainder, where the
+        // cleanup flow could neither see nor clear it.
+        val staging = dirSize(File(filesDir, "import-staging"))
         val total = dirSize(filesDir)
-        val known = content + books + covers + temp
+        val known = content + books + covers + temp + staging
         return StorageBreakdown(
             downloadedTextBytes = content,
             bookFilesBytes = books,
             coverCacheBytes = covers,
-            tempBytes = temp,
+            tempBytes = temp + staging,
             otherBytes = (total - known).coerceAtLeast(0)
         )
     }

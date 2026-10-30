@@ -121,6 +121,15 @@ class FakeChapterDao : ChapterDao {
         }
     }
 
+    override suspend fun setDownloadStateForIds(
+        ids: List<Long>, state: DownloadState
+    ) {
+        val wanted = ids.toSet()
+        chapters.value = chapters.value.map {
+            if (it.id in wanted) it.copy(downloadState = state) else it
+        }
+    }
+
     override suspend fun setContent(id: Long, path: String, words: Int, state: DownloadState) {
         chapters.value = chapters.value.map {
             if (it.id == id) it.copy(contentPath = path, wordCount = words, downloadState = state) else it
@@ -188,6 +197,10 @@ class FakeDownloadQueueDao : DownloadQueueDao {
         val id = ids.getAndIncrement()
         items.value = items.value + item.copy(id = id)
         return id
+    }
+
+    override suspend fun insertAll(items: List<DownloadQueueItem>) {
+        for (item in items) insert(item)
     }
 
     override suspend fun update(item: DownloadQueueItem) {

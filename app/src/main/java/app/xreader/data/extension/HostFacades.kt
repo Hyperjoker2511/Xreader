@@ -247,4 +247,31 @@ class HostContextFactory(
         whitelist = { permissions },
         rateLimiter = rateLimiter
     )
+
+    /**
+     * v1.0.6.2: a raw client bound to an INSTALLED extension — its
+     * own session key and parsed permissions, and the SAME rate
+     * limiter its source context uses (the [rateLimiters] map is
+     * the shared one [contextFor] draws from). This is the
+     * byte-fetch twin of the context client: the context itself
+     * only speaks text (the extension API is string-shaped), but
+     * chapter images are host-side downloads, and they must travel
+     * under exactly the whitelist/session/rate-limit the source's
+     * page fetches travel under — never the raw transport.
+     */
+    fun sourceClientFor(
+        extensionRowId: Long,
+        label: String,
+        permissions: ExtensionPermissions
+    ): ExtensionHttpClient {
+        val limiter = synchronized(rateLimiters) {
+            rateLimiters.getOrPut(extensionRowId) { RateLimiter() }
+        }
+        return clientFor(
+            sessionKey = ExtensionHttpClient.sessionKeyFor(extensionRowId),
+            label = label,
+            permissions = permissions,
+            rateLimiter = limiter
+        )
+    }
 }

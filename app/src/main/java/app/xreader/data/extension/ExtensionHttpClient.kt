@@ -78,7 +78,78 @@ class ExtensionHttpClient(
         body: String?,
         contentType: String?,
         headers: Map<String, String>
-    ): AppResult<HostResponse> {
+    ): AppResult<HostResponse> =
+        when (
+            val raw = requestRaw(
+                method, url, body, contentType, headers,
+                ::readBody, PAGE_TOO_LARGE_MESSAGE
+            )
+        ) {
+            is AppResult.Err -> raw
+            is AppResult.Ok -> AppResult.Ok(
+                HostResponse(
+                    status = raw.value.status,
+                    body = raw.value.body,
+                    headers = raw.value.headers,
+                    finalUrl = raw.value.finalUrl
+                )
+            )
+        }
+
+    /**
+     * v1.0.6.2: one GET for raw bytes (chapter images) through the
+     * SAME guarded path as page fetches — the whitelist is checked
+     * before the request and on every redirect hop, the saved
+     * session is attached, the rate limit is honoured. Only the
+     * body handling differs: bytes come back untouched instead of
+     * being decoded as text (the text path would mangle binary).
+     * Unlike page fetches, whose callers read the status
+     * themselves, a non-2xx answer is an Err here: an image either
+     * arrived or it didn't.
+     */
+    suspend fun getBytes(
+        url: String,
+        headers: Map<String, String> = emptyMap()
+    ): AppResult<ByteArray> =
+        when (
+            val raw = requestRaw(
+                "GET", url, null, null, headers,
+                ::readByteBody, FILE_TOO_LARGE_MESSAGE
+            )
+        ) {
+            is AppResult.Err -> raw
+            is AppResult.Ok ->
+                if (raw.value.status in 200..299) {
+                    AppResult.Ok(raw.value.body)
+                } else {
+                    AppResult.Err(
+                        AppError.ExtensionFailed(
+                            label, "the site answered HTTP ${raw.value.status}"
+                        )
+                    )
+                }
+        }
+
+    /** One fetched response with its body already read by the
+     * caller's reader ([readBody] for pages, [readByteBody] for
+     * files) — the loop below is shared so the whitelist, session
+     * and redirect handling exist in exactly one place. */
+    private data class RawResponse<T>(
+        val status: Int,
+        val body: T,
+        val headers: Map<String, String>,
+        val finalUrl: String
+    )
+
+    private suspend fun <T> requestRaw(
+        method: String,
+        url: String,
+        body: String?,
+        contentType: String?,
+        headers: Map<String, String>,
+        readBody: (HttpTransport.Response) -> T?,
+        tooLargeMessage: String
+    ): AppResult<RawResponse<T>> {
         var currentUrl = url
         var currentMethod = method
         var currentBody = body
@@ -163,16 +234,14 @@ class ExtensionHttpClient(
                         }
                         continue
                     }
-                    val text = readBody(resp)
+                    val parsed = readBody(resp)
                         ?: return AppResult.Err(
-                            AppError.ExtensionFailed(
-                                label, "the page was too large to load (over 8 MB)"
-                            )
+                            AppError.ExtensionFailed(label, tooLargeMessage)
                         )
                     return AppResult.Ok(
-                        HostResponse(
+                        RawResponse(
                             status = resp.code,
-                            body = text,
+                            body = parsed,
                             headers = resp.headers,
                             finalUrl = currentUrl
                         )
@@ -180,6 +249,24 @@ class ExtensionHttpClient(
                 }
             }
         }
+    }
+
+    /** The byte twin of [readBody]: same size cap, no decoding. */
+    private fun readByteBody(response: HttpTransport.Response): ByteArray? {
+        val stream = response.body ?: return ByteArray(0)
+        val out = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(32 * 1024)
+        var total = 0L
+        stream.use { input ->
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                total += read
+                if (total > MAX_BODY_BYTES) return null
+                out.write(buffer, 0, read)
+            }
+        }
+        return out.toByteArray()
     }
 
     private fun readBody(response: HttpTransport.Response): String? {
@@ -202,6 +289,8 @@ class ExtensionHttpClient(
     companion object {
         const val MAX_BODY_BYTES = 8L * 1024 * 1024
         const val MAX_REDIRECTS = 5
+        const val PAGE_TOO_LARGE_MESSAGE = "the page was too large to load (over 8 MB)"
+        const val FILE_TOO_LARGE_MESSAGE = "the file was too large to load (over 8 MB)"
         private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
 
         /** Session key for an installed extension row. */

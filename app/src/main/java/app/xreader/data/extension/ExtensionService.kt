@@ -234,6 +234,32 @@ class ExtensionService(
         else -> AppError.ExtensionFailed(row.displayName, "the source can't run right now")
     }
 
+    /**
+     * v1.0.6.2: raw bytes for one URL in [handle]'s own context —
+     * chapter images. The context an extension lives in only
+     * speaks text (the API is string-shaped by design), so this
+     * goes through a client the factory builds for the extension
+     * itself: same transport, same session key (the saved login
+     * session attaches exactly as for page fetches), same parsed
+     * whitelist, same rate limiter as its source context. A plugin
+     * therefore cannot make the host fetch bytes from a host it
+     * isn't allowed to open — image URLs come from plugin-shaped
+     * HTML and are held to the same gate as everything else. Any
+     * failure, whitelist refusal included, is an Err; callers
+     * treat it as "skip this one". Image fetches deliberately do
+     * NOT run through [guarded]: a dead image host must not count
+     * toward the §9.1 disable counter.
+     */
+    suspend fun fetchBytes(handle: SourceHandle, url: String): AppResult<ByteArray> {
+        val permissions = ExtensionPermissions.parse(handle.extension.permissionsJson)
+        val client = contextFactory.sourceClientFor(
+            extensionRowId = handle.extension.id,
+            label = handle.extension.displayName,
+            permissions = permissions
+        )
+        return client.getBytes(url)
+    }
+
     // ── v1.0.2 (R24): account bookshelf ─────────────────────────────
 
     /** The declarative rules behind a handle, when rule-based. */

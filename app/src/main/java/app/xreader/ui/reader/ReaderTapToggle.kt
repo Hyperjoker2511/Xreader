@@ -3,7 +3,6 @@ package app.xreader.ui.reader
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToUp
-import androidx.compose.ui.input.pointer.changedToUpOrCanceled
 import androidx.compose.ui.input.pointer.pointerInput
 import app.xreader.domain.reader.CentreTap
 import kotlin.math.sqrt
@@ -78,7 +77,7 @@ fun Modifier.readerTapToggle(
                             )
                         }
                     }
-                    change.changedToUpOrCanceled() -> finished = true
+                    change.changedToUp() || change.isCanceled -> finished = true
                 }
             }
         }
