@@ -211,9 +211,29 @@ fun AddSourceScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Xreader can't install extensions made for other apps, " +
-                                "but it can build its own source for the same sites. " +
-                                "Pick a site below and Xreader will test-read it first.",
+                            // v1.0.8.3: a plugin index lists no
+                            // sites — its sources are code inside
+                            // one plugin file. Say that plainly
+                            // instead of inviting a pick from a
+                            // list that isn't there.
+                            if (foreign.pluginIndex) {
+                                "Its sources live inside a single plugin file made for " +
+                                    (if (foreign.ecosystemName == "another reader app") {
+                                        "another reader app"
+                                    } else {
+                                        foreign.ecosystemName
+                                    }) +
+                                    ". Xreader can't run another app's plugin file, and " +
+                                    "the index doesn't list its sites separately — so " +
+                                    "there's nothing here it can install. If there's a " +
+                                    "site you read there, add it with Add from link " +
+                                    "instead: Xreader will test-read it and build its " +
+                                    "own source."
+                            } else {
+                                "Xreader can't install extensions made for other apps, " +
+                                    "but it can build its own source for the same sites. " +
+                                    "Pick a site below and Xreader will test-read it first."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

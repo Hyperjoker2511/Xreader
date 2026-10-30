@@ -59,10 +59,51 @@ object HtmlToContent {
             XhtmlConverter(imageResolver).convert(xml)
         }.getOrNull()
         if (converted != null && converted.blocks.isNotEmpty()) {
-            return ChapterContent(converted.blocks)
+            // v1.0.8.3 (the woopread lesson): the structured
+            // conversion can succeed yet keep only a SLIVER of
+            // a chapter — markup it walks past (content held in
+            // elements it skips) while a promo card converts
+            // cleanly. The drive then reads the card, not the
+            // chapter, and the reader would too. When the
+            // blocks carry less than half of the text the
+            // document itself holds, the plain-text reading of
+            // the whole element is the honest chapter. Small
+            // documents never trigger this (the floor), and a
+            // faithful conversion always carries ~all of the
+            // text, so ordinary chapters are untouched.
+            val blockChars = converted.blocks.sumOf { block ->
+                when (block) {
+                    is ChapterBlock.Paragraph -> block.text.length
+                    is ChapterBlock.Heading -> block.text.length
+                    else -> 0
+                }
+            }
+            val docText = visibleText(doc)
+            if (docText.length < MIN_GUARD_TEXT ||
+                blockChars * 2 >= docText.length
+            ) {
+                return ChapterContent(converted.blocks)
+            }
+            return plainTextFallback(docText)
         }
-        return plainTextFallback(doc.body().text())
+        return plainTextFallback(visibleText(doc))
     }
+
+    /** The document's readable text with scripts and styles
+     * removed — what a person looking at the page could read.
+     * (The pre-v1.0.8.3 fallback read body text raw, which on
+     * script-carrying fragments could fold a page's data
+     * payload into the "chapter".) */
+    private fun visibleText(doc: Document): String {
+        val copy = doc.clone()
+        copy.select("script, style").remove()
+        return copy.body()?.text().orEmpty()
+    }
+
+    /** Below this much readable text the sliver guard stays
+     * out of the way — short chapters and fragments convert
+     * exactly as they always have. */
+    private const val MIN_GUARD_TEXT = 400
 
     fun fromElement(element: Element, baseUrl: String): ChapterContent {
         val doc = Jsoup.parseBodyFragment(element.html(), baseUrl)

@@ -1,6 +1,7 @@
 package app.xreader.data.extension
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -59,6 +60,83 @@ class RepoFormatTest {
         assertEquals("Alpha", foreign.sites.first().name)
         assertEquals("en", foreign.sites.first().lang)
         assertEquals("es", foreign.sites.last().lang)
+        assertFalse(
+            "an index that lists its sources is not a plugin index",
+            foreign.pluginIndex
+        )
+    }
+
+    @Test
+    fun `kototoro plugin index is recognised and named, with no sites`() {
+        // The verbatim shape of the live Kototoro repository
+        // index (index.min.json, fetched 2026-10-30): ONE
+        // package entry pointing at a single plugin.jar, no
+        // sources list at all — the sites are code inside the
+        // jar. v1.0.8.1 read this as Unknown ("isn't a
+        // repository Xreader recognises"); it is a real
+        // repository and must be named.
+        val body = """
+            [
+              {
+                "name": "Kototoro Parsers",
+                "pkg": "org.skepsun.kototoro.parsers",
+                "version": "1.0.155",
+                "code": 155,
+                "apk": "plugin.jar",
+                "lang": "all",
+                "nsfw": 0
+              }
+            ]
+        """.trimIndent()
+        val result = detectRepoFormat(body)
+        assertTrue(result is RepoFormat.ForeignRepo)
+        val foreign = result as RepoFormat.ForeignRepo
+        assertEquals("Kototoro", foreign.ecosystemName)
+        assertTrue(foreign.sites.isEmpty())
+        assertTrue(
+            "a package index with no readable sources is a plugin index",
+            foreign.pluginIndex
+        )
+    }
+
+    @Test
+    fun `tachiyomi plugin index without sources is a Mihon plugin index`() {
+        val body = """
+            [
+              {
+                "name": "All in One",
+                "pkg": "eu.kanade.tachiyomi.extension.all.pack",
+                "apk": "tachiyomi-all.pack-v1.apk",
+                "version": "1.0", "code": 1, "lang": "all"
+              }
+            ]
+        """.trimIndent()
+        val result = detectRepoFormat(body)
+        assertTrue(result is RepoFormat.ForeignRepo)
+        val foreign = result as RepoFormat.ForeignRepo
+        assertEquals("Mihon", foreign.ecosystemName)
+        assertTrue(foreign.sites.isEmpty())
+        assertTrue(foreign.pluginIndex)
+    }
+
+    @Test
+    fun `unnamed plugin index is another reader app's plugin index`() {
+        val body = """
+            [
+              {
+                "name": "Parsers Bundle",
+                "pkg": "com.example.parsers",
+                "apk": "plugin.jar",
+                "version": "2.1", "code": 7
+              }
+            ]
+        """.trimIndent()
+        val result = detectRepoFormat(body)
+        assertTrue(result is RepoFormat.ForeignRepo)
+        val foreign = result as RepoFormat.ForeignRepo
+        assertEquals("another reader app", foreign.ecosystemName)
+        assertTrue(foreign.sites.isEmpty())
+        assertTrue(foreign.pluginIndex)
     }
 
     @Test
@@ -154,6 +232,20 @@ class RepoFormatTest {
         assertEquals(
             listOf("https://generic-one.example", "https://generic-two.example"),
             foreign.sites.map { it.baseUrl }
+        )
+    }
+
+    @Test
+    fun `binary protobuf-style index is named honestly`() {
+        // A .pb index decoded as UTF-8 is dense with U+FFFD
+        // replacement marks (Novel Sourcery's index.pb is the
+        // verified shape). It must not degrade to the generic
+        // not-JSON reason — the link IS a repository.
+        val body = "�".repeat(24) + "garbled binary tail"
+        val result = detectRepoFormat(body)
+        assertTrue(result is RepoFormat.Unknown)
+        assertTrue(
+            (result as RepoFormat.Unknown).reason.contains("binary")
         )
     }
 

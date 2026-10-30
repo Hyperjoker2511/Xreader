@@ -24,7 +24,11 @@ import kotlinx.serialization.json.contentOrNull
  *    declarative-config document/array.
  * 2. Legado — entries carrying `bookSourceName` + `bookSourceUrl`.
  * 3. Mihon / Tachiyomi — array entries carrying `pkg`/`apk` +
- *    `sources` (each source has name/lang/id/baseUrl).
+ *    `sources` (each source has name/lang/id/baseUrl). Entries
+ *    carrying `pkg`/`apk` but NO readable sources are a PLUGIN
+ *    index (v1.0.8.3): the sites are code inside the one plugin
+ *    file the index points at, so the repo is still named —
+ *    with an empty site list and the plugin flag set.
  * 4. LNReader — entries carrying a site / plugin URL (`site`,
  *    `siteUrl`, `plugin.url`, `source.site`, …) plus a name or id.
  * 5. Generic — any entry exposing an http(s) URL in a field named
@@ -46,7 +50,17 @@ sealed interface RepoFormat {
     /** The text is another reader app's repository format. */
     data class ForeignRepo(
         val ecosystemName: String,
-        val sites: List<ForeignSite>
+        val sites: List<ForeignSite>,
+        /**
+         * v1.0.8.3: the index is a PLUGIN index — its entries
+         * point at one plugin file (a .jar/.apk) and list no
+         * sites at all, because the sites exist only as code
+         * inside that file (Kototoro's repository is the
+         * verified shape). [sites] is empty by construction;
+         * the UI explains the plugin instead of inviting the
+         * user to pick from a list that isn't there.
+         */
+        val pluginIndex: Boolean = false
     ) : RepoFormat
 
     /** The text matches nothing we recognise. */
@@ -62,6 +76,17 @@ object RepoFormatDetector {
 
     fun detect(text: String): RepoFormat {
         if (text.isBlank()) return RepoFormat.Unknown("the reply was empty")
+        // v1.0.8.3: a binary index (Novel Sourcery's index.pb is
+        // the verified shape) decodes to text full of U+FFFD
+        // replacement marks. Name that honestly instead of the
+        // generic not-JSON reason — the link IS a repository,
+        // in a format Xreader can't read yet.
+        if (text.count { it == '�' } > 8) {
+            return RepoFormat.Unknown(
+                "the list was a binary data file (a protobuf-style index), " +
+                    "which Xreader can't read yet"
+            )
+        }
         val root = runCatching { json.parseToJsonElement(text) }.getOrElse {
             return RepoFormat.Unknown("the reply wasn't JSON at all")
         }
@@ -150,11 +175,17 @@ object RepoFormatDetector {
 
     private fun detectMihon(entries: List<JsonObject>): RepoFormat.ForeignRepo? {
         var isMihon = false
+        // v1.0.8.3: package markers count even on entries with no
+        // sources array — that combination IS the plugin index.
+        var packageMarked = false
         val sites = mutableListOf<ForeignSite>()
         for (entry in entries) {
-            val sources = entry["sources"] as? JsonArray ?: continue
             val hasPackageMarker = entry.containsKey("pkg") || entry.containsKey("apk")
-            if (hasPackageMarker) isMihon = true
+            if (hasPackageMarker) {
+                isMihon = true
+                packageMarked = true
+            }
+            val sources = entry["sources"] as? JsonArray ?: continue
             for (element in sources) {
                 val source = element as? JsonObject ?: continue
                 // A sources list shaped like Mihon's (name/lang/id/
@@ -174,8 +205,44 @@ object RepoFormatDetector {
                 )
             }
         }
+        if (sites.isNotEmpty()) {
+            return if (isMihon) {
+                RepoFormat.ForeignRepo("Mihon", dedupe(sites))
+            } else {
+                null
+            }
+        }
+        // v1.0.8.3: a PLUGIN index — package entries pointing at
+        // one plugin file and listing no sources (verified live:
+        // Kototoro's index.min.json is a single pkg/apk entry,
+        // "plugin.jar", no sources at all). The repository is
+        // real and gets named; there is simply no site list in
+        // it to offer, because the sites are code in the file.
+        if (packageMarked) {
+            return RepoFormat.ForeignRepo(
+                ecosystemName = pluginEcosystem(entries),
+                sites = emptyList(),
+                pluginIndex = true
+            )
+        }
         if (!isMihon) return null
         return RepoFormat.ForeignRepo("Mihon", dedupe(sites))
+    }
+
+    /** Which app a plugin index belongs to, read from its
+     * entries' package / display names: Kototoro and
+     * Tachiyomi/Mihon publish this shape; anything else stays
+     * generic. */
+    private fun pluginEcosystem(entries: List<JsonObject>): String {
+        val haystack = entries.joinToString(" ") { entry ->
+            listOfNotNull(stringValue(entry, "pkg"), stringValue(entry, "name"))
+                .joinToString(" ")
+        }.lowercase()
+        return when {
+            "kototoro" in haystack -> "Kototoro"
+            "tachiyomi" in haystack || "mihon" in haystack -> "Mihon"
+            else -> "another reader app"
+        }
     }
 
     private fun detectLnReader(entries: List<JsonObject>): RepoFormat.ForeignRepo? {

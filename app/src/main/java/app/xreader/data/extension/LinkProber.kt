@@ -446,6 +446,18 @@ class LinkProber(
                             proposer, "passed", "the test-drive passed"
                         )
                     }
+                    // v1.0.8.3: a drive that healed its own
+                    // chapter rules drafts the HEALED rules —
+                    // the ones that failed never reach the user.
+                    val effectiveConfig = drive.healedConfig ?: config
+                    if (drive.healedConfig != null) {
+                        stageLines += StageLine(
+                            proposer, "chapter text",
+                            "the chapter rules from the first read didn't " +
+                                "read as story text — the drive re-read a " +
+                                "chapter page and healed them"
+                        )
+                    }
                     // Rank: a fully-proven candidate always
                     // beats a pass-with-limits (v1.0.6), then
                     // search proof, chapter count, text length.
@@ -466,8 +478,8 @@ class LinkProber(
                     if (current == null || rankIsBetter(rank, current)) {
                         bestRank = rank
                         bestDraft = Draft(
-                            config = config.copy(
-                                searchNeedsSetup = config.search == null ||
+                            config = effectiveConfig.copy(
+                                searchNeedsSetup = effectiveConfig.search == null ||
                                     !result.value.searchVerified,
                                 // v1.0.6 (TR1/Q5): a drive that
                                 // passed with rendered pages marks
@@ -476,11 +488,11 @@ class LinkProber(
                                 // now on (TR3). Repair flips a
                                 // source the same way, and Details
                                 // says so plainly.
-                                needsRendering = config.needsRendering ||
+                                needsRendering = effectiveConfig.needsRendering ||
                                     escalating?.renderedAny == true
                             ),
                             testDrive = result.value.copy(
-                                reviewsFound = config.reviews != null
+                                reviewsFound = effectiveConfig.reviews != null
                             ),
                             bookUrl = driveBookUrl,
                             host = host
@@ -1319,7 +1331,16 @@ class LinkProber(
      * the most steps is the honest one to report. */
     private data class ScoredDrive(
         val steps: Int,
-        val result: AppResult<TestDriveResult>
+        val result: AppResult<TestDriveResult>,
+        /**
+         * v1.0.8.3: when the drive healed the candidate's
+         * chapter rules mid-drive (the first rules read a
+         * chapter page as non-prose; a fresh analysis of the
+         * same page found the real container), the healed
+         * config rides here so the caller drafts IT, not the
+         * rules that failed.
+         */
+        val healedConfig: DeclarativeConfig? = null
     )
 
     /** v1.0.6.1 (P4): the outcome of reading a test book's lock
@@ -1399,6 +1420,68 @@ class LinkProber(
         val verdict: ListShapeVerdict,
         val sampleTitles: List<String> = emptyList()
     )
+
+    /**
+     * v1.0.8.3: the drive's first sampling pass — the first,
+     * middle and last unlocked chapters (fewer when the list
+     * is short), so one atypical opening chapter can't speak
+     * for the whole book.
+     */
+    private fun spreadSamples(
+        chapters: List<app.xreader.extensionapi.SourceChapter>
+    ): List<app.xreader.extensionapi.SourceChapter> {
+        if (chapters.size <= MAX_TEXT_SAMPLES) return chapters
+        return linkedSetOf(
+            chapters.first(),
+            chapters[chapters.size / 2],
+            chapters.last()
+        ).toList()
+    }
+
+    /**
+     * v1.0.8.3: the self-heal's fresh rules. Re-reads one
+     * sampled chapter page through the drive's own context
+     * and runs the chapter-page analysis on it as it stands
+     * NOW: when the analysis names a different content
+     * container than the candidate's rules use, and that
+     * container's own text is genuine prose, the candidate
+     * is rebuilt with the fresh chapter rules. Null when the
+     * page can't be re-read, the analysis finds nothing, the
+     * container is the one already in use, or its text isn't
+     * prose either — the original failure then stands.
+     */
+    private fun healedChapterConfig(
+        config: DeclarativeConfig,
+        context: SourceContext,
+        unlocked: List<app.xreader.extensionapi.SourceChapter>
+    ): DeclarativeConfig? {
+        val sample = unlocked.firstOrNull() ?: return null
+        val doc = runCatching {
+            val response = context.http.get(sample.id)
+            if (response.status !in 200..299) return null
+            Jsoup.parse(
+                response.body,
+                response.finalUrl.ifBlank { sample.id }
+            )
+        }.getOrNull() ?: return null
+        val analysis = LinkInference.analyseChapterPage(doc, sample.id)
+            ?: return null
+        if (analysis.contentSelector == config.chapter.content) {
+            return null
+        }
+        val element = runCatching {
+            doc.selectFirst(analysis.contentSelector)
+        }.getOrNull() ?: return null
+        if (!isGenuineProse(element.text().trim())) return null
+        return config.copy(
+            chapter = config.chapter.copy(
+                content = analysis.contentSelector,
+                title = analysis.titleSpec ?: config.chapter.title,
+                nextPage = analysis.nextPageSelector
+                    ?: config.chapter.nextPage
+            )
+        )
+    }
 
     private suspend fun testDrive(
         config: DeclarativeConfig,
@@ -1505,7 +1588,10 @@ class LinkProber(
         // lane configs are exempt from the prose gate — a lane
         // candidate whose lock read fails keeps the plain
         // sampled-text verdict it always had.
-        laneVerified: Boolean = false
+        laneVerified: Boolean = false,
+        // v1.0.8.3: the self-heal redrive passes true so a
+        // healed candidate is never healed twice.
+        healAttempted: Boolean = false
     ): ScoredDrive {
         val source = DeclarativeSource(config, context)
         val testBook = SourceBook(id = bookUrl, title = "")
@@ -1711,7 +1797,12 @@ class LinkProber(
         var lockedEvidence = false
         var firstError: Throwable? = null
         var timeoutError: Throwable? = null
-        for (candidate in unlocked.take(MAX_TEXT_SAMPLES)) {
+        // v1.0.8.3: one sampling read, hoisted so the first
+        // pass and the recovery passes below share the exact
+        // same read + timeout-retry + error bookkeeping.
+        fun sampleText(
+            candidate: app.xreader.extensionapi.SourceChapter
+        ): String {
             fun readText(): String {
                 source.chapterContent(candidate)
                 return source.contentOf(candidate.id)?.blocks
@@ -1725,7 +1816,7 @@ class LinkProber(
                         }
                     }?.trim().orEmpty()
             }
-            val text = runCatching { readText() }.getOrElse { e ->
+            return runCatching { readText() }.getOrElse { e ->
                 when {
                     e is kotlinx.coroutines.CancellationException -> throw e
                     // v1.0.6: a timed-out chapter fetch is
@@ -1746,12 +1837,64 @@ class LinkProber(
                     }
                 }
             }
+        }
+        // v1.0.8.3: spread the first pass (first / middle /
+        // last) instead of only the opening chapters — a book
+        // whose first chapters are notices or announcements
+        // shouldn't sink a drive its later chapters would pass.
+        val firstPass = spreadSamples(unlocked)
+        for (candidate in firstPass) {
+            val text = sampleText(candidate)
             if (text.length > bestText.length) bestText = text
             if (text.length >= LinkInference.MIN_READABLE_CHARS) {
                 sampled = candidate
                 break
             }
             if (ChapterLocks.pageSuggestsLocked(text)) lockedEvidence = true
+        }
+        // v1.0.8.3 RECOVERY (the woopread lesson): the first
+        // pass produced no prose — either nothing readable at
+        // all, or a long non-prose sliver (a promo card, a
+        // notice page) that cleared the length floor and
+        // stopped the loop early. Before this candidate may
+        // fail: (1) sample deeper into the list with the same
+        // rules — real chapters further in can still prove the
+        // text; (2) if the text still isn't prose, re-analyse
+        // one sampled chapter page and, when the fresh
+        // analysis finds a DIFFERENT container whose text is
+        // genuine prose, redrive once with the healed rules
+        // and draft those. A site is only refused when its
+        // pages defeat the fresh analysis too.
+        if (!laneVerified && !healAttempted &&
+            (sampled == null || !isGenuineProse(bestText))
+        ) {
+            for (candidate in unlocked.drop(firstPass.size)
+                .take(MAX_TEXT_SAMPLES)) {
+                val text = sampleText(candidate)
+                if (text.length > bestText.length) bestText = text
+                if (text.length >= LinkInference.MIN_READABLE_CHARS &&
+                    isGenuineProse(text)
+                ) {
+                    sampled = candidate
+                    break
+                }
+                if (ChapterLocks.pageSuggestsLocked(text)) {
+                    lockedEvidence = true
+                }
+            }
+        }
+        if (!laneVerified && !healAttempted &&
+            (sampled == null || !isGenuineProse(bestText))
+        ) {
+            val healed = healedChapterConfig(config, context, unlocked)
+            if (healed != null) {
+                val redrive = testDriveScored(
+                    healed, bookUrl, context, healAttempted = true
+                )
+                if (redrive.result is AppResult.Ok) {
+                    return redrive.copy(healedConfig = healed)
+                }
+            }
         }
         val provenChapter = sampled ?: return ScoredDrive(
             2,
