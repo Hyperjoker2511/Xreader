@@ -232,9 +232,18 @@ object NovelightSite {
             "$BASE/book/chapter/104" to CHAPTER_PAGE,
             "$BASE/book/chapter/105" to CHAPTER_PAGE,
             "$BASE/catalog/" to CATALOGUE_PAGE,
+            // v1.0.6.2 (F2): the lane's catalogue/search URLs now
+            // carry {page} — page 1 is what the engine asks for.
+            "$BASE/catalog/?page=1" to CATALOGUE_PAGE,
             "$BASE/catalog/?search=Talents" to SEARCH_PAGE,
+            "$BASE/catalog/?search=Talents&page=1" to SEARCH_PAGE,
             // A nonsense word finds NOTHING on the real site.
             "$BASE/catalog/?search=zxqwvkj" to """
+                <html><head><title>Search - Novelight</title></head><body>
+                <div class="manga-grid-list"></div>
+                </body></html>
+            """.trimIndent(),
+            "$BASE/catalog/?search=zxqwvkj&page=1" to """
                 <html><head><title>Search - Novelight</title></head><body>
                 <div class="manga-grid-list"></div>
                 </body></html>

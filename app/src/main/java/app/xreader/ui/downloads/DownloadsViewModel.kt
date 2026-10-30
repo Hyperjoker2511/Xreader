@@ -54,10 +54,52 @@ data class DownloadsUiState(
     val active: List<BookDownloads> = emptyList(),
     val finished: List<BookDownloads> = emptyList(),
     val wifiOnlyPrefetch: Boolean = true,
-    val loading: Boolean = true
+    val loading: Boolean = true,
+    /** v1.0.6.2 (D2): bytes of downloaded book files on disk. */
+    val storageBytes: Long = 0L
 ) {
+    /** v1.0.6.2 (D2): the one plain header line — storage used
+     * and how many books it belongs to. */
+    val storageLine: String
+        get() {
+            val books = active.size + finished.size
+            return "${formatBytes(storageBytes)} · " +
+                if (books == 1) "1 book" else "$books books"
+        }
+
+    /** Any item the queue could pause right now. */
+    val hasPausable: Boolean
+        get() = active.any { group ->
+            group.items.any {
+                it.state == QueueState.QUEUED || it.state == QueueState.RUNNING
+            }
+        }
+
+    /** Any paused or failed item a Resume all would restart. */
+    val hasResumable: Boolean
+        get() = active.any { group ->
+            group.items.any {
+                it.state == QueueState.PAUSED || it.state == QueueState.FAILED
+            }
+        }
+
     val statusSummary: String
         get() = "${active.size} active • ${finished.size} finished"
+
+    /** v1.0.6.2 (RB): failed chapters across every book —
+     * drives the "Couldn't download (N)" section. */
+    val failedCount: Int
+        get() = active.sumOf { it.failedItems.size }
+}
+
+/** Plain byte sizes for the D2 line: "812 KB", "1.2 GB". */
+fun formatBytes(bytes: Long): String = when {
+    bytes < 1_000L -> "$bytes B"
+    bytes < 1_000_000L -> "${bytes / 1_000} KB"
+    bytes < 1_000_000_000L ->
+        String.format(java.util.Locale.US, "%.1f MB", bytes / 1_000_000.0)
+    else ->
+        String.format(java.util.Locale.US, "%.1f GB", bytes / 1_000_000_000.0)
 }
 
 /**
@@ -90,13 +132,25 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
                 totalChapters = if (book.totalChapters > 0) book.totalChapters else chapters.size
             )
         }
+        // v1.0.6.2 (D2): storage used = the bytes of every
+        // grouped book's files on disk (chapter content + the
+        // book's own files share the books/<id> tree).
+        val storageBytes = grouped.sumOf { group ->
+            runCatching {
+                container.bookStorage.booksDir(group.book.id)
+                    .walkTopDown()
+                    .filter { it.isFile }
+                    .sumOf { it.length() }
+            }.getOrDefault(0L)
+        }
         DownloadsUiState(
             active = grouped.filter { it.activeItems.isNotEmpty() || it.failedItems.isNotEmpty() },
             finished = grouped.filter {
                 it.activeItems.isEmpty() && it.failedItems.isEmpty() && it.items.isNotEmpty()
             },
             wifiOnlyPrefetch = settings.wifiOnlyPrefetch,
-            loading = false
+            loading = false,
+            storageBytes = storageBytes
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DownloadsUiState())
 
@@ -124,6 +178,27 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             group.failedItems.forEach { container.downloadController.resume(it.id) }
         }
+    }
+
+    /** v1.0.6.2 (RB): one retry for every failed chapter in
+     * the queue, across all books. */
+    fun retryAllFailed() {
+        viewModelScope.launch {
+            state.value.active.forEach { group ->
+                group.failedItems.forEach {
+                    container.downloadController.resume(it.id)
+                }
+            }
+        }
+    }
+
+    /** v1.0.6.2 (D2): the header's Pause all / Resume all. */
+    fun pauseAll() {
+        viewModelScope.launch { container.downloadController.pauseAll() }
+    }
+
+    fun resumeAll() {
+        viewModelScope.launch { container.downloadController.resumeAll() }
     }
 
     fun setWifiOnlyPrefetch(value: Boolean) {

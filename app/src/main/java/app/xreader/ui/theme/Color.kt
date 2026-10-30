@@ -184,9 +184,19 @@ val ReaderCafe = ReaderPalette(
     accent = Color(0xFFD9A05B)
 )
 
+/**
+ * v1.0.6.2 (F8c + the user's 1–3 options rule): the reader's
+ * page-theme list is exactly three — AMOLED (the default),
+ * Sepia, Paper. Ember dark is REMOVED (the user's disliked
+ * amber/brown scheme) and the v1.0.1 extras (Slate, Max
+ * contrast, Night blue, Forest, Café) are consolidated out of
+ * the list; their values stay defined above (contrast-pinned),
+ * and a book still storing a retired name falls back to AMOLED
+ * at read time. The Custom page/text colours are separate and
+ * unchanged.
+ */
 val ReaderPalettes = listOf(
-    ReaderAmoled, ReaderEmberDark, ReaderSepia, ReaderPaper, ReaderSlate,
-    ReaderMaxContrast, ReaderNightBlue, ReaderForest, ReaderCafe
+    ReaderAmoled, ReaderSepia, ReaderPaper
 )
 
 /**

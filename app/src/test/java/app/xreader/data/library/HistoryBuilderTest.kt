@@ -71,12 +71,29 @@ class HistoryBuilderTest {
     }
 
     @Test
-    fun `older days are labelled with their ISO date`() {
+    fun `older days gather under the plain Earlier heading`() {
+        // v1.0.6.2 (H1): plain words, not ISO dates.
         val groups = build(
             listOf(source("old", millis(day = 25, hour = 12)))
         )
         assertEquals(1, groups.size)
-        assertEquals("2026-10-25", groups[0].label)
+        assertEquals("Earlier", groups[0].label)
+    }
+
+    @Test
+    fun `two older days merge into one Earlier group`() {
+        val groups = build(
+            listOf(
+                source("day-25", millis(day = 25, hour = 12)),
+                source("day-20", millis(day = 20, hour = 12))
+            )
+        )
+        assertEquals(1, groups.size)
+        assertEquals("Earlier", groups[0].label)
+        assertEquals(
+            listOf("day-25", "day-20"),
+            groups[0].entries.map { it.bookId }
+        )
     }
 
     @Test
@@ -89,7 +106,7 @@ class HistoryBuilderTest {
                 source("today-late", millis(day = 28, hour = 21))
             )
         )
-        assertEquals(listOf("Today", "Yesterday", "2026-10-25"), groups.map { it.label })
+        assertEquals(listOf("Today", "Yesterday", "Earlier"), groups.map { it.label })
         assertEquals(
             listOf("today-late", "today-early"),
             groups[0].entries.map { it.bookId }

@@ -74,10 +74,12 @@ class XhtmlConverter(
         val spans = mutableListOf<TextSpan>()
         var paragraphId: String? = null
 
-        fun appendText(raw: String) {
-            if (raw.isEmpty()) return
-            val text = if (preDepth > 0) raw else raw.replace(WHITESPACE, " ")
-            if (text.isEmpty()) return
+        // v1.0.6.2 (F7b): true right after a <br> with no real text
+        // since — a second <br> in a row is a paragraph break in the
+        // wild (chapters separated by <br/><br/>), not a line break.
+        var lastWasBr = false
+
+        fun appendSpanText(text: String) {
             val bold = boldDepth > 0
             val italic = italicDepth > 0
             val last = spans.lastOrNull()
@@ -85,6 +87,27 @@ class XhtmlConverter(
                 spans[spans.lastIndex] = last.copy(text = last.text + text)
             } else {
                 spans += TextSpan(text, bold, italic)
+            }
+        }
+
+        fun appendText(raw: String) {
+            if (raw.isEmpty()) return
+            if (preDepth > 0) {
+                appendSpanText(raw)
+                if (raw.isNotBlank()) lastWasBr = false
+                return
+            }
+            // v1.0.6.2 (F7b): a blank line INSIDE one text node (a
+            // chapter stored as plain text in a single <div>, common
+            // in machine-made EPUBs and site HTML) is a paragraph
+            // break — the old whitespace collapse glued those
+            // paragraphs into one block with no visible separation.
+            val chunks = raw.split(BLANK_LINE)
+            chunks.forEachIndexed { index, chunk ->
+                if (index > 0) flushParagraph()
+                val text = chunk.replace(WHITESPACE, " ")
+                if (text.isNotEmpty()) appendSpanText(text)
+                if (chunk.isNotBlank()) lastWasBr = false
             }
         }
 
@@ -122,7 +145,18 @@ class XhtmlConverter(
                                 flushParagraph()
                                 preDepth++
                             }
-                            "br" -> appendText("\n")
+                            "br" -> {
+                                // v1.0.6.2 (F7b): <br><br> (nothing but
+                                // whitespace between) ends the paragraph;
+                                // a single <br> stays a line break.
+                                if (lastWasBr) {
+                                    flushParagraph()
+                                    lastWasBr = false
+                                } else {
+                                    appendText("\n")
+                                    lastWasBr = true
+                                }
+                            }
                             "hr" -> {
                                 flushParagraph()
                                 blocks += ChapterBlock.Rule
@@ -200,6 +234,9 @@ class XhtmlConverter(
 
     companion object {
         private val WHITESPACE = Regex("\\s+")
+
+        /** v1.0.6.2 (F7b): a blank line inside a text node. */
+        private val BLANK_LINE = Regex("\\n\\s*\\n")
         private val SKIP_TAGS = setOf("script", "style", "noscript", "template")
         private val BLOCK_TAGS = setOf(
             "p", "div", "section", "article", "header", "footer", "main", "aside",

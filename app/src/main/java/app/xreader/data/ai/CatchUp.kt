@@ -6,7 +6,6 @@ import app.xreader.data.db.Book
 import app.xreader.data.db.ChapterDao
 import app.xreader.data.db.ReadingProgress
 import app.xreader.data.db.ReadingProgressDao
-import app.xreader.data.files.BookStorage
 import app.xreader.data.prefs.AiFeature
 import app.xreader.data.prefs.AiSettings
 
@@ -21,10 +20,11 @@ import app.xreader.data.prefs.AiSettings
  * ending) unless they are effectively at its end — the same hard
  * rule Lore Chat's context builder applies.
  *
- * Chapters in range that have no summary yet are summarised first —
- * but only when their text is actually on this device (downloaded or
- * imported). A chapter whose text isn't here is counted and
- * reported, never fetched silently and never invented.
+ * Chapters in range that have no summary yet are summarised first,
+ * with their text loaded through the shared ChapterTextLoader —
+ * the stored copy, or the reader's own live fetch when a chapter
+ * isn't on this device yet. A chapter whose text still can't be
+ * read is counted and reported, never invented.
  */
 object CatchUpBounds {
 
@@ -53,7 +53,7 @@ class CatchUp(
     private val summarizer: Summarizer,
     private val progressDao: ReadingProgressDao,
     private val chapterDao: ChapterDao,
-    private val storage: BookStorage,
+    private val loader: app.xreader.data.download.ChapterTextLoader,
     private val settingsProvider: suspend () -> AiSettings
 ) {
 
@@ -72,7 +72,7 @@ class CatchUp(
     suspend fun recap(book: Book): AppResult<Result> {
         if (!settingsProvider().enabled(AiFeature.SUMMARIZER)) {
             return AppResult.Err(
-                AppError.BadFile(
+                AppError.NeutralVerdict(
                     "Chapter summaries are turned off — switch them on in " +
                         "Providers & keys."
                 )
@@ -81,14 +81,14 @@ class CatchUp(
         val chapters = chapterDao.forBook(book.id)
         if (chapters.isEmpty()) {
             return AppResult.Err(
-                AppError.BadFile("This book has no chapters yet.")
+                AppError.NeutralVerdict("This book has no chapters yet.")
             )
         }
         val progress = progressDao.getForBook(book.id)
         val through = CatchUpBounds.throughIndex(progress, chapters.size)
         if (through < 0) {
             return AppResult.Err(
-                AppError.BadFile(
+                AppError.NeutralVerdict(
                     "You haven't finished a chapter of this book yet — " +
                         "Catch me up works once there's a chapter behind you."
                 )
@@ -97,12 +97,13 @@ class CatchUp(
         val eligible = chapters.filter { it.index <= through }
         var skipped = 0
         for (chapter in eligible) {
-            // A fresh summary only when a cached one doesn't already
-            // match the on-device text; chapterSummary itself does
-            // the hash check and the caching.
-            val content = storage.readChapterContent(book.id, chapter.id)
-                .getOrNull()
-            if (content == null) {
+            // v1.0.6.2 (F9): text comes through the ONE loader —
+            // the stored copy, or the reader's own live fetch
+            // when the chapter isn't on the phone yet. A chapter
+            // whose text is BLANK (an imported front-matter page)
+            // is skipped without spending a summary call on it.
+            val content = loader.loadContent(book.id, chapter)
+            if (content == null || content.plainText().isBlank()) {
                 skipped++
                 continue
             }

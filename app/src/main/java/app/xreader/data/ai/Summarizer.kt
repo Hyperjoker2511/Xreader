@@ -87,7 +87,7 @@ class Summarizer(
         }
         if (parts.isEmpty()) {
             return AppResult.Err(
-                AppError.BadFile(
+                AppError.NeutralVerdict(
                     "There are no chapter summaries yet — summarize a chapter first, " +
                         "then the story-so-far recap can be built from them."
                 )
@@ -203,7 +203,7 @@ class Summarizer(
         """.trimIndent()
 
     private fun featureOff(): AppError =
-        AppError.BadFile("Chapter summaries are turned off — switch them on in Providers & keys.")
+        AppError.NeutralVerdict("Chapter summaries are turned off — switch them on in Providers & keys.")
 
     companion object {
         /** chapterId marker for the book-so-far arc recap row (§1.3). */

@@ -16,6 +16,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -25,7 +27,12 @@ import app.xreader.ui.common.GlassCard
 /** About & licences (PLAN §3): what this build is, and the open-source
  * licences of everything bundled in it. */
 @Composable
-fun AboutScreen(onBack: () -> Unit) {
+fun AboutScreen(
+    onBack: () -> Unit,
+    /** v1.0.6.2 (M1): supplies the sources + health for
+     * "Copy app details"; null in previews/tests. */
+    container: app.xreader.di.AppContainer? = null
+) {
     Column(
         Modifier
             .fillMaxSize()
@@ -54,6 +61,9 @@ fun AboutScreen(onBack: () -> Unit) {
                         "your library — on your devices only.",
                     style = MaterialTheme.typography.bodyMedium
                 )
+                if (container != null) {
+                    CopyAppDetailsButton(container)
+                }
             }
         }
 
@@ -66,6 +76,52 @@ fun AboutScreen(onBack: () -> Unit) {
                     style = MaterialTheme.typography.titleMedium
                 )
                 listOf(
+                    // v1.0.6.2 (full chapter lists, live reading,
+                    // meaning-checked site rules).
+                    "Books now show their FULL chapter list: " +
+                        "on sites that reveal chapters page by " +
+                        "page, Xreader fetches every page — a " +
+                        "700-chapter book shows all 700.",
+                    "Browsing and searching a source keeps " +
+                        "going: scroll and more books load page " +
+                        "after page, the way the site itself " +
+                        "pages.",
+                    "Tap a chapter and just read it: chapters " +
+                        "open live, without downloading first — " +
+                        "and the copy is saved quietly, so it's " +
+                        "there offline next time.",
+                    "Pasting a site's home page works now: " +
+                        "Xreader walks in and learns the site " +
+                        "from one of its books.",
+                    "Site checks now judge meaning, not just " +
+                        "shape: a site's social feed can no " +
+                        "longer be saved as if it were books, " +
+                        "and your AI key can be asked to confirm " +
+                        "a list it isn't sure about.",
+                    // v1.0.6.2 phase 2 (library look, reader
+                    // chrome, downloads resume, Ask AI page).
+                    "A fresh library look: covers are posters " +
+                        "now — full-size art, the title underneath, " +
+                        "one quiet line of details. Search is a " +
+                        "small icon in the corner.",
+                    "Reading is calmer: the bars never cover " +
+                        "your words, tapping the middle of the " +
+                        "page always brings them back, paragraphs " +
+                        "breathe again, and the chapter number at " +
+                        "the bottom matches the chapter you're " +
+                        "actually reading.",
+                    "Interrupted downloads pick up where they " +
+                        "stopped — finished chapters are never " +
+                        "fetched twice — and Downloads can pause " +
+                        "or resume everything at once.",
+                    "Ask AI has its own full page now, with " +
+                        "room to read; summaries, catch-up and " +
+                        "lore chat all work from the same chapter " +
+                        "text you're reading, on local books too.",
+                    "Three colour themes — Electric violet, " +
+                        "Deep indigo, Magenta violet — and the " +
+                        "reader's page themes are three too: " +
+                        "AMOLED, Sepia, Paper.",
                     // v1.0.6.1 (honest verdicts, forgiving links,
                     // self-evidencing problem reports).
                     "Adding a site from a link is more forgiving: " +
@@ -314,3 +370,54 @@ private val LICENCES = listOf(
     "Inter" to "SIL Open Font Licence 1.1",
     "Literata (TypeTogether)" to "SIL Open Font Licence 1.1"
 )
+
+/**
+ * v1.0.6.2 (M1): "Copy app details" — version, every source's
+ * plain health word and the session's recent problems, in one
+ * paste (ProblemDetails.formatAppDetails).
+ */
+@Composable
+private fun CopyAppDetailsButton(container: app.xreader.di.AppContainer) {
+    val extensions by container.database.installedExtensionDao().observeAll()
+        .collectAsStateWithLifecycle(emptyList())
+    val health by container.sourcePrefs.sourceHealth
+        .collectAsStateWithLifecycle(emptyMap())
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    var copied by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+    androidx.compose.material3.TextButton(
+        onClick = {
+            val sourceLines = extensions.flatMap { ext ->
+                val ids = ext.sourceIds.split(",")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                if (ids.isEmpty()) {
+                    listOf("${ext.displayName} — Not checked yet")
+                } else {
+                    ids.map { sourceId ->
+                        val record = health[
+                            app.xreader.data.extension.SourceHealthRecord
+                                .key(ext.id, sourceId)
+                        ]
+                        "${ext.displayName} — " +
+                            (record?.summaryLine() ?: "Not checked yet")
+                    }
+                }
+            }
+            clipboard.setText(
+                androidx.compose.ui.text.AnnotatedString(
+                    app.xreader.data.extension.ProblemDetails.formatAppDetails(
+                        appVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                        sourceLines = sourceLines,
+                        recentProblems =
+                            app.xreader.data.extension.DiagnosticLog.entries()
+                    )
+                )
+            )
+            copied = true
+        }
+    ) {
+        Text(if (copied) "Copied" else "Copy app details")
+    }
+}

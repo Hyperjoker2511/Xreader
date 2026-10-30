@@ -152,12 +152,18 @@ object AppearanceValidation {
      * that — an older device holding the value falls back to Ember. */
     val COLOUR_SCHEMES = listOf(
         "Ember", "Violet night", "Ocean", "Forest", "Rose", "Mono",
-        "Nebula violet", "Emerald", "Sunset", "Electric violet", "Wallpaper"
+        "Nebula violet", "Emerald", "Sunset", "Electric violet", "Wallpaper",
+        "Deep indigo", "Magenta violet"
     )
 
-    /** The fresh-install default scheme (R04 + the user's autonomy
-     * decision): a brand-new install starts on Violet Night. */
-    const val FRESH_INSTALL_SCHEME = "Violet night"
+    /** The fresh-install default scheme: a brand-new install
+     * starts on Electric Violet — v1.0.6.2 (F8b) makes it the
+     * default of the three-theme picker, per the final-build
+     * plan (it is the user's own palette; he is not a fan of
+     * the amber Ember scheme). Established installs and stored
+     * choices are untouched (see ESTABLISHED_INSTALL_SCHEME and
+     * primeDefaultScheme's never-overwrite rule). */
+    const val FRESH_INSTALL_SCHEME = "Electric violet"
 
     /** The upgrade-preserving default: an install that already has
      * data keeps the look it had (Ember unless the user chose). */

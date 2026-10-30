@@ -94,7 +94,7 @@ class RawTranslator(
         if (!settingsProvider().enabled(AiFeature.RAW_TRANSLATION)) {
             emit(
                 Event.Failed(
-                    AppError.BadFile(
+                    AppError.NeutralVerdict(
                         "RAW translation is turned off — switch it on in Providers & keys."
                     )
                 )
@@ -104,7 +104,7 @@ class RawTranslator(
         if (language == SourceLanguage.ENGLISH) {
             emit(
                 Event.Failed(
-                    AppError.BadFile("This chapter already reads as English — nothing to translate.")
+                    AppError.NeutralVerdict("This chapter already reads as English — nothing to translate.")
                 )
             )
             return@flow

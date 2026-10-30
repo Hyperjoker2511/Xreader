@@ -227,6 +227,35 @@ val SunsetScheme = scheme(
 // #00F0FF / #FF2D55 live as the text/stage tokens below and in the
 // shell mesh + hero gradient, where no small text sits on them.
 
+// ── v1.0.6.2 (F8b): the two violet-family relatives that
+// complete the three-theme picker — a deep blue-violet and a
+// magenta-violet, built through the same scheme() builder and
+// held to the same contrast gate as every scheme above.
+
+val DeepIndigoScheme = scheme(
+    name = "Deep indigo",
+    darkPrimary = Color(0xFF4338CA), darkSecondary = Color(0xFF3E6FB0), darkTertiary = Color(0xFF7C5CD6),
+    lightPrimary = Color(0xFF3D34B8), lightSecondary = Color(0xFF2E5FA3), lightTertiary = Color(0xFF6A3FD4),
+    darkBg = Color(0xFF0B0E1D), darkSurface = Color(0xFF151A2E), darkHigh = Color(0xFF1F2742),
+    darkText = Color(0xFFECEEFB), darkMuted = Color(0xFFA6ABD0), darkHair = Color(0xFF2E3657),
+    lightBg = Color(0xFFF1F2FA), lightSurface = Color(0xFFFFFFFF), lightHigh = Color(0xFFE0E3F2),
+    lightText = Color(0xFF141830), lightMuted = Color(0xFF4E5474), lightHair = Color(0xFFC3C8E2),
+    primaryTextDark = Color(0xFFA5B4FC), primaryTextLight = Color(0xFF3730A3),
+    aiTextDark = Color(0xFFC4B0F5), aiTextLight = Color(0xFF5B3FA8)
+)
+
+val MagentaVioletScheme = scheme(
+    name = "Magenta violet",
+    darkPrimary = Color(0xFFA21CAF), darkSecondary = Color(0xFF7C5CD6), darkTertiary = Color(0xFFC21847),
+    lightPrimary = Color(0xFF86198F), lightSecondary = Color(0xFF6A3FD4), lightTertiary = Color(0xFFC21847),
+    darkBg = Color(0xFF170A1C), darkSurface = Color(0xFF221129), darkHigh = Color(0xFF2E1738),
+    darkText = Color(0xFFF9EDFA), darkMuted = Color(0xFFCBA3D4), darkHair = Color(0xFF472A52),
+    lightBg = Color(0xFFFAF1FB), lightSurface = Color(0xFFFFFFFF), lightHigh = Color(0xFFF3DFF5),
+    lightText = Color(0xFF2A1030), lightMuted = Color(0xFF6E4A77), lightHair = Color(0xFFE4C6E8),
+    primaryTextDark = Color(0xFFF0A6F5), primaryTextLight = Color(0xFF86198F),
+    aiTextDark = Color(0xFFFFB3C8), aiTextLight = Color(0xFFB0123F)
+)
+
 val ElectricVioletScheme = scheme(
     name = "Electric violet",
     darkPrimary = ElectricPurple, darkSecondary = Color(0xFF007A87), darkTertiary = Color(0xFFC21847),
@@ -239,10 +268,23 @@ val ElectricVioletScheme = scheme(
     aiTextDark = Color(0xFFFF8FAB), aiTextLight = Color(0xFFB0123F)
 )
 
-/** All picker schemes, Ember first (the default). */
+/** Every resolvable scheme (stored names keep working). */
 val AppSchemes: List<AppScheme> = listOf(
     EmberScheme, VioletNightScheme, OceanScheme, ForestScheme, RoseScheme, MonoScheme,
-    NebulaVioletScheme, EmeraldScheme, SunsetScheme, ElectricVioletScheme
+    NebulaVioletScheme, EmeraldScheme, SunsetScheme, ElectricVioletScheme,
+    DeepIndigoScheme, MagentaVioletScheme
+)
+
+/**
+ * v1.0.6.2 (F8b + the user's 1–3 options rule): the Colour
+ * theme PICKER offers exactly three complete themes — Electric
+ * Violet (the default) and its two violet-family relatives.
+ * The other schemes above stay resolvable for installs that
+ * already chose them; they are simply no longer a wall of
+ * options.
+ */
+val AppColourThemes: List<AppScheme> = listOf(
+    ElectricVioletScheme, DeepIndigoScheme, MagentaVioletScheme
 )
 
 /**

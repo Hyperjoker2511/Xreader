@@ -9,9 +9,16 @@ import org.junit.Test
 /**
  * The spoiler guard boundary (PLAN §7 gate): lore chat context is
  * built ONLY from material at or before the reader's position —
- * earlier chapter summaries, lore first seen in earlier chapters,
- * and the current chapter's text cut exactly at the read offset.
- * One chapter further in ANY of them is a hard failure.
+ * chapter summaries up to and including the current chapter,
+ * lore first seen in earlier chapters, and the current chapter's
+ * text cut exactly at the read offset. One chapter further in ANY
+ * of them is a hard failure.
+ *
+ * v1.0.6.2 (F9): the CURRENT chapter's summary is included now —
+ * it is already displayed to the reader in the Ask AI sheet, and
+ * excluding it left the chat with nothing to go on at a chapter's
+ * start (the model literally answered "I don't know the story
+ * yet"). Future chapters' summaries remain a hard exclusion.
  */
 class SpoilerGuardTest {
 
@@ -55,8 +62,10 @@ class SpoilerGuardTest {
         assertTrue(context.contains("SEEN-SO-FAR"))
         assertFalse("future lore leaked", context.contains("Future Villain"))
         assertFalse("future summary leaked", context.contains("FUTURE-EVENT"))
-        assertFalse(
-            "current chapter's own summary would describe unread text",
+        // v1.0.6.2 (F9): the current chapter's summary is the
+        // reader's own displayed summary — it belongs in context.
+        assertTrue(
+            "current chapter summary is in context (F9)",
             context.contains("CURRENT chapter summary")
         )
         assertFalse("unread tail of current chapter leaked", context.contains("NOT-YET-READ"))
@@ -74,8 +83,10 @@ class SpoilerGuardTest {
         assertTrue(context.contains("Early Friend"))
         assertTrue(context.contains("The "))
         assertFalse(context.contains("Later"))
-        assertFalse(
-            "chapter 0's summary is not 'before' chapter 0",
+        // v1.0.6.2 (F9): at chapter 0 the reader's own summary of
+        // chapter 0 IS the material there is — it is included.
+        assertTrue(
+            "chapter 0's own summary is in context at chapter 0 (F9)",
             context.contains("FIRST summary")
         )
         assertFalse(context.contains("beginning"))

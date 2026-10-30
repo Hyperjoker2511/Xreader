@@ -30,6 +30,31 @@ class EpubParser : BookParser {
 
     override val format: BookFormat = BookFormat.EPUB
 
+    /**
+     * v1.0.6.2 (F6a): metadata-only read — the OPF description
+     * without converting a single chapter. Powers heal-on-open for
+     * library books imported before descriptions were mapped (or
+     * whose stored synopsis is empty): cheap enough to run once
+     * when the book's details are opened.
+     */
+    fun readDescription(staged: File, workDir: File): String? = try {
+        val unzipped = File(workDir, "unzipped-meta")
+        if (extractZip(staged, unzipped) != null) {
+            null
+        } else {
+            val container = File(unzipped, "META-INF/container.xml")
+            val opfPath = if (container.isFile) parseContainer(container) else null
+            val opfFile = opfPath?.let { File(unzipped, it) }
+            if (opfFile != null && opfFile.isFile) {
+                parseOpf(opfFile)?.description?.trim()?.takeIf { it.isNotEmpty() }
+            } else {
+                null
+            }
+        }
+    } catch (e: Exception) {
+        null
+    }
+
     override fun parse(
         staged: File,
         workDir: File,
@@ -146,9 +171,18 @@ class EpubParser : BookParser {
             } else {
                 null
             }
-            if (converted == null || converted.blocks.isEmpty()) {
+            if (converted == null) {
                 failures++
                 writer.add(titles[relPath] ?: "Chapter ${index + 1}", ChapterContent())
+            } else if (converted.blocks.isEmpty() && overlays[relPath] == null) {
+                // v1.0.6.2 (F7): a spine item that converts
+                // cleanly to NO readable blocks and carries no
+                // narration is front matter (a cover/title page),
+                // not a chapter. Storing it as an empty chapter
+                // made every real chapter's number one higher
+                // than the book's own headings ("Chapter 2" over
+                // the chapter titled Chapter 1). Skip it.
+                Unit
             } else {
                 val content = ChapterContent(
                     blocks = converted.blocks,

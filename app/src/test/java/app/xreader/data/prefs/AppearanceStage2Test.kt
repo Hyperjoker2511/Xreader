@@ -15,7 +15,9 @@ import org.junit.Test
 /**
  * v1.0.2 Stage 2 appearance rules: the R04 fresh-install default
  * (decided by the main agent under the user's autonomy grant —
- * fresh installs get Violet Night, upgraders keep their look, via
+ * fresh installs get Electric Violet (v1.0.6.2 F8b — was Violet
+ * Night until the final-build plan made the user's own palette
+ * the default), upgraders keep their look, via
  * existing-data presence), the three-custom-scheme cap, and the
  * R05/R06/R07 state defaults.
  */
@@ -34,10 +36,10 @@ class AppearanceStage2Test {
     }
 
     @Test
-    fun `fresh install primes to Violet Night`() = runTest {
+    fun `fresh install primes to Electric Violet`() = runTest {
         val prefs = AppearancePrefs(FakeDataStore(), establishedInstall = false)
         prefs.primeDefaultScheme()
-        assertEquals("Violet night", prefs.state.first().colourScheme)
+        assertEquals("Electric violet", prefs.state.first().colourScheme)
     }
 
     @Test
@@ -57,14 +59,14 @@ class AppearanceStage2Test {
     }
 
     @Test
-    fun `fresh install keeps Violet Night across a later established run`() = runTest {
+    fun `fresh install keeps Electric Violet across a later established run`() = runTest {
         val store = FakeDataStore()
         AppearancePrefs(store, establishedInstall = false).primeDefaultScheme()
         // Second process: the database now exists, so the signal
         // says "established" — the primed value must not flip.
         val second = AppearancePrefs(store, establishedInstall = true)
         second.primeDefaultScheme()
-        assertEquals("Violet night", second.state.first().colourScheme)
+        assertEquals("Electric violet", second.state.first().colourScheme)
     }
 
     @Test

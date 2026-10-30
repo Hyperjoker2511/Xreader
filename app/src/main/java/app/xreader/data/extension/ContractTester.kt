@@ -53,14 +53,53 @@ class ContractTester(private val service: ExtensionService) {
 
         // LIST — the catalogue's front page.
         val listResult = service.guarded(handle) { it.popular(1) }
-        record(
-            SourceCapability.LIST, listResult,
-            if (listResult is AppResult.Ok) {
-                "${listResult.value.books.size} book(s) listed"
-            } else {
-                ""
-            }
-        )
+        // v1.0.6.2 (F2): a config whose listing URL carries
+        // {page} CLAIMS the catalogue pages — prove the claim.
+        // Page 2 must not be page 1 again (a source answering
+        // every page with its first one froze Browse on page 1
+        // while looking alive). An EMPTY page 2 is a one-page
+        // catalogue ending honestly, and a different set is
+        // paging working; only an identical set fails the step.
+        val listSpecUrl = service.declarativeConfigOf(handle)?.let { cfg ->
+            (cfg.popular ?: cfg.latest ?: cfg.search)?.url
+        }
+        val pageTwoResult = if (
+            listResult is AppResult.Ok &&
+            listSpecUrl?.contains("{page}") == true
+        ) {
+            service.guarded(handle) { it.popular(2) }
+        } else {
+            null
+        }
+        val pageOneIds = (listResult as? AppResult.Ok)?.value
+            ?.books?.map { it.id }?.toSet().orEmpty()
+        val pageTwoBooks = (pageTwoResult as? AppResult.Ok)?.value?.books
+        val pageTwoSame = pageTwoBooks != null && pageOneIds.isNotEmpty() &&
+            pageTwoBooks.map { it.id }.toSet() == pageOneIds
+        if (pageTwoSame) {
+            results += CapabilityResult(
+                capability = SourceCapability.LIST,
+                ok = false,
+                detail = "the catalogue claims to page, but page 2 " +
+                    "shows the same books as page 1"
+            )
+        } else {
+            record(
+                SourceCapability.LIST, listResult,
+                if (listResult is AppResult.Ok) {
+                    "${listResult.value.books.size} book(s) listed" +
+                        when {
+                            pageTwoBooks == null -> ""
+                            pageTwoBooks.isEmpty() ->
+                                " — page 2 is empty, so this is the whole catalogue"
+                            else ->
+                                " — page 2 shows different books, so the catalogue pages"
+                        }
+                } else {
+                    ""
+                }
+            )
+        }
         val firstBook: SourceBook? = (listResult as? AppResult.Ok)?.value
             ?.books?.firstOrNull()
 
@@ -130,24 +169,56 @@ class ContractTester(private val service: ExtensionService) {
                 checkedAtMillis = System.currentTimeMillis()
             )
         }
-        proofBook = firstBook.title
+        fun detailsDetail(book: SourceBook): String =
+            "author: ${book.author ?: "—"}, " +
+                if (book.coverUrl != null) {
+                    "cover found"
+                } else {
+                    "no cover found (the book will show a letter tile)"
+                }
 
         // DETAILS — the book page fills in.
-        val detailsResult = service.guarded(handle) { it.details(firstBook) }
-        record(
-            SourceCapability.DETAILS, detailsResult,
-            if (detailsResult is AppResult.Ok) {
-                "author: ${detailsResult.value.author ?: "—"}, " +
-                    if (detailsResult.value.coverUrl != null) {
-                        "cover found"
-                    } else {
-                        "no cover found (the book will show a letter tile)"
-                    }
-            } else {
-                ""
+        // v1.0.6.2 (F5): judge the book the rules were SAVED
+        // from — the config's recorded sample — when there is
+        // one. Repair proved THAT book; Health re-judging a
+        // different book off the catalogue's front page let an
+        // unrepresentative pick contradict a good Repair. The
+        // catalogue's first book stays the fallback: when no
+        // sample is recorded, or the recorded book no longer
+        // opens at all.
+        val sampleUrl = service.declarativeConfigOf(handle)
+            ?.sampleBookUrl?.takeIf { it.isNotBlank() }
+        var sampled: SourceBook? = null
+        if (sampleUrl != null) {
+            val sampleResult = service.guarded(handle) {
+                it.details(SourceBook(id = sampleUrl, title = ""))
             }
-        )
-        val detailed = (detailsResult as? AppResult.Ok)?.value ?: firstBook
+            if (sampleResult is AppResult.Ok &&
+                sampleResult.value.title.isNotBlank()
+            ) {
+                record(
+                    SourceCapability.DETAILS, sampleResult,
+                    detailsDetail(sampleResult.value)
+                )
+                sampled = sampleResult.value
+                proofBook = sampleResult.value.title
+            }
+        }
+        val detailed: SourceBook = if (sampled != null) {
+            sampled
+        } else {
+            proofBook = firstBook.title
+            val detailsResult = service.guarded(handle) { it.details(firstBook) }
+            record(
+                SourceCapability.DETAILS, detailsResult,
+                if (detailsResult is AppResult.Ok) {
+                    detailsDetail(detailsResult.value)
+                } else {
+                    ""
+                }
+            )
+            (detailsResult as? AppResult.Ok)?.value ?: firstBook
+        }
 
         // CHAPTERS — the list must exist and be non-empty.
         // v1.0.5 (A1): an Ok-but-EMPTY list fails this step with

@@ -81,6 +81,16 @@ sealed interface AppError {
     /** Corrupt / empty / wrong-format file handed to an importer. */
     data class BadFile(val reason: String) : AppError
 
+    /**
+     * v1.0.6.2 (F9): a verdict that is NOT a failure — the feature
+     * ran and the honest answer is "nothing to do" (the chapter is
+     * already in English; there are no summaries yet; a feature is
+     * switched off). Carries its own complete plain-words message:
+     * UIs render it as a calm note, never as an error, and it never
+     * acquires a failure prefix the way BadFile's reason does.
+     */
+    data class NeutralVerdict(val message: String) : AppError
+
     /** Anything not yet classified. Carries the exception class name only. */
     data class Unknown(val cause: Throwable) : AppError {
         val causeClass: String get() = cause.javaClass.simpleName

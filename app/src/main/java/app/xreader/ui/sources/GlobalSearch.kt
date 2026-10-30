@@ -226,7 +226,8 @@ class GlobalSearchViewModel(private val container: AppContainer) : ViewModel() {
 fun GlobalSearchScreen(
     viewModel: GlobalSearchViewModel,
     onOpenBook: (Long) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    coverFile: (String?) -> java.io.File? = { null }
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(viewModel) {
@@ -349,14 +350,30 @@ fun GlobalSearchScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                     }
-                    items(state.libraryBooks, key = { "lib-${it.id}" }) { book ->
-                        GlassCard(onClick = { viewModel.openLibraryBook(book.id) }) {
-                            Text(book.title, style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                "Already on your shelf — tap to open.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                    // v1.0.6.2 (S1): library hits use the shared
+                    // poster card, in rows of three like the shelf.
+                    items(
+                        state.libraryBooks.chunked(3),
+                        key = { row -> "librow-" + row.joinToString("-") { it.id.toString() } }
+                    ) { rowBooks ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            rowBooks.forEach { book ->
+                                app.xreader.ui.common.BookPosterCard(
+                                    title = book.title,
+                                    author = book.author.takeIf { it.isNotBlank() },
+                                    coverModel = coverFile(book.coverPath)
+                                        ?.takeIf { it.exists() },
+                                    metaLine = "${book.totalChapters} chapters",
+                                    onClick = { viewModel.openLibraryBook(book.id) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            repeat(3 - rowBooks.size) {
+                                Spacer(Modifier.weight(1f))
+                            }
                         }
                     }
                 }
@@ -395,29 +412,40 @@ fun GlobalSearchScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                     }
-                    items(group.books, key = { "gs-${group.sourceId}-${it.id}" }) { book ->
-                        val workKey = app.xreader.data.extension.WorkMatcher
-                            .normaliseTitle(book.title)
-                        val inLibrary = workKey in state.libraryKeys
-                        val copies = state.workCounts[workKey] ?: 1
-                        GlassCard(onClick = { viewModel.openBook(group, book) }) {
-                            Text(book.title, style = MaterialTheme.typography.bodyLarge)
-                            book.author?.takeIf { it.isNotBlank() }?.let {
-                                Text(
-                                    it,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (inLibrary || copies > 1) {
-                                Text(
-                                    listOfNotNull(
+                    // v1.0.6.2 (S1): source hits use the shared
+                    // poster card too — one card everywhere.
+                    items(
+                        group.books.chunked(3),
+                        key = { row ->
+                            "gsrow-${group.sourceId}-" +
+                                row.joinToString("-") { it.id }
+                        }
+                    ) { rowBooks ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            rowBooks.forEach { book ->
+                                val workKey = app.xreader.data.extension.WorkMatcher
+                                    .normaliseTitle(book.title)
+                                val inLibrary = workKey in state.libraryKeys
+                                val copies = state.workCounts[workKey] ?: 1
+                                app.xreader.ui.common.BookPosterCard(
+                                    title = book.title,
+                                    author = book.author
+                                        ?.takeIf { it.isNotBlank() },
+                                    coverModel = book.coverUrl
+                                        ?.takeIf { it.isNotBlank() },
+                                    metaLine = listOfNotNull(
                                         if (inLibrary) "In your library" else null,
                                         if (copies > 1) "On $copies sources" else null
-                                    ).joinToString(" · "),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.secondary
+                                    ).joinToString(" · ").takeIf { it.isNotBlank() },
+                                    onClick = { viewModel.openBook(group, book) },
+                                    modifier = Modifier.weight(1f)
                                 )
+                            }
+                            repeat(3 - rowBooks.size) {
+                                Spacer(Modifier.weight(1f))
                             }
                         }
                     }

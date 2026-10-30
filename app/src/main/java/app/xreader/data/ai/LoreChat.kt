@@ -15,13 +15,16 @@ data class ReadingPosition(val chapterIndex: Int, val charOffset: Int)
  * Assembling the Lore Chat context (PLAN §7) — a pure function with a
  * hard rule: **nothing from beyond the reader's position may enter
  * the prompt.** Concretely:
- *  - chapter summaries are included only for chapters BEFORE the
- *    current one (the current chapter's own summary could describe
- *    its ending);
+ *  - chapter summaries are included for chapters up to AND
+ *    INCLUDING the current one (v1.0.6.2, F9: the current chapter's
+ *    summary is already shown to the reader in the Ask AI sheet —
+ *    excluding it left the chat with literally nothing to go on at
+ *    a chapter's start, and the model said so);
  *  - lore entities are included only when they first appeared at or
  *    before the current chapter;
  *  - the current chapter's text is cut exactly at the reader's char
- *    offset (a window ending there);
+ *    offset (a window of at most [MAX_CHAPTER_WINDOW] chars ending
+ *    there — the bound is the offset, never beyond it);
  *  - later chapters contribute nothing at all — not even titles.
  */
 object LoreChatContext {
@@ -29,6 +32,28 @@ object LoreChatContext {
     const val MAX_CHAPTER_WINDOW = 6_000
     const val MAX_LORE_ENTITIES = 80
     const val MAX_SUMMARIES = 40
+
+    /**
+     * v1.0.6.2 (F9): is there ANYTHING for the chat to go on —
+     * a lore entry, a summary in range, or chapter text before
+     * the reader's place? When this is false the UI says so in
+     * plain words instead of sending an empty brief to the model.
+     */
+    fun hasMaterial(
+        lore: List<LoreEntity>,
+        summariesBefore: List<Pair<Int, List<String>>>,
+        currentChapterText: String,
+        position: ReadingPosition
+    ): Boolean {
+        if (lore.any { it.firstChapterIndex <= position.chapterIndex }) {
+            return true
+        }
+        if (summariesBefore.any { it.first <= position.chapterIndex }) {
+            return true
+        }
+        val offset = position.charOffset.coerceIn(0, currentChapterText.length)
+        return currentChapterText.substring(0, offset).isNotBlank()
+    }
 
     fun build(
         bookTitle: String,
@@ -42,7 +67,7 @@ object LoreChatContext {
             .sortedWith(compareBy({ it.firstChapterIndex }, { it.name }))
             .take(MAX_LORE_ENTITIES)
         val safeSummaries = summariesBefore
-            .filter { it.first < position.chapterIndex }
+            .filter { it.first <= position.chapterIndex }
             .sortedBy { it.first }
             .takeLast(MAX_SUMMARIES)
         val offset = position.charOffset.coerceIn(0, currentChapterText.length)
@@ -108,7 +133,7 @@ class LoreChat(
         if (!settingsProvider().enabled(AiFeature.LORE_CHAT)) {
             emit(
                 GeminiClient.StreamEvent.Failed(
-                    AppError.BadFile(
+                    AppError.NeutralVerdict(
                         "Lore Chat is turned off — switch it on in Providers & keys."
                     )
                 )

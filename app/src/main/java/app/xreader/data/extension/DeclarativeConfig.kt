@@ -89,14 +89,79 @@ data class DetailsSpec(
 
 /** [list] selects one chapter row; [name]/[link] resolve within it
  * (or on it — `@text`/`@href`). [reverse] is for sites that list the
- * newest chapter first: the engine always returns reading order. */
+ * newest chapter first: the engine always returns reading order.
+ * [pagination] is the optional server-side paging of the list
+ * itself (v1.0.6.2, F1) for sites whose book page renders only the
+ * newest slice; null (every config written before it existed) =
+ * the book page's own rows are the whole list, exactly as before. */
 @Serializable
 data class ChapterListSpec(
     val list: String,
     val name: String,
     val link: String,
-    val reverse: Boolean = false
+    val reverse: Boolean = false,
+    val pagination: ChapterListPagination? = null
 )
+
+/**
+ * Chapter-list pagination (v1.0.6.2, F1 — the QuickNovel contract:
+ * a book yields its COMPLETE chapter list). Some sites render only
+ * the newest rows on the book page and serve the rest from a
+ * paging endpoint the page's own scripts call (novelight's
+ * `/book/ajax/chapter-pagination?book_id=…&page=…`, verified live
+ * 2026-10-30: 50 rows per page, newest first, the last page short,
+ * the walk ending at chapter 1). This block declares that endpoint
+ * declaratively, like everything else in the config:
+ *
+ * - [urlTemplate] builds each page's URL; `{bookId}` and `{page}`
+ *   (1-based; the walk starts at page 2 — the book page itself is
+ *   page 1) are replaced before the URL is resolved against the
+ *   source's base URL, so the template may be absolute or
+ *   base-relative, and the placeholders may sit in the path or
+ *   the query string.
+ * - [bookIdPattern] is a regex applied to the book page's HTML
+ *   (script bodies included); group 1 is the id the endpoint
+ *   needs (novelight: `BOOK_ID = "402"`). No match = the walk
+ *   simply doesn't run and the rendered rows are the list.
+ * - [jsonHtmlField]: when set, each response is a JSON object and
+ *   the named field's string value is the rows' HTML fragment
+ *   (novelight: `"html"`). Null = the response body IS the
+ *   fragment.
+ * - [headers] ride along on every page request through the
+ *   source's normal session/whitelist HTTP. The default carries
+ *   the XMLHttpRequest header these endpoints demand (the same
+ *   convention as [ChapterTextAjax]).
+ *
+ * The engine parses each fragment with the chapter list's own
+ * selectors, dedupes by chapter URL across the whole walk, and
+ * stops on an empty page, an all-already-seen page, a page
+ * shorter than the first paginated page (a short page is the
+ * last), or a hard page cap — a failed page mid-walk keeps the
+ * rows gathered so far instead of losing the list.
+ */
+@Serializable
+data class ChapterListPagination(
+    val urlTemplate: String,
+    val bookIdPattern: String,
+    val jsonHtmlField: String? = null,
+    val headers: Map<String, String> = mapOf(
+        "X-Requested-With" to "XMLHttpRequest"
+    )
+) {
+    /** The endpoint URL for one page of the walk. */
+    fun endpointFor(bookId: String, page: Int): String =
+        urlTemplate
+            .replace("{bookId}", bookId)
+            .replace("{page}", page.toString())
+
+    /** The book id [pageHtml] carries, or null when the pattern
+     * doesn't match (or doesn't compile — a broken pattern must
+     * never take the whole chapter list down with it). */
+    fun bookIdIn(pageHtml: String): String? =
+        runCatching { Regex(bookIdPattern).find(pageHtml) }
+            .getOrNull()?.groupValues?.getOrNull(1)
+            ?.takeIf { it.isNotBlank() }
+}
 
 /** One chapter page. [content] selects the readable element; [nextPage]
  * chains multi-page chapters (selector for the next-page link),

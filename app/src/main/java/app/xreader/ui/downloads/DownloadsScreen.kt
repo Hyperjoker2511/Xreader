@@ -71,6 +71,26 @@ fun DownloadsScreen(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        // v1.0.6.2 (D2): one plain storage line + Pause all /
+        // Resume all for the whole queue.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                state.storageLine,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            if (state.hasPausable) {
+                TextButton(onClick = { viewModel.pauseAll() }) {
+                    Text("Pause all")
+                }
+            }
+            if (state.hasResumable) {
+                TextButton(onClick = { viewModel.resumeAll() }) {
+                    Text("Resume all")
+                }
+            }
+        }
         Spacer(Modifier.height(16.dp))
 
         // v1.0.4 (D13 ruling — "Settings, all download switches
@@ -97,6 +117,23 @@ fun DownloadsScreen(
             Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // v1.0.6.2 (RB): failures get their own plain
+            // section with one retry for all of them — a failed
+            // chapter is never just a number inside a book card.
+            if (state.failedCount > 0) {
+                item(key = "failed-header") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Couldn't download (${state.failedCount})",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { viewModel.retryAllFailed() }) {
+                            Text("Retry all")
+                        }
+                    }
+                }
+            }
             if (state.active.isNotEmpty()) {
                 item(key = "active-header") {
                     Text("Active", style = MaterialTheme.typography.titleMedium)

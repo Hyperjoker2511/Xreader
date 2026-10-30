@@ -154,8 +154,12 @@ object KnownSites {
         baseUrl: String
     ): DeclarativeConfig {
         val base = baseUrl.trimEnd('/')
+        // v1.0.6.2 (F2): the catalogue pages with ?page=N (links
+        // verified in the live catalogue HTML 2026-10-30) — the
+        // {page} placeholder is what lets Browse walk past the
+        // first screen of books at all.
         val grid = ListSpec(
-            url = "$base/catalog/",
+            url = "$base/catalog/?page={page}",
             results = ".manga-grid-list a.item",
             title = ".title@text",
             link = "@href",
@@ -166,7 +170,7 @@ object KnownSites {
             name = name,
             lang = "en",
             baseUrl = base,
-            search = grid.copy(url = "$base/catalog/?search={query}"),
+            search = grid.copy(url = "$base/catalog/?search={query}&page={page}"),
             popular = grid,
             latest = null,
             details = DetailsSpec(
@@ -178,7 +182,19 @@ object KnownSites {
                     list = ".chapters a.chapter",
                     name = ".title@text",
                     link = "@href",
-                    reverse = true
+                    reverse = true,
+                    // v1.0.6.2 (F1): the book page renders only
+                    // the newest 50 rows; the rest come from the
+                    // paging endpoint the site's own scripts call
+                    // (verified live 2026-10-30: {"html": …}, 50
+                    // rows a page, the last page short, ending
+                    // at chapter 1; BOOK_ID sits in the book
+                    // page's scripts).
+                    pagination = ChapterListPagination(
+                        urlTemplate = "$base/book/ajax/chapter-pagination?book_id={bookId}&page={page}",
+                        bookIdPattern = "BOOK_ID\\s*=\\s*\"(\\d+)\"",
+                        jsonHtmlField = "html"
+                    )
                 )
             ),
             chapter = ChapterSpec(

@@ -153,7 +153,14 @@ class AppContainer(context: Context) {
 
     val httpTransport: HttpTransport = OkHttpTransport()
 
-    val parserRegistry: ParserRegistry = ParserRegistry(PdfBoxTextExtractor(appContext))
+    val pdfTextExtractor: PdfBoxTextExtractor = PdfBoxTextExtractor(appContext)
+
+    val parserRegistry: ParserRegistry = ParserRegistry(pdfTextExtractor)
+
+    /** v1.0.6.2 (F6a): fills an empty local book's synopsis from
+     * its own file metadata when the details screen opens. */
+    val localSynopsisHeal: app.xreader.data.parse.LocalSynopsisHeal =
+        app.xreader.data.parse.LocalSynopsisHeal(bookStorage, pdfTextExtractor)
 
     val bookImporter: BookImporter = BookImporter(
         storage = bookStorage,
@@ -189,6 +196,17 @@ class AppContainer(context: Context) {
         storage = bookStorage,
         enqueuer = WorkManagerEnqueuer(appContext)
     )
+
+    /** v1.0.6.2 (F9): the one chapter-text resolution the reader
+     * and every AI feature share (stored copy, else the live
+     * download-queue path). */
+    val chapterTextLoader: app.xreader.data.download.ChapterTextLoader =
+        app.xreader.data.download.ChapterTextLoader(
+            storage = bookStorage,
+            downloadController = downloadController,
+            chapterDao = database.chapterDao(),
+            queueDao = database.downloadQueueDao()
+        )
 
     val downloadEngine: DownloadEngine = DownloadEngine(
         queueDao = database.downloadQueueDao(),
@@ -373,6 +391,17 @@ class AppContainer(context: Context) {
                             status == android.os.BatteryManager.BATTERY_STATUS_FULL
                     } ?: false
                 )
+            },
+            // v1.0.6.2 (Revision 2, P1): the MINIMAL tier skips
+            // the sweep's background book refresh (the F1 walk
+            // belongs to book-open there).
+            minimalTier = {
+                val appearance = appearancePrefs.state
+                    .first()
+                app.xreader.data.prefs.PerformancePolicy.resolve(
+                    appearance.performanceMode, totalRamMb(),
+                    appearance.coverGlow
+                ).tier == app.xreader.data.prefs.PerfTier.MINIMAL
             }
         )
     }
@@ -445,7 +474,7 @@ class AppContainer(context: Context) {
             summarizer = summarizer,
             progressDao = database.readingProgressDao(),
             chapterDao = database.chapterDao(),
-            storage = bookStorage,
+            loader = chapterTextLoader,
             settingsProvider = aiSettingsProvider
         )
 

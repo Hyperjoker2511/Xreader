@@ -96,8 +96,25 @@ class LinkProber(
         val coverFound: Boolean = true,
         /** v1.0.5 (A6): plain-words cover warning when
          * [coverFound] is false. */
-        val coverWarning: String? = null
+        val coverWarning: String? = null,
+        /** v1.0.6.2 (F5): the semantic gate's verdict on the
+         * site's list shape for this drive — CLEAN (the items
+         * read as books), BORDERLINE (some post-shaped titles
+         * among books; the borderline AI check may be consulted
+         * by the flow), FEED (the items read as posts, not
+         * books — such a drive never returns Ok). Lane-verified
+         * candidates and drives that couldn't read a list
+         * report CLEAN: the gate did not judge them. */
+        val listShape: ListShapeVerdict = ListShapeVerdict.CLEAN,
+        /** v1.0.6.2 (F5): the listing titles the semantic gate
+         * judged (up to a small sample) — carried out so the
+         * borderline AI check can be shown what the drive saw. */
+        val sampleTitles: List<String> = emptyList()
     )
+
+    /** v1.0.6.2 (F5): what a test-drive's semantic gate made of
+     * the site's list — see [TestDriveResult.listShape]. */
+    enum class ListShapeVerdict { CLEAN, BORDERLINE, FEED }
 
     /** The distinctive search word for verification: the longest
      * word of the book's title (≥4 letters), else its first word. */
@@ -186,17 +203,30 @@ class LinkProber(
     suspend fun probe(
         rawUrl: String,
         aiAvailable: Boolean = false,
-        tryAllProposers: Boolean = false
+        tryAllProposers: Boolean = false,
+        // v1.0.6.2 (F5): the borderline AI verify hook — asked
+        // at most once per probe, only when a passing
+        // candidate's list shape judged BORDERLINE, with the
+        // sampled listing titles and a chapter-text excerpt.
+        // true = "these are books", false = "they are not",
+        // null = the AI is unavailable (no key, feature off,
+        // call failed) and the deterministic verdict stands.
+        // Null (the default) = no AI check is wired in.
+        semanticVerifier: (suspend (List<String>, String) -> Boolean?)? = null
     ): Outcome = withContext(Dispatchers.Default) {
-        probeImpl(rawUrl, aiAvailable, tryAllProposers)
+        probeImpl(rawUrl, aiAvailable, tryAllProposers, semanticVerifier)
     }
 
     /** The probe itself; see [probe] for the contract. Always
-     * entered on [Dispatchers.Default] via the public wrapper. */
+     * entered on [Dispatchers.Default] via the public wrapper.
+     * [walkedIn] is the F4 guard: a probe that already walked
+     * in from a home page never walks in again. */
     private suspend fun probeImpl(
         rawUrl: String,
         aiAvailable: Boolean = false,
-        tryAllProposers: Boolean = false
+        tryAllProposers: Boolean = false,
+        semanticVerifier: (suspend (List<String>, String) -> Boolean?)? = null,
+        walkedIn: Boolean = false
     ): Outcome {
         val url = normaliseUrl(rawUrl)
         if (url == null) {
@@ -318,7 +348,11 @@ class LinkProber(
         fun tried(tag: String) {
             if (tag !in proposersTried) proposersTried += tag
         }
-        fun consider(
+        // v1.0.6.2 (F5): the borderline AI check is spent at
+        // most once per probe, however many candidates judge
+        // borderline while competing.
+        var aiVerifyUsed = false
+        suspend fun consider(
             proposer: String,
             config: DeclarativeConfig,
             driveBookUrl: String,
@@ -326,6 +360,53 @@ class LinkProber(
         ) {
             when (val result = drive.result) {
                 is AppResult.Ok -> {
+                    // v1.0.6.2 (F5): a BORDERLINE list shape is
+                    // the one band where the AI is asked to
+                    // verify MEANING before anything is saved —
+                    // clear passes and clear feeds never spend
+                    // the call. A NO turns this candidate into a
+                    // semantic failure: it is not saved, and the
+                    // probe's ordinary escalation (other
+                    // proposers, then the AI detector) continues.
+                    // A YES is recorded on the stage lines, so
+                    // the AI's work is visible in the repair
+                    // record instead of invisible. A null (AI
+                    // unavailable) leaves the deterministic
+                    // borderline verdict standing — the follow-up
+                    // book check inside the drive already passed.
+                    var semanticFailure: String? = null
+                    if (result.value.listShape == ListShapeVerdict.BORDERLINE &&
+                        semanticVerifier != null && !aiVerifyUsed
+                    ) {
+                        aiVerifyUsed = true
+                        when (semanticVerifier.invoke(
+                            result.value.sampleTitles,
+                            result.value.chapterTextPreview
+                        )) {
+                            true -> stageLines += StageLine(
+                                "AI check", "confirmed",
+                                "confirmed these are books"
+                            )
+                            false -> {
+                                semanticFailure =
+                                    "The AI check looked at the site's list " +
+                                        "and said the items don't look like " +
+                                        "books — more like posts — so those " +
+                                        "rules weren't saved."
+                                stageLines += StageLine(
+                                    "AI check", "chapter list",
+                                    "the items don't look like books"
+                                )
+                            }
+                            null -> Unit
+                        }
+                    }
+                    if (semanticFailure != null) {
+                        val failure = bestFailure
+                        if (failure == null || 1 > failure.first) {
+                            bestFailure = 1 to semanticFailure
+                        }
+                    } else {
                     stageLines += when {
                         result.value.allChaptersLocked -> StageLine(
                             proposer, "chapter text",
@@ -385,6 +466,7 @@ class LinkProber(
                             bookUrl = driveBookUrl,
                             host = host
                         )
+                    }
                     }
                 }
                 is AppResult.Err -> {
@@ -485,6 +567,28 @@ class LinkProber(
         // The pasted link may be a CHAPTER page: find its book page.
         if (analysis == null) {
             val chapterAnalysis = LinkInference.analyseChapterPage(bookDoc, bookUrl)
+            // v1.0.6.2 (F4): the page may be the site's HOME or
+            // a listing — neither a book page nor, whatever the
+            // chapter analysis makes of its biggest text block,
+            // a chapter. When the listing analysis reads book
+            // links from it, walk into the first book and probe
+            // THAT; the source is still recorded under the
+            // pasted link's host. A site-root address earns the
+            // walk-in even when a text block tripped the
+            // chapter analysis — a home page is never a chapter.
+            val listing = runCatching {
+                LinkInference.analyseListingPage(bookDoc, bookUrl, null)
+            }.getOrNull()
+            val siteRoot = isSiteRoot(bookUrl)
+            if (!walkedIn && listing != null &&
+                (chapterAnalysis == null || siteRoot)
+            ) {
+                val walked = walkInFromListing(
+                    listing, bookDoc, host, aiAvailable,
+                    tryAllProposers, semanticVerifier
+                )
+                if (walked != null) return walked
+            }
             if (chapterAnalysis != null) {
                 var rescuedBookPage = false
                 val bookLink = LinkInference.findBookPageLink(bookDoc, bookUrl)
@@ -506,8 +610,15 @@ class LinkProber(
                 }
                 if (analysis == null) {
                     return failOrDraft(
-                        "That link opened a chapter, but Xreader couldn't find the book's own page " +
-                            "from it. Paste the book's main page (the one with the whole chapter list) instead."
+                        // v1.0.6.2 (F4): a home/listing page is
+                        // refused for what it IS — the chapter
+                        // copy below is for chapter links only.
+                        if (siteRoot || listing != null) {
+                            HOME_PAGE_COPY
+                        } else {
+                            "That link opened a chapter, but Xreader couldn't find the book's own page " +
+                                "from it. Paste the book's main page (the one with the whole chapter list) instead."
+                        }
                     )
                 }
             } else {
@@ -520,7 +631,13 @@ class LinkProber(
                 analysis = HeuristicProposer.analyseBookPage(bookDoc, bookUrl)
                 if (analysis == null) {
                     return failOrDraft(
-                        if (aiAvailable) {
+                        // v1.0.6.2 (F4): a home/listing page that
+                        // yielded no readable book is refused for
+                        // what it is; every other unreadable page
+                        // keeps the copy it has always had.
+                        if (siteRoot || listing != null) {
+                            HOME_PAGE_COPY
+                        } else if (aiAvailable) {
                             "Xreader couldn't spot a chapter list or readable chapter text on that page. " +
                                 "It may use a layout the automatic detector can't read — try the AI " +
                                 "detector below; it reads pages the way a person would."
@@ -852,6 +969,79 @@ class LinkProber(
         )
     }
 
+    /**
+     * v1.0.6.2 (F4): walk in from a home/listing page — take its
+     * first book link (same host only: a home page linking OUT
+     * to another site's books is an aggregator, and the source
+     * must belong to the pasted host) and probe that book page
+     * as if it had been pasted. A [Outcome.Ready] is returned
+     * with a leading stage line saying where the probe started;
+     * anything else returns null and the caller falls through
+     * to its honest refusal for the page it actually saw.
+     */
+    private suspend fun walkInFromListing(
+        listing: LinkInference.ListingAnalysis,
+        bookDoc: Document,
+        host: String,
+        aiAvailable: Boolean,
+        tryAllProposers: Boolean,
+        semanticVerifier: (suspend (List<String>, String) -> Boolean?)?
+    ): Outcome? {
+        val firstBook = firstListingBookUrl(bookDoc, listing) ?: return null
+        if (CookieParsing.hostOf(firstBook) != host) return null
+        val inner = probeImpl(
+            firstBook, aiAvailable, tryAllProposers,
+            semanticVerifier = semanticVerifier, walkedIn = true
+        )
+        return when (inner) {
+            is Outcome.Ready -> inner.copy(
+                stageLines = listOf(
+                    StageLine(
+                        "home page", "walked in",
+                        "the pasted link was the site's home page — " +
+                            "a book from its list was used to learn " +
+                            "the site's shape"
+                    )
+                ) + inner.stageLines
+            )
+            else -> null
+        }
+    }
+
+    /** The first usable book link of a listing page, resolved
+     * against the page's own base by jsoup (the documents the
+     * probe studies are parsed with their URL as base). */
+    private fun firstListingBookUrl(
+        doc: Document,
+        listing: LinkInference.ListingAnalysis
+    ): String? {
+        val elements = runCatching { doc.select(listing.resultsSelector) }
+            .getOrNull() ?: return null
+        for (el in elements) {
+            for (candidate in SelectorChains.split(listing.linkSpec)) {
+                val spec = SelectorSpec.parse(candidate)
+                val target = if (spec.css.isBlank()) {
+                    el
+                } else {
+                    el.selectFirst(spec.css)
+                } ?: continue
+                val href = when (spec.attr) {
+                    null, "text" -> target.absUrl("href")
+                    else -> target.absUrl(spec.attr)
+                        .ifBlank { target.attr(spec.attr) }
+                }
+                if (href.isNotBlank()) return href
+            }
+        }
+        return null
+    }
+
+    /** Whether [url] addresses the site's root (no path). */
+    private fun isSiteRoot(url: String): Boolean {
+        val path = runCatching { URI(url).path }.getOrNull() ?: return false
+        return path.isBlank() || path == "/"
+    }
+
     /** True when candidate rank [a] beats [b]: fully-proven
      * first (a pass-with-limits never beats a proven pass),
      * then search proof, chapter count, readable text length.
@@ -1047,6 +1237,62 @@ class LinkProber(
         data object DetectionFailed : LockCheck
     }
 
+    /**
+     * v1.0.6.2 (F5): the list-shape judge — reads the candidate's
+     * OWN listing through the candidate's own rules and decides
+     * whether the items read as books or as feed posts. A post
+     * title is "name + relative time + text" ("Monarch just
+     * now Ruined the mood") — the chikari case, where inference
+     * saved the site's social feed as a novel source. Returns
+     * the verdict plus the titles sampled, for the borderline
+     * AI check.
+     */
+    private suspend fun judgeListShape(
+        source: DeclarativeSource,
+        config: DeclarativeConfig
+    ): SemanticShape {
+        if (config.popular == null && config.latest == null) {
+            return SemanticShape(ListShapeVerdict.CLEAN)
+        }
+        val books = runCatching { source.popular(1).books }
+            .getOrDefault(emptyList())
+            .take(LIST_SHAPE_SAMPLE)
+        val titles = books.map { it.title }
+        if (titles.size < 2) {
+            return SemanticShape(ListShapeVerdict.CLEAN, titles)
+        }
+        val hits = titles.count { RELATIVE_TIME_TITLE.containsMatchIn(it) }
+        if (hits * 2 >= titles.size) {
+            return SemanticShape(ListShapeVerdict.FEED, titles)
+        }
+        if (hits == 0) {
+            return SemanticShape(ListShapeVerdict.CLEAN, titles)
+        }
+        // Borderline: some items look post-shaped. Prove the
+        // list with its first item — a real book page carries
+        // chapters or a synopsis; a post page carries neither.
+        return if (firstItemReadsAsBook(source, books.first())) {
+            SemanticShape(ListShapeVerdict.BORDERLINE, titles)
+        } else {
+            SemanticShape(ListShapeVerdict.FEED, titles)
+        }
+    }
+
+    /** F5 follow-check: does the list's first item open as a
+     * book (a chapter list or a synopsis)? */
+    private suspend fun firstItemReadsAsBook(
+        source: DeclarativeSource,
+        book: app.xreader.extensionapi.SourceBook
+    ): Boolean = runCatching {
+        val (details, chapters) = source.detailsAndChapters(book)
+        chapters.isNotEmpty() || !details.description.isNullOrBlank()
+    }.getOrDefault(false)
+
+    private data class SemanticShape(
+        val verdict: ListShapeVerdict,
+        val sampleTitles: List<String> = emptyList()
+    )
+
     private suspend fun testDrive(
         config: DeclarativeConfig,
         bookUrl: String,
@@ -1206,6 +1452,36 @@ class LinkProber(
                 )
             )
         }
+        // v1.0.6.2 (F5): the SEMANTIC gate — structure is not
+        // meaning. A repeating card list plus some text used to
+        // be enough to pass, so a social feed's post cards were
+        // saved as a "catalogue" on a real device (username +
+        // "just now" titles, post pages for books). Before any
+        // lock or text sampling, the site's own list is judged
+        // for book-shape; a feed verdict fails the drive HERE,
+        // at the list step, for every non-lane candidate —
+        // which is also what routes the flow's ordinary
+        // escalation (other proposers, then the AI detector)
+        // to run before anything is saved. The curated lane is
+        // exempt: hand-verified, like the prose gate below.
+        val shape = if (laneVerified) {
+            SemanticShape(ListShapeVerdict.CLEAN)
+        } else {
+            judgeListShape(source, config)
+        }
+        if (shape.verdict == ListShapeVerdict.FEED) {
+            return ScoredDrive(
+                1,
+                AppResult.Err(
+                    AppError.BadFile(
+                        "The test read found the site's list, but the items in it " +
+                            "look like posts, not books — names with times like " +
+                            "‘just now’ where book titles should be. Rules built " +
+                            "from a list like that weren't saved."
+                    )
+                )
+            )
+        }
         // A3: skip lock-marked chapters when sampling text.
         // v1.0.6.1 (P4): the lock read is TRI-STATE now. It
         // used to fail OPEN — a thrown lock read became an
@@ -1274,7 +1550,9 @@ class LinkProber(
                             "No cover image was found on the book page — this book will " +
                                 "show a plain letter tile until the site gives it one."
                         },
-                        allChaptersLocked = true
+                        allChaptersLocked = true,
+                        listShape = shape.verdict,
+                        sampleTitles = shape.sampleTitles
                     )
                 )
             )
@@ -1350,21 +1628,32 @@ class LinkProber(
                 )
             )
         )
-        // v1.0.6.1 (P4): when the lock read failed (and this
-        // is not a hand-verified lane candidate), a bare length
-        // pass is not proof — the sampled text must read like
-        // prose. Boilerplate (nav lists, tag clouds, related-
-        // titles blocks) is long but has almost no sentence
-        // punctuation; real story text always does.
-        if (lockDetectionFailed && !isGenuineProse(bestText)) {
+        // v1.0.6.1 (P4) + v1.0.6.2 (F5): a bare length pass is
+        // not proof of chapter text — the sampled text must
+        // read like prose. The gate began as the lock-failed
+        // case's guard (P4); F5 extends it to EVERY non-lane
+        // candidate save, because a shell or placeholder page
+        // is the same failure whether or not the lock read
+        // happened to work. Boilerplate (nav lists, tag
+        // clouds, related-title blocks) is long but has almost
+        // no sentence punctuation; real story text always does.
+        // The hand-verified lane stays exempt (P4's rule), and
+        // the lock-failed case keeps its own precise words.
+        if (!laneVerified && !isGenuineProse(bestText)) {
             return ScoredDrive(
                 2,
                 AppResult.Err(
                     AppError.BadFile(
-                        "The test read opened a chapter, but the text it found " +
-                            "doesn't read like story text — and the site wouldn't " +
-                            "show which chapters are locked, so the chapter " +
-                            "couldn't be proven."
+                        if (lockDetectionFailed) {
+                            "The test read opened a chapter, but the text it found " +
+                                "doesn't read like story text — and the site wouldn't " +
+                                "show which chapters are locked, so the chapter " +
+                                "couldn't be proven."
+                        } else {
+                            "The test read opened a chapter, but the chapter text " +
+                                "could not be read — what came back doesn't read " +
+                                "like story text."
+                        }
                     )
                 )
             )
@@ -1397,7 +1686,12 @@ class LinkProber(
                     },
                     // v1.0.6.1 (P4): a prose-gated pass
                     // carries its limit on the result.
-                    lockStateUnknown = lockDetectionFailed
+                    lockStateUnknown = lockDetectionFailed,
+                    // v1.0.6.2 (F5): the semantic verdict
+                    // rides out for the flow's borderline
+                    // AI check.
+                    listShape = shape.verdict,
+                    sampleTitles = shape.sampleTitles
                 )
             )
         )
@@ -1519,12 +1813,34 @@ class LinkProber(
          * before falling back (v1.0.6). */
         const val MAX_SAMPLE_BOOKS = 3
 
+        /** v1.0.6.2 (F5): listing items sampled per drive for
+         * the list-shape judge. */
+        const val LIST_SHAPE_SAMPLE = 8
+
+        /** F5: a feed-post title opens with "name + relative
+         * time" ("Monarch just now …", "Theonebeggar21 · 2h
+         * ago …"). Anchored at the title's start. */
+        private val RELATIVE_TIME_TITLE = Regex(
+            "^\\S+\\s+(?:just now|\\d{1,3}\\s*[mhdw]\\s*ago|yesterday|·)",
+            RegexOption.IGNORE_CASE
+        )
+
         /** v1.0.6: the plain-words failure when the CONNECTION
          * gave up mid-drive — the site is never blamed for a
          * slow link. */
         const val SLOW_CONNECTION_REASON =
             "The connection was too slow to finish checking this site. " +
                 "Try again when your connection is better."
+
+        /** v1.0.6.2 (F4): the honest refusal for a home/listing
+         * page the probe couldn't learn a book from — it says
+         * what was actually seen, and is never used for a
+         * chapter link (that refusal keeps its own words). */
+        const val HOME_PAGE_COPY =
+            "That link opened the site's home page. Xreader looked for a book " +
+                "there to learn from, but couldn't read one well enough to " +
+                "build the source. Paste one book's page instead — the one " +
+                "with the whole chapter list."
 
         /** v1.0.6.1 (P1): characters stripped from a pasted
          * address before parsing — the whitespace/control range
@@ -1598,18 +1914,27 @@ class LinkProber(
         /**
          * v1.0.6.1 (P4): does a sampled chapter's text read
          * like genuine prose? Deterministic and cheap: the
-         * existing readable-length floor plus at least five
+         * existing readable-length floor plus at least four
          * sentence-ending marks ('.', '?', '!', '"', '”') —
          * real story text punctuates; page boilerplate (nav
          * links, tag clouds, related-title lists) runs long
          * without ever ending a sentence.
+         *
+         * v1.0.6.2 (F5) calibration: the boundary was five
+         * when the gate only guarded the lock-failed case.
+         * Extending it to every candidate save put the app's
+         * own genuine-prose shapes on the line — a real
+         * four-sentence paragraph (the OddSite and novelight
+         * fixture chapters) carries exactly four enders in
+         * ~450 characters, while boilerplate carries none.
+         * Four keeps both sides of that line.
          */
         fun isGenuineProse(text: String): Boolean {
             if (text.length < LinkInference.MIN_READABLE_CHARS) return false
             val enders = text.count {
                 it == '.' || it == '?' || it == '!' || it == '"' || it == '”'
             }
-            return enders >= 5
+            return enders >= 4
         }
 
         fun baseOf(url: String): String = runCatching {

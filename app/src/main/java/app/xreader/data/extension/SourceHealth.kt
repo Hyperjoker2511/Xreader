@@ -148,6 +148,20 @@ data class SourceHealthRecord(
         SourceHealthState.UNKNOWN -> "Not checked yet"
     }
 
+    /**
+     * v1.0.6.2 (SO1): the short plain state word for list rows —
+     * the same verdict as [summaryLine], in row-sized words:
+     * Working / Working with limits / Needs setup / Not working /
+     * Not checked yet.
+     */
+    fun shortStateWord(): String = when (state) {
+        SourceHealthState.WORKING -> "Working"
+        SourceHealthState.WORKING_WITH_LIMITS -> "Working with limits"
+        SourceHealthState.NEEDS_SETUP -> "Needs setup"
+        SourceHealthState.BROKEN -> "Not working"
+        SourceHealthState.UNKNOWN -> "Not checked yet"
+    }
+
     companion object {
         /** The SourcePrefs key for one source of one extension. */
         fun key(extensionId: Long, sourceId: String): String = "$extensionId:$sourceId"

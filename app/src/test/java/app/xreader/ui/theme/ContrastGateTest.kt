@@ -1,6 +1,7 @@
 package app.xreader.ui.theme
 
 import androidx.compose.ui.graphics.Color
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -43,13 +44,24 @@ class ContrastGateTest {
     }
 
     @Test
-    fun `the four new palettes exist and pass`() {
-        val names = ReaderPalettes.map { it.name }
-        listOf("Max contrast", "Night blue", "Forest", "Café").forEach {
-            assertTrue("missing $it", it in names)
-        }
-        val max = ReaderPalettes.first { it.name == "Max contrast" }
-        assertTrue(Contrast.ratio(max.text, max.background) >= 20.0)
+    fun `the reader palette list is exactly the three shipping themes`() {
+        // v1.0.6.2 (F8c + the 1–3 options rule): AMOLED / Sepia /
+        // Paper only — Ember dark removed, the v1.0.1 extras
+        // consolidated out of the picker list. The retired
+        // palette VALUES remain defined and contrast-pinned
+        // (a stored retired name falls back to AMOLED at read).
+        assertEquals(
+            listOf("AMOLED", "Sepia", "Paper"),
+            ReaderPalettes.map { it.name }
+        )
+        assertTrue(Contrast.ratio(ReaderMaxContrast.text, ReaderMaxContrast.background) >= 20.0)
+        listOf(ReaderEmberDark, ReaderSlate, ReaderNightBlue, ReaderForest, ReaderCafe)
+            .forEach { palette ->
+                assertTrue(
+                    "${palette.name} text ${Contrast.ratio(palette.text, palette.background)}",
+                    Contrast.ratio(palette.text, palette.background) >= 4.5
+                )
+            }
     }
 
     @Test

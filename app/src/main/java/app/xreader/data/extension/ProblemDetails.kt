@@ -83,4 +83,40 @@ object ProblemDetails {
         }
         return lines.joinToString("\n")
     }
+
+    /**
+     * v1.0.6.2 (M1): the About screen's "Copy app details" —
+     * the whole app's story in one paste: version, every
+     * source with its plain health word, and the session's
+     * recent problems. [sourceLines] arrive display-ready
+     * ("Novelight — Working").
+     */
+    fun formatAppDetails(
+        appVersion: String,
+        sourceLines: List<String>,
+        recentProblems: List<DiagnosticLog.Entry> = emptyList()
+    ): String {
+        val lines = mutableListOf(
+            "Xreader app details",
+            "App version: $appVersion",
+            "Sources:"
+        )
+        if (sourceLines.isEmpty()) {
+            lines += "- none added yet"
+        } else {
+            sourceLines.forEach { lines += "- $it" }
+        }
+        if (recentProblems.isNotEmpty()) {
+            lines += "Recent problems (this session):"
+            recentProblems.forEach { entry ->
+                val line = "- ${entry.timeText()} · ${entry.tag} · ${entry.message}"
+                lines += if (entry.detail.isNotBlank()) {
+                    "$line (${entry.detail})"
+                } else {
+                    line
+                }
+            }
+        }
+        return lines.joinToString("\n")
+    }
 }

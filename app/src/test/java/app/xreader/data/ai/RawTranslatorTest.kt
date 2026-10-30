@@ -143,9 +143,16 @@ class RawTranslatorTest {
         ).toList()
         val failed = events.filterIsInstance<RawTranslator.Event.Failed>()
         assertEquals(1, failed.size)
+        // v1.0.6.2 (F9): "already in English" is a neutral verdict,
+        // NOT a failure — it must never render with the
+        // "That file couldn't be used" prefix BadFile acquires.
         assertTrue(
-            "english refusal is a plain BadFile, got ${failed.single().error}",
-            failed.single().error is app.xreader.core.error.AppError.BadFile
+            "english refusal is a neutral verdict, got ${failed.single().error}",
+            failed.single().error is app.xreader.core.error.AppError.NeutralVerdict
+        )
+        assertEquals(
+            "This chapter already reads as English — nothing to translate.",
+            app.xreader.core.error.ErrorText.displayText(failed.single().error)
         )
         assertEquals(0, transport.requests.size)
     }

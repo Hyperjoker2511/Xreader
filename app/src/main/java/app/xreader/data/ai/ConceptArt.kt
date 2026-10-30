@@ -87,7 +87,7 @@ class ConceptArt(
     ): AppResult<LoreArt> {
         if (!settingsProvider().enabled(AiFeature.CONCEPT_ART)) {
             return AppResult.Err(
-                AppError.BadFile("Concept art is turned off — switch it on in Providers & keys.")
+                AppError.NeutralVerdict("Concept art is turned off — switch it on in Providers & keys.")
             )
         }
         val image = when (val result = client.generateImage(prompt)) {

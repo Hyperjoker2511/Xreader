@@ -61,6 +61,9 @@ object ErrorText {
         is AppError.BadFile ->
             ErrorUi("That file couldn't be used. ${error.reason}", "Choose another file")
 
+        is AppError.NeutralVerdict ->
+            ErrorUi(error.message, "Got it")
+
         is AppError.Unknown ->
             ErrorUi("Something went wrong.", "Try again")
     }

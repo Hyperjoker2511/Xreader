@@ -642,7 +642,12 @@ class ExtensionDetailViewModel(
                 // this flow never renders an AI button, so the
                 // probe's own failure copy must not promise one.
                 when (val outcome = container.linkProber.probe(
-                    probeUrl, aiAvailable = false, tryAllProposers = true
+                    probeUrl, aiAvailable = false, tryAllProposers = true,
+                    // v1.0.6.2 (F5): the borderline-list AI verify
+                    // shares the Add flow's single call per run.
+                    semanticVerifier = { titles, excerpt ->
+                        container.selectorAi.verifySample(titles, excerpt)
+                    }
                 )) {
                     is app.xreader.data.extension.LinkProber.Outcome.Ready -> {
                         repairStageLines = outcome.stageLines.map { it.render() }

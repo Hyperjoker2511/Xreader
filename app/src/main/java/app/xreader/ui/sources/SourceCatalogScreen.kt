@@ -61,6 +61,11 @@ fun SourceCatalogScreen(
     onLogin: () -> Unit
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // v1.0.6.2 (F8a): search opens from an icon, like the Library —
+    // the field itself only takes room while searching.
+    var searchOpen by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.openedBook.collect { bookId -> onOpenBook(bookId) }
@@ -91,6 +96,17 @@ fun SourceCatalogScreen(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            IconButton(
+                onClick = {
+                    viewModel.setMode(CatalogMode.SEARCH)
+                    searchOpen = true
+                }
+            ) {
+                Icon(
+                    androidx.compose.material.icons.Icons.Filled.Search,
+                    contentDescription = "Search this source"
+                )
+            }
             TextButton(onClick = onLogin) { Text("Log in") }
         }
         Spacer(Modifier.height(8.dp))
@@ -108,11 +124,14 @@ fun SourceCatalogScreen(
                         CatalogMode.SEARCH -> "Search"
                     },
                     selected = state.mode == mode,
-                    onClick = { viewModel.setMode(mode) }
+                    onClick = {
+                        viewModel.setMode(mode)
+                        if (mode == CatalogMode.SEARCH) searchOpen = true
+                    }
                 )
             }
         }
-        if (state.mode == CatalogMode.SEARCH) {
+        if (state.mode == CatalogMode.SEARCH && searchOpen) {
             Spacer(Modifier.height(10.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -171,59 +190,20 @@ fun SourceCatalogScreen(
                     items(
                         state.books, key = { "book-${it.id}" }
                     ) { book ->
-                        Column(
-                            Modifier
-                                .animateItem(
-                                    placementSpec = listPlacementSpec()
-                                )
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { viewModel.openBook(book) }
-                        ) {
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(2f / 3f)
-                                    .clip(RoundedCornerShape(12.dp))
-                            ) {
-                                if (!book.coverUrl.isNullOrBlank()) {
-                                    AsyncImage(
-                                        model = book.coverUrl,
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } else {
-                                    app.xreader.ui.library.PlaceholderCover(
-                                        title = book.title,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                }
-                                if (state.openingBookId == book.id) {
-                                    CircularProgressIndicator(
-                                        Modifier
-                                            .size(26.dp)
-                                            .align(Alignment.Center)
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                book.title,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
+                        // v1.0.6.2 (S1): the same shared poster
+                        // card as the Library — one card everywhere.
+                        app.xreader.ui.common.BookPosterCard(
+                            title = book.title,
+                            author = book.author?.takeIf { it.isNotBlank() },
+                            coverModel = book.coverUrl
+                                ?.takeIf { it.isNotBlank() },
+                            metaLine = null,
+                            busy = state.openingBookId == book.id,
+                            onClick = { viewModel.openBook(book) },
+                            modifier = Modifier.animateItem(
+                                placementSpec = listPlacementSpec()
                             )
-                            if (!book.author.isNullOrBlank()) {
-                                Text(
-                                    book.author!!,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme
-                                        .onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
+                        )
                     }
                     if (state.hasNext) {
                         item(
@@ -238,6 +218,28 @@ fun SourceCatalogScreen(
                             ) {
                                 Text(if (state.loading) "Loading…" else "Load more")
                             }
+                        }
+                    }
+                    if (!state.hasNext && state.page > 1 && state.books.isNotEmpty()) {
+                        // v1.0.6.2 (F2): the honest end of the
+                        // catalogue — shown once paging actually
+                        // walked past page 1 and a page added
+                        // nothing new.
+                        item(
+                            span = {
+                                androidx.compose.foundation.lazy.grid
+                                    .GridItemSpan(maxLineSpan)
+                            }
+                        ) {
+                            Text(
+                                "That's everything here",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                            )
                         }
                     }
                 }

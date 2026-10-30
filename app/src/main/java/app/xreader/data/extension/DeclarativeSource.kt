@@ -145,7 +145,7 @@ class DeclarativeSource(
 
     override fun chapters(book: SourceBook): List<SourceChapter> {
         val doc = fetchDoc(bookPageUrl(book))
-        return parseChapters(doc, bookPageUrl(book))
+        return parseAllChapters(doc, bookPageUrl(book))
     }
 
     // ── v1.0.1 enrichment ─────────────────────────────────────────
@@ -206,7 +206,8 @@ class DeclarativeSource(
         }
     }
 
-    /** Details + chapters from ONE fetch — book pages carry both. */
+    /** Details + chapters from ONE book-page fetch — book pages
+     * carry both (plus the F1 pagination walk when declared). */
     fun detailsAndChapters(book: SourceBook): Pair<SourceBook, List<SourceChapter>> {
         val url = bookPageUrl(book)
         val doc = fetchDoc(url)
@@ -219,12 +220,34 @@ class DeclarativeSource(
             coverUrl = spec.cover?.let { readDocSpec(doc, it) }?.ifBlank { null }
                 ?.let { absolute(it, url) } ?: book.coverUrl
         )
-        return filled to parseChapters(doc, url)
+        return filled to parseAllChapters(doc, url)
     }
 
-    private fun parseChapters(doc: Document, pageUrl: String): List<SourceChapter> {
+    /** The COMPLETE chapter list (v1.0.6.2, F1): the book page's
+     * own rows, then — when the chapter spec declares a
+     * [ChapterListPagination] and the page yields its book id —
+     * the pagination walk appends every remaining page in site
+     * order. Dedupe + reading-order finishing happen ONCE, over
+     * the merged set, exactly as the single-page parse did. */
+    private fun parseAllChapters(doc: Document, pageUrl: String): List<SourceChapter> {
         val spec = config.details.chapters
-        val chapters = selectChained(doc, spec.list).mapIndexedNotNull { index, el ->
+        val rows = parseChapterRows(doc, pageUrl).toMutableList()
+        val pagination = spec.pagination
+        if (pagination != null) {
+            walkChapterPages(doc, pageUrl, pagination, rows)
+        }
+        return finishChapterRows(rows)
+    }
+
+    private fun parseChapterRows(doc: Document, pageUrl: String): List<SourceChapter> =
+        rowsFromElements(selectChained(doc, config.details.chapters.list), pageUrl)
+
+    private fun rowsFromElements(
+        elements: List<Element>,
+        pageUrl: String
+    ): List<SourceChapter> {
+        val spec = config.details.chapters
+        return elements.mapIndexedNotNull { index, el ->
             val link = readSpec(el, spec.link)?.trim().orEmpty()
             if (link.isEmpty()) return@mapIndexedNotNull null
             val chapterName = readSpec(el, spec.name)?.trim()
@@ -235,14 +258,126 @@ class DeclarativeSource(
                 number = ChapterNumbers.parse(chapterName)
             )
         }
+    }
+
+    private fun finishChapterRows(rows: List<SourceChapter>): List<SourceChapter> {
+        val spec = config.details.chapters
         // v1.0.5 (E3): sites that show a "latest chapters" block
         // AND the full list on the same page (Novelight: 10 + 51
         // rows under one selector) would otherwise hand back the
         // overlap twice. One entry per chapter URL, first
         // occurrence wins, order preserved — the COMPLETE list.
-        val unique = chapters.distinctBy { it.id }
+        val unique = rows.distinctBy { it.id }
         return if (spec.reverse) unique.asReversed() else unique
     }
+
+    /**
+     * The F1 pagination walk: fetch pages 2, 3, … of the declared
+     * endpoint through the source's own HTTP context (declared
+     * headers ride along; whitelist/session/rate limit apply),
+     * appending each page's NEW rows to [rows] in site order.
+     * Stops on: a page that fails to load or parse (the rows
+     * gathered so far are kept — a broken page 14 must not lose
+     * chapters 1–700), an empty page, a page whose rows were all
+     * already seen, a page shorter than the first paginated page
+     * (a short page is the last), or the hard page cap.
+     */
+    private fun walkChapterPages(
+        bookDoc: Document,
+        pageUrl: String,
+        pagination: ChapterListPagination,
+        rows: MutableList<SourceChapter>
+    ) {
+        val bookId = pagination.bookIdIn(bookIdHaystack(bookDoc)) ?: return
+        val seen = rows.mapTo(HashSet()) { it.id }
+        var firstPageSize = -1
+        var page = 2
+        var fetched = 0
+        while (fetched < MAX_LIST_PAGES) {
+            val url = resolveUrl(pagination.endpointFor(bookId, page))
+            val fragmentRows = runCatching {
+                val response = context.http.get(url, pagination.headers)
+                if (response.status !in 200..299) return@runCatching null
+                val html = paginationFragmentHtml(response.body, pagination)
+                    ?: return@runCatching null
+                val fragment = Jsoup.parseBodyFragment(html, pageUrl)
+                rowsFromElements(selectFragmentRows(fragment), pageUrl)
+            }.getOrElse { error ->
+                // Cancellation is the caller's business, never
+                // a "page failed" signal.
+                if (error is kotlinx.coroutines.CancellationException) {
+                    throw error
+                }
+                null
+            } ?: return
+            fetched++
+            if (fragmentRows.isEmpty()) return
+            val fresh = fragmentRows.filter { it.id !in seen }
+            if (fresh.isEmpty()) return
+            rows += fresh
+            seen += fresh.map { it.id }
+            if (firstPageSize < 0) {
+                firstPageSize = fragmentRows.size
+            } else if (fragmentRows.size < firstPageSize) {
+                return
+            }
+            page++
+        }
+    }
+
+    /** The text the book-id pattern runs over: script bodies
+     * first (ids like novelight's `BOOK_ID` live in a script),
+     * then the whole serialised page as the fallback. */
+    private fun bookIdHaystack(doc: Document): String = buildString {
+        for (script in doc.select("script")) {
+            append(script.data())
+            append('\n')
+        }
+        append(doc.outerHtml())
+    }
+
+    /** A pagination response's rows HTML: the body itself, or the
+     * configured JSON field's value when the endpoint answers
+     * JSON. Null when a JSON answer carries no usable field —
+     * the walk treats that as the end of the list. */
+    private fun paginationFragmentHtml(
+        body: String,
+        pagination: ChapterListPagination
+    ): String? {
+        val field = pagination.jsonHtmlField ?: return body
+        val root = runCatching { ajaxJson.parseToJsonElement(body) }
+            .getOrNull() as? JsonObject ?: return null
+        return (root[field] as? JsonPrimitive)?.content
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    /** Row elements of a pagination fragment. Fragments carry the
+     * rows WITHOUT the page chrome the book-page selector expects
+     * (the `.chapters` container, say), so when the list selector
+     * matches nothing, each candidate's row-only tail — the last
+     * compound after any combinator — is tried before giving up
+     * on the page. */
+    private fun selectFragmentRows(fragment: Document): List<Element> {
+        val spec = config.details.chapters
+        val direct = selectChained(fragment, spec.list)
+        if (direct.isNotEmpty()) return direct
+        for (candidate in SelectorChains.split(spec.list)) {
+            val css = SelectorSpec.parse(candidate).css
+            if (css.isBlank()) continue
+            val tail = rowOnlySelector(css)
+            if (tail == css) continue
+            val found = runCatching { fragment.select(tail) }.getOrNull()
+            if (!found.isNullOrEmpty()) return found
+        }
+        return emptyList()
+    }
+
+    /** The last compound of a selector — everything after the
+     * final descendant/child/sibling combinator. */
+    private fun rowOnlySelector(css: String): String =
+        css.split(Regex("\\s*[>+~]\\s*|\\s+"))
+            .filter { it.isNotBlank() }
+            .lastOrNull() ?: css
 
     /**
      * v1.0.5 (A3): the ids of this book's chapters whose list
@@ -498,6 +633,11 @@ class DeclarativeSource(
     companion object {
         /** Multi-page chapter chaining cap (§5: no runaway pagination). */
         const val MAX_CHAPTER_PAGES = 10
+
+        /** v1.0.6.2 (F1): chapter-LIST pagination walk cap — at
+         * novelight's 50 rows a page this still covers 2,000
+         * chapters past the book page's own slice. */
+        const val MAX_LIST_PAGES = 40
 
         /** v1.0.5 Stage 1.5: the AJAX endpoint answered but carried
          * no readable text — the paid/locked signal for this mode,

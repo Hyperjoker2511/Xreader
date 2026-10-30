@@ -58,3 +58,46 @@ object StreamWindowPlanner {
     fun charBudgetFor(minimalTier: Boolean): Int =
         if (minimalTier) 600_000 else 1_500_000
 }
+
+/**
+ * v1.0.6.2 (F7): which chapter a stream position NAMES. Normally
+ * the first visible item's chapter — but an entry carrying zero
+ * text blocks (an imported front-matter page: a cover/title spine
+ * item stored as an empty chapter by older imports) can never be
+ * what the reader is reading; its text is the NEXT chapter's.
+ * The position resolves to the nearest text-carrying entry,
+ * preferring the following one, so the header, the footer and
+ * the progress always name the chapter whose words are on
+ * screen. [blockCounts] maps chapterIndex → block count; a
+ * negative count means "not loaded yet" (a live chapter) and
+ * counts as readable — only a KNOWN-empty entry is skipped.
+ */
+object StreamReadingPosition {
+    fun resolve(
+        firstVisibleChapterIndex: Int,
+        blockCounts: Map<Int, Int>
+    ): Int {
+        if ((blockCounts[firstVisibleChapterIndex] ?: -1) != 0) {
+            return firstVisibleChapterIndex
+        }
+        val sorted = blockCounts.keys.sorted()
+        return sorted.firstOrNull {
+            it > firstVisibleChapterIndex && (blockCounts[it] ?: -1) != 0
+        } ?: sorted.lastOrNull {
+            it < firstVisibleChapterIndex && (blockCounts[it] ?: -1) != 0
+        } ?: firstVisibleChapterIndex
+    }
+}
+
+/**
+ * v1.0.6.2 (F7): the centre-tap decision, kept pure so the rule
+ * is testable: the centre band of the screen toggles the chrome;
+ * a press only counts as a tap when it ends before the
+ * long-press timeout (a held press is the paragraph menu's).
+ */
+object CentreTap {
+    fun isCentre(xFraction: Float): Boolean = xFraction in 0.30f..0.70f
+
+    fun isTap(durationMs: Long, longPressTimeoutMs: Long): Boolean =
+        durationMs >= 0 && durationMs < longPressTimeoutMs
+}

@@ -169,7 +169,10 @@ class V105EngineTest {
             entry, "link-test", "Novelight", NovelightSite.BASE
         )!!
         assertEquals(
-            "https://novelight.net/catalog/?search={query}", config.search!!.url
+            // v1.0.6.2 (F2): the lane search URL pages, like the
+            // catalogue — the sanctioned pin update.
+            "https://novelight.net/catalog/?search={query}&page={page}",
+            config.search!!.url
         )
         assertEquals(".manga-grid-list a.item", config.popular!!.results)
         assertEquals(".poster img@src", config.popular!!.cover)

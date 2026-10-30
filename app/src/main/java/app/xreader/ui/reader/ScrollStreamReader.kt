@@ -72,7 +72,10 @@ fun ScrollStreamReader(
     onCenterTap: () -> Unit,
     onChromeWanted: (Boolean) -> Unit,
     onDownloadChapter: (chapterIndex: Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** v1.0.6.2 (F7): measured chrome heights (see ScrollReader). */
+    topInset: androidx.compose.ui.unit.Dp = 0.dp,
+    bottomInset: androidx.compose.ui.unit.Dp = 0.dp
 ) {
     val listState = rememberLazyListState()
     var restoredGeneration by remember { mutableStateOf(-1) }
@@ -107,10 +110,20 @@ fun ScrollStreamReader(
             val item = info.visibleItemsInfo.firstOrNull()
                 ?: return@snapshotFlow null
             val flatItem = flat.getOrNull(item.index) ?: return@snapshotFlow null
-            val entry = entries.firstOrNull { it.chapterIndex == flatItem.chapterIndex }
+            // v1.0.6.2 (F7): the named chapter is the one whose
+            // TEXT is on screen — a known-empty entry (imported
+            // front matter) never names the position by itself.
+            val blockCounts = entries.associate {
+                it.chapterIndex to (it.text?.content?.blocks?.size ?: -1)
+            }
+            val resolvedIndex =
+                app.xreader.domain.reader.StreamReadingPosition.resolve(
+                    flatItem.chapterIndex, blockCounts
+                )
+            val entry = entries.firstOrNull { it.chapterIndex == resolvedIndex }
                 ?: return@snapshotFlow null
             val text = entry.text ?: return@snapshotFlow null
-            if (flatItem.blockIndex < 0) {
+            if (flatItem.blockIndex < 0 || resolvedIndex != flatItem.chapterIndex) {
                 // On a chapter header: position = chapter start.
                 return@snapshotFlow Triple(entry.chapterIndex, 0, 0f)
             }
@@ -166,11 +179,13 @@ fun ScrollStreamReader(
     Box(
         modifier
             .fillMaxSize()
-            .pointerInput(entries) {
-                detectTapGestures { offset ->
-                    if (offset.x in (size.width * 0.30f)..(size.width * 0.70f)) {
-                        onCenterTap()
-                    }
+            // v1.0.6.2 (F7): Initial-pass tap observation — the
+            // centre tap toggles the chrome even when it lands on
+            // text (the old Main-pass detector was starved by the
+            // blocks' click handlers and the selection container).
+            .readerTapToggle(entries) { xFraction, _ ->
+                if (app.xreader.domain.reader.CentreTap.isCentre(xFraction)) {
+                    onCenterTap()
                 }
             }
     ) {
@@ -179,7 +194,8 @@ fun ScrollStreamReader(
                 state = listState,
                 contentPadding = PaddingValues(
                     horizontal = config.marginHorizontalDp.dp,
-                    vertical = config.marginVerticalDp.dp
+                    top = config.marginVerticalDp.dp + topInset,
+                    bottom = config.marginVerticalDp.dp + bottomInset
                 ),
                 modifier = Modifier.fillMaxSize()
             ) {
@@ -193,21 +209,37 @@ fun ScrollStreamReader(
                             )
                         }
                         FlatKind.MISSING -> item(key = flatItem.key) {
+                            // v1.0.6.2 (F3-stream): a chapter the
+                            // stream is already pulling live says
+                            // so — no button for a download that's
+                            // already running.
+                            val entry = entries.firstOrNull {
+                                it.chapterIndex == flatItem.chapterIndex
+                            }
                             Column(
                                 Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 24.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Text(
-                                    "This chapter hasn't been downloaded yet.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = palette.muted,
-                                    textAlign = TextAlign.Center
-                                )
-                                TextButton(
-                                    onClick = { onDownloadChapter(flatItem.chapterIndex) }
-                                ) { Text("Download this chapter") }
+                                if (entry?.fetching == true) {
+                                    Text(
+                                        "Fetching this chapter…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = palette.muted,
+                                        textAlign = TextAlign.Center
+                                    )
+                                } else {
+                                    Text(
+                                        "This chapter hasn't been downloaded yet.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = palette.muted,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    TextButton(
+                                        onClick = { onDownloadChapter(flatItem.chapterIndex) }
+                                    ) { Text("Download this chapter") }
+                                }
                             }
                         }
                         FlatKind.BLOCK -> item(key = flatItem.key) {

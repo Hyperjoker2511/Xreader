@@ -53,6 +53,28 @@ object HealSweepLogic {
             state == SourceHealthState.WORKING_WITH_LIMITS
 
     /**
+     * v1.0.6.2 (RA): the current app version's lane rules for a
+     * stored config — the source's own choices (its recorded
+     * sample, browser view, cleaners, search flag) preserved.
+     * Null when the config isn't a known site's lane config or
+     * is already current. Pure: no I/O, never any AI.
+     */
+    fun refreshedLaneConfig(stored: DeclarativeConfig): DeclarativeConfig? {
+        val host = CookieParsing.hostOf(stored.baseUrl) ?: return null
+        val entry = KnownSites.entryFor(host) ?: return null
+        val fresh = KnownSites.fullConfig(
+            entry, stored.id, stored.name, stored.baseUrl
+        ) ?: return null
+        val merged = fresh.copy(
+            sampleBookUrl = stored.sampleBookUrl,
+            needsRendering = stored.needsRendering,
+            cleaners = stored.cleaners,
+            searchNeedsSetup = stored.searchNeedsSetup
+        )
+        return merged.takeIf { it != stored }
+    }
+
+    /**
      * Healed = the source was failing — by its stored record or
      * by today's drive — and after the repair it passes. A source
      * that already passed was checked, not healed, and a repair
@@ -102,7 +124,14 @@ class HealSweep(
     private val sourcePrefs: SourcePrefs,
     private val sourceBookSync: SourceBookSync,
     private val networkGate: app.xreader.data.download.NetworkGate,
-    private val battery: () -> Battery
+    private val battery: () -> Battery,
+    /** v1.0.6.2 (Revision 2, P1): is this device on the MINIMAL
+     * performance tier? On that tier the sweep still checks and
+     * heals sources, but it does NOT refresh their books in the
+     * background — a refresh now walks complete chapter lists
+     * (F1), and on the 2 GB tablet that work belongs to the
+     * moment a book is opened, not to a background pass. */
+    private val minimalTier: suspend () -> Boolean = { false }
 ) {
 
     data class Battery(val percent: Int, val isCharging: Boolean)
@@ -206,10 +235,18 @@ class HealSweep(
         if (extensionService.declarativeConfigOf(handle)?.needsRendering == true) {
             return outcome
         }
-        val sourceId = handle.source.id
+        // v1.0.6.2 (RA): a known site's lane rules are refreshed
+        // from the CURRENT app version before judging — a lane
+        // improvement (the chapter-list pagination, say) then
+        // reaches sources installed before it existed, instead
+        // of their frozen copy being re-judged forever. The
+        // source's own choices (its recorded sample, browser
+        // view, cleaners) ride along untouched.
+        val judgedHandle = refreshLaneConfig(extension, handle) ?: handle
+        val sourceId = judgedHandle.source.id
         val key = SourceHealthRecord.key(extension.id, sourceId)
         val prior = health[key]
-        val verdict = contractTester.test(handle)
+        val verdict = contractTester.test(judgedHandle)
         sourcePrefs.setSourceHealth(key, verdict.toRecord())
         var result = outcome.copy(sourcesChecked = outcome.sourcesChecked + 1)
         if (!HealSweepLogic.isFailingState(verdict.state)) return result
@@ -248,19 +285,48 @@ class HealSweep(
             return result
         }
         var refreshed = 0
-        bookDao.allBooks()
-            .filter {
-                it.extensionId == extension.id &&
-                    it.mergedIntoId == null &&
-                    it.sourceType == app.xreader.data.db.SourceType.EXTENSION
-            }
-            .forEach { book ->
-                if (sourceBookSync.refresh(book) is AppResult.Ok) refreshed++
-            }
+        // P1: no background book refresh on the MINIMAL tier —
+        // the chapter-list walk (F1) runs when a book is opened.
+        if (!minimalTier()) {
+            bookDao.allBooks()
+                .filter {
+                    it.extensionId == extension.id &&
+                        it.mergedIntoId == null &&
+                        it.sourceType == app.xreader.data.db.SourceType.EXTENSION
+                }
+                .forEach { book ->
+                    if (sourceBookSync.refresh(book) is AppResult.Ok) refreshed++
+                }
+        }
         return result.copy(
             sourcesHealed = result.sourcesHealed + 1,
             booksRefreshed = result.booksRefreshed + refreshed
         )
+    }
+
+    /**
+     * RA: rebuild a known site's stored lane rules from this
+     * app version's shape. Returns the source's fresh handle
+     * when rules were saved, or null when the source isn't a
+     * lane config, is already current, or the save failed (the
+     * sweep then judges the rules it has). Never calls AI —
+     * [KnownSites.fullConfig] is a pure builder.
+     */
+    private suspend fun refreshLaneConfig(
+        extension: InstalledExtension,
+        handle: SourceHandle
+    ): SourceHandle? {
+        val stored = extensionService.declarativeConfigOf(handle) ?: return null
+        val merged = HealSweepLogic.refreshedLaneConfig(stored) ?: return null
+        val host = CookieParsing.hostOf(stored.baseUrl) ?: return null
+        return when (
+            repoManager.saveLinkSource(
+                merged, host, packageIdOverride = extension.packageId
+            )
+        ) {
+            is AppResult.Ok -> firstHandle(extension.id)
+            is AppResult.Err -> null
+        }
     }
 
     private suspend fun firstHandle(

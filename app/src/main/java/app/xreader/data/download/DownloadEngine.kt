@@ -243,6 +243,24 @@ class DownloadEngine(
         val chapterId = item.chapterId ?: return
         val chapter = chapterDao.getById(chapterId)
             ?: return markFailed(item, AppError.BadFile("this chapter is no longer in the book"))
+        // v1.0.6.2 (D3): a chapter already on the phone is never
+        // fetched again — a duplicate or resumed item for a
+        // finished chapter completes where it stands. This is
+        // what makes Download-all and Resume strictly
+        // continue-where-it-stopped at the engine level, not
+        // just at the enqueue level.
+        if (chapter.downloadState == DownloadState.READY &&
+            chapter.contentPath != null
+        ) {
+            queueDao.update(
+                item.copy(
+                    state = QueueState.DONE,
+                    lastErrorDetail = null,
+                    updatedAt = clock()
+                )
+            )
+            return
+        }
         chapterDao.setDownloadState(chapterId, DownloadState.DOWNLOADING)
 
         val candidates = resolverForItem(item).candidatesFor(chapter)
@@ -487,6 +505,17 @@ class DownloadEngine(
                 updatedAt = clock()
             )
         )
+        // v1.0.6.2 (F3): chapter download failures join the
+        // session's problem history, so Copy details can say
+        // WHY a chapter never arrived (the draw-check's silent
+        // download failures were undiagnosable without this).
+        if (item.chapterId != null) {
+            app.xreader.data.extension.DiagnosticLog.record(
+                "download",
+                ErrorText.displayText(error),
+                "chapter ${item.chapterId} · book ${item.bookId}"
+            )
+        }
     }
 
     companion object {

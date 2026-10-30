@@ -54,6 +54,9 @@ data class ReaderUiState(
     val restoreGeneration: Int = 0,
     val loading: Boolean = true,
     val errorMessage: String? = null,
+    /** v1.0.6.2 (F3): the error came from a live chapter fetch
+     * that can simply be retried (the error block offers it). */
+    val chapterFetchFailed: Boolean = false,
     /** Live position (char offset in the current chapter). */
     val positionOffset: Int = 0,
     val bookFraction: Float = 0f,
@@ -101,7 +104,11 @@ data class StreamEntry(
     val chapterId: Long,
     val title: String,
     val text: ChapterText?,
-    val missing: Boolean = false
+    val missing: Boolean = false,
+    /** v1.0.6.2 (F3-stream): this chapter's copy is travelling
+     * through the download queue right now — the block says so
+     * instead of offering a download that's already running. */
+    val fetching: Boolean = false
 )
 
 /** R18 settings scope: where a reader-settings change lands. */
@@ -349,7 +356,7 @@ class ReaderViewModel(
     ) {
         flushSession()
         val chapters = _state.value.chapters
-        val chapter = chapters.getOrNull(index)
+        var chapter = chapters.getOrNull(index)
         if (chapter == null) {
             _state.value = _state.value.copy(
                 loading = false,
@@ -365,16 +372,16 @@ class ReaderViewModel(
             chapterText = null,
             loading = true,
             errorMessage = null,
+            chapterFetchFailed = false,
             positionOffset = restoreOffset,
             currentPositionBookmarked = false
         )
         if (chapter.contentPath == null) {
-            _state.value = _state.value.copy(
-                loading = false,
-                errorMessage = "This chapter hasn't been downloaded yet. " +
-                    "Open the book page and tap Download."
-            )
-            return
+            // v1.0.6.2 (F3): read live — fetch the chapter
+            // through the same download queue downloads use, so
+            // a live read and a download are ONE stored copy
+            // (same chapter identity, same progress: RD).
+            chapter = fetchChapterLive(chapter) ?: return
         }
         // Phase 5: a RAW translation, when one exists, is the default
         // view of the chapter; the original file is untouched.
@@ -436,6 +443,80 @@ class ReaderViewModel(
         prefetchNeighbours(index)
     }
 
+    /**
+     * v1.0.6.2 (F3): fetch an un-downloaded chapter through the
+     * download queue and wait for the stored copy. Returns the
+     * refreshed chapter row, or null after setting the state's
+     * honest error — a paid/locked chapter says so, another
+     * failure offers a retry, and a slow fetch says the
+     * download continues in the queue.
+     */
+    private suspend fun fetchChapterLive(chapter: Chapter): Chapter? {
+        // v1.0.6.2 (F9): the fetch itself is the shared
+        // ChapterTextLoader's — the same resolution every AI
+        // feature uses; only the error WORDING lives here.
+        return when (
+            val outcome = container.chapterTextLoader.ensureStored(bookId, chapter)
+        ) {
+            is app.xreader.data.download.ChapterTextLoader.Outcome.Stored -> {
+                val fresh = outcome.chapter
+                // The stored copy landed: the state's list now
+                // holds the same row downloads and progress use
+                // (one chapter identity — RD).
+                _state.value = _state.value.copy(
+                    chapters = _state.value.chapters.map {
+                        if (it.id == fresh.id) fresh else it
+                    }
+                )
+                fresh
+            }
+            is app.xreader.data.download.ChapterTextLoader.Outcome.Failed -> {
+                if (outcome.detail.contains("paid or locked", ignoreCase = true)) {
+                    _state.value = _state.value.copy(
+                        loading = false,
+                        errorMessage = "This chapter is paid or locked " +
+                            "on the site, so it can't be read here.",
+                        chapterFetchFailed = true
+                    )
+                } else {
+                    _state.value = _state.value.copy(
+                        loading = false,
+                        errorMessage = "This chapter couldn't be read just " +
+                            "now. Check your connection and try again.",
+                        chapterFetchFailed = true
+                    )
+                }
+                null
+            }
+            app.xreader.data.download.ChapterTextLoader.Outcome.TimedOut -> {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    errorMessage = "This chapter is taking a long time to arrive. " +
+                        "It's still on its way — check Downloads, or try again.",
+                    chapterFetchFailed = true
+                )
+                null
+            }
+        }
+    }
+
+    /** F3: the error block's retry — re-runs the current
+     * chapter's load; its fetch resumes through the queue. */
+    fun retryCurrentChapter() {
+        launchLoad { loadChapter(_state.value.chapterIndex, 0, 0f) }
+    }
+
+    /** Revision 2 (P1): is this device on the MINIMAL
+     * performance tier (the 2 GB tablet's class)? Resolved the
+     * same way the stream window resolves it. */
+    private suspend fun isMinimalTier(): Boolean {
+        val appearance = container.appearancePrefs.state.first()
+        return app.xreader.data.prefs.PerformancePolicy.resolve(
+            appearance.performanceMode, container.totalRamMb(),
+            appearance.coverGlow
+        ).tier == app.xreader.data.prefs.PerfTier.MINIMAL
+    }
+
     private fun cacheChapter(chapterId: Long, text: ChapterText) {
         chapterCache[chapterId] = text
         // Keep at most 3 chapters resident (current + neighbours) —
@@ -451,9 +532,28 @@ class ReaderViewModel(
             val chapters = _state.value.chapters
             for (neighbour in listOf(index - 1, index + 1)) {
                 val chapter = chapters.getOrNull(neighbour) ?: continue
-                if (chapter.contentPath == null || chapterCache.containsKey(chapter.id)) {
+                if (chapter.contentPath == null) {
+                    // v1.0.6.2 (F3): warm the NEXT chapter through
+                    // the download queue, so turning the page
+                    // doesn't wait on the network. One ahead only,
+                    // and only when nothing is queued for it yet
+                    // (the queue insert doesn't dedupe).
+                    // Revision 2 (P1): prefetch is OFF on the
+                    // MINIMAL tier — nothing warms in the
+                    // background on the 2 GB tablet.
+                    if (neighbour == index + 1 &&
+                        chapter.downloadState ==
+                        app.xreader.data.db.DownloadState.NONE &&
+                        !isMinimalTier()
+                    ) {
+                        runCatching {
+                            container.downloadController
+                                .enqueueChapter(bookId, chapter.id)
+                        }
+                    }
                     continue
                 }
+                if (chapterCache.containsKey(chapter.id)) continue
                 val result = container.bookStorage.readChapterContent(bookId, chapter.id)
                 if (result is AppResult.Ok) cacheChapter(chapter.id, ChapterText(result.value))
             }
@@ -507,7 +607,11 @@ class ReaderViewModel(
                     policy.tier == app.xreader.data.prefs.PerfTier.MINIMAL
                 )
             )
-            val entries = buildStreamEntries(window)
+            val entries = buildStreamEntries(
+                window, anchorIndex,
+                minimalTier = policy.tier ==
+                    app.xreader.data.prefs.PerfTier.MINIMAL
+            )
             val anchorEntry = entries.firstOrNull { it.chapterIndex == anchorIndex }
             _state.value = _state.value.copy(
                 streamActive = true,
@@ -524,7 +628,9 @@ class ReaderViewModel(
     }
 
     private suspend fun buildStreamEntries(
-        window: StreamWindowPlanner.Window
+        window: StreamWindowPlanner.Window,
+        anchorIndex: Int,
+        minimalTier: Boolean
     ): List<StreamEntry> {
         val chapters = _state.value.chapters
         val entries = mutableListOf<StreamEntry>()
@@ -539,7 +645,93 @@ class ReaderViewModel(
                 missing = text == null
             )
         }
+        // v1.0.6.2 (F3-stream): a window chapter with no copy on
+        // the phone is pulled LIVE through the same download
+        // queue as everything else — the scroll chains straight
+        // into it instead of stopping at a download prompt. The
+        // stream is served first: these fills ARE the reader's
+        // prefetch now. On the MINIMAL tier (P1) only the
+        // anchor chapter itself is pulled — lookahead fills are
+        // prefetch, and prefetch is off there.
+        for (position in entries.indices) {
+            val entry = entries[position]
+            if (!entry.missing) continue
+            if (minimalTier && entry.chapterIndex != anchorIndex) continue
+            if (startStreamLiveFetch(entry.chapterIndex)) {
+                entries[position] = entry.copy(fetching = true)
+            }
+        }
         return entries
+    }
+
+    /** Chapters the stream is already pulling live — one fetch
+     * per chapter, however many triggers ask for it. */
+    private val streamLiveFetches = mutableSetOf<Long>()
+
+    /**
+     * v1.0.6.2 (F3-stream): fetch a stream chapter that isn't on
+     * the phone yet, through the download queue, and fill its
+     * block in when the stored copy lands (the state's chapter
+     * row becomes the stored one — one identity, as everywhere).
+     * A failed fetch leaves the honest missing block standing;
+     * its reason is already in the diagnostic log. Returns true
+     * when a fetch is in flight for the chapter afterwards.
+     */
+    private fun startStreamLiveFetch(index: Int): Boolean {
+        val chapter = _state.value.chapters.getOrNull(index) ?: return false
+        if (chapter.contentPath != null) return false
+        if (!streamLiveFetches.add(chapter.id)) return true
+        _state.value = _state.value.copy(
+            streamEntries = _state.value.streamEntries.map {
+                if (it.chapterIndex == index && it.text == null) {
+                    it.copy(fetching = true)
+                } else {
+                    it
+                }
+            }
+        )
+        viewModelScope.launch {
+            try {
+                // v1.0.6.2 (F9): the wait is the shared loader's —
+                // one fetch path for reader, stream and AI alike.
+                val outcome = container.chapterTextLoader
+                    .ensureStored(bookId, chapter)
+                if (outcome is
+                    app.xreader.data.download.ChapterTextLoader.Outcome.Stored
+                ) {
+                    val fresh = outcome.chapter
+                    val text = loadStreamText(fresh)
+                    _state.value = _state.value.copy(
+                        chapters = _state.value.chapters.map {
+                            if (it.id == fresh.id) fresh else it
+                        },
+                        streamEntries = _state.value.streamEntries.map {
+                            if (it.chapterIndex == index) {
+                                it.copy(
+                                    text = text,
+                                    missing = text == null,
+                                    fetching = false
+                                )
+                            } else {
+                                it
+                            }
+                        }
+                    )
+                }
+            } finally {
+                streamLiveFetches.remove(chapter.id)
+                // Never leave a block claiming a fetch that ended.
+                _state.value = _state.value.copy(
+                    streamEntries = _state.value.streamEntries.map {
+                        if (it.chapterIndex == index && it.text == null) {
+                            it.copy(fetching = false)
+                        } else {
+                            it
+                        }
+                    }
+                )
+            }
+        }
     }
 
     /** The stream reader reports its settled position here. */
@@ -611,7 +803,11 @@ class ReaderViewModel(
             ) {
                 return@launch
             }
-            val entries = buildStreamEntries(window)
+            val entries = buildStreamEntries(
+                window, anchorIndex,
+                minimalTier = policy.tier ==
+                    app.xreader.data.prefs.PerfTier.MINIMAL
+            )
             // Release texts that fell out of the window (the
             // planner's whole point); the anchor's text survives
             // because the window always contains the anchor.
@@ -622,33 +818,12 @@ class ReaderViewModel(
     }
 
     /** R17: a not-yet-downloaded chapter inside the stream can be
-     * fetched in place; when it lands, its block fills in. */
+     * fetched in place; when it lands, its block fills in.
+     * v1.0.6.2: this is the same live pull the stream now starts
+     * on its own when a window chapter is missing — the tap is
+     * just the explicit retry of it. */
     fun downloadStreamChapter(index: Int) {
-        val chapter = _state.value.chapters.getOrNull(index) ?: return
-        viewModelScope.launch {
-            container.downloadController.enqueueChapter(bookId, chapter.id)
-            repeat(30) {
-                delay(2_000)
-                val fresh = container.database.chapterDao().getById(chapter.id)
-                if (fresh?.downloadState == app.xreader.data.db.DownloadState.READY &&
-                    fresh.contentPath != null
-                ) {
-                    val text = loadStreamText(fresh)
-                    if (text != null) {
-                        _state.value = _state.value.copy(
-                            streamEntries = _state.value.streamEntries.map {
-                                if (it.chapterIndex == index) {
-                                    it.copy(text = text, missing = false)
-                                } else {
-                                    it
-                                }
-                            }
-                        )
-                    }
-                    return@launch
-                }
-            }
-        }
+        startStreamLiveFetch(index)
     }
 
     /** Leaving the stream (a chapter jump in chapter-by-chapter
@@ -1254,6 +1429,10 @@ class ReaderViewModel(
     companion object {
         const val SAVE_DEBOUNCE_MS = 1_500L
         const val BOOKMARK_SNAP_CHARS = 400
+
+        /** v1.0.6.2 (F3): the live-fetch wait — polls × cadence
+         * ≈ 3 minutes, generous for slow links; the queue item
+         * outlives the wait either way. */
 
         /** v1.0.6 (W3.4): extension ids whose browser-view note
          * this session has already shown. Process-lifetime on

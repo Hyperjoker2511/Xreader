@@ -9,6 +9,7 @@ import app.xreader.data.db.DownloadState
 import app.xreader.data.db.QueueState
 import app.xreader.data.files.BookStorage
 import java.io.File
+import kotlinx.coroutines.flow.first
 
 /** Schedules the background drain; WorkManager in production, a fake in tests. */
 fun interface WorkEnqueuer {
@@ -47,9 +48,20 @@ class DownloadController(
     /** Enqueues every not-yet-downloaded chapter that has a source. */
     suspend fun enqueueBook(bookId: Long) {
         val now = clock()
+        // v1.0.6.2 (D3): Download-all is idempotent — a chapter
+        // that already has a live queue item (queued, running
+        // or paused) keeps it; only genuinely missing chapters
+        // get a new item. Re-tapping Download-all, or calling
+        // it again after an app restart, continues the book
+        // from its first missing chapter instead of restarting
+        // it or duplicating work.
+        val activeChapterIds = queueDao.activeForBook(bookId)
+            .mapNotNull { it.chapterId }
+            .toSet()
         for (chapter in chapterDao.forBook(bookId)) {
             if (chapter.downloadState == DownloadState.READY) continue
             if (chapter.remoteId.isNullOrBlank()) continue
+            if (chapter.id in activeChapterIds) continue
             queueDao.insert(
                 DownloadQueueItem(
                     bookId = bookId, chapterId = chapter.id,
@@ -123,6 +135,23 @@ class DownloadController(
 
     suspend fun pauseAllForBook(bookId: Long) {
         for (item in queueDao.activeForBook(bookId)) pause(item.id)
+    }
+
+    /** v1.0.6.2 (D2): pause EVERYTHING active — the Downloads
+     * tab's "Pause all". Same per-item rules as [pause]. */
+    suspend fun pauseAll() {
+        for (item in queueDao.active()) pause(item.id)
+    }
+
+    /** v1.0.6.2 (D2): resume everything paused or failed — the
+     * Downloads tab's "Resume all". Same per-item rules as
+     * [resume] (failed items get a fresh attempt budget). Reads
+     * the whole queue: active() is only QUEUED/RUNNING. */
+    suspend fun resumeAll() {
+        val resumable = queueDao.observeAll().first().filter {
+            it.state == QueueState.PAUSED || it.state == QueueState.FAILED
+        }
+        for (item in resumable) resume(item.id)
     }
 
     suspend fun cancelAllForBook(bookId: Long) {

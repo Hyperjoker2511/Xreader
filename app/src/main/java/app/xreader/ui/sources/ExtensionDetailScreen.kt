@@ -501,6 +501,25 @@ fun ExtensionDetailScreen(
                                             .onSurfaceVariant
                                     )
                             }
+                            // v1.0.6.2 (RE): how this source's
+                            // chapter lists are fetched, in plain
+                            // words.
+                            Text(
+                                if (state.linkConfig?.details?.chapters
+                                        ?.pagination != null
+                                ) {
+                                    "Chapter lists: full — Xreader fetches " +
+                                        "the whole list page by page, not " +
+                                        "just the chapters a book page shows."
+                                } else {
+                                    "Chapter lists: as the site shows " +
+                                        "them — a book shows the chapters " +
+                                        "its own page lists."
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
                             XreaderPrimaryButton(
                                 text = "Edit parser rules",
                                 onClick = { viewModel.openParserEditor() },

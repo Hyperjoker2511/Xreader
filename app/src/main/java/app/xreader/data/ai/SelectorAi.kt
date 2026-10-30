@@ -176,6 +176,46 @@ class SelectorAi(
         }
     }
 
+    /**
+     * v1.0.6.2 (F5): the borderline-list verdict — asks the AI
+     * whether a candidate source's sampled items read as books.
+     * Returns null when the check can't run (feature off, no
+     * key, the call fails, the answer is unclear): a check that
+     * never aired must never block a source the deterministic
+     * drive otherwise passed. Callers use at most one call per
+     * run (the borderline band only).
+     */
+    suspend fun verifySample(
+        sampleTitles: List<String>,
+        textExcerpt: String
+    ): Boolean? {
+        if (!settingsProvider().enabled(AiFeature.SELECTOR_AI)) return null
+        if (!client.hasKey()) return null
+        if (sampleTitles.isEmpty()) return null
+        val prompt = buildString {
+            append("You are checking a web-novel site for a reader app. Below are ")
+            append("the first items of the site's book list, and an excerpt of one ")
+            append("item's text. Are these items BOOKS (novels), and is the excerpt ")
+            append("a chapter of a novel? Answer with ONE word only: YES if they ")
+            append("are books, NO if they look like social-media posts, comments ")
+            append("or other non-book content.\n\nBOOK LIST ITEMS:\n")
+            sampleTitles.take(8).forEach { append("- ").append(it).append('\n') }
+            append("\nTEXT EXCERPT:\n")
+            append(textExcerpt.take(600))
+        }
+        val result = client.generateText(prompt, temperature = 0.1f)
+        val text = when (result) {
+            is AppResult.Err -> return null
+            is AppResult.Ok -> result.value.text
+        }
+        val answer = text.trim().uppercase()
+        return when {
+            answer.startsWith("YES") -> true
+            answer.startsWith("NO") -> false
+            else -> null
+        }
+    }
+
     private fun findChapterLink(doc: Document, pageUrl: String): String? =
         doc.select("a[href]").firstNotNullOfOrNull { anchor ->
             val text = anchor.text().trim()

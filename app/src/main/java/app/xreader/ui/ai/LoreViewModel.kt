@@ -123,8 +123,11 @@ class LoreViewModel(
                 local.value = local.value.copy(
                     buildProgress = "Chapter ${chapter.index + 1} of ${chapters.size}…"
                 )
-                val content = container.bookStorage.readChapterContent(bookId, chapter.id)
-                    .getOrNull() ?: continue
+                // v1.0.6.2 (F9): the stored copy via the one
+                // loader (this pass is on-device chapters only,
+                // so no fetch — the same accessor either way).
+                val content = container.chapterTextLoader
+                    .storedContent(bookId, chapter.id) ?: continue
                 when (
                     val result = container.loreKeeper.extractForChapter(
                         book, chapter, content.plainText()

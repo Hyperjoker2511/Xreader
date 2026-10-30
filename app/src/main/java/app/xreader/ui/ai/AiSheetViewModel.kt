@@ -36,10 +36,14 @@ data class AiSheetUiState(
     val summary: AiSummary? = null,
     val summarizing: Boolean = false,
     val summaryError: String? = null,
+    /** v1.0.6.2 (F9): a calm verdict (not a failure) for the
+     * summary section — rendered as a note, never red. */
+    val summaryNote: String? = null,
     // Catch-up
     val catchUp: String? = null,
     val catchingUp: Boolean = false,
     val catchUpError: String? = null,
+    val catchUpNote: String? = null,
     // Chat
     val chat: List<ChatMessage> = emptyList(),
     val chatBusy: Boolean = false,
@@ -50,6 +54,9 @@ data class AiSheetUiState(
     val translating: Boolean = false,
     val translationPreview: String = "",
     val translationError: String? = null,
+    /** v1.0.6.2 (F9): "already in English" and friends — a calm
+     * one-line note, not an error. */
+    val translationNote: String? = null,
     // Art
     val illustrating: Boolean = false,
     val illustrateMessage: String? = null
@@ -136,8 +143,11 @@ class AiSheetViewModel(
                 }
         }
         viewModelScope.launch {
-            val content = container.bookStorage
-                .readChapterContent(bookId, chapterId).getOrNull()
+            // v1.0.6.2 (F9): the stored copy via the one loader
+            // (bind never fetches — the reader already brought
+            // this chapter to the phone to display it).
+            val content = container.chapterTextLoader
+                .storedContent(bookId, chapterId)
             if (content != null && boundChapterId == chapterId) {
                 boundContent = content
                 val detected = LanguageDetect.detect(content.plainText())
@@ -153,8 +163,14 @@ class AiSheetViewModel(
 
     private suspend fun contentOrLoad(): ChapterContent? {
         boundContent?.let { return it }
-        val loaded = container.bookStorage
-            .readChapterContent(bookId, boundChapterId).getOrNull()
+        // v1.0.6.2 (F9): THE content resolution — stored copy, or
+        // the reader's own live fetch through the download queue
+        // when the chapter isn't on the phone yet. A feature can
+        // no longer fail to see a chapter the reader can show.
+        val chapter = container.database.chapterDao()
+            .getById(boundChapterId) ?: return null
+        val loaded = container.chapterTextLoader
+            .loadContent(bookId, chapter)
         boundContent = loaded
         return loaded
     }
@@ -163,7 +179,9 @@ class AiSheetViewModel(
 
     fun summarizeChapter() {
         if (_state.value.summarizing) return
-        _state.value = _state.value.copy(summarizing = true, summaryError = null)
+        _state.value = _state.value.copy(
+            summarizing = true, summaryError = null, summaryNote = null
+        )
         viewModelScope.launch {
             val content = contentOrLoad()
             val chapter = container.database.chapterDao().getById(boundChapterId)
@@ -185,17 +203,27 @@ class AiSheetViewModel(
                 is AppResult.Ok -> _state.value = _state.value.copy(
                     summarizing = false
                 )
-                is AppResult.Err -> _state.value = _state.value.copy(
-                    summarizing = false,
-                    summaryError = ErrorText.displayText(result.error)
-                )
+                is AppResult.Err -> _state.value =
+                    if (result.error is app.xreader.core.error.AppError.NeutralVerdict) {
+                        _state.value.copy(
+                            summarizing = false,
+                            summaryNote = result.error.message
+                        )
+                    } else {
+                        _state.value.copy(
+                            summarizing = false,
+                            summaryError = ErrorText.displayText(result.error)
+                        )
+                    }
             }
         }
     }
 
     fun catchUp() {
         if (_state.value.catchingUp) return
-        _state.value = _state.value.copy(catchingUp = true, catchUpError = null)
+        _state.value = _state.value.copy(
+            catchingUp = true, catchUpError = null, catchUpNote = null
+        )
         viewModelScope.launch {
             val book = container.database.bookDao().getById(bookId)
             val chapters = container.database.chapterDao().forBook(bookId)
@@ -216,10 +244,18 @@ class AiSheetViewModel(
                     catchingUp = false,
                     catchUp = result.value.bullets.joinToString("\n") { "• $it" }
                 )
-                is AppResult.Err -> _state.value = _state.value.copy(
-                    catchingUp = false,
-                    catchUpError = ErrorText.displayText(result.error)
-                )
+                is AppResult.Err -> _state.value =
+                    if (result.error is app.xreader.core.error.AppError.NeutralVerdict) {
+                        _state.value.copy(
+                            catchingUp = false,
+                            catchUpNote = result.error.message
+                        )
+                    } else {
+                        _state.value.copy(
+                            catchingUp = false,
+                            catchUpError = ErrorText.displayText(result.error)
+                        )
+                    }
             }
         }
     }
@@ -250,6 +286,32 @@ class AiSheetViewModel(
             }
             val lore = container.database.loreEntityDao().forBook(bookId)
             val content = contentOrLoad()
+            // v1.0.6.2 (F9): if there is genuinely nothing for the
+            // chat to go on, SAY SO here in plain words — never
+            // send an empty brief and let the model confess it.
+            if (!LoreChatContext.hasMaterial(
+                    lore = lore,
+                    summariesBefore = summaries,
+                    currentChapterText = content?.plainText() ?: "",
+                    position = ReadingPosition(boundChapterIndex, boundCharOffset)
+                )
+            ) {
+                val messages = _state.value.chat.toMutableList()
+                val lastIndex = messages.indexOfLast { !it.fromUser }
+                if (lastIndex >= 0) {
+                    messages[lastIndex] = messages[lastIndex].copy(
+                        text = "I don't have anything to go on yet for " +
+                            "this book — read a little of this chapter " +
+                            "first, or summarise it, and then I can " +
+                            "answer from the story so far."
+                    )
+                }
+                _state.value = _state.value.copy(
+                    chat = messages,
+                    chatBusy = false
+                )
+                return@launch
+            }
             val context = LoreChatContext.build(
                 bookTitle = book.title,
                 lore = lore,
@@ -322,6 +384,7 @@ class AiSheetViewModel(
         _state.value = _state.value.copy(
             translating = true,
             translationError = null,
+            translationNote = null,
             translationPreview = ""
         )
         viewModelScope.launch {
@@ -356,10 +419,19 @@ class AiSheetViewModel(
                         _translationDone.emit(boundChapterId)
                     }
                     is RawTranslator.Event.Failed -> _state.value =
-                        _state.value.copy(
-                            translating = false,
-                            translationError = ErrorText.displayText(event.error)
-                        )
+                        if (event.error is
+                            app.xreader.core.error.AppError.NeutralVerdict
+                        ) {
+                            _state.value.copy(
+                                translating = false,
+                                translationNote = event.error.message
+                            )
+                        } else {
+                            _state.value.copy(
+                                translating = false,
+                                translationError = ErrorText.displayText(event.error)
+                            )
+                        }
                 }
             }
         }
@@ -396,8 +468,18 @@ class AiSheetViewModel(
                 )
                 is AppResult.Err -> _state.value = _state.value.copy(
                     illustrating = false,
-                    illustrateMessage = "Couldn't paint this moment.\n" +
-                        ErrorText.displayText(result.error)
+                    // v1.0.6.2 (F9): a verdict (feature off) is
+                    // its own calm sentence; a real failure names
+                    // what failed under the plain lead-in.
+                    illustrateMessage = if (
+                        result.error is
+                        app.xreader.core.error.AppError.NeutralVerdict
+                    ) {
+                        result.error.message
+                    } else {
+                        "Couldn't paint this moment.\n" +
+                            ErrorText.displayText(result.error)
+                    }
                 )
             }
         }

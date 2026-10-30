@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -108,647 +107,674 @@ fun ReaderSettingsSheet(
      * "Words I'm learning". */
     onSaveWord: (String) -> Unit = {}
 ) {
+    // v1.0.6.2 (F8c): the sheet is a short INDEX of plainly-named
+    // groups now — not one long scroll. Each group is its own
+    // small page inside the sheet; every control below is the
+    // same control with the same stored value, regrouped, with
+    // the explanation paragraphs cut to at most one short line.
+    var page by remember { mutableStateOf("index") }
     Column(
         Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Reading settings", style = MaterialTheme.typography.titleLarge)
-
-        // R18 scope: visible at the TOP of the sheet, labelled in
-        // plain words — never a buried preference.
-        // v1.0.5 (B3): every chip row in these sheets is a FlowRow
-        // — fixed Rows crushed the long labels ("Pull for next",
-        // "End of chapter") on narrow screens; wrapping rows can't.
-        SheetSection("Apply colours & text size to") {
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+        if (page != "index") {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { page = "index" }
+                    .padding(vertical = 4.dp)
             ) {
-                FilterChip(
-                    selected = settingsScope == ReaderSettingsScope.ALL_BOOKS,
-                    onClick = { onScopeChange(ReaderSettingsScope.ALL_BOOKS) },
-                    label = { Text("All books") }
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back to settings",
+                    modifier = Modifier.size(20.dp)
                 )
-                FilterChip(
-                    selected = settingsScope == ReaderSettingsScope.THIS_BOOK,
-                    onClick = { onScopeChange(ReaderSettingsScope.THIS_BOOK) },
-                    label = { Text("This book only") }
+                Text(
+                    when (page) {
+                        "reading" -> "Reading"
+                        "page" -> "Page & text"
+                        else -> "Extras"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(start = 8.dp)
                 )
             }
-            if (hasBookOverride) {
-                Text(
-                    "This book has its own colours/text size.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+        }
+        when (page) {
+            "index" -> {
+                Text("Reading settings", style = MaterialTheme.typography.titleLarge)
+
+                // R18 scope: at the TOP of the index, as before.
+                SheetSection("Apply colours & text size to") {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = settingsScope == ReaderSettingsScope.ALL_BOOKS,
+                            onClick = { onScopeChange(ReaderSettingsScope.ALL_BOOKS) },
+                            label = { Text("All books") }
+                        )
+                        FilterChip(
+                            selected = settingsScope == ReaderSettingsScope.THIS_BOOK,
+                            onClick = { onScopeChange(ReaderSettingsScope.THIS_BOOK) },
+                            label = { Text("This book only") }
+                        )
+                    }
+                    if (hasBookOverride) {
+                        Text(
+                            "This book has its own colours/text size.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        TextButton(onClick = onClearBookOverride) {
+                            Text("Use the global look for this book")
+                        }
+                    }
+                }
+
+                SettingsIndexRow(
+                    title = "Reading",
+                    summary = if (config.mode == ReaderMode.SCROLL) "Scroll" else "Pages",
+                    onClick = { page = "reading" }
                 )
-                TextButton(onClick = onClearBookOverride) {
-                    Text("Use the global look for this book")
+                SettingsIndexRow(
+                    title = "Page & text",
+                    summary = "Page theme · ${config.paletteName}",
+                    onClick = { page = "page" }
+                )
+                SettingsIndexRow(
+                    title = "Extras",
+                    summary = "Words · Eye-tracking",
+                    onClick = { page = "extras" }
+                )
+                TextButton(onClick = onOpenCustomise) {
+                    Text("Open the Customise screen — colours, glass, layout and more")
                 }
             }
-        }
 
-        SheetSection("Reading mode") {
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = config.mode == ReaderMode.PAGED,
-                    onClick = { onUpdate { it.copy(mode = ReaderMode.PAGED) } },
-                    label = { Text("Pages") }
-                )
-                FilterChip(
-                    selected = config.mode == ReaderMode.SCROLL,
-                    onClick = { onUpdate { it.copy(mode = ReaderMode.SCROLL) } },
-                    label = { Text("Scroll") }
-                )
-            }
-        }
-
-        SheetSection("Page theme") {
-            // v1.0.1: REAL previews — a mini page in each palette, so
-            // readability is judged by eye before choosing, not from
-            // a colour chip. The effective palette (high-contrast
-            // substitution applied) is what the preview renders.
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(ReaderPalettes) { palette ->
-                    val effective = palette.maxContrast(config.highContrastText)
-                    val selected = config.paletteName == palette.name
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+            "reading" -> {
+                SheetSection("Reading mode") {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(
-                            Modifier
-                                .width(92.dp)
-                                .height(118.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(effective.background)
-                                .border(
-                                    width = if (selected) 3.dp else 1.dp,
-                                    color = if (selected) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.outline
-                                    },
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                                .clickable {
-                                    onUpdate { it.copy(paletteName = palette.name) }
-                                }
-                                .padding(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(3.dp)
-                        ) {
-                            Text(
-                                "The Moon Gate",
-                                color = effective.text,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1
-                            )
-                            Text(
-                                "The gate opened at dawn, and the river ran silver beneath it.",
-                                color = effective.text,
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 3
-                            )
-                            Text(
-                                "Chapter 12",
-                                color = effective.muted,
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 1
-                            )
-                        }
-                        Text(
-                            palette.name,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        FilterChip(
+                            selected = config.mode == ReaderMode.PAGED,
+                            onClick = { onUpdate { it.copy(mode = ReaderMode.PAGED) } },
+                            label = { Text("Pages") }
+                        )
+                        FilterChip(
+                            selected = config.mode == ReaderMode.SCROLL,
+                            onClick = { onUpdate { it.copy(mode = ReaderMode.SCROLL) } },
+                            label = { Text("Scroll") }
                         )
                     }
                 }
-            }
-            SheetSwitch(
-                label = "High contrast text",
-                checked = config.highContrastText,
-                onChange = { v -> onUpdate { it.copy(highContrastText = v) } }
-            )
-            Text(
-                "Makes the words as bright (or dark) as the page allows, whatever theme is picked.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
 
-        // v1.0.1 one-tap comfort: text size + brightness live at the
-        // TOP of the sheet with the theme — no scrolling to reach
-        // the controls that decide whether the page can be read.
-        SheetSlider(
-            label = "Text size",
-            valueText = "${config.fontSizeSp.roundToInt()} sp",
-            value = config.fontSizeSp,
-            range = 12f..34f,
-            onChange = { v -> onUpdate { it.copy(fontSizeSp = v) } }
-        )
-
-        SheetSection("Brightness") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Use the phone's brightness",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f)
-                )
-                Switch(
-                    checked = config.brightness == null,
-                    onCheckedChange = { system ->
-                        onUpdate { it.copy(brightness = if (system) null else 0.7f) }
-                    }
-                )
-            }
-            if (config.brightness != null) {
-                Slider(
-                    value = config.brightness,
-                    onValueChange = { v -> onUpdate { it.copy(brightness = v) } },
-                    valueRange = 0.05f..1f
-                )
-            }
-        }
-
-        SheetSection("Auto-scroll") {
-            SheetSwitch(
-                label = "Auto-scroll / auto page-turn",
-                checked = config.autoScrollEnabled,
-                onChange = { v -> onUpdate { it.copy(autoScrollEnabled = v) } }
-            )
-            Text(
-                "Scroll mode drifts down on its own; paged mode turns the page for you. Any touch pauses it — tap the middle of the page to carry on.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            SheetSlider(
-                label = "Speed — ${autoScrollSpeedLabel(config.autoScrollSpeed)}",
-                valueText = "%.1f×".format(config.autoScrollSpeed),
-                value = config.autoScrollSpeed,
-                range = 0.25f..3f,
-                onChange = { v -> onUpdate { it.copy(autoScrollSpeed = v) } }
-            )
-        }
-
-        // v1.0.1 custom colour pair (QuickNovel lesson): pick your
-        // own page + text colours, with a plain-words warning when
-        // the pair would be hard to read.
-        SheetSection("Your own colours") {
-            Text(
-                "Pick a page colour and a word colour. Xreader warns you if they are too close to read comfortably.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            val pageChoices = listOf(
-                "Black" to 0xFF000000L, "Deep blue" to 0xFF0E1524L,
-                "Deep green" to 0xFF14201AL, "Brown" to 0xFF211712L,
-                "Cream" to 0xFFF5EDDCL, "White" to 0xFFFFFFFFL
-            )
-            val textChoices = listOf(
-                "White" to 0xFFFFFFFFL, "Cream" to 0xFFEFDFC8L,
-                "Pale blue" to 0xFFD7E3F4, "Pale green" to 0xFFDCE8D8,
-                "Black" to 0xFF000000L, "Dark brown" to 0xFF2A1D12L
-            )
-            Text("Page", style = MaterialTheme.typography.labelMedium)
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.horizontalScroll(rememberScrollState())
-            ) {
-                pageChoices.forEach { (label, argb) ->
-                    FilterChip(
-                        selected = config.paletteName == "Custom" &&
-                            config.customPageArgb == argb,
-                        onClick = {
-                            onUpdate { it.copy(paletteName = "Custom", customPageArgb = argb) }
-                        },
-                        label = { Text(label) }
-                    )
-                }
-            }
-            Text("Words", style = MaterialTheme.typography.labelMedium)
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.horizontalScroll(rememberScrollState())
-            ) {
-                textChoices.forEach { (label, argb) ->
-                    FilterChip(
-                        selected = config.paletteName == "Custom" &&
-                            config.customTextArgb == argb,
-                        onClick = {
-                            onUpdate { it.copy(paletteName = "Custom", customTextArgb = argb) }
-                        },
-                        label = { Text(label) }
-                    )
-                }
-            }
-            if (config.paletteName == "Custom") {
-                val ratio = app.xreader.ui.theme.Contrast.ratio(
-                    androidx.compose.ui.graphics.Color(config.customTextArgb.toInt()),
-                    androidx.compose.ui.graphics.Color(config.customPageArgb.toInt())
-                )
-                if (ratio < 4.5) {
-                    Text(
-                        "Hard to read — too close in brightness. Pick lighter words or a darker page.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = app.xreader.ui.theme.errorTextColor()
-                    )
-                } else {
-                    Text(
-                        "That pair is easy to read.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-
-        SheetSection("Moving between chapters") {
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                listOf(
-                    app.xreader.domain.reader.ChapterTransition.CONTINUOUS to "Continuous",
-                    app.xreader.domain.reader.ChapterTransition.CHAPTER_BY_CHAPTER to
-                        "Chapter by chapter",
-                    app.xreader.domain.reader.ChapterTransition.PULL_FOR_NEXT to
-                        "Pull for next"
-                ).forEach { (value, label) ->
-                    FilterChip(
-                        selected = config.chapterTransition == value,
-                        onClick = { onUpdate { it.copy(chapterTransition = value) } },
-                        label = { Text(label) }
-                    )
-                }
-            }
-            Text(
-                "Continuous flows straight into the next chapter. Chapter by chapter stops at each end. Pull for next chapter waits for a little pull at the end of the chapter.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            SheetSwitch(
-                label = "Clock on the page",
-                checked = config.showPageOverlay,
-                onChange = { v -> onUpdate { it.copy(showPageOverlay = v) } }
-            )
-            Text(
-                "Shows the time and battery quietly on the page while you read.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // R18/G18: hardware-keyboard presets (tablet).
-            Text(
-                "Keyboard control",
-                style = MaterialTheme.typography.bodyMedium
-            )
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                listOf(
-                    app.xreader.domain.reader.KeyboardPreset.STANDARD to "Arrows + space",
-                    app.xreader.domain.reader.KeyboardPreset.PAGE_KEYS to "Page keys",
-                    app.xreader.domain.reader.KeyboardPreset.OFF to "Off"
-                ).forEach { (value, label) ->
-                    FilterChip(
-                        selected = config.keyboardPreset == value,
-                        onClick = { onUpdate { it.copy(keyboardPreset = value) } },
-                        label = { Text(label) }
-                    )
-                }
-            }
-            Text(
-                "On a keyboard or tablet: → / ↓ / Page Down turn " +
-                    "forward, ← / ↑ / Page Up go back (Standard adds " +
-                    "the space bar). Keys pause while a sheet or the " +
-                    "menu is open.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // Sweep addendum: the reading line/ruler.
-            SheetSwitch(
-                label = "Reading line",
-                checked = config.readingLine,
-                onChange = { v -> onUpdate { it.copy(readingLine = v) } }
-            )
-            Text(
-                "A soft line at reading height that helps your eyes " +
-                    "track across long lines. Scroll modes only.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        SheetSection("Customise") {
-            TextButton(onClick = onOpenCustomise) {
-                Text("Open the Customise screen — colours, glass, layout and more")
-            }
-            Text(
-                "Tap zones",
-                style = MaterialTheme.typography.bodyMedium
-            )
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = config.tapZoneLayout == TapZoneLayout.STANDARD,
-                    onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.STANDARD) } },
-                    label = { Text("Standard") }
-                )
-                FilterChip(
-                    selected = config.tapZoneLayout == TapZoneLayout.REVERSED,
-                    onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.REVERSED) } },
-                    label = { Text("Reversed") }
-                )
-                FilterChip(
-                    selected = config.tapZoneLayout == TapZoneLayout.NINE_ZONE,
-                    onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.NINE_ZONE) } },
-                    label = { Text("Nine-zone") }
-                )
-                FilterChip(
-                    selected = config.tapZoneLayout == TapZoneLayout.OFF,
-                    onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.OFF) } },
-                    label = { Text("Off") }
-                )
-            }
-            Text(
-                "Page order",
-                style = MaterialTheme.typography.bodyMedium
-            )
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = config.pagedDirection == PagedDirection.LTR,
-                    onClick = { onUpdate { it.copy(pagedDirection = PagedDirection.LTR) } },
-                    label = { Text("Left to right") }
-                )
-                FilterChip(
-                    selected = config.pagedDirection == PagedDirection.RTL,
-                    onClick = { onUpdate { it.copy(pagedDirection = PagedDirection.RTL) } },
-                    label = { Text("Right to left") }
-                )
-            }
-        }
-
-        SheetSection("Font") {
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                FilterChip(
-                    selected = config.fontChoice == ReaderFontChoice.LITERATA,
-                    onClick = {
-                        onUpdate { it.copy(fontChoice = ReaderFontChoice.LITERATA) }
-                    },
-                    label = { Text("Literata") }
-                )
-                FilterChip(
-                    selected = config.fontChoice == ReaderFontChoice.JAKARTA,
-                    onClick = {
-                        onUpdate { it.copy(fontChoice = ReaderFontChoice.JAKARTA) }
-                    },
-                    label = { Text("Jakarta") }
-                )
-                FilterChip(
-                    selected = config.fontChoice == ReaderFontChoice.INTER,
-                    onClick = {
-                        onUpdate { it.copy(fontChoice = ReaderFontChoice.INTER) }
-                    },
-                    label = { Text("Inter") }
-                )
-            }
-            for (fontName in userFonts) {
-                FilterChip(
-                    selected = config.fontChoice == ReaderFontChoice.USER &&
-                        config.userFontName == fontName,
-                    onClick = {
-                        onUpdate {
-                            it.copy(
-                                fontChoice = ReaderFontChoice.USER,
-                                userFontName = fontName
+                SheetSection("Moving between chapters") {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            app.xreader.domain.reader.ChapterTransition.CONTINUOUS to "Continuous",
+                            app.xreader.domain.reader.ChapterTransition.CHAPTER_BY_CHAPTER to
+                                "Chapter by chapter",
+                            app.xreader.domain.reader.ChapterTransition.PULL_FOR_NEXT to
+                                "Pull for next"
+                        ).forEach { (value, label) ->
+                            FilterChip(
+                                selected = config.chapterTransition == value,
+                                onClick = { onUpdate { it.copy(chapterTransition = value) } },
+                                label = { Text(label) }
                             )
                         }
-                    },
-                    label = { Text(fontName) },
-                    modifier = Modifier.padding(top = 6.dp)
-                )
-            }
-            Text(
-                "Import a font (.ttf / .otf)",
-                color = primaryTextColor(),
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier
-                    .clickable { onImportFont() }
-                    .padding(top = 8.dp)
-            )
-        }
-
-        SheetSlider(
-            label = "Line height",
-            valueText = "%.2f×".format(config.lineHeightMultiplier),
-            value = config.lineHeightMultiplier,
-            range = 1.1f..2.2f,
-            onChange = { v -> onUpdate { it.copy(lineHeightMultiplier = v) } }
-        )
-        SheetSlider(
-            label = "Space between paragraphs",
-            valueText = "${config.paragraphSpacingDp.roundToInt()} dp",
-            value = config.paragraphSpacingDp,
-            range = 0f..32f,
-            onChange = { v -> onUpdate { it.copy(paragraphSpacingDp = v) } }
-        )
-        SheetSlider(
-            label = "Side margins",
-            valueText = "${config.marginHorizontalDp.roundToInt()} dp",
-            value = config.marginHorizontalDp,
-            range = 0f..72f,
-            onChange = { v -> onUpdate { it.copy(marginHorizontalDp = v) } }
-        )
-        SheetSlider(
-            label = "Top & bottom margins",
-            valueText = "${config.marginVerticalDp.roundToInt()} dp",
-            value = config.marginVerticalDp,
-            range = 0f..64f,
-            onChange = { v -> onUpdate { it.copy(marginVerticalDp = v) } }
-        )
-
-        SheetSection("Alignment") {
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = config.alignment == ReaderAlignment.LEFT,
-                    onClick = { onUpdate { it.copy(alignment = ReaderAlignment.LEFT) } },
-                    label = { Text("Left") }
-                )
-                FilterChip(
-                    selected = config.alignment == ReaderAlignment.JUSTIFY,
-                    onClick = {
-                        onUpdate { it.copy(alignment = ReaderAlignment.JUSTIFY) }
-                    },
-                    label = { Text("Justified") }
-                )
-            }
-        }
-
-        SheetSlider(
-            label = "Warm light",
-            valueText = if (config.warmLight == 0f) "Off"
-            else "${(config.warmLight * 100).roundToInt()}%",
-            value = config.warmLight,
-            range = 0f..0.6f,
-            onChange = { v -> onUpdate { it.copy(warmLight = v) } }
-        )
-
-        SheetSection("Page turns") {
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = config.turnOverride == PageTurnOverride.AUTO,
-                    onClick = {
-                        onUpdate { it.copy(turnOverride = PageTurnOverride.AUTO) }
-                    },
-                    label = { Text("Automatic") }
-                )
-                FilterChip(
-                    selected = config.turnOverride == PageTurnOverride.FULL,
-                    onClick = {
-                        onUpdate { it.copy(turnOverride = PageTurnOverride.FULL) }
-                    },
-                    label = { Text("Curl") }
-                )
-                FilterChip(
-                    selected = config.turnOverride == PageTurnOverride.MID,
-                    onClick = {
-                        onUpdate { it.copy(turnOverride = PageTurnOverride.MID) }
-                    },
-                    label = { Text("Gooey") }
-                )
-                FilterChip(
-                    selected = config.turnOverride == PageTurnOverride.MINIMAL,
-                    onClick = {
-                        onUpdate { it.copy(turnOverride = PageTurnOverride.MINIMAL) }
-                    },
-                    label = { Text("Fade") }
-                )
-            }
-            Text(
-                "On this device: ${tierLabel(effectiveTier)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        SheetSwitch(
-            label = "Bionic reading (bold word starts)",
-            checked = config.bionicReading,
-            onChange = { v -> onUpdate { it.copy(bionicReading = v) } }
-        )
-        SheetSwitch(
-            label = "Volume keys turn pages",
-            checked = config.volumeKeyTurn,
-            onChange = { v -> onUpdate { it.copy(volumeKeyTurn = v) } }
-        )
-        SheetSwitch(
-            label = "Keep the screen on while reading",
-            checked = config.keepScreenOn,
-            onChange = { v -> onUpdate { it.copy(keepScreenOn = v) } }
-        )
-        SheetSwitch(
-            label = "Two-page spread on wide screens",
-            checked = config.twoPageSpread,
-            onChange = { v -> onUpdate { it.copy(twoPageSpread = v) } }
-        )
-        SheetSwitch(
-            label = "e-Ink mode (no animation, instant turns)",
-            checked = config.eInkMode,
-            onChange = { v -> onUpdate { it.copy(eInkMode = v) } }
-        )
-
-        // ── v1.0.2 (sweep): Words I'm learning ───────────────────
-        SheetSection("Words I'm learning") {
-            var wordText by remember { mutableStateOf("") }
-            var wordSavedNote by remember { mutableStateOf(false) }
-            Text(
-                "Met a word you want to keep? Type it here — it's " +
-                    "saved with the sentence it appears in, and waits " +
-                    "for you in Me → Words I'm learning.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = wordText,
-                    onValueChange = {
-                        wordText = it
-                        wordSavedNote = false
-                    },
-                    label = { Text("Word") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(
-                    onClick = {
-                        onSaveWord(wordText)
-                        wordText = ""
-                        wordSavedNote = true
-                    },
-                    enabled = wordText.trim().length >= 2
-                ) { Text("Save") }
-            }
-            if (wordSavedNote) {
-                Text(
-                    "Saved ✓ — review it from Me → Words I'm learning.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.secondary
-                )
-            }
-        }
-
-        SheetSection("Labs — experimental") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Eye-tracking page turns — EXPERIMENTAL",
-                        style = MaterialTheme.typography.bodyMedium
+                    }
+                    SheetSwitch(
+                        label = "Clock on the page",
+                        checked = config.showPageOverlay,
+                        onChange = { v -> onUpdate { it.copy(showPageOverlay = v) } }
                     )
                     Text(
-                        eyeStatusText(eyeState, eyeMessage),
+                        "Keyboard control",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            app.xreader.domain.reader.KeyboardPreset.STANDARD to "Arrows + space",
+                            app.xreader.domain.reader.KeyboardPreset.PAGE_KEYS to "Page keys",
+                            app.xreader.domain.reader.KeyboardPreset.OFF to "Off"
+                        ).forEach { (value, label) ->
+                            FilterChip(
+                                selected = config.keyboardPreset == value,
+                                onClick = { onUpdate { it.copy(keyboardPreset = value) } },
+                                label = { Text(label) }
+                            )
+                        }
+                    }
+                    SheetSwitch(
+                        label = "Reading line",
+                        checked = config.readingLine,
+                        onChange = { v -> onUpdate { it.copy(readingLine = v) } }
+                    )
+                }
+
+                SheetSection("Auto-scroll") {
+                    SheetSwitch(
+                        label = "Auto-scroll / auto page-turn",
+                        checked = config.autoScrollEnabled,
+                        onChange = { v -> onUpdate { it.copy(autoScrollEnabled = v) } }
+                    )
+                    SheetSlider(
+                        label = "Speed — ${autoScrollSpeedLabel(config.autoScrollSpeed)}",
+                        valueText = "%.1f×".format(config.autoScrollSpeed),
+                        value = config.autoScrollSpeed,
+                        range = 0.25f..3f,
+                        onChange = { v -> onUpdate { it.copy(autoScrollSpeed = v) } }
+                    )
+                }
+
+                SheetSection("Page turns") {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = config.turnOverride == PageTurnOverride.AUTO,
+                            onClick = {
+                                onUpdate { it.copy(turnOverride = PageTurnOverride.AUTO) }
+                            },
+                            label = { Text("Automatic") }
+                        )
+                        FilterChip(
+                            selected = config.turnOverride == PageTurnOverride.FULL,
+                            onClick = {
+                                onUpdate { it.copy(turnOverride = PageTurnOverride.FULL) }
+                            },
+                            label = { Text("Curl") }
+                        )
+                        FilterChip(
+                            selected = config.turnOverride == PageTurnOverride.MID,
+                            onClick = {
+                                onUpdate { it.copy(turnOverride = PageTurnOverride.MID) }
+                            },
+                            label = { Text("Gooey") }
+                        )
+                        FilterChip(
+                            selected = config.turnOverride == PageTurnOverride.MINIMAL,
+                            onClick = {
+                                onUpdate { it.copy(turnOverride = PageTurnOverride.MINIMAL) }
+                            },
+                            label = { Text("Fade") }
+                        )
+                    }
+                    Text(
+                        "On this device: ${tierLabel(effectiveTier)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(
-                    checked = config.eyeTracking,
-                    onCheckedChange = { v -> onUpdate { it.copy(eyeTracking = v) } }
+
+                SheetSection("Taps & keys") {
+                    Text(
+                        "Tap zones",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = config.tapZoneLayout == TapZoneLayout.STANDARD,
+                            onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.STANDARD) } },
+                            label = { Text("Standard") }
+                        )
+                        FilterChip(
+                            selected = config.tapZoneLayout == TapZoneLayout.REVERSED,
+                            onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.REVERSED) } },
+                            label = { Text("Reversed") }
+                        )
+                        FilterChip(
+                            selected = config.tapZoneLayout == TapZoneLayout.NINE_ZONE,
+                            onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.NINE_ZONE) } },
+                            label = { Text("Nine-zone") }
+                        )
+                        FilterChip(
+                            selected = config.tapZoneLayout == TapZoneLayout.OFF,
+                            onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.OFF) } },
+                            label = { Text("Off") }
+                        )
+                    }
+                    Text(
+                        "Page order",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = config.pagedDirection == PagedDirection.LTR,
+                            onClick = { onUpdate { it.copy(pagedDirection = PagedDirection.LTR) } },
+                            label = { Text("Left to right") }
+                        )
+                        FilterChip(
+                            selected = config.pagedDirection == PagedDirection.RTL,
+                            onClick = { onUpdate { it.copy(pagedDirection = PagedDirection.RTL) } },
+                            label = { Text("Right to left") }
+                        )
+                    }
+                    SheetSwitch(
+                        label = "Volume keys turn pages",
+                        checked = config.volumeKeyTurn,
+                        onChange = { v -> onUpdate { it.copy(volumeKeyTurn = v) } }
+                    )
+                    SheetSwitch(
+                        label = "Bionic reading (bold word starts)",
+                        checked = config.bionicReading,
+                        onChange = { v -> onUpdate { it.copy(bionicReading = v) } }
+                    )
+                    SheetSwitch(
+                        label = "Keep the screen on while reading",
+                        checked = config.keepScreenOn,
+                        onChange = { v -> onUpdate { it.copy(keepScreenOn = v) } }
+                    )
+                    SheetSwitch(
+                        label = "Two-page spread on wide screens",
+                        checked = config.twoPageSpread,
+                        onChange = { v -> onUpdate { it.copy(twoPageSpread = v) } }
+                    )
+                    SheetSwitch(
+                        label = "e-Ink mode (no animation, instant turns)",
+                        checked = config.eInkMode,
+                        onChange = { v -> onUpdate { it.copy(eInkMode = v) } }
+                    )
+                }
+            }
+
+            "page" -> {
+                SheetSection("Page theme") {
+                    // v1.0.6.2 (F8c): exactly THREE cards in ONE
+                    // visible row — AMOLED (default), Sepia, Paper.
+                    // Ember dark is gone; the custom colours live
+                    // in the "Custom colours" row below the cards.
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        ReaderPalettes.forEach { palette ->
+                            val effective = palette.maxContrast(config.highContrastText)
+                            val selected = config.paletteName == palette.name
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .height(118.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(effective.background)
+                                        .border(
+                                            width = if (selected) 3.dp else 1.dp,
+                                            color = if (selected) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.outline
+                                            },
+                                            shape = RoundedCornerShape(10.dp)
+                                        )
+                                        .clickable {
+                                            onUpdate { it.copy(paletteName = palette.name) }
+                                        }
+                                        .padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Text(
+                                        "The Moon Gate",
+                                        color = effective.text,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        "The gate opened at dawn, and the river ran silver beneath it.",
+                                        color = effective.text,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 3
+                                    )
+                                    Text(
+                                        "Chapter 12",
+                                        color = effective.muted,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1
+                                    )
+                                }
+                                Text(
+                                    palette.name,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    SheetSwitch(
+                        label = "High contrast text",
+                        checked = config.highContrastText,
+                        onChange = { v -> onUpdate { it.copy(highContrastText = v) } }
+                    )
+                }
+
+                SheetSection("Custom colours") {
+                    val pageChoices = listOf(
+                        "Black" to 0xFF000000L, "Deep blue" to 0xFF0E1524L,
+                        "Deep green" to 0xFF14201AL, "Brown" to 0xFF211712L,
+                        "Cream" to 0xFFF5EDDCL, "White" to 0xFFFFFFFFL
+                    )
+                    val textChoices = listOf(
+                        "White" to 0xFFFFFFFFL, "Cream" to 0xFFEFDFC8L,
+                        "Pale blue" to 0xFFD7E3F4, "Pale green" to 0xFFDCE8D8,
+                        "Black" to 0xFF000000L, "Dark brown" to 0xFF2A1D12L
+                    )
+                    Text("Page", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState())
+                    ) {
+                        pageChoices.forEach { (label, argb) ->
+                            FilterChip(
+                                selected = config.paletteName == "Custom" &&
+                                    config.customPageArgb == argb,
+                                onClick = {
+                                    onUpdate { it.copy(paletteName = "Custom", customPageArgb = argb) }
+                                },
+                                label = { Text(label) }
+                            )
+                        }
+                    }
+                    Text("Words", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState())
+                    ) {
+                        textChoices.forEach { (label, argb) ->
+                            FilterChip(
+                                selected = config.paletteName == "Custom" &&
+                                    config.customTextArgb == argb,
+                                onClick = {
+                                    onUpdate { it.copy(paletteName = "Custom", customTextArgb = argb) }
+                                },
+                                label = { Text(label) }
+                            )
+                        }
+                    }
+                    if (config.paletteName == "Custom") {
+                        val ratio = app.xreader.ui.theme.Contrast.ratio(
+                            androidx.compose.ui.graphics.Color(config.customTextArgb.toInt()),
+                            androidx.compose.ui.graphics.Color(config.customPageArgb.toInt())
+                        )
+                        if (ratio < 4.5) {
+                            Text(
+                                "Hard to read — too close in brightness. Pick lighter words or a darker page.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = app.xreader.ui.theme.errorTextColor()
+                            )
+                        } else {
+                            Text(
+                                "That pair is easy to read.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                SheetSlider(
+                    label = "Text size",
+                    valueText = "${config.fontSizeSp.roundToInt()} sp",
+                    value = config.fontSizeSp,
+                    range = 12f..34f,
+                    onChange = { v -> onUpdate { it.copy(fontSizeSp = v) } }
+                )
+
+                SheetSection("Brightness") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Use the phone's brightness",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Switch(
+                            checked = config.brightness == null,
+                            onCheckedChange = { system ->
+                                onUpdate { it.copy(brightness = if (system) null else 0.7f) }
+                            }
+                        )
+                    }
+                    if (config.brightness != null) {
+                        Slider(
+                            value = config.brightness,
+                            onValueChange = { v -> onUpdate { it.copy(brightness = v) } },
+                            valueRange = 0.05f..1f
+                        )
+                    }
+                }
+
+                SheetSection("Font") {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        FilterChip(
+                            selected = config.fontChoice == ReaderFontChoice.LITERATA,
+                            onClick = {
+                                onUpdate { it.copy(fontChoice = ReaderFontChoice.LITERATA) }
+                            },
+                            label = { Text("Literata") }
+                        )
+                        FilterChip(
+                            selected = config.fontChoice == ReaderFontChoice.JAKARTA,
+                            onClick = {
+                                onUpdate { it.copy(fontChoice = ReaderFontChoice.JAKARTA) }
+                            },
+                            label = { Text("Jakarta") }
+                        )
+                        FilterChip(
+                            selected = config.fontChoice == ReaderFontChoice.INTER,
+                            onClick = {
+                                onUpdate { it.copy(fontChoice = ReaderFontChoice.INTER) }
+                            },
+                            label = { Text("Inter") }
+                        )
+                    }
+                    for (fontName in userFonts) {
+                        FilterChip(
+                            selected = config.fontChoice == ReaderFontChoice.USER &&
+                                config.userFontName == fontName,
+                            onClick = {
+                                onUpdate {
+                                    it.copy(
+                                        fontChoice = ReaderFontChoice.USER,
+                                        userFontName = fontName
+                                    )
+                                }
+                            },
+                            label = { Text(fontName) },
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
+                    Text(
+                        "Import a font (.ttf / .otf)",
+                        color = primaryTextColor(),
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier
+                            .clickable { onImportFont() }
+                            .padding(top = 8.dp)
+                    )
+                }
+
+                SheetSlider(
+                    label = "Line height",
+                    valueText = "%.2f×".format(config.lineHeightMultiplier),
+                    value = config.lineHeightMultiplier,
+                    range = 1.1f..2.2f,
+                    onChange = { v -> onUpdate { it.copy(lineHeightMultiplier = v) } }
+                )
+                SheetSlider(
+                    label = "Space between paragraphs",
+                    valueText = "${config.paragraphSpacingDp.roundToInt()} dp",
+                    value = config.paragraphSpacingDp,
+                    range = 0f..32f,
+                    onChange = { v -> onUpdate { it.copy(paragraphSpacingDp = v) } }
+                )
+                SheetSlider(
+                    label = "Side margins",
+                    valueText = "${config.marginHorizontalDp.roundToInt()} dp",
+                    value = config.marginHorizontalDp,
+                    range = 0f..72f,
+                    onChange = { v -> onUpdate { it.copy(marginHorizontalDp = v) } }
+                )
+                SheetSlider(
+                    label = "Top & bottom margins",
+                    valueText = "${config.marginVerticalDp.roundToInt()} dp",
+                    value = config.marginVerticalDp,
+                    range = 0f..64f,
+                    onChange = { v -> onUpdate { it.copy(marginVerticalDp = v) } }
+                )
+
+                SheetSection("Alignment") {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = config.alignment == ReaderAlignment.LEFT,
+                            onClick = { onUpdate { it.copy(alignment = ReaderAlignment.LEFT) } },
+                            label = { Text("Left") }
+                        )
+                        FilterChip(
+                            selected = config.alignment == ReaderAlignment.JUSTIFY,
+                            onClick = {
+                                onUpdate { it.copy(alignment = ReaderAlignment.JUSTIFY) }
+                            },
+                            label = { Text("Justified") }
+                        )
+                    }
+                }
+
+                SheetSlider(
+                    label = "Warm light",
+                    valueText = if (config.warmLight == 0f) "Off"
+                    else "${(config.warmLight * 100).roundToInt()}%",
+                    value = config.warmLight,
+                    range = 0f..0.6f,
+                    onChange = { v -> onUpdate { it.copy(warmLight = v) } }
                 )
             }
-            Text(
-                "Uses the front camera on this device only — nothing is " +
-                    "recorded or sent anywhere. Double-blink, nod, or hold " +
-                    "your gaze down to turn a page. If it doesn't behave on " +
-                    "your device, it turns itself off and says why.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+
+            else -> {
+                SheetSection("Words I'm learning") {
+                    var wordText by remember { mutableStateOf("") }
+                    var wordSavedNote by remember { mutableStateOf(false) }
+                    Text(
+                        "Save a word with its sentence — find it in Me → Words I'm learning.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = wordText,
+                            onValueChange = {
+                                wordText = it
+                                wordSavedNote = false
+                            },
+                            label = { Text("Word") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            onClick = {
+                                onSaveWord(wordText)
+                                wordText = ""
+                                wordSavedNote = true
+                            },
+                            enabled = wordText.trim().length >= 2
+                        ) { Text("Save") }
+                    }
+                    if (wordSavedNote) {
+                        Text(
+                            "Saved ✓ — review it from Me → Words I'm learning.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
+
+                SheetSection("Labs — experimental") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Eye-tracking page turns — EXPERIMENTAL",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                eyeStatusText(eyeState, eyeMessage),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = config.eyeTracking,
+                            onCheckedChange = { v -> onUpdate { it.copy(eyeTracking = v) } }
+                        )
+                    }
+                    Text(
+                        "Uses the front camera on this device only — nothing is recorded or sent anywhere.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(16.dp))
+    }
+}
+
+/** v1.0.6.2 (F8c): one index row — group name, its current
+ * choice quietly on the right. */
+@Composable
+private fun SettingsIndexRow(
+    title: String,
+    summary: String,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            summary,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -1095,6 +1121,17 @@ fun TocSheet(
                                 Icons.Filled.Check, "Read",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        // v1.0.6.2 (R2): a quiet "saved" word for
+                        // chapters already on the phone — it reads
+                        // offline and opens instantly.
+                        if (chapter.contentPath != null) {
+                            Text(
+                                "saved",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 8.dp)
                             )
                         }
                     }

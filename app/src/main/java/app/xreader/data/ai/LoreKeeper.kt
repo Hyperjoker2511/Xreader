@@ -206,7 +206,7 @@ class LoreKeeper(
     ): AppResult<Int> {
         if (!settingsProvider().enabled(AiFeature.LORE_KEEPER)) {
             return AppResult.Err(
-                AppError.BadFile("LoreKeeper is turned off — switch it on in Providers & keys.")
+                AppError.NeutralVerdict("LoreKeeper is turned off — switch it on in Providers & keys.")
             )
         }
         val hash = app.xreader.data.extension.Hashes.sha256Hex(chapterText)

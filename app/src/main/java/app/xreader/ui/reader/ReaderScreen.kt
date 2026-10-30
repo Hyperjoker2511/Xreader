@@ -21,6 +21,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -49,6 +53,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -62,6 +67,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -87,7 +93,7 @@ import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class ActiveSheet { SETTINGS, LISTEN, TOC, FOCUS, AI }
+private enum class ActiveSheet { SETTINGS, LISTEN, TOC, FOCUS }
 
 private val EInkPalette = ReaderPalette(
     name = "e-Ink",
@@ -115,7 +121,9 @@ fun ReaderScreen(
     bookId: Long,
     onBack: () -> Unit,
     /** v1.0.1: the settings sheet's Customise jump. */
-    onOpenCustomise: () -> Unit = {}
+    onOpenCustomise: () -> Unit = {},
+    /** v1.0.6.2 (F9b): Ask AI is a full page, not a sheet. */
+    onOpenAiPage: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val config by viewModel.config.collectAsStateWithLifecycle()
@@ -159,7 +167,7 @@ fun ReaderScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
 
-    val palette = (if (config.paletteName == "Custom" && !config.eInkMode) {
+    val basePalette = if (config.paletteName == "Custom" && !config.eInkMode) {
         // v1.0.1 custom colour pair (QuickNovel lesson): the user's
         // own page + text colours, muted/accent derived in-family.
         val page = androidx.compose.ui.graphics.Color(config.customPageArgb.toInt())
@@ -175,10 +183,46 @@ fun ReaderScreen(
         EInkPalette
     } else {
         ReaderPalettes.firstOrNull { it.name == config.paletteName } ?: ReaderAmoled
-    }).maxContrast(config.highContrastText)
+    }
+    // v1.0.6.2 (F8b reader parity): on the AMOLED theme the
+    // reader's accent IS the active app colour theme's primary —
+    // each app theme's reader counterpart, in family, without a
+    // second palette list. Sepia/Paper keep their own warm accent
+    // (they are the light-reading pair shared by all themes).
+    val appPrimary = MaterialTheme.colorScheme.primary
+    val palette = (
+        if (basePalette.name == "AMOLED") {
+            basePalette.copy(accent = appPrimary)
+        } else {
+            basePalette
+        }
+        ).maxContrast(config.highContrastText)
     val fontFamily = rememberReaderFontFamily(config, container)
 
     var chromeVisible by remember { mutableStateOf(true) }
+
+    // v1.0.6.2 (F7): the chrome bars report their REAL measured
+    // heights; the readers inset their text by exactly that much
+    // while the bars are up (text never renders under chrome),
+    // and by the bare safe-area insets while they are hidden
+    // (full height for reading). No constants to drift.
+    var topChromePx by remember { mutableIntStateOf(0) }
+    var bottomChromePx by remember { mutableIntStateOf(0) }
+    val densityNow = androidx.compose.ui.platform.LocalDensity.current
+    val safeTop = WindowInsets.statusBars.asPaddingValues()
+        .calculateTopPadding()
+    val safeBottom = WindowInsets.navigationBars.asPaddingValues()
+        .calculateBottomPadding()
+    val readerTopInset = if (chromeVisible && topChromePx > 0) {
+        with(densityNow) { topChromePx.toDp() }
+    } else {
+        safeTop
+    }
+    val readerBottomInset = if (chromeVisible && bottomChromePx > 0) {
+        with(densityNow) { bottomChromePx.toDp() }
+    } else {
+        safeBottom
+    }
 
     var activeSheet by remember { mutableStateOf<ActiveSheet?>(null) }
 
@@ -398,7 +442,15 @@ fun ReaderScreen(
             state.errorMessage != null -> EmptyState(
                 title = "Can't open this chapter",
                 message = state.errorMessage ?: "",
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                // v1.0.6.2 (F3): a failed live fetch can simply
+                // be tried again, right here.
+                actionLabel = if (state.chapterFetchFailed) "Try again" else null,
+                onAction = if (state.chapterFetchFailed) {
+                    { viewModel.retryCurrentChapter() }
+                } else {
+                    null
+                }
             )
 
             // v1.0.2 (R17): the endless stream — scroll mode with
@@ -424,7 +476,9 @@ fun ReaderScreen(
                     onChromeWanted = { wanted -> chromeVisible = wanted },
                     onDownloadChapter = { index ->
                         viewModel.downloadStreamChapter(index)
-                    }
+                    },
+                    topInset = readerTopInset,
+                    bottomInset = readerBottomInset
                 )
             }
 
@@ -448,7 +502,9 @@ fun ReaderScreen(
                         onPosition = { offset -> viewModel.onPosition(offset, 0f) },
                         onNextChapter = { viewModel.nextChapter() },
                         onPreviousChapter = { viewModel.previousChapter() },
-                        onCenterTap = { chromeVisible = !chromeVisible }
+                        onCenterTap = { chromeVisible = !chromeVisible },
+                        topInset = readerTopInset,
+                        bottomInset = readerBottomInset
                     )
                 } else {
                     ScrollReader(
@@ -487,7 +543,9 @@ fun ReaderScreen(
                             }
                         },
                         onCenterTap = { chromeVisible = !chromeVisible },
-                        onChromeWanted = { wanted -> chromeVisible = wanted }
+                        onChromeWanted = { wanted -> chromeVisible = wanted },
+                        topInset = readerTopInset,
+                        bottomInset = readerBottomInset
                     )
                 }
             }
@@ -528,7 +586,9 @@ fun ReaderScreen(
             onOpenListen = { activeSheet = ActiveSheet.LISTEN },
             onOpenFocus = { activeSheet = ActiveSheet.FOCUS },
             onOpenSettings = { activeSheet = ActiveSheet.SETTINGS },
-            onOpenAi = { activeSheet = ActiveSheet.AI }
+            onOpenAi = { onOpenAiPage() },
+            onTopBarHeight = { px -> if (px > 0) topChromePx = px },
+            onBottomBarHeight = { px -> if (px > 0) bottomChromePx = px }
         )
 
         // Eye-tracking status (Labs): small, honest, dismissible.
@@ -612,7 +672,15 @@ fun ReaderScreen(
                 contentColor = palette.text,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 108.dp)
+                    // v1.0.6.2 (F7): float above the real bottom
+                    // chrome (measured), not a guessed offset.
+                    .padding(
+                        bottom = if (chromeVisible) {
+                            readerBottomInset + 12.dp
+                        } else {
+                            24.dp
+                        }
+                    )
             ) {
                 Text(
                     text,
@@ -727,12 +795,6 @@ fun ReaderScreen(
                         }
                     }
                 )
-                ActiveSheet.AI -> app.xreader.ui.ai.AiSheetContent(
-                    viewModel = aiViewModel,
-                    showingTranslation = state.showingTranslation,
-                    onShowOriginal = { viewModel.showOriginalChapter() },
-                    onShowTranslation = { viewModel.showTranslatedChapter() }
-                )
                 ActiveSheet.FOCUS -> FocusSheet(
                     focus = focus,
                     onStart = { minutes, soundscape ->
@@ -822,7 +884,11 @@ private fun ReaderChrome(
     onOpenListen: () -> Unit,
     onOpenFocus: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenAi: () -> Unit
+    onOpenAi: () -> Unit,
+    /** v1.0.6.2 (F7): the bars' measured heights (px), so the
+     * text insets match the real chrome, never a guess. */
+    onTopBarHeight: (Int) -> Unit = {},
+    onBottomBarHeight: (Int) -> Unit = {}
 ) {
     val chromeColor = palette.background.copy(alpha = 0.94f)
     Column(Modifier.fillMaxSize()) {
@@ -831,7 +897,11 @@ private fun ReaderChrome(
             enter = sharedAxisYEnter(reduceMotion = reduceMotion),
             exit = sharedAxisYExit(reduceMotion = reduceMotion)
         ) {
-            Surface(color = chromeColor, contentColor = palette.text) {
+            Surface(
+                color = chromeColor,
+                contentColor = palette.text,
+                modifier = Modifier.onSizeChanged { onTopBarHeight(it.height) }
+            ) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -878,10 +948,21 @@ private fun ReaderChrome(
             enter = sharedAxisYEnter(reduceMotion = reduceMotion),
             exit = sharedAxisYExit(reduceMotion = reduceMotion)
         ) {
-            Surface(color = chromeColor, contentColor = palette.text) {
+            Surface(
+                color = chromeColor,
+                contentColor = palette.text,
+                modifier = Modifier.onSizeChanged { onBottomBarHeight(it.height) }
+            ) {
                 Column(
                     Modifier
                         .fillMaxWidth()
+                        // v1.0.6.2 (F7 + lift): the bar floats —
+                        // above the system navigation inset, plus
+                        // the shared extra lift, so nothing sits
+                        // at the screen's very bottom edge. The
+                        // slider lives inside this padded area.
+                        .androidx.compose.foundation.layout.navigationBarsPadding()
+                        .padding(bottom = app.xreader.ui.theme.FloatingChromeLift)
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
                     var sliderFraction by remember { mutableStateOf(bookFraction) }

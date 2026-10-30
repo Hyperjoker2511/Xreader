@@ -113,13 +113,29 @@ class SourceCatalogViewModel(
                     loading = false,
                     errorMessage = if (reset) ErrorText.displayText(result.error) else null
                 )
-                is AppResult.Ok -> _state.value.copy(
-                    loading = false,
-                    books = if (reset) result.value.books
-                    else _state.value.books + result.value.books,
-                    page = page,
-                    hasNext = result.value.hasNextPage
-                )
+                is AppResult.Ok -> {
+                    // v1.0.6.2 (F2): pages are merged by book id —
+                    // a book already on screen is never appended
+                    // twice (overlapping pages, or a source that
+                    // answers every page with its first one).
+                    // "More may exist" is the engine's own word
+                    // (hasNextPage) OR the plain evidence that
+                    // this page brought books we hadn't seen; a
+                    // page of pure duplicates ends the list
+                    // honestly instead of re-requesting forever.
+                    val existing = if (reset) emptyList() else _state.value.books
+                    val knownIds = existing.mapTo(HashSet()) { it.id }
+                    val newBooks = result.value.books
+                        .distinctBy { it.id }
+                        .filter { it.id !in knownIds }
+                    _state.value.copy(
+                        loading = false,
+                        books = existing + newBooks,
+                        page = page,
+                        hasNext = (result.value.hasNextPage || newBooks.isNotEmpty()) &&
+                            page < MAX_CATALOG_PAGE
+                    )
+                }
             }
             if (result is AppResult.Err && !reset) {
                 _messages.tryEmit(ErrorText.displayText(result.error))
@@ -145,6 +161,11 @@ class SourceCatalogViewModel(
     }
 
     companion object {
+        /** v1.0.6.2 (F2): a hard stop for pathological sources
+         * whose pages never repeat and never end — 50 pages of
+         * catalogue is beyond any real browsing session. */
+        const val MAX_CATALOG_PAGE = 50
+
         fun factory(
             container: AppContainer,
             extensionId: Long,

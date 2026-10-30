@@ -200,6 +200,17 @@ fun BookDetailScreen(
                                     .background(backdropBase.copy(alpha = 0.22f))
                             )
                         }
+                        // v1.0.6.2 (F6b): a scrim over the blurred
+                        // backdrop so the band's chips and text
+                        // keep full contrast over any cover.
+                        Box(
+                            Modifier
+                                .matchParentSize()
+                                .background(
+                                    MaterialTheme.colorScheme.background
+                                        .copy(alpha = 0.30f)
+                                )
+                        )
                     }
                 Column(
                     Modifier.padding(8.dp),
@@ -377,6 +388,20 @@ fun BookDetailScreen(
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
+                }
+                }
+            }
+            // v1.0.6.2 (F6b): everything below the header band —
+            // the action links, Synopsis, Next unread — sits on
+            // the plain solid background with full-contrast text.
+            // Only the band above (cover, title, author, chips,
+            // Start reading, status chips, track toggle) keeps
+            // the blurred-cover backdrop.
+            item(key = "below-header") {
+                Column(
+                    Modifier.padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     // v1.0.5 (B4/B3): exports + book tools in ONE
                     // wrapping row. As two fixed Rows, "Highlights
                     // (.md)" wrapped mid-label and the row crowded
@@ -445,7 +470,6 @@ fun BookDetailScreen(
                     // out of this header card — it now opens the
                     // always-present Chapters section below, with
                     // its count and recovery doors.
-                }
                 }
             }
             // v1.0.5 (B1/D26): the Chapters section ALWAYS opens

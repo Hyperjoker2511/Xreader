@@ -83,7 +83,11 @@ fun ScrollReader(
     /** Scroll direction drives chrome auto-show/hide in scroll mode
      * (taps land on text and are consumed by selection/long-press). */
     onChromeWanted: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** v1.0.6.2 (F7): measured chrome heights — text starts
+     * below the top bar and ends above the bottom bar, always. */
+    topInset: androidx.compose.ui.unit.Dp = 0.dp,
+    bottomInset: androidx.compose.ui.unit.Dp = 0.dp
 ) {
     val listState = rememberLazyListState()
     val blocks = chapterText.content.blocks
@@ -173,19 +177,18 @@ fun ScrollReader(
     Box(
         modifier
             .fillMaxSize()
-            .pointerInput(chapterText) {
-                detectTapGestures { offset ->
-                    // Taps toggle the chrome from anywhere (scroll and
-                    // selection gestures are unaffected — they cancel
-                    // or coexist with tap detection). A tap also
-                    // pauses auto-scroll; a CENTRE tap resumes it
-                    // (the same control family that shows the menu).
-                    if (offset.x in (size.width * 0.30f)..(size.width * 0.70f)) {
-                        autoPaused = false
-                        onCenterTap()
-                    } else {
-                        autoPaused = true
-                    }
+            // v1.0.6.2 (F7): the tap toggle is observed in the
+            // INITIAL pointer pass now — paragraph click handlers
+            // and text selection can no longer swallow centre
+            // taps (the "bars never come back" bug). A tap also
+            // pauses auto-scroll; a CENTRE tap resumes it (the
+            // same control family that shows the menu).
+            .readerTapToggle(chapterText) { xFraction, _ ->
+                if (app.xreader.domain.reader.CentreTap.isCentre(xFraction)) {
+                    autoPaused = false
+                    onCenterTap()
+                } else {
+                    autoPaused = true
                 }
             }
     ) {
@@ -194,7 +197,8 @@ fun ScrollReader(
                 state = listState,
                 contentPadding = PaddingValues(
                     horizontal = config.marginHorizontalDp.dp,
-                    vertical = config.marginVerticalDp.dp
+                    top = config.marginVerticalDp.dp + topInset,
+                    bottom = config.marginVerticalDp.dp + bottomInset
                 ),
                 modifier = Modifier.fillMaxSize()
             ) {

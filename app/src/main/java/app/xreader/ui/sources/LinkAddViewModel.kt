@@ -82,7 +82,14 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
             // v1.0.5 (A10): the failure copy may only mention
             // the AI detector when its button will render.
             _state.value = when (val outcome = container.linkProber.probe(
-                rawUrl, aiAvailable = aiAvailable.value
+                rawUrl, aiAvailable = aiAvailable.value,
+                // v1.0.6.2 (F5): a borderline-shaped book list
+                // gets one AI verify call per run; it returns
+                // null silently when no key is set or the check
+                // can't run.
+                semanticVerifier = { titles, excerpt ->
+                    container.selectorAi.verifySample(titles, excerpt)
+                }
             )) {
                 is LinkProber.Outcome.Ready -> LinkAddUiState.Ready(
                     draft = outcome.draft,

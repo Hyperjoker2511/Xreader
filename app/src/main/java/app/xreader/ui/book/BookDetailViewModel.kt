@@ -359,6 +359,33 @@ class BookDetailViewModel(
     private var autoLoadTried = false
 
     init {
+        // v1.0.6.2 (F6a): a local book with an empty synopsis whose
+        // file is still on the phone gets ONE metadata re-read —
+        // books imported before descriptions were mapped heal
+        // themselves on open, no re-import needed.
+        viewModelScope.launch {
+            val book = container.database.bookDao().getById(bookId)
+                ?: return@launch
+            if (book.sourceType != app.xreader.data.db.SourceType.LOCAL_FILE ||
+                book.description.isNotBlank()
+            ) {
+                return@launch
+            }
+            val heal = container.localSynopsisHeal
+            val file = heal.candidateFile(book) ?: return@launch
+            val found = kotlinx.coroutines.withContext(
+                container.defaultDispatcher
+            ) {
+                runCatching { heal.readDescription(book, file) }.getOrNull()
+            } ?: return@launch
+            val current = container.database.bookDao().getById(bookId)
+                ?: return@launch
+            if (current.description.isBlank()) {
+                container.database.bookDao().update(
+                    current.copy(description = found)
+                )
+            }
+        }
         // v1.0.1: a source book with zero local chapters loads them
         // on open — the user must never stare at an empty list for a
         // book the app itself verified has chapters.

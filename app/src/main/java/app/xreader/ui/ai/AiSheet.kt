@@ -52,38 +52,52 @@ fun AiSheetContent(
     viewModel: AiSheetViewModel,
     showingTranslation: Boolean,
     onShowOriginal: () -> Unit,
-    onShowTranslation: () -> Unit
+    onShowTranslation: () -> Unit,
+    /** v1.0.6.2 (F9b): true when hosted by the full Ask AI page —
+     * the page supplies the header and the docked chat input, and
+     * the content uses the full height instead of a sheet's cap. */
+    pageMode: Boolean = false,
+    modifier: Modifier = Modifier
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val engineLabel by viewModel.engineLabel.collectAsStateWithLifecycle()
     Column(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(max = 640.dp)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 8.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.Filled.AutoAwesome,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.tertiary
-            )
-            Text(
-                "Ask AI",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(start = 8.dp)
-            )
-            Spacer(Modifier.weight(1f))
-            EngineChip(label = engineLabel)
+        if (pageMode) {
+            modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 8.dp)
+        } else {
+            modifier
+                .fillMaxWidth()
+                .heightIn(max = 640.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 8.dp)
         }
-        Text(
-            "Answers only use the story up to where you're reading — no spoilers.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp)
-        )
-        Spacer(Modifier.height(12.dp))
+    ) {
+        if (!pageMode) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
+                Text(
+                    "Ask AI",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+                Spacer(Modifier.weight(1f))
+                EngineChip(label = engineLabel)
+            }
+            Text(
+                "Answers only use the story up to where you're reading — no spoilers.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            Spacer(Modifier.height(12.dp))
+        }
 
         if (!state.hasKey) {
             GlassCard(Modifier.fillMaxWidth()) {
@@ -116,6 +130,9 @@ fun AiSheetContent(
             state.summaryError?.let { error ->
                 ErrorLine(error)
             }
+            state.summaryNote?.let { note ->
+                NoteLine(note)
+            }
             state.summary?.let { summary ->
                 val bullets = Summarizer.decodeBullets(summary.bulletsJson)
                 Column(Modifier.padding(start = 40.dp, top = 4.dp)) {
@@ -136,6 +153,7 @@ fun AiSheetContent(
                 onClick = { viewModel.catchUp() }
             )
             state.catchUpError?.let { ErrorLine(it) }
+            state.catchUpNote?.let { NoteLine(it) }
             state.catchUp?.let { text ->
                 Text(
                     text,
@@ -157,6 +175,7 @@ fun AiSheetContent(
                 onClick = { viewModel.translateChapter() }
             )
             state.translationError?.let { ErrorLine(it) }
+            state.translationNote?.let { NoteLine(it) }
             if (state.translating && state.translationPreview.isNotBlank()) {
                 Text(
                     "…" + state.translationPreview,
@@ -246,6 +265,12 @@ fun AiSheetContent(
                 }
             }
             state.chatError?.let { ErrorLine(it) }
+            if (pageMode) {
+                // The page renders the chat input docked at its
+                // bottom (F9b); the sheet's inline row is skipped.
+                Spacer(Modifier.height(16.dp))
+                return@Column
+            }
             var question by remember { mutableStateOf("") }
             Row(
                 Modifier
@@ -310,6 +335,17 @@ private fun ActionRow(
             TextButton(onClick = onClick) { Text("Run") }
         }
     }
+}
+
+/** v1.0.6.2 (F9): a calm verdict — same words, no error colour. */
+@Composable
+private fun NoteLine(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 40.dp, top = 2.dp)
+    )
 }
 
 @Composable

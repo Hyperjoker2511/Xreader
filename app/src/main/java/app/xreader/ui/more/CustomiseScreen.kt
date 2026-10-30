@@ -62,7 +62,6 @@ import app.xreader.domain.reader.PagedDirection
 import app.xreader.domain.reader.ReaderConfig
 import app.xreader.domain.reader.TapZoneLayout
 import app.xreader.ui.common.GlassCard
-import app.xreader.ui.theme.AppSchemes
 import app.xreader.ui.theme.ReaderPalettes
 import app.xreader.ui.theme.maxContrast
 import kotlinx.coroutines.flow.SharingStarted
@@ -264,7 +263,7 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
                 appearance.customSchemes.filterNot { it.id == id }
             )
             // R04: deleting the ACTIVE custom scheme returns to
-            // Violet Night (not a silent fall to Ember).
+            // the fresh-install default (not a silent fall to Ember).
             if (appearance.colourScheme == CUSTOM_SCHEME_PREFIX + id) {
                 container.appearancePrefs.setColourScheme(
                     app.xreader.data.prefs.AppearanceValidation.FRESH_INSTALL_SCHEME
@@ -360,14 +359,18 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
 
         CustomiseSection("Colour theme") {
             Text(
-                "The colours the whole app wears. The preview shows each theme's real colours.",
+                "The colours the whole app wears.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             val darkPreview = appearance.themeMode == app.xreader.data.prefs.ThemeMode.DARK ||
                 (appearance.themeMode == app.xreader.data.prefs.ThemeMode.FOLLOW_SYSTEM &&
                     androidx.compose.foundation.isSystemInDarkTheme())
-            AppSchemes.forEach { scheme ->
+            // v1.0.6.2 (F8b): exactly three complete themes —
+            // the full scheme list stays resolvable for installs
+            // that already picked another, but the picker is
+            // these three (the user's 1–3 options rule).
+            app.xreader.ui.theme.AppColourThemes.forEach { scheme ->
                 val colors = scheme.colors(darkPreview)
                 val selected = appearance.colourScheme == scheme.name
                 Row(
@@ -498,7 +501,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("True black", style = MaterialTheme.typography.titleSmall)
+                    Text("True black (AMOLED)", style = MaterialTheme.typography.titleSmall)
                     Text(
                         "In dark mode, backgrounds become pure black — " +
                             "kinder to AMOLED screens and batteries. " +

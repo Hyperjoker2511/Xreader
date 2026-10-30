@@ -907,7 +907,8 @@ private fun XreaderNavHost(
             GlobalSearchScreen(
                 viewModel = viewModel,
                 onOpenBook = { bookId -> navController.navigate("book/$bookId") },
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                coverFile = coverFile
             )
         }
         composable(Tab.History.route) {
@@ -1145,7 +1146,61 @@ private fun XreaderNavHost(
                 assetFile = assetFile,
                 bookId = bookId,
                 onBack = { navController.popBackStack() },
-                onOpenCustomise = { navController.navigate("customise") }
+                onOpenCustomise = { navController.navigate("customise") },
+                onOpenAiPage = {
+                    navController.navigate("ai/$bookId/$chapterIndex")
+                }
+            )
+        }
+        composable(
+            "ai/{bookId}/{chapterIndex}",
+            arguments = listOf(
+                androidx.navigation.navArgument("bookId") {
+                    type = androidx.navigation.NavType.LongType
+                },
+                androidx.navigation.navArgument("chapterIndex") {
+                    type = androidx.navigation.NavType.IntType
+                }
+            )
+        ) { entry ->
+            // v1.0.6.2 (F9b): Ask AI is a full page now. It shares
+            // the READER entry's view models (same AiSheetViewModel
+            // the reader bound to the chapter on screen, same
+            // ReaderViewModel for the translation toggles), so the
+            // features behave exactly as they did in the sheet.
+            val bookId = entry.arguments?.getLong("bookId") ?: 0L
+            val chapterIndex = entry.arguments?.getInt("chapterIndex") ?: 0
+            val readerEntry = runCatching {
+                navController.getBackStackEntry("reader/{bookId}/{chapterIndex}")
+            }.getOrNull()
+            if (readerEntry == null) {
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    navController.popBackStack()
+                }
+                return@composable
+            }
+            val readerViewModel =
+                androidx.lifecycle.viewmodel.compose.viewModel<ReaderViewModel>(
+                    viewModelStoreOwner = readerEntry,
+                    key = "reader-$bookId-$chapterIndex",
+                    factory = ReaderViewModel.factory(container, bookId, chapterIndex)
+                )
+            val aiViewModel =
+                androidx.lifecycle.viewmodel.compose.viewModel<
+                    app.xreader.ui.ai.AiSheetViewModel>(
+                    viewModelStoreOwner = readerEntry,
+                    key = "ai-$bookId",
+                    factory = app.xreader.ui.ai.AiSheetViewModel
+                        .factory(container, bookId)
+                )
+            val readerState by readerViewModel.state
+                .collectAsStateWithLifecycle()
+            app.xreader.ui.ai.AiPage(
+                viewModel = aiViewModel,
+                showingTranslation = readerState.showingTranslation,
+                onShowOriginal = { readerViewModel.showOriginalChapter() },
+                onShowTranslation = { readerViewModel.showTranslatedChapter() },
+                onBack = { navController.popBackStack() }
             )
         }
         composable("appearance") {
@@ -1163,7 +1218,10 @@ private fun XreaderNavHost(
             LabsScreen(container = container, onBack = { navController.popBackStack() })
         }
         composable("about") {
-            AboutScreen(onBack = { navController.popBackStack() })
+            AboutScreen(
+                onBack = { navController.popBackStack() },
+                container = container
+            )
         }
     }
 }
@@ -1177,6 +1235,7 @@ private fun selectedTab(navController: NavHostController): Tab {
             route == "providers" || route == "sync" || route == "profile" ||
             route == "migration" || route == "customise" || route == "more" -> Tab.Me
         route?.startsWith("book/") == true || route?.startsWith("reader/") == true ||
+            route?.startsWith("ai/") == true ||
             route?.startsWith("lore/") == true || route == "updates" ||
             route?.startsWith("tag/") == true || route == "vocab" -> Tab.Library
         route?.startsWith("opds/") == true || route == "opdsServers" ||
@@ -1238,9 +1297,18 @@ private fun FloatingNavBar(
         Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
+            // v1.0.6.2 (F7 lift): the floating pill floats the
+            // shared extra amount above the navigation inset —
+            // the same height language as the reader's bottom bar.
             .padding(
-                horizontal = if (docked) 0.dp else 16.dp,
-                vertical = if (docked) 0.dp else 10.dp
+                start = if (docked) 0.dp else 16.dp,
+                end = if (docked) 0.dp else 16.dp,
+                top = if (docked) 0.dp else 10.dp,
+                bottom = if (docked) {
+                    0.dp
+                } else {
+                    10.dp + app.xreader.ui.theme.FloatingChromeLift
+                }
             )
     ) {
         Surface(

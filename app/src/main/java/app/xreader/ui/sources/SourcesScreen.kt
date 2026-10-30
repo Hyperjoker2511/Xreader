@@ -43,7 +43,6 @@ import app.xreader.data.db.OpdsServer
 import app.xreader.data.db.TrustState
 import app.xreader.data.extension.HealthDot
 import app.xreader.data.extension.SourceHealthRecord
-import app.xreader.data.extension.SourceHealthState
 import app.xreader.data.extension.healthDot
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
@@ -200,12 +199,6 @@ fun SourcesScreen(
             item {
                 GlassCard(onClick = onOpenStore, bouncePress = true) {
                     Text("Source store", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Repositories of sources to install — your pinned " +
-                            "and recent ones first.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
             item {
@@ -213,12 +206,6 @@ fun SourcesScreen(
                     Text(
                         "Library servers (OPDS)",
                         style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        "Add or remove Komga, Kavita and Calibre-Web servers. " +
-                            "The ones you have are in the list above.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -246,22 +233,22 @@ private fun SourceRow(
     modifier: Modifier = Modifier
 ) {
     val canOpen = ext.enabled && ext.trustState == TrustState.TRUSTED
+    // v1.0.6.2 (SO1/F8a): action alerts only (re-trust, update,
+    // off) — the health verdict itself now rides the meta line
+    // as a plain word, the same words the Details health card
+    // uses, so the row stays one quiet line.
     val alert: Pair<String, Color>? = when {
         ext.trustState == TrustState.CHANGED_REQUIRES_RETRUST ->
             "Needs re-trust" to MaterialTheme.colorScheme.error
         hasPending -> "Update waiting" to MaterialTheme.colorScheme.error
         !ext.enabled -> "Off" to MaterialTheme.colorScheme.onSurfaceVariant
-        healthRecord?.state == SourceHealthState.BROKEN ->
-            "Not working" to MaterialTheme.colorScheme.error
-        healthRecord?.state == SourceHealthState.NEEDS_SETUP ->
-            "Needs setup" to MaterialTheme.colorScheme.onSurfaceVariant
         else -> null
     }
     val typeLabel = if (ext.packageId.startsWith("link.")) "Link source" else null
     val meta = listOfNotNull(
         ext.languages.split(",").firstOrNull()?.uppercase()
             ?.takeIf { it.isNotBlank() },
-        "v${ext.versionName}",
+        healthRecord?.shortStateWord() ?: "Not checked yet",
         typeLabel
     ).joinToString(" · ")
     GlassCard(

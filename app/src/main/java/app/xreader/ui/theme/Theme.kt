@@ -31,6 +31,16 @@ import dev.chrisbanes.haze.HazeState
  * surface colour at an alpha + a hairline border + a soft shadow —
  * there is no backdrop-blur API anywhere in this design system.
  */
+/**
+ * v1.0.6.2 (F7): the extra lift every floating bottom bar sits
+ * ABOVE the system gesture/navigation inset — one shared amount
+ * so the reader's bottom bar and the main bottom-navigation pill
+ * float at the same height. (The user's phone has a dead strip
+ * at the very bottom of its screen; controls must float clear
+ * of the edge.)
+ */
+val FloatingChromeLift: Dp = 14.dp
+
 data class GlassSettings(
     val opacity: Float = 1.0f,
     val radiusScale: Float = 1.0f,

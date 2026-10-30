@@ -40,9 +40,10 @@ object HistoryBuilder {
         val updatedAtMillis: Long
     )
 
-    /** All history entries for one local day, newest first.
-     * [label] is "Today", "Yesterday", or the day's ISO date
-     * (e.g. "2026-10-25") for anything older. */
+    /** History entries under one plain heading, newest first.
+     * [label] is "Today", "Yesterday", or "Earlier" — v1.0.6.2
+     * (H1): everything older than yesterday gathers under the
+     * one plain word instead of a list of ISO dates. */
     data class DayGroup(
         val label: String,
         val entries: List<HistorySource>
@@ -71,16 +72,17 @@ object HistoryBuilder {
             source.bookId !in hiddenBookIds &&
                 source.updatedAtMillis > clearedBeforeMillis
         }
-        return visible
-            .groupBy { source -> localDate(source.updatedAtMillis, zone) }
-            .entries
-            .sortedByDescending { it.key }
-            .map { (date, daySources) ->
-                DayGroup(
-                    label = labelFor(date, today),
-                    entries = daySources.sortedByDescending { it.updatedAtMillis }
-                )
-            }
+        // Group by the plain label: Today, then Yesterday, then
+        // one merged Earlier bucket (newest first throughout).
+        val byLabel = visible.groupBy { source ->
+            labelFor(localDate(source.updatedAtMillis, zone), today)
+        }
+        return listOf("Today", "Yesterday", "Earlier").mapNotNull { label ->
+            val entries = byLabel[label]
+                ?.sortedByDescending { it.updatedAtMillis }
+                ?: return@mapNotNull null
+            DayGroup(label = label, entries = entries)
+        }
     }
 
     /**
@@ -97,7 +99,6 @@ object HistoryBuilder {
     private fun labelFor(date: LocalDate, today: LocalDate): String = when (date) {
         today -> "Today"
         today.minusDays(1) -> "Yesterday"
-        // LocalDate.toString() IS the ISO date (yyyy-MM-dd).
-        else -> date.toString()
+        else -> "Earlier"
     }
 }

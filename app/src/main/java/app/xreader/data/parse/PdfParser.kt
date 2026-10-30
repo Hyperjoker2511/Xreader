@@ -20,6 +20,13 @@ import java.io.File
 interface PdfTextExtractor {
     /** Extracted plain text per page, in page order. */
     fun extractPages(file: File): AppResult<List<String>>
+
+    /**
+     * v1.0.6.2 (F6a): the PDF's own description metadata (the Info
+     * dictionary's Subject — the PDF equivalent of EPUB's
+     * dc:description), or null when the file carries none.
+     */
+    fun extractDescription(file: File): String? = null
 }
 
 class PdfBoxTextExtractor(context: Context) : PdfTextExtractor {
@@ -53,6 +60,19 @@ class PdfBoxTextExtractor(context: Context) : PdfTextExtractor {
                 AppError.ParseFailed("PDF", "the file couldn't be read", e.javaClass.simpleName)
             )
         }
+    }
+
+    override fun extractDescription(file: File): String? = try {
+        if (!initialised) {
+            PDFBoxResourceLoader.init(appContext)
+            initialised = true
+        }
+        PDDocument.load(file).use { document ->
+            document.documentInformation?.subject
+                ?.trim()?.takeIf { it.isNotEmpty() }
+        }
+    } catch (e: Exception) {
+        null
     }
 }
 
@@ -197,7 +217,7 @@ class PdfBookParser(private val extractor: PdfTextExtractor) : BookParser {
             ParsedBook(
                 title = null,
                 author = null,
-                description = null,
+                description = extractor.extractDescription(staged),
                 language = null,
                 format = BookFormat.PDF,
                 coverFile = null,

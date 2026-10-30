@@ -104,7 +104,11 @@ fun PagedReader(
     onNextChapter: () -> Unit,
     onPreviousChapter: () -> Unit,
     onCenterTap: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** v1.0.6.2 (F7): measured chrome heights — pages are laid
+     * out in the space BETWEEN the bars, never beneath them. */
+    topInset: androidx.compose.ui.unit.Dp = 0.dp,
+    bottomInset: androidx.compose.ui.unit.Dp = 0.dp
 ) {
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer()
@@ -121,7 +125,7 @@ fun PagedReader(
         } else {
             maxWidth - marginH * 2
         }
-        val contentHeight = maxHeight - marginV * 2
+        val contentHeight = maxHeight - marginV * 2 - topInset - bottomInset
         val columnWidthPx = with(density) { columnWidth.toPx() }
         val contentHeightPx = with(density) { contentHeight.toPx() }
 
@@ -317,14 +321,18 @@ fun PagedReader(
         }
 
         val gestureModifier = Modifier
-            .pointerInput(chapterText, config.tapZoneLayout, config.pagedDirection) {
-                detectTapGestures { offset ->
-                    if (System.currentTimeMillis() - lastDragEndMs < 250L) {
-                        return@detectTapGestures
-                    }
+            // v1.0.6.2 (F7): Initial-pass tap observation (see
+            // readerTapToggle) — page taps are decided before any
+            // child handler can swallow them; the drag detector
+            // below is untouched because a tap only consumes its
+            // own up-event after proving it isn't a drag.
+            .readerTapToggle(
+                listOf(chapterText, config.tapZoneLayout, config.pagedDirection)
+            ) { xFraction, yFraction ->
+                if (System.currentTimeMillis() - lastDragEndMs >= 250L) {
                     val action = TapZones.action(
                         config.tapZoneLayout, config.pagedDirection,
-                        offset.x / size.width, offset.y / size.height
+                        xFraction, yFraction
                     )
                     when {
                         action > 0 -> { autoPaused = true; turn(1) }
@@ -403,7 +411,12 @@ fun PagedReader(
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(horizontal = marginH, vertical = marginV)
+                .padding(
+                    start = marginH,
+                    end = marginH,
+                    top = marginV + topInset,
+                    bottom = marginV + bottomInset
+                )
                 .then(gestureModifier)
         ) {
             val displayPage = targetPage ?: currentPage

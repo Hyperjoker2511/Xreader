@@ -46,6 +46,8 @@ import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlaylistRemove
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -105,6 +107,15 @@ fun LibraryScreen(
     val candidates by viewModel.candidates.collectAsStateWithLifecycle()
     // v1.0.1 library power basics: in-library search / sort / filter.
     var query by remember { mutableStateOf("") }
+    // v1.0.6.2 (F6): search is an icon in the header now; the
+    // field itself only appears while searching.
+    var searchOpen by remember { mutableStateOf(false) }
+    val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    androidx.compose.runtime.LaunchedEffect(searchOpen) {
+        if (searchOpen) {
+            runCatching { searchFocus.requestFocus() }
+        }
+    }
     var sort by remember { mutableStateOf(app.xreader.data.library.LibrarySort.RECENTLY_READ) }
     var statusFilter by remember { mutableStateOf("ALL") }
     // v1.0.5 (C1/D20): status + sort + check-for-updates live in
@@ -266,6 +277,17 @@ fun LibraryScreen(
                             )
                         }
                     }
+                    // v1.0.6.2 (F6): the search entry point is a
+                    // small icon here — the full-width field is
+                    // gone; tapping opens the same search.
+                    androidx.compose.material3.IconButton(
+                        onClick = { searchOpen = !searchOpen }
+                    ) {
+                        androidx.compose.material3.Icon(
+                            Icons.Filled.Search,
+                            contentDescription = "Search your library"
+                        )
+                    }
                     XreaderPrimaryButton(text = "+ Add a book", onClick = onAddBook)
                 }
             }
@@ -309,17 +331,37 @@ fun LibraryScreen(
             return@Column
         }
 
-        // The Library's chrome (v1.0.5, C1): header, search, ONE
-        // chip row, then books — nothing else stands between the
-        // reader and their shelves.
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            label = { Text("Search your library") },
-            placeholder = { Text("Title or author") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
+        // The Library's chrome (v1.0.5, C1): header, ONE chip
+        // row, then books — nothing else stands between the
+        // reader and their shelves. v1.0.6.2 (F6): the search
+        // field renders only while searching (opened from the
+        // header icon); its filtering behaviour is unchanged.
+        if (searchOpen) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("Search your library") },
+                placeholder = { Text("Title or author") },
+                singleLine = true,
+                trailingIcon = {
+                    androidx.compose.material3.IconButton(
+                        onClick = {
+                            query = ""
+                            searchOpen = false
+                        }
+                    ) {
+                        androidx.compose.material3.Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Close search"
+                        )
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .androidx.compose.ui.focus.focusRequester(searchFocus)
+            )
+            Spacer(Modifier.height(10.dp))
+        }
         // v1.0.5 (C1/D20): the Library decluttered to ONE chip row.
         // History and Updates left the toolbar — they are bottom-
         // nav tabs already. The shelf rail below is the only row:
@@ -1099,115 +1141,38 @@ private fun ShelfGridCard(
         app.xreader.ui.theme.CoverPaletteExtractor
             .placeholderPalette(shelfBook.book.title).vibrant
     }
-    GlassCard(modifier = modifier) {
-        Column(
-            Modifier
-                .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
-                // R30: covers lean toward the touch, subtly.
-                .pressTilt(),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Box(
-                if (coverGlow && glowColor != null) {
-                    Modifier.drawBehind {
-                        drawCircle(
-                            brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                                listOf(
-                                    glowColor.copy(alpha = 0.55f),
-                                    androidx.compose.ui.graphics.Color.Transparent
-                                ),
-                                radius = size.maxDimension * 0.8f
-                            ),
-                            radius = size.maxDimension * 0.8f
-                        )
-                    }
-                } else {
-                    Modifier
-                }
-            ) {
-                if (cover != null && cover.exists()) {
-                    AsyncImage(
-                        model = cover,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(150.dp)
-                    )
-                } else {
-                    PlaceholderCover(
-                        title = shelfBook.book.title,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(150.dp)
-                    )
-                }
-                if (newChapters > 0) {
-                    Box(
-                        Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(6.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(MaterialTheme.colorScheme.primary)
-                            .padding(horizontal = 7.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            "+$newChapters",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                    }
-                }
-                if (favourite || selected == true) {
-                    Box(
-                        Modifier
-                            .align(Alignment.TopStart)
-                            .padding(6.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            if (selected == true) "✓" else "♥",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            }
-            // v1.0.6: the title always gets a full two-line
-            // area (minLines keeps short titles from shrinking
-            // the card, so rows align) and overflows with an
-            // ellipsis — the default clip used to cut titles
-            // mid-word ("I Fell into the Martial").
-            Text(
-                shelfBook.book.title,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 2,
-                minLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                "${shelfBook.book.totalChapters} chapters",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (downloaded > 0) {
-                Text(
-                    "$downloaded/${shelfBook.book.totalChapters} downloaded" +
-                        if (unreadDownloaded > 0) " · $unreadDownloaded unread" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (showProgress && shelfBook.fraction > 0f) {
-                LinearProgressIndicator(
-                    progress = { shelfBook.fraction },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
+    // v1.0.6.2 (F6 + S1): the shared poster card — the cover IS
+    // the card (2:3, full-bleed, no slab), title below in a fixed
+    // two-line area, ONE metadata line, progress as a thin line.
+    // The unread count rides the same line as the chapter count
+    // (the spec's "3228 chapters · 12 unread" shape).
+    val unread = shelfBook.book.totalChapters -
+        (shelfBook.fraction * shelfBook.book.totalChapters).toInt()
+    val metaLine = buildString {
+        append("${shelfBook.book.totalChapters} chapters")
+        if (downloaded > 0) append(" · $downloaded downloaded")
+        if (shelfBook.fraction > 0f && shelfBook.fraction < 1f && unread > 0) {
+            append(" · $unread unread")
         }
     }
+    app.xreader.ui.common.BookPosterCard(
+        title = shelfBook.book.title,
+        author = shelfBook.book.author.takeIf { it.isNotBlank() },
+        coverModel = cover?.takeIf { it.exists() },
+        metaLine = metaLine,
+        onClick = onOpen,
+        onLongClick = onLongPress,
+        progressFraction = if (showProgress) shelfBook.fraction else null,
+        topEndBadge = if (newChapters > 0) "+$newChapters" else null,
+        topStartBadge = when {
+            selected == true -> "✓"
+            favourite -> "♥"
+            else -> null
+        },
+        glowColor = if (coverGlow) glowColor else null,
+        tilt = true,
+        modifier = modifier
+    )
 }
 
 private fun CandidateState.token(): String = when (this) {
