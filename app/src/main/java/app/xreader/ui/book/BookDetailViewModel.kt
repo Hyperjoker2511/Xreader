@@ -330,11 +330,64 @@ class BookDetailViewModel(
         ) {
             return
         }
+        launchGrow(book, current.chapters.size +
+            app.xreader.data.extension.SourceBookSync.EDGE_TARGET)
+    }
+
+    /** v1.0.8 (recommendation): searching a chapter NUMBER
+     * past the loaded edge loads forward until the list
+     * reaches it — the search must not silently miss a
+     * chapter just because it hasn't loaded yet. */
+    fun onChapterNumberSearch(number: Int) {
+        val current = state.value
+        val book = current.book ?: return
+        if (book.chapterListComplete) return
+        if (number <= current.chapters.size) return
+        launchGrow(book, number + 10)
+    }
+
+    private fun launchGrow(book: app.xreader.data.db.Book, target: Int) {
         if (edgeJob?.isActive == true) return
-        val target = current.chapters.size +
-            app.xreader.data.extension.SourceBookSync.EDGE_TARGET
         edgeJob = viewModelScope.launch {
             container.sourceBookSync.ensureChapters(book, target)
+        }
+    }
+
+    /** v1.0.8 (recommendation): the manual complete-the-list
+     * door on a partially loaded book — for when he wants to
+     * browse or search the WHOLE list now, without
+     * downloading anything. Mirrors Refresh's state handling. */
+    fun loadFullChapterList() {
+        viewModelScope.launch {
+            val book = container.database.bookDao().getById(bookId)
+                ?: return@launch
+            if (book.sourceType != app.xreader.data.db.SourceType.EXTENSION) {
+                return@launch
+            }
+            if (book.chapterListComplete) return@launch
+            storyLocal.value = storyLocal.value.copy(
+                chaptersLoading = true, chaptersError = null
+            )
+            when (
+                val result = container.sourceBookSync.completeChapters(book)
+            ) {
+                is app.xreader.core.error.AppResult.Ok -> {
+                    storyLocal.value = storyLocal.value.copy(
+                        chaptersLoading = false
+                    )
+                    _messages.tryEmit(
+                        "Full chapter list loaded — " +
+                            "${result.value.totalChapters} chapters"
+                    )
+                }
+                is app.xreader.core.error.AppResult.Err -> {
+                    storyLocal.value = storyLocal.value.copy(
+                        chaptersLoading = false,
+                        chaptersError = app.xreader.core.error.ErrorText
+                            .displayText(result.error)
+                    )
+                }
+            }
         }
     }
 

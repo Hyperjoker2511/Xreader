@@ -573,6 +573,32 @@ fun BookDetailScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    // v1.0.8 (recommendation): a partially
+                    // loaded book says so plainly — the count
+                    // above is what's on the device so far, not
+                    // the book's full length — and the whole
+                    // list is one tap away when he wants it
+                    // (browsing, search and the part chips only
+                    // see loaded chapters until then).
+                    if (section.kind == ChaptersSectionKind.LIST &&
+                        !book.chapterListComplete
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                "More chapters load as you read",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TextButton(
+                                onClick = { viewModel.loadFullChapterList() }
+                            ) {
+                                Text("Load full list")
+                            }
+                        }
+                    }
                     // v1.0.7 (draw-check ask): search + filters
                     // on long lists — search by title or chapter
                     // number, narrow by read/downloaded state,
@@ -583,7 +609,15 @@ fun BookDetailScreen(
                     ) {
                         androidx.compose.material3.OutlinedTextField(
                             value = chapterQuery,
-                            onValueChange = { chapterQuery = it },
+                            onValueChange = { value ->
+                                chapterQuery = value
+                                // v1.0.8 (recommendation): a
+                                // chapter-number search past the
+                                // loaded edge loads forward to it.
+                                value.trim().toIntOrNull()?.let { number ->
+                                    viewModel.onChapterNumberSearch(number)
+                                }
+                            },
                             label = { Text("Search chapters") },
                             placeholder = {
                                 Text("Title or chapter number")
