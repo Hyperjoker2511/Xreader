@@ -382,7 +382,7 @@ class V1061FixTest {
     fun `a cleared health record is gone from the stored map`() =
         runBlocking {
             val prefs = SourcePrefs(FakePreferencesStore())
-            val key = SourceHealthRecord.key("ext-1", "src-1")
+            val key = SourceHealthRecord.key(7L, "src-1")
             prefs.setSourceHealth(
                 key, SourceHealthRecord(SourceHealthState.BROKEN)
             )
