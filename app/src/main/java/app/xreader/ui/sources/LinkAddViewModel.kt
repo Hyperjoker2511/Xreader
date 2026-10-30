@@ -81,7 +81,7 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             // v1.0.5 (A10): the failure copy may only mention
             // the AI detector when its button will render.
-            _state.value = when (val outcome = container.linkProber.probe(
+            var outcome = container.linkProber.probe(
                 rawUrl, aiAvailable = aiAvailable.value,
                 // v1.0.6.2 (F5): a borderline-shaped book list
                 // gets one AI verify call per run; it returns
@@ -90,7 +90,31 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
                 semanticVerifier = { titles, excerpt ->
                     container.selectorAi.verifySample(titles, excerpt)
                 }
-            )) {
+            )
+            // v1.0.7: AUTOMATIC escalation — a plain check that
+            // couldn't prove the site (app-built pages whose
+            // chapter list only exists after the site's scripts
+            // run) is retried ONCE through the browser view, by
+            // itself. The user never picks a mode and never sees
+            // the intermediate failure; the screen just keeps
+            // showing the checking state. The retry spends no AI
+            // verify call (its lists judge on their own shape).
+            if (outcome is LinkProber.Outcome.Failed &&
+                outcome.renderWorthTrying
+            ) {
+                app.xreader.data.extension.DiagnosticLog.record(
+                    "add from link",
+                    "the plain check couldn't prove this site — " +
+                        "checking again through the browser view",
+                    outcome.message
+                )
+                outcome = container.linkProber.probe(
+                    rawUrl,
+                    aiAvailable = aiAvailable.value,
+                    forceRender = true
+                )
+            }
+            _state.value = when (outcome) {
                 is LinkProber.Outcome.Ready -> LinkAddUiState.Ready(
                     draft = outcome.draft,
                     sourceName = outcome.draft.config.name

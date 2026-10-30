@@ -216,7 +216,8 @@ class HostContextFactory(
         needsRendering: () -> Boolean = { false },
         permissions: () -> ExtensionPermissions,
         rateLimiter: RateLimiter,
-        onRuntimeShell: (() -> Unit)? = null
+        onRuntimeShell: (() -> Unit)? = null,
+        forceRender: Boolean = false
     ): EscalatingPageFetcher? {
         val renderer = renderedFetcher ?: return null
         val runtime = renderRuntime ?: return null
@@ -229,7 +230,8 @@ class HostContextFactory(
             permissions = permissions,
             rateLimiter = rateLimiter,
             gate = runtime.gate(),
-            onRuntimeShell = onRuntimeShell
+            onRuntimeShell = onRuntimeShell,
+            forceRender = forceRender
         )
     }
 

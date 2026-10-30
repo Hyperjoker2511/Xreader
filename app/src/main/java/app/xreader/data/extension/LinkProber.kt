@@ -179,7 +179,16 @@ class LinkProber(
         data class Failed(
             val message: String,
             val proposersTried: List<String> = emptyList(),
-            val stageLines: List<StageLine> = emptyList()
+            val stageLines: List<StageLine> = emptyList(),
+            /** v1.0.7: the plain probe failed, a renderer is
+             * wired and permitted, and nothing was rendered yet
+             * — one automatic retry through the browser view is
+             * worth it (the Add-from-link flow takes it without
+             * asking; the user never picks a mode). Never set
+             * on a probe that itself ran forced, on early
+             * refusals (bad link, login, connection), or when no
+             * render could actually happen. */
+            val renderWorthTrying: Boolean = false
         ) : Outcome
     }
 
@@ -212,9 +221,15 @@ class LinkProber(
         // null = the AI is unavailable (no key, feature off,
         // call failed) and the deterministic verdict stands.
         // Null (the default) = no AI check is wired in.
-        semanticVerifier: (suspend (List<String>, String) -> Boolean?)? = null
+        semanticVerifier: (suspend (List<String>, String) -> Boolean?)? = null,
+        // v1.0.7: run this probe through the browser view from
+        // the first fetch (the automatic escalation retry — see
+        // Outcome.Failed.renderWorthTrying). The saved source
+        // is marked needsRendering when the drive passes, as
+        // with any rendered probe (TR1/Q5).
+        forceRender: Boolean = false
     ): Outcome = withContext(Dispatchers.Default) {
-        probeImpl(rawUrl, aiAvailable, tryAllProposers, semanticVerifier)
+        probeImpl(rawUrl, aiAvailable, tryAllProposers, semanticVerifier, forceRender = forceRender)
     }
 
     /** The probe itself; see [probe] for the contract. Always
@@ -226,7 +241,8 @@ class LinkProber(
         aiAvailable: Boolean = false,
         tryAllProposers: Boolean = false,
         semanticVerifier: (suspend (List<String>, String) -> Boolean?)? = null,
-        walkedIn: Boolean = false
+        walkedIn: Boolean = false,
+        forceRender: Boolean = false
     ): Outcome {
         val url = normaliseUrl(rawUrl)
         if (url == null) {
@@ -256,7 +272,7 @@ class LinkProber(
         // view once, and the RENDERED page is what gets studied
         // below. With no renderer wired (or the policy saying no)
         // the probe runs on the static client exactly as before.
-        val stack = probeStack(host)
+        val stack = probeStack(host, forceRender = forceRender)
         val escalating = stack.escalating
         val fetcher = stack.fetcher
         val context = probeContext(fetcher, host)
@@ -497,7 +513,17 @@ class LinkProber(
                 ?: Outcome.Failed(
                     bestFailure?.takeIf { it.first >= 2 }?.second ?: message,
                     proposersTried.toList(),
-                    outcomeLines()
+                    outcomeLines(),
+                    // v1.0.7: a stage failure with a renderer
+                    // wired, permitted, and untouched is worth
+                    // ONE rendered retry (the caller's call —
+                    // the Add-from-link flow takes it
+                    // automatically). A probe that already ran
+                    // forced never asks for another.
+                    renderWorthTrying = !forceRender &&
+                        escalating != null &&
+                        !escalating.renderedAny &&
+                        escalating.renderAvailable()
                 )
 
         // ── v1.0.5 (A11): the known-sites fast lane ─────────────
@@ -585,7 +611,8 @@ class LinkProber(
             ) {
                 val walked = walkInFromListing(
                     listing, bookDoc, host, aiAvailable,
-                    tryAllProposers, semanticVerifier
+                    tryAllProposers, semanticVerifier,
+                    forceRender = forceRender
                 )
                 if (walked != null) return walked
                 // v1.0.6.3 (P6): ONE more hop — a home page may
@@ -615,7 +642,8 @@ class LinkProber(
                             if (catListing != null) {
                                 val walkedCatalogue = walkInFromListing(
                                     catListing, catDoc, host, aiAvailable,
-                                    tryAllProposers, semanticVerifier
+                                    tryAllProposers, semanticVerifier,
+                                    forceRender = forceRender
                                 )
                                 if (walkedCatalogue != null) {
                                     return walkedCatalogue
@@ -1021,13 +1049,15 @@ class LinkProber(
         host: String,
         aiAvailable: Boolean,
         tryAllProposers: Boolean,
-        semanticVerifier: (suspend (List<String>, String) -> Boolean?)?
+        semanticVerifier: (suspend (List<String>, String) -> Boolean?)?,
+        forceRender: Boolean = false
     ): Outcome? {
         val firstBook = firstListingBookUrl(bookDoc, listing) ?: return null
         if (CookieParsing.hostOf(firstBook) != host) return null
         val inner = probeImpl(
             firstBook, aiAvailable, tryAllProposers,
-            semanticVerifier = semanticVerifier, walkedIn = true
+            semanticVerifier = semanticVerifier, walkedIn = true,
+            forceRender = forceRender
         )
         return when (inner) {
             is Outcome.Ready -> inner.copy(
@@ -1538,6 +1568,40 @@ class LinkProber(
                 )
             )
         }
+        // v1.0.7 (the wetriedtls lesson): the FURNITURE guard.
+        // A candidate can clear every check above with a
+        // chapter list that is not a chapter list at all: on
+        // app-built sites the book page's server HTML carries
+        // details and synopsis but the real chapter list loads
+        // with the page's scripts — so inference settles for a
+        // rail of OTHER BOOKS (same URL shape as the book page
+        // itself), and the "chapter text" it samples is the
+        // book's own synopsis, which passes the prose gate
+        // because a synopsis IS prose. On-device proof
+        // 2026-10-30: title read as the site's brand, "13
+        // chapters" were book cards, the preview was the
+        // synopsis. When the rows are book-page-shaped, the
+        // candidate fails HERE, at the list step — and the
+        // probe's failure is marked worth a rendered retry, so
+        // the flow escalates to the browser view (where the
+        // real list exists) instead of saving furniture. The
+        // lane stays exempt, like the F5 and prose gates.
+        if (!laneVerified &&
+            chapterRowsAreBookPages(bookUrl, chapters.map { it.id })
+        ) {
+            return ScoredDrive(
+                1,
+                AppResult.Err(
+                    AppError.BadFile(
+                        "The test read found links on that page, but they lead to " +
+                            "other books — not to this book's chapters. The real " +
+                            "chapter list on this site loads after the page opens, " +
+                            "so it wasn't in the page Xreader read. Rules like " +
+                            "that weren't saved."
+                    )
+                )
+            )
+        }
         // A3: skip lock-marked chapters when sampling text.
         // v1.0.6.1 (P4): the lock read is TRI-STATE now. It
         // used to fail OPEN — a thrown lock read became an
@@ -1817,6 +1881,9 @@ class LinkProber(
 
     private fun probeStack(
         host: String,
+        forceRender: Boolean = false,
+        // needsRendering stays LAST: three call sites pass it
+        // as a trailing lambda.
         needsRendering: () -> Boolean = { false }
     ): ProbeStack {
         val limiter = RateLimiter(minIntervalMs = 0)
@@ -1832,7 +1899,8 @@ class LinkProber(
             purpose = RenderPurpose.PROBE,
             needsRendering = needsRendering,
             permissions = { ExtensionPermissions(domains = listOf(host)) },
-            rateLimiter = limiter
+            rateLimiter = limiter,
+            forceRender = forceRender
         )
         return ProbeStack(client, escalating)
     }
@@ -1925,6 +1993,52 @@ class LinkProber(
                 if (CATALOGUE_WORDS.any { text.contains(it) }) return href
             }
             return null
+        }
+
+        /** v1.0.7: are these "chapter rows" actually links to
+         * other BOOK pages? True when at least 3 rows remain
+         * after dropping any row that points at the book page
+         * itself, and at least half of them share the book
+         * URL's path SHAPE (same segment count, same static
+         * segments, final segment free) without containing the
+         * book's own final segment (its slug) anywhere in
+         * their path. The slug condition is what keeps a pasted
+         * CHAPTER link safe: its sibling chapters live under
+         * the book's slug, so they contain it and never judge
+         * as furniture. Real chapter lists differ in shape
+         * (…/book/<slug>/<id>, …/novel/<slug>/chapter-1,
+         * /chapter/<id>) and never judge either. Book URLs
+         * with fewer than two path segments are never judged —
+         * not enough shape to tell. Pure: unit-tested. */
+        fun chapterRowsAreBookPages(
+            bookUrl: String,
+            chapterUrls: List<String>
+        ): Boolean {
+            fun segmentsOf(url: String): List<String> =
+                runCatching { URI(url).path }
+                    .getOrNull()
+                    ?.trim('/')
+                    ?.split('/')
+                    ?.filter { it.isNotBlank() }
+                    ?: emptyList()
+            fun comparable(url: String): String =
+                url.substringBefore('#').trim().trimEnd('/')
+                    .lowercase()
+            val bookSegments = segmentsOf(bookUrl)
+            if (bookSegments.size < 2) return false
+            val slug = bookSegments.last().lowercase()
+            val bookShape = bookSegments.dropLast(1).map { it.lowercase() }
+            val rows = chapterUrls.filter {
+                comparable(it) != comparable(bookUrl)
+            }
+            if (rows.size < 3) return false
+            val bookShaped = rows.count { row ->
+                val segs = segmentsOf(row)
+                segs.size == bookSegments.size &&
+                    segs.dropLast(1).map { it.lowercase() } == bookShape &&
+                    segs.none { it.lowercase() == slug }
+            }
+            return bookShaped * 2 >= rows.size
         }
 
         /** v1.0.6: the plain-words failure when the CONNECTION

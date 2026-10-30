@@ -58,7 +58,13 @@ class EscalatingPageFetcher(
     /** TR4: fired when an UNMARKED source serves a shell at runtime
      * (the caller records "this source now needs the browser view";
      * the config itself is never flipped silently). */
-    private val onRuntimeShell: (() -> Unit)? = null
+    private val onRuntimeShell: (() -> Unit)? = null,
+    /** v1.0.7: the caller already KNOWS the static page cannot
+     * prove itself (a probe whose plain drive failed on page
+     * furniture) — render every fetch first, policy permitting.
+     * RenderPolicy's own table is untouched: its PROBE mode
+     * still never renders first on its own. */
+    private val forceRender: Boolean = false
 ) : PageFetcher {
 
     private val rendered = AtomicBoolean(false)
@@ -80,6 +86,9 @@ class EscalatingPageFetcher(
         headers: Map<String, String>
     ): AppResult<HostResponse> {
         val mode = RenderPolicy.mode(inputs())
+        if (forceRender && mode != RenderMode.STATIC_ONLY) {
+            return render(url)
+        }
         if (RenderPolicy.rendersFirst(mode)) {
             return render(url)
         }
@@ -119,4 +128,13 @@ class EscalatingPageFetcher(
         rateLimiter.awaitTurn()
         return renderedFetcher.fetchRendered(url, sessionKey, permissions())
     }
+
+    /** v1.0.7: could a render actually happen through this
+     * fetcher right now? (The renderer being wired is a given —
+     * this instance only exists then; this checks the POLICY:
+     * master switch, background work, performance tier.) The
+     * prober uses it to mark a failure "worth one rendered
+     * retry" only when the retry could really render. */
+    fun renderAvailable(): Boolean =
+        RenderPolicy.mode(inputs()) != RenderMode.STATIC_ONLY
 }
