@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -408,6 +409,52 @@ class V107FurnitureTest {
             assertEquals(4, ready.draft.testDrive.chapterCount)
             assertTrue(
                 ready.draft.testDrive.chapterTextLength > 200
+            )
+        }
+
+    // ── TEMPORARY staged diagnostics (gate run isolates the
+    // failing stage of the forced walk-in; removed once known)
+    @Test
+    fun `diag D1 listing analysis reads the rendered home`() {
+        val doc = org.jsoup.Jsoup.parse(
+            ShellHomeSite.RENDERED_HOME, ShellHomeSite.HOME_URL
+        )
+        val listing = LinkInference.analyseListingPage(
+            doc, ShellHomeSite.HOME_URL, null
+        )
+        assertNotNull("listing analysis was null", listing)
+        assertEquals(4, listing!!.count)
+    }
+
+    @Test
+    fun `diag D2 book analysis reads the rendered book`() {
+        val doc = org.jsoup.Jsoup.parse(
+            ShellHomeSite.RENDERED_BOOK, ShellHomeSite.BOOK_URL
+        )
+        val analysis = LinkInference.analyseBookPage(
+            doc, ShellHomeSite.BOOK_URL
+        )
+        assertNotNull("book analysis was null", analysis)
+        assertEquals(4, analysis!!.chapterCount)
+    }
+
+    @Test
+    fun `diag D3 forced probe of the book url directly`() =
+        runBlocking {
+            val prober = LinkProber(
+                factory(
+                    ShellHomeSite.transport(),
+                    ShellHomeSite.renderer(),
+                    runtime()
+                ),
+                testSessionStore()
+            )
+            val outcome = prober.probe(
+                ShellHomeSite.BOOK_URL, forceRender = true
+            )
+            assertTrue(
+                "expected Ready, was $outcome",
+                outcome is LinkProber.Outcome.Ready
             )
         }
 
