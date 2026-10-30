@@ -73,11 +73,24 @@ object FamilyTemplates {
 
     // ── Madara (WordPress) ──────────────────────────────────
     //
-    // Port of MadaraPlugin: the site root is the archive
-    // (m_orderby listings), search is the WordPress ?s= form,
+    // Port of MadaraPlugin, corrected against the generator's
+    // compiled form (six sampled plugins, identical class):
+    // listings are the WordPress search endpoint walked by
+    // /page/{n}/ (an empty query lists the whole wp-manga
+    // archive; latest appends m_orderby=latest), search is the
+    // stock ?s= form Xreader's own Madara spec also uses,
+    // items are .page-item-detail / .c-tabs-item__content with
+    // the title link inside .post-title, covers prefer the
+    // lazy-load attributes (data-lazy-src, then data-src),
     // details come from the summary block, chapters from the
-    // book page's li.wp-manga-chapter rows (newest first), and
-    // the reading text is .reading-content .text-left.
+    // book page's .wp-manga-chapter rows (newest first — the
+    // generator reverses them, and numbers them by position),
+    // and the reading text chain is .text-left → .text-right →
+    // .entry-content. The generator's chapter list itself is a
+    // POST endpoint (see the file header's known limit); the
+    // options it reads (useNewChapterEndpoint, hasLocked,
+    // browserHeaders, customJs, resolveCoverDataUri) have no
+    // declarative expression and are ignored here.
 
     private fun madara(
         base: String,
@@ -86,17 +99,14 @@ object FamilyTemplates {
         lang: String,
         options: Map<String, String>
     ): DeclarativeConfig {
-        val prefix = options["pathPrefix"] ?: options["seriesPath"]
-            ?: options["novelPath"] ?: options["mangaPath"] ?: ""
-        val archive = if (prefix.isBlank()) base else "$base/$prefix"
-        val searchPath = options["searchPath"] ?: "/"
-        val searchBase = if (searchPath == "/") base else "$base$searchPath"
         val listing = ListSpec(
-            url = "$archive/?m_orderby=views&page={page}",
-            results = ".page-item-detail, .manga-card, article, .post, li[data-post-id]",
+            url = "$base/page/{page}/?s=&post_type=wp-manga",
+            results = ".page-item-detail, .c-tabs-item__content, " +
+                ".manga-card, article, .post, li[data-post-id]",
             title = ".post-title a@text",
-            link = "a@href",
-            cover = ".item-thumb img@data-src || .item-thumb img@src"
+            link = ".post-title a@href || a@href",
+            cover = "img@data-lazy-src || img@data-src || img@src",
+            nextPage = ".wp-pagenavi a, .pagination a, .c-pagination a"
         )
         return DeclarativeConfig(
             id = "lnreader.$pluginId",
@@ -104,35 +114,40 @@ object FamilyTemplates {
             lang = lang.ifBlank { "en" },
             baseUrl = base,
             search = ListSpec(
-                url = "$searchBase?s={query}&post_type=wp-manga&m_orderby=views",
+                url = "$base/page/{page}/?s={query}&post_type=wp-manga",
                 results = listing.results,
                 title = listing.title,
                 link = listing.link,
-                cover = listing.cover
+                cover = listing.cover,
+                nextPage = listing.nextPage
             ),
             popular = listing,
             latest = ListSpec(
-                url = "$archive/?m_orderby=latest&page={page}",
+                url = "$base/page/{page}/?s=&post_type=wp-manga&m_orderby=latest",
                 results = listing.results,
                 title = listing.title,
                 link = listing.link,
-                cover = listing.cover
+                cover = listing.cover,
+                nextPage = listing.nextPage
             ),
             details = DetailsSpec(
-                title = ".post-title h1 || h1",
-                author = ".author-content a@text",
+                title = ".post-title h1 || #manga-title h1 || h1",
+                author = ".author-content a@text || " +
+                    ".manga-authors a@text || .manga-author a@text",
                 description = ".summary__content@text",
-                cover = ".summary_image img@data-src || .summary_image img@src",
+                cover = ".summary_image img@data-lazy-src || " +
+                    ".summary_image img@data-src || .summary_image img@src",
                 chapters = ChapterListSpec(
-                    list = "li.wp-manga-chapter",
+                    list = ".wp-manga-chapter",
                     name = "a@text",
                     link = "a@href",
-                    date = ".chapter-release-date i@text",
-                    reverse = options["chaptersOrderBy"] != "asc"
+                    date = "span.chapter-release-date@text",
+                    reverse = true
                 )
             ),
             chapter = ChapterSpec(
-                content = ".reading-content .text-left || .text-left || .reading-content",
+                content = ".text-left || .text-right || .entry-content || " +
+                    ".reading-content",
                 remove = listOf(
                     ".ad", ".ads", "div.code-block", ".sharedaddy",
                     ".jp-relatedposts", ".wp-manga-reader-pagination",

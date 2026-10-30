@@ -304,27 +304,30 @@ class V109RepoLiveTest {
             options = mapOf("useNewChapterEndpoint" to "true")
         )!!
         assertEquals("lnreader.arnovel", madara.id)
+        // The generator's proven listing shapes: the WordPress
+        // search endpoint walked by /page/{n}/ (latest appends
+        // its ordering), NOT the theme's m_orderby archive.
         assertEquals(
-            "https://ar-no.com/?m_orderby=views&page={page}",
+            "https://ar-no.com/page/{page}/?s=&post_type=wp-manga",
             madara.popular!!.url
         )
         assertEquals(
-            "https://ar-no.com?s={query}&post_type=wp-manga&m_orderby=views",
+            "https://ar-no.com/page/{page}/?s=&post_type=wp-manga&m_orderby=latest",
+            madara.latest!!.url
+        )
+        assertEquals(
+            "https://ar-no.com/page/{page}/?s={query}&post_type=wp-manga",
             madara.search!!.url
         )
         assertTrue(madara.details.chapters.reverse)
+        assertEquals(".wp-manga-chapter", madara.details.chapters.list)
         assertEquals(
-            ".reading-content .text-left || .text-left || .reading-content",
+            ".text-left || .text-right || .entry-content || .reading-content",
             madara.chapter.content
         )
-
-        val madaraPrefixed = FamilyTemplates.configFor(
-            family = "madara", pluginId = "some", site = "https://s.example",
-            name = "S", lang = "en", options = mapOf("pathPrefix" to "series")
-        )!!
         assertEquals(
-            "https://s.example/series/?m_orderby=views&page={page}",
-            madaraPrefixed.popular!!.url
+            "img@data-lazy-src || img@data-src || img@src",
+            madara.popular!!.cover
         )
 
         val lnwp = FamilyTemplates.configFor(
