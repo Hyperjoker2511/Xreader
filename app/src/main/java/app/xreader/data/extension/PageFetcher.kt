@@ -1,5 +1,6 @@
 package app.xreader.data.extension
 
+import app.xreader.core.error.AppError
 import app.xreader.core.error.AppResult
 import app.xreader.extensionapi.HostResponse
 import java.util.concurrent.atomic.AtomicBoolean
@@ -130,10 +131,66 @@ class EscalatingPageFetcher(
 
     private suspend fun render(url: String): AppResult<HostResponse> {
         rendered.set(true)
+        val hint = waitForSelector()
+        val first = renderOnce(url, hint)
+        if (hint == null || first !is AppResult.Ok) return first
+        if (renderCarriesHint(first.value.body, url, hint)) return first
+        // v1.0.9.1: the render came back WITHOUT the content it
+        // was told to wait for. That is a real outcome, not a
+        // contradiction: the wait is capped (RenderSettle's
+        // HINT_WAIT_MAX_MS) well inside the render's hard
+        // timeout, so on a slow connection an app-shell page can
+        // settle on its chrome alone — header/footer clear both
+        // shell bands (anchors >= 5, text >= 120) while the data
+        // the caller reads is still in flight — and the browser
+        // view's own shell verdict passes that chrome as a built
+        // page. The caller's parse then finds nothing and, for a
+        // listing, reports a legitimately-looking EMPTY
+        // catalogue (the chikari.moe v1.0.9 device failure: the
+        // hint reached the renderer, the catalogue still came
+        // back empty). A render that never produced its
+        // waited-for content must not be handed over as content:
+        // render once more (the retry's settle window is a fresh
+        // wait, and the site's scripts are cached by then), and
+        // if the content still isn't there, fail the fetch the
+        // way the browser view itself fails a page that never
+        // built itself — an honest, retryable error instead of
+        // a silent empty page.
+        val second = renderOnce(url, hint)
+        if (second !is AppResult.Ok) return second
+        if (renderCarriesHint(second.value.body, url, hint)) return second
+        return AppResult.Err(
+            AppError.ProviderDown(
+                "browser view",
+                retryable = true,
+                detail = "the page never finished building itself"
+            )
+        )
+    }
+
+    private suspend fun renderOnce(
+        url: String,
+        hint: String?
+    ): AppResult<HostResponse> {
         rateLimiter.awaitTurn()
         return renderedFetcher.fetchRendered(
-            url, sessionKey, permissions(), waitForSelector()
+            url, sessionKey, permissions(), hint
         )
+    }
+
+    /** Whether a rendered [body] actually contains the content
+     * its wait-for [selector] promised. A selector that cannot
+     * be run (or a body that cannot be parsed) is NOT evidence
+     * the wait failed — the page is accepted, exactly as
+     * before this check existed. */
+    private suspend fun renderCarriesHint(
+        body: String,
+        url: String,
+        selector: String
+    ): Boolean = withContext(Dispatchers.Default) {
+        runCatching {
+            Jsoup.parse(body, url).select(selector).isNotEmpty()
+        }.getOrDefault(true)
     }
 
     /** v1.0.7: could a render actually happen through this

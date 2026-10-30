@@ -268,11 +268,34 @@ val ElectricVioletScheme = scheme(
     aiTextDark = Color(0xFFFF8FAB), aiTextLight = Color(0xFFB0123F)
 )
 
+/**
+ * Nocturne Violet (user's Stitch design system, 2026-10-30): the
+ * prose spec over the token table — pure-black #000000 canvas,
+ * tiers #0c0d12 / #161822, electric violet #8B5CF6 family, slate
+ * text ladder (#f8fafc / #cbd5e1 / #94a3b8 / #64748b). Built
+ * through the same [scheme] builder as every other scheme, so
+ * its on* pairs are chosen by the WCAG function and pinned by
+ * the same contrast gate. The dark primary fill is the deep
+ * violet (white 5.9:1); the pure #8B5CF6 lives in the text
+ * tokens and stage accents, where no small white text sits.
+ */
+val NocturneVioletScheme = scheme(
+    name = "Nocturne violet",
+    darkPrimary = NocturneVioletDeep, darkSecondary = Color(0xFF475569), darkTertiary = Color(0xFF7C3AED),
+    lightPrimary = Color(0xFF7C3AED), lightSecondary = Color(0xFF64748B), lightTertiary = Color(0xFF8B5CF6),
+    darkBg = NocturneCanvas, darkSurface = NocturneTier1, darkHigh = NocturneTier2,
+    darkText = NocturneTextPrimary, darkMuted = NocturneTextMuted, darkHair = Color(0xFF26272F),
+    lightBg = Color(0xFFF8FAFC), lightSurface = Color(0xFFFFFFFF), lightHigh = Color(0xFFEEF0F6),
+    lightText = Color(0xFF0F172A), lightMuted = Color(0xFF5B6472), lightHair = Color(0xFFD8DBE6),
+    primaryTextDark = Color(0xFFC4B5FD), primaryTextLight = Color(0xFF6D28D9),
+    aiTextDark = Color(0xFFD8B4FE), aiTextLight = Color(0xFF7E22CE)
+)
+
 /** Every resolvable scheme (stored names keep working). */
 val AppSchemes: List<AppScheme> = listOf(
     EmberScheme, VioletNightScheme, OceanScheme, ForestScheme, RoseScheme, MonoScheme,
     NebulaVioletScheme, EmeraldScheme, SunsetScheme, ElectricVioletScheme,
-    DeepIndigoScheme, MagentaVioletScheme
+    DeepIndigoScheme, MagentaVioletScheme, NocturneVioletScheme
 )
 
 /**

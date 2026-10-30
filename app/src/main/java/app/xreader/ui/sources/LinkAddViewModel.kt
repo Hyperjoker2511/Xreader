@@ -3,6 +3,7 @@ package app.xreader.ui.sources
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import app.xreader.core.error.AppError
 import app.xreader.core.error.AppResult
 import app.xreader.data.extension.ExtensionHttpClient
 import app.xreader.data.extension.LinkProber
@@ -269,7 +270,14 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
                 is AppResult.Err -> {
                     _state.value = LinkAddUiState.Failed(
                         "The Live Source couldn't be installed: " +
-                            (installed.error.detail ?: "a storage problem")
+                            // v1.0.9.1: say the actual reason —
+                            // the old fallback called every
+                            // refusal "a storage problem", which
+                            // hid a link-parsing refusal behind
+                            // the wrong words entirely.
+                            ((installed.error as? AppError.ParseFailed)?.reason
+                                ?: installed.error.detail
+                                ?: "a storage problem")
                     )
                 }
                 is AppResult.Ok -> {
@@ -277,10 +285,18 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
                     val sourceId = row.sourceIds.substringBefore(",")
                     val handle = container.extensionService
                         .source(row.id, sourceId).getOrNull()
+                    val liveSpec = (handle?.source as?
+                        app.xreader.data.extension.LiveSource)?.spec
                     val bookId = if (handle != null) {
                         container.sourceBookSync.openBook(
                             handle,
-                            SourceBook(id = url, title = row.displayName)
+                            // The spec's normalised address,
+                            // not the raw paste (which may be
+                            // a bare host the book can't open by).
+                            SourceBook(
+                                id = liveSpec?.startUrl ?: url,
+                                title = row.displayName
+                            )
                         ).getOrNull()?.id
                     } else {
                         null
@@ -289,9 +305,7 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
                         extensionId = row.id,
                         sourceId = sourceId,
                         name = row.displayName,
-                        iconUrl = (handle?.source as?
-                            app.xreader.data.extension.LiveSource)
-                            ?.spec?.iconUrl,
+                        iconUrl = liveSpec?.iconUrl,
                         bookId = bookId
                     )
                     _messages.tryEmit(

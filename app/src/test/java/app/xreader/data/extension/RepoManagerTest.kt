@@ -235,6 +235,51 @@ class RepoManagerTest {
         assertEquals(row.id, candidate.installed.id)
     }
 
+    // ── v1.0.9.1: Live Source installs ──────────────────────
+
+    @Test
+    fun `live source installs from a bare host name`() = runBlocking {
+        // The on-device bug: the user typed "chikari.moe"
+        // (no scheme) — the probe accepts that shape, but
+        // installLiveSource fed it raw to java.net.URI, whose
+        // host is null for a relative URI, and the install
+        // refused with a message that called it "a storage
+        // problem". The install must normalise like the probe.
+        setUp()
+        val installed = manager.installLiveSource("chikari.moe")
+        assertTrue("expected Ok, got $installed", installed is AppResult.Ok)
+        val row = (installed as AppResult.Ok).value
+        assertEquals("live.chikari.moe", row.packageId)
+        assertEquals(
+            app.xreader.data.db.ExtensionKind.LIVE, row.kind
+        )
+        val spec = LiveSourceSpec.decode(
+            store.readText(store.definitionFile(row.packageId))!!
+        )!!
+        assertEquals("https://chikari.moe", spec.startUrl)
+        assertEquals("https://chikari.moe", spec.baseUrl)
+    }
+
+    @Test
+    fun `live source installs from a full book link`() = runBlocking {
+        setUp()
+        val installed = manager.installLiveSource(
+            "https://woop.example/series/woop-book"
+        )
+        assertTrue("expected Ok, got $installed", installed is AppResult.Ok)
+        val row = (installed as AppResult.Ok).value
+        val spec = LiveSourceSpec.decode(
+            store.readText(store.definitionFile(row.packageId))!!
+        )!!
+        assertEquals(
+            "https://woop.example/series/woop-book", spec.startUrl
+        )
+        assertEquals("https://woop.example", spec.baseUrl)
+        // A refused link still refuses, in plain words.
+        val refused = manager.installLiveSource("not a link at all")
+        assertTrue(refused is AppResult.Err)
+    }
+
     companion object {
         const val INDEX_URL = "https://repo.example/index.json"
         const val ARTIFACT_URL = "https://repo.example/bundle.js"

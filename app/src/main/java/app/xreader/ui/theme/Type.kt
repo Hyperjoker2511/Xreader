@@ -50,15 +50,15 @@ val XreaderTypography = Typography(
     ),
     headlineLarge = TextStyle(
         fontFamily = JakartaSans, fontWeight = FontWeight.ExtraBold,
-        fontSize = 32.sp, lineHeight = 40.sp
+        fontSize = 32.sp, lineHeight = 40.sp, letterSpacing = (-0.64).sp
     ),
     headlineMedium = TextStyle(
         fontFamily = JakartaSans, fontWeight = FontWeight.Bold,
-        fontSize = 28.sp, lineHeight = 36.sp
+        fontSize = 28.sp, lineHeight = 36.sp, letterSpacing = (-0.7).sp
     ),
     headlineSmall = TextStyle(
         fontFamily = JakartaSans, fontWeight = FontWeight.Bold,
-        fontSize = 24.sp, lineHeight = 32.sp
+        fontSize = 24.sp, lineHeight = 32.sp, letterSpacing = (-0.48).sp
     ),
     titleLarge = TextStyle(
         fontFamily = JakartaSans, fontWeight = FontWeight.Bold,
@@ -96,4 +96,15 @@ val XreaderTypography = Typography(
         fontFamily = InterSans, fontWeight = FontWeight.Medium,
         fontSize = 11.sp, lineHeight = 16.sp
     )
+)
+
+/**
+ * Nocturne Violet overline (DESIGN.md type scale): 10sp Jakarta
+ * bold, uppercase, +0.08em tracking — the small caps anchor above
+ * titles and inside stat tiles ("TIME LEFT", "ON DEVICE").
+ * Jakarta has no separate medium file; bold is the bundled cut.
+ */
+val NocturneOverline = TextStyle(
+    fontFamily = JakartaSans, fontWeight = FontWeight.Bold,
+    fontSize = 10.sp, lineHeight = 12.sp, letterSpacing = 0.8.sp
 )

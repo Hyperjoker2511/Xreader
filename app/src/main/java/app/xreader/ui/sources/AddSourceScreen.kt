@@ -156,6 +156,37 @@ fun AddSourceScreen(
                 }
             }
 
+            // ── Door 2.5: install a site as an app (v1.0.9.1 —
+            // the Live Source door, in plain words, at the top
+            // level: in v1.0.9 it hid behind a text button
+            // inside Add from link and the user couldn't find
+            // the feature at all) ────────────────────────────
+            item {
+                GlassCard {
+                    Text(
+                        "Install a site as an app",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Any novel site can live on your home screen " +
+                            "like an app — its own icon, its own window — " +
+                            "while everything inside opens in Xreader's " +
+                            "own screens, never as a web page. No test " +
+                            "read, nothing to go stale: it's read fresh " +
+                            "from the site each time.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    XreaderPrimaryButton(
+                        text = "Install a site as an app",
+                        onClick = onAddFromLink,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
             // ── Door 3: a Legado file ───────────────────────────
             item {
                 GlassCard {

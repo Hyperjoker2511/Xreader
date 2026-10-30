@@ -597,7 +597,16 @@ class RepoManager(
      * host name. Re-installing the same host replaces the row.
      */
     suspend fun installLiveSource(rawUrl: String): AppResult<InstalledExtension> {
-        val startUrl = rawUrl.trim()
+        // v1.0.9.1 fix (the on-device "storage problem"): the
+        // raw input went straight to java.net.URI, whose host
+        // is null for a scheme-less paste like "chikari.moe"
+        // — the install refused a link the probe accepts.
+        // Normalise exactly like the probe does (bare domains
+        // gain https://, share-text junk is stripped).
+        val startUrl = LinkProber.normaliseUrl(rawUrl)
+            ?: return AppResult.Err(
+                AppError.ParseFailed("link", "that link doesn't name a website")
+            )
         val uri = runCatching { java.net.URI(startUrl) }.getOrNull()
         val host = uri?.host?.takeIf { it.isNotBlank() }
             ?: return AppResult.Err(

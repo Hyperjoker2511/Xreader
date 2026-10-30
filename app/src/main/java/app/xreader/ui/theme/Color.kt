@@ -91,6 +91,35 @@ val NeonPurple = Color(0xFF6A0DAD)
 /** D9 mesh: the near-black base of the dark shell backdrop. */
 val DeepSpace = Color(0xFF0D0B14)
 
+// ---- Nocturne Violet tokens (user's Stitch system, 2026-10-30) ----------
+// The prose spec wins over the DESIGN.md token table: pure-black
+// canvas, two elevated tiers, electric violet accent. These named
+// tokens feed [NocturneVioletScheme] in AppSchemes.kt; components
+// reach the look through the scheme's Material roles, never by
+// hardcoding these hexes, so the customiser keeps working.
+
+/** Nocturne canvas: pure AMOLED black. */
+val NocturneCanvas = Color(0xFF000000)
+
+/** Nocturne elevated tier 1 — main section cards. */
+val NocturneTier1 = Color(0xFF0C0D12)
+
+/** Nocturne elevated tier 2 — nested controls, chips, tiles. */
+val NocturneTier2 = Color(0xFF161822)
+
+/** Nocturne electric violet accent (#8B5CF6). */
+val NocturneViolet = Color(0xFF8B5CF6)
+
+/** Nocturne deep violet — the CTA fill's darker partner (white
+ * text reaches 5.9:1 on it; the pure accent alone is 3.9:1). */
+val NocturneVioletDeep = Color(0xFF7C3AED)
+
+/** Nocturne text ladder (dark): primary / secondary / muted / ghost. */
+val NocturneTextPrimary = Color(0xFFF8FAFC)
+val NocturneTextSecondary = Color(0xFFCBD5E1)
+val NocturneTextMuted = Color(0xFF94A3B8)
+val NocturneTextGhost = Color(0xFF64748B)
+
 /** D6 glass values: the FROSTED card fill (white at 10%) and the
  * specular border's bright end (white at 30%) in dark mode. */
 val LiquidGlassFillDark = Color(0x1AFFFFFF)

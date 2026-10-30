@@ -122,6 +122,21 @@ class DeclarativeSource(
                     ?.let { absolute(it, url) }
             )
         }
+        // v1.0.9.1: an empty listing read from a page that is
+        // still a JavaScript shell is not an empty catalogue —
+        // the page never built itself (the browser view was
+        // unavailable, switched off, or gave up upstream), and
+        // returning an empty page would present "nothing here
+        // yet" for a source that simply never loaded. Fail
+        // loudly so the caller offers a retry instead. A built
+        // page with no results (a search with no hits, a list
+        // beyond its end) is not a shell and still returns its
+        // honest empty page.
+        if (books.isEmpty() && LinkInference.isJsShell(doc)) {
+            throw SourceException(
+                "the site's page never finished loading — try again"
+            )
+        }
         val hasNext = spec.nextPage?.let { sel ->
             selectChained(doc, sel).isNotEmpty()
         } ?: false
