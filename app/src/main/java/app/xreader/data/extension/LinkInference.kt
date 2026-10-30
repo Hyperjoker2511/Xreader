@@ -577,18 +577,41 @@ object LinkInference {
     }
 
     private fun findDescriptionSpec(doc: Document): String? {
-        if (doc.selectFirst("meta[name=description]")?.attr("content")?.isNotBlank() == true) {
-            return "meta[name=description]@content"
+        val meta = listOf(
+            "meta[name=description]",
+            "meta[property=og:description]"
+        ).firstNotNullOfOrNull { selector ->
+            doc.selectFirst(selector)?.attr("content")?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { selector to it }
         }
-        if (doc.selectFirst("meta[property=og:description]")?.attr("content")
-                ?.isNotBlank() == true
+        val block = doc.select(
+            "[class*=synopsis], [class*=description], [class*=summary]"
+        ).firstOrNull {
+            it.text().trim().length >= 40 && !isInChromeContainer(it)
+        }
+        // v1.0.7 draw-check fix: a meta description is an SEO
+        // snippet, often sliced mid-word by the site itself
+        // ("…was a n..."). When it reads truncated AND the
+        // page's own synopsis block is longer, the block is
+        // the real synopsis — prefer it. An untruncated meta
+        // keeps winning, exactly as before.
+        if (meta != null && block != null &&
+            isTruncatedSnippet(meta.second) &&
+            block.text().trim().length > meta.second.length
         ) {
-            return "meta[property=og:description]@content"
+            return SelectorSynthesizer.forElement(block)
         }
-        val el = doc.select("[class*=synopsis], [class*=description], [class*=summary]")
-            .firstOrNull { it.text().trim().length >= 40 && !isInChromeContainer(it) }
-            ?: return null
-        return SelectorSynthesizer.forElement(el)
+        if (meta != null) return "${meta.first}@content"
+        return block?.let { SelectorSynthesizer.forElement(it) }
+    }
+
+    /** A text that ends in an ellipsis cut — the shape of a
+     * snippet that was sliced, not finished. Shared with the
+     * declarative reader's heal. */
+    fun isTruncatedSnippet(text: String): Boolean {
+        val trimmed = text.trim()
+        return trimmed.endsWith("...") || trimmed.endsWith("…")
     }
 
     /**

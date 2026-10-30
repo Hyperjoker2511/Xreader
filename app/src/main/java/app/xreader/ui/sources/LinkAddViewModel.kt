@@ -32,7 +32,13 @@ sealed interface LinkAddUiState {
         val draft: LinkProber.Draft,
         val sourceName: String
     ) : LinkAddUiState
-    data class Failed(val message: String) : LinkAddUiState
+    data class Failed(
+        val message: String,
+        /** v1.0.7 draw-check fix: the probe's stage lines, so
+         * "Copy details" carries what was actually tried (the
+         * chikari paste of 2026-10-30 had no steps at all). */
+        val steps: List<String> = emptyList()
+    ) : LinkAddUiState
     data object Saving : LinkAddUiState
     data class Saved(val bookId: Long?, val bookTitle: String) : LinkAddUiState
     /** Phase 5: Gemini is studying the page after the automatic
@@ -74,6 +80,11 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
     )
 
     private var lastUrl: String = ""
+
+    /** The link as typed for the latest probe — the screen's
+     * Copy details reads the site from its normalised form
+     * (the raw text of a bare domain has no host to read). */
+    val lastProbedRawUrl: String get() = lastUrl
 
     fun probe(rawUrl: String) {
         lastUrl = rawUrl
@@ -123,7 +134,10 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
                     loginUrl = outcome.loginUrl, host = outcome.host,
                     siteCheck = outcome.siteCheck
                 )
-                is LinkProber.Outcome.Failed -> LinkAddUiState.Failed(outcome.message)
+                is LinkProber.Outcome.Failed -> LinkAddUiState.Failed(
+                    outcome.message,
+                    outcome.stageLines.map { it.render() }
+                )
             }
         }
     }

@@ -851,14 +851,30 @@ class ReaderViewModel(
         val estimator = container.wpmEstimator
         val wordsLeftChapter =
             ChapterContent.countWords(text.text.substring(clamped.coerceAtMost(text.length)))
-        val wordsLeftBook = wordsLeftChapter + _state.value.chapters
-            .drop(_state.value.chapterIndex + 1).sumOf { it.wordCount }
+        // v1.0.7 draw-check fix: the book remainder used to
+        // sum only the word counts already known, so a source
+        // book showed "≈17 min in book" at chapter 87 of
+        // 1,692 — the book page's old lie, still alive in the
+        // reader. Later chapters now go through the same
+        // estimator as the book page: chapters whose length
+        // isn't known count at this book's own average.
+        val laterMinutes = app.xreader.domain.reader.WpmEstimator
+            .estimateRemainingMinutes(
+                _state.value.chapters
+                    .drop(_state.value.chapterIndex + 1)
+                    .map {
+                        app.xreader.domain.reader.WpmEstimator
+                            .ChapterWords(it.read, it.wordCount)
+                    },
+                estimator.wpm()
+            ).first
         _state.value = _state.value.copy(
             positionOffset = clamped,
             chapterFraction = chapterFraction,
             bookFraction = bookFraction,
             minutesLeftInChapter = estimator.minutesLeft(wordsLeftChapter),
-            minutesLeftInBook = estimator.minutesLeft(wordsLeftBook),
+            minutesLeftInBook =
+                estimator.minutesLeft(wordsLeftChapter) + laterMinutes,
             currentPositionBookmarked = _bookmarks.value.any {
                 it.chapterIndex == _state.value.chapterIndex &&
                     kotlin.math.abs(it.charOffset - clamped) <= BOOKMARK_SNAP_CHARS

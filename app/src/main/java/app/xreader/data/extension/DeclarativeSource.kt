@@ -136,8 +136,7 @@ class DeclarativeSource(
         return book.copy(
             title = readTitle(doc, spec.title) ?: book.title,
             author = spec.author?.let { readDocSpec(doc, it) }?.ifBlank { null } ?: book.author,
-            description = spec.description?.let { readDocSpec(doc, it) }?.ifBlank { null }
-                ?: book.description,
+            description = readDescription(doc, spec) ?: book.description,
             coverUrl = spec.cover?.let { readDocSpec(doc, it) }?.ifBlank { null }
                 ?.let { absolute(it, bookPageUrl(book)) } ?: book.coverUrl
         )
@@ -215,8 +214,7 @@ class DeclarativeSource(
         val filled = book.copy(
             title = readTitle(doc, spec.title) ?: book.title,
             author = spec.author?.let { readDocSpec(doc, it) }?.ifBlank { null } ?: book.author,
-            description = spec.description?.let { readDocSpec(doc, it) }?.ifBlank { null }
-                ?: book.description,
+            description = readDescription(doc, spec) ?: book.description,
             coverUrl = spec.cover?.let { readDocSpec(doc, it) }?.ifBlank { null }
                 ?.let { absolute(it, url) } ?: book.coverUrl
         )
@@ -407,6 +405,29 @@ class DeclarativeSource(
      * trailing date stamps stripped; a date-only read is rejected
      * (null) so the caller keeps the title the book already had.
      */
+    /** v1.0.7 draw-check fix: the spec's description, healed
+     * when it reads as a truncated SEO snippet. Sources saved
+     * before the inference fix can carry a meta-tag spec whose
+     * text the site itself sliced ("…was a n..."); when the
+     * extracted text ends in an ellipsis cut, the page's own
+     * synopsis block (the longest synopsis/description/summary
+     * block, when longer) is the real text. */
+    private fun readDescription(doc: Document, spec: DetailsSpec): String? {
+        val extracted = spec.description
+            ?.let { readDocSpec(doc, it) }?.ifBlank { null }
+            ?: return null
+        if (!LinkInference.isTruncatedSnippet(extracted)) {
+            return extracted
+        }
+        val block = doc.select(
+            "[class*=synopsis], [class*=description], [class*=summary]"
+        ).map { it.text().trim() }
+            .filter { it.length >= 40 }
+            .maxByOrNull { it.length }
+        return block?.takeIf { it.length > extracted.length }
+            ?: extracted
+    }
+
     private fun readTitle(doc: Document, rawSpec: String?): String? {
         val raw = rawSpec?.let { readDocSpec(doc, it) }?.trim()?.ifBlank { null }
             ?: return null

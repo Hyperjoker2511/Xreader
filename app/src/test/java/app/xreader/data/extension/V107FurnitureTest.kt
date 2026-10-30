@@ -359,4 +359,158 @@ class V107FurnitureTest {
             ?: throw AssertionError("expected Failed, was $outcome")
         assertFalse(failed.renderWorthTrying)
     }
+
+    // ── the chikari shape (v1.0.7 draw-check fix) ────────────
+    // The HOME page is a JS shell, so the plain pass renders
+    // it; the book it walks into is unreadable statically but
+    // NOT shell-shaped, so its own fetcher never escalates.
+    // The failure must STILL offer the rendered retry — an
+    // earlier version of the flag spent the retry because the
+    // home page had rendered (on-device 2026-10-30: chikari's
+    // home pasted, "No browser").
+
+    @Test
+    fun `a rendered home page does not spend the book's rendered chance`() =
+        runBlocking {
+            val prober = LinkProber(
+                factory(
+                    ShellHomeSite.transport(),
+                    ShellHomeSite.renderer()
+                ),
+                testSessionStore()
+            )
+            val outcome = prober.probe(ShellHomeSite.HOME_URL)
+            val failed = outcome as? LinkProber.Outcome.Failed
+                ?: throw AssertionError("expected Failed, was $outcome")
+            assertTrue(
+                "the book page never rendered, so the retry stands",
+                failed.renderWorthTrying
+            )
+        }
+
+    @Test
+    fun `the forced pass walks the rendered home into the rendered book`() =
+        runBlocking {
+            val prober = LinkProber(
+                factory(
+                    ShellHomeSite.transport(),
+                    ShellHomeSite.renderer()
+                ),
+                testSessionStore()
+            )
+            val outcome = prober.probe(
+                ShellHomeSite.HOME_URL, forceRender = true
+            )
+            val ready = outcome as? LinkProber.Outcome.Ready
+                ?: throw AssertionError("expected Ready, was $outcome")
+            assertEquals(4, ready.draft.testDrive.chapterCount)
+            assertTrue(
+                ready.draft.testDrive.chapterTextLength > 200
+            )
+        }
+
+    /** A shell home page, a rendered listing, a book that
+     * only exists after rendering. */
+    object ShellHomeSite {
+        const val BASE = "https://shellhome.example"
+        const val HOME_URL = "$BASE/"
+        const val BOOK_URL = "$BASE/series/the-rendered-sword"
+
+        fun chapterUrl(n: Int) = "$BOOK_URL/chapter-$n"
+
+        val SHELL_HOME = """
+            <!DOCTYPE html><html><head><title>ShellBooks</title>
+            </head><body>
+            <div id="app"></div>
+            <script src="/assets/app.js"></script>
+            <script src="/assets/vendor.js"></script>
+            </body></html>
+        """.trimIndent()
+
+        val RENDERED_HOME = """
+            <!DOCTYPE html><html><head><title>ShellBooks</title>
+            </head><body>
+            <div class="brand">ShellBooks</div>
+            <div class="grid">
+            <div class="book-card"><a href="$BOOK_URL"><img src="/covers/rs.jpg"></a><a class="t" href="$BOOK_URL">The Rendered Sword</a></div>
+            <div class="book-card"><a href="$BASE/series/other-tale-1"><img src="/covers/o1.jpg"></a><a class="t" href="$BASE/series/other-tale-1">Other Tale One</a></div>
+            <div class="book-card"><a href="$BASE/series/other-tale-2"><img src="/covers/o2.jpg"></a><a class="t" href="$BASE/series/other-tale-2">Other Tale Two</a></div>
+            <div class="book-card"><a href="$BASE/series/other-tale-3"><img src="/covers/o3.jpg"></a><a class="t" href="$BASE/series/other-tale-3">Other Tale Three</a></div>
+            </div>
+            </body></html>
+        """.trimIndent()
+
+        /** Real text (never shell-detected) but no readable
+         * book in it: no title heading, no chapter list. */
+        val STATIC_BOOK = """
+            <!DOCTYPE html><html><head>
+            <title>The Rendered Sword — ShellBooks</title>
+            </head><body>
+            <header>ShellBooks · Sign in · Register · Search</header>
+            <main>
+            <p>ShellBooks is a reading platform for serialised
+            fiction, updated daily by its authors.</p>
+            <p>Browse thousands of stories across every genre,
+            follow your favourites and pick up where you left
+            off on any device.</p>
+            </main>
+            <footer>About · Terms · Privacy · Contact</footer>
+            </body></html>
+        """.trimIndent()
+
+        val RENDERED_BOOK = """
+            <!DOCTYPE html><html><head>
+            <title>The Rendered Sword — ShellBooks</title>
+            </head><body>
+            <h1 class="book-title">The Rendered Sword</h1>
+            <div class="poster"><img src="/covers/rs.jpg"></div>
+            <p class="synopsis">A blacksmith's apprentice finds a
+            sword that only appears when the moon is rendered
+            full, and every lord in the province wants it melted
+            down before it can choose its bearer.</p>
+            <ul class="chapter-rows">
+            ${(1..4).joinToString("") { n ->
+                "<li class=\"chapter-row\"><a href=\"" +
+                    chapterUrl(n) + "\">Chapter $n</a></li>"
+            }}
+            </ul>
+            </body></html>
+        """.trimIndent()
+
+        fun chapterPage(n: Int): String {
+            val prose = (1..6).joinToString("") { i ->
+                "<p>The bell over the forge rang for the $n-th " +
+                    "time that morning, paragraph $i, and Maren " +
+                    "counted the strokes the way her master had " +
+                    "taught her: slowly, and without hope of " +
+                    "finishing before the light changed over the " +
+                    "yard and the apprentices came in from the " +
+                    "rain with their boots singing on the stones.</p>"
+            }
+            return "<!DOCTYPE html><html><body>" +
+                "<article class=\"chapter-text\">$prose</article>" +
+                "</body></html>"
+        }
+
+        fun transport() = FakeTransport { url ->
+            when {
+                url == HOME_URL || url == BASE -> SHELL_HOME
+                url == BOOK_URL -> STATIC_BOOK
+                url.startsWith("$BOOK_URL/chapter-") ->
+                    chapterPage(
+                        url.substringAfterLast("chapter-")
+                            .toIntOrNull() ?: 1
+                    )
+                else -> null
+            }
+        }
+
+        fun renderer() = FakeRenderedFetcher { url ->
+            when (url) {
+                HOME_URL, BASE -> RENDERED_HOME
+                BOOK_URL -> RENDERED_BOOK
+                else -> null
+            }
+        }
+    }
 }

@@ -53,6 +53,35 @@ class ProblemDetailsTest {
     }
 
     @Test
+    fun steps_appearAfterTheVersionAsWhatXreaderTried() {
+        // v1.0.7 draw-check fix: the probe's stage lines ride
+        // the paste; with none passed the text is unchanged
+        // (the three tests above pin that).
+        val text = ProblemDetails.format(
+            host = "chikari.example",
+            failingStep = null,
+            reason = "That link opened the site's home page.",
+            appVersion = "1.0.7",
+            steps = listOf(
+                "inference — book page: no chapter list found",
+                "walk-in — first book: couldn't read it either"
+            )
+        )
+        assertEquals(
+            """
+            Xreader problem details
+            Site: chikari.example
+            Problem: That link opened the site's home page.
+            App version: 1.0.7
+            What Xreader tried:
+            - inference — book page: no chapter list found
+            - walk-in — first book: couldn't read it either
+            """.trimIndent(),
+            text
+        )
+    }
+
+    @Test
     fun blankReason_getsAPlaceholderNotAnEmptyLine() {
         val text = ProblemDetails.format(
             host = "example.com",

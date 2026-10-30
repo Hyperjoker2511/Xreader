@@ -41,7 +41,12 @@ object ProblemDetails {
          * its own evidence. Callers pass the log explicitly —
          * with none passed (or an empty log) the output stays
          * byte-identical to before. */
-        recentProblems: List<DiagnosticLog.Entry> = emptyList()
+        recentProblems: List<DiagnosticLog.Entry> = emptyList(),
+        /** v1.0.7 draw-check fix: the probe's own stage lines
+         * ("What Xreader tried"), rendered when passed. The
+         * Add-from-link failure never passed them, so its
+         * pastes carried no evidence of what ran. */
+        steps: List<String> = emptyList()
     ): String {
         val lines = mutableListOf("Xreader problem details")
         if (!host.isNullOrBlank()) {
@@ -70,6 +75,10 @@ object ProblemDetails {
             }
         }
         lines += "App version: $appVersion"
+        if (steps.isNotEmpty()) {
+            lines += "What Xreader tried:"
+            steps.forEach { lines += "- $it" }
+        }
         if (recentProblems.isNotEmpty()) {
             lines += "Recent problems (this session):"
             recentProblems.forEach { entry ->

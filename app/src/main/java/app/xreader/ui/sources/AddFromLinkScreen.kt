@@ -315,8 +315,23 @@ fun AddFromLinkScreen(
                             clipboard.setText(
                                 androidx.compose.ui.text.AnnotatedString(
                                     app.xreader.data.extension.ProblemDetails.format(
+                                        // v1.0.7 draw-check fix:
+                                        // the host of the NORMALISED
+                                        // probed link (hostOf on the
+                                        // raw field text returns
+                                        // nothing for a bare domain,
+                                        // so the paste lost its
+                                        // Site line).
                                         host = app.xreader.data.extension
-                                            .CookieParsing.hostOf(url),
+                                            .CookieParsing.hostOf(
+                                                app.xreader.data.extension
+                                                    .LinkProber
+                                                    .normaliseUrl(
+                                                        viewModel
+                                                            .lastProbedRawUrl
+                                                            .ifBlank { url }
+                                                    ) ?: url
+                                            ),
                                         failingStep = null,
                                         reason = current.message,
                                         appVersion = app.xreader.BuildConfig.VERSION_NAME,
@@ -325,7 +340,10 @@ fun AddFromLinkScreen(
                                         // history rides along.
                                         recentProblems =
                                             app.xreader.data.extension
-                                                .DiagnosticLog.entries()
+                                                .DiagnosticLog.entries(),
+                                        // v1.0.7 draw-check fix:
+                                        // what the probe tried.
+                                        steps = current.steps
                                     )
                                 )
                             )

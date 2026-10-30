@@ -54,6 +54,7 @@ import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.GlassSheetActionRow
 import app.xreader.ui.common.StatusPill
 import app.xreader.ui.common.XreaderPrimaryButton
+import androidx.compose.ui.graphics.Brush
 import coil.compose.AsyncImage
 import java.io.File
 
@@ -94,6 +95,32 @@ fun BookDetailScreen(
     // choices (all / next 10 / latest unread) live there, beside
     // Start reading, never only in a long-press sheet.
     var downloadSheetOpen by remember { mutableStateOf(false) }
+    // v1.0.7 (draw-check ask): chapter search + filters — a
+    // 1,692-chapter list can't be scrolled by hand, and a
+    // novel split into parts buries Part 1 under Part 2.
+    var chapterQuery by remember { mutableStateOf("") }
+    var chapterStateFilter by remember {
+        mutableStateOf(
+            app.xreader.domain.reader.ChapterListFilter.State.ALL
+        )
+    }
+    var chapterPartFilter by remember { mutableStateOf<String?>(null) }
+    val chapterParts = remember(state.chapters) {
+        app.xreader.domain.reader.ChapterListFilter
+            .availableParts(state.chapters)
+    }
+    val visibleChapters = remember(
+        state.chapters, chapterQuery, chapterStateFilter, chapterPartFilter
+    ) {
+        app.xreader.domain.reader.ChapterListFilter.apply(
+            state.chapters, chapterQuery, chapterStateFilter,
+            chapterPartFilter
+        )
+    }
+    val chapterFilterActive = chapterQuery.isNotBlank() ||
+        chapterStateFilter !=
+        app.xreader.domain.reader.ChapterListFilter.State.ALL ||
+        chapterPartFilter != null
     val context = androidx.compose.ui.platform.LocalContext.current
     // Phase 6: highlights → Markdown, saved where the user picks.
     val markdownLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -204,12 +231,28 @@ fun BookDetailScreen(
                         // v1.0.6.2 (F6b): a scrim over the blurred
                         // backdrop so the band's chips and text
                         // keep full contrast over any cover.
+                        // v1.0.7 draw-check fix: 30% was not
+                        // enough — over a bright cover the meta
+                        // lines drowned ("I can't read",
+                        // 2026-10-30). The scrim is now a
+                        // gradient: near-solid behind the text
+                        // zone at the top, easing off toward the
+                        // band's bottom so the cover's mood
+                        // still shows.
                         Box(
                             Modifier
                                 .matchParentSize()
                                 .background(
-                                    MaterialTheme.colorScheme.background
-                                        .copy(alpha = 0.30f)
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            MaterialTheme.colorScheme
+                                                .background.copy(alpha = 0.86f),
+                                            MaterialTheme.colorScheme
+                                                .background.copy(alpha = 0.72f),
+                                            MaterialTheme.colorScheme
+                                                .background.copy(alpha = 0.52f)
+                                        )
+                                    )
                                 )
                         )
                     }
@@ -243,7 +286,12 @@ fun BookDetailScreen(
                                 Text(
                                     book.author,
                                     style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    // v1.0.7 draw-check fix: header
+                                    // meta lines use full-strength
+                                    // onSurface over the backdrop —
+                                    // variant/tertiary tones drowned
+                                    // in the cover blur.
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                             TextButton(
@@ -287,7 +335,11 @@ fun BookDetailScreen(
                             // own average chapter length instead of
                             // zero words (the "≈21 min left" lie on
                             // a 759-chapter book).
-                            val remainingEstimate =
+                            // v1.0.7 draw-check fix: remembered —
+                            // a 1,692-chapter book must not re-map
+                            // its whole list on every recomposition
+                            // of this header.
+                            val remainingEstimate = remember(state.chapters, state.wpm) {
                                 app.xreader.domain.reader.WpmEstimator
                                     .estimateRemainingMinutes(
                                         state.chapters.map {
@@ -298,13 +350,14 @@ fun BookDetailScreen(
                                         },
                                         state.wpm
                                     )
+                            }
                             if (remainingEstimate.first > 0) {
                                 Text(
                                     app.xreader.domain.reader.WpmEstimator
                                         .formatMinutes(remainingEstimate.first) +
                                         " left in this book",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.tertiary
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                             // v1.0.6.3 (P5): when the latest
@@ -320,7 +373,7 @@ fun BookDetailScreen(
                                 Text(
                                     "Latest chapter · $latestChapterLabel",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                             // Sweep addendum: the rhythm line —
@@ -330,7 +383,7 @@ fun BookDetailScreen(
                                 Text(
                                     label,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }
@@ -510,10 +563,80 @@ fun BookDetailScreen(
                     Text("Chapters", style = MaterialTheme.typography.titleMedium)
                     if (section.kind == ChaptersSectionKind.LIST) {
                         Text(
-                            "${section.chapterCount} chapters · in reading order",
+                            if (chapterFilterActive) {
+                                "${visibleChapters.size} of " +
+                                    "${section.chapterCount} chapters · in reading order"
+                            } else {
+                                "${section.chapterCount} chapters · in reading order"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                    // v1.0.7 (draw-check ask): search + filters
+                    // on long lists — search by title or chapter
+                    // number, narrow by read/downloaded state,
+                    // and jump straight to a part when the
+                    // titles carry one (Part 1 / Part 2 …).
+                    if (section.kind == ChaptersSectionKind.LIST &&
+                        state.chapters.size >= 30
+                    ) {
+                        androidx.compose.material3.OutlinedTextField(
+                            value = chapterQuery,
+                            onValueChange = { chapterQuery = it },
+                            label = { Text("Search chapters") },
+                            placeholder = {
+                                Text("Title or chapter number")
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            FilterChip(
+                                selected = chapterStateFilter ==
+                                    app.xreader.domain.reader.ChapterListFilter.State.ALL,
+                                onClick = {
+                                    chapterStateFilter =
+                                        app.xreader.domain.reader.ChapterListFilter.State.ALL
+                                },
+                                label = { Text("All") }
+                            )
+                            FilterChip(
+                                selected = chapterStateFilter ==
+                                    app.xreader.domain.reader.ChapterListFilter.State.UNREAD,
+                                onClick = {
+                                    chapterStateFilter =
+                                        app.xreader.domain.reader.ChapterListFilter.State.UNREAD
+                                },
+                                label = { Text("Unread") }
+                            )
+                            FilterChip(
+                                selected = chapterStateFilter ==
+                                    app.xreader.domain.reader.ChapterListFilter.State.DOWNLOADED,
+                                onClick = {
+                                    chapterStateFilter =
+                                        app.xreader.domain.reader.ChapterListFilter.State.DOWNLOADED
+                                },
+                                label = { Text("Downloaded") }
+                            )
+                            chapterParts.forEach { part ->
+                                FilterChip(
+                                    selected = chapterPartFilter == part,
+                                    onClick = {
+                                        chapterPartFilter =
+                                            if (chapterPartFilter == part) {
+                                                null
+                                            } else {
+                                                part
+                                            }
+                                    },
+                                    label = { Text(part) }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -636,7 +759,28 @@ fun BookDetailScreen(
                     }
                 }
             }
-            items(state.chapters, key = { "chapter-${it.id}" }) { chapter ->
+            if (section.kind == ChaptersSectionKind.LIST &&
+                visibleChapters.isEmpty() && state.chapters.isNotEmpty()
+            ) {
+                item(key = "chapters-filter-empty") {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "No chapters match that search or filter.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        TextButton(
+                            onClick = {
+                                chapterQuery = ""
+                                chapterStateFilter =
+                                    app.xreader.domain.reader.ChapterListFilter.State.ALL
+                                chapterPartFilter = null
+                            }
+                        ) { Text("Clear search & filters") }
+                    }
+                }
+            }
+            items(visibleChapters, key = { "chapter-${it.id}" }) { chapter ->
                 ChapterRow(
                     chapter = chapter,
                     isCurrent = chapter.index == state.continueChapterIndex && state.progress != null,

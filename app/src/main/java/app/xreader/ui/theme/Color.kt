@@ -107,12 +107,19 @@ data class ReaderPalette(
     val accent: Color
 )
 
-/** True AMOLED: the page is #000000 exactly (DESIGN.md, reader-dark). */
+/** True AMOLED: the page is #000000 exactly (DESIGN.md,
+ * reader-dark). v1.0.7 draw-check fix: the ink is PURE
+ * white — it used to be a warm cream (#E8DFD0) that read as
+ * "brownish white" on the black page (his words,
+ * 2026-10-30); the muted ink is a neutral grey now, not
+ * the brownish #8A7F6D. This palette is also the reader's
+ * default, so the fix reaches everyone who never picked a
+ * palette. */
 val ReaderAmoled = ReaderPalette(
     name = "AMOLED",
     background = Color(0xFF000000),
-    text = Color(0xFFE8DFD0),
-    muted = Color(0xFF8A7F6D),
+    text = Color(0xFFFFFFFF),
+    muted = Color(0xFFABABAB),
     accent = EmberAmber
 )
 

@@ -180,14 +180,17 @@ class LinkProber(
             val message: String,
             val proposersTried: List<String> = emptyList(),
             val stageLines: List<StageLine> = emptyList(),
-            /** v1.0.7: the plain probe failed, a renderer is
-             * wired and permitted, and nothing was rendered yet
-             * — one automatic retry through the browser view is
-             * worth it (the Add-from-link flow takes it without
-             * asking; the user never picks a mode). Never set
-             * on a probe that itself ran forced, on early
-             * refusals (bad link, login, connection), or when no
-             * render could actually happen. */
+            /** v1.0.7: the plain probe failed and a renderer
+             * is wired and permitted — one automatic retry
+             * through the browser view is worth it (the
+             * Add-from-link flow takes it without asking; the
+             * user never picks a mode). Never set on a probe
+             * that itself ran forced, on early refusals (bad
+             * link, login, connection), or when no render
+             * could actually happen. (Whether anything already
+             * rendered during the plain pass does NOT clear it:
+             * a rendered home page says nothing about the book
+             * page the probe walked into.) */
             val renderWorthTrying: Boolean = false
         ) : Outcome
     }
@@ -515,14 +518,21 @@ class LinkProber(
                     proposersTried.toList(),
                     outcomeLines(),
                     // v1.0.7: a stage failure with a renderer
-                    // wired, permitted, and untouched is worth
-                    // ONE rendered retry (the caller's call —
-                    // the Add-from-link flow takes it
-                    // automatically). A probe that already ran
-                    // forced never asks for another.
+                    // wired and permitted is worth ONE rendered
+                    // retry (the caller's call — the Add-from-
+                    // link flow takes it automatically). A probe
+                    // that already ran forced never asks for
+                    // another. v1.0.7 draw-check fix: an earlier
+                    // version also required that NOTHING had
+                    // rendered yet in this probe — wrong for the
+                    // walk-in shape: a shell HOME page renders
+                    // during the plain pass, which says nothing
+                    // about the BOOK page, whose own fetcher
+                    // only escalates on a shell detection the
+                    // book page may not trip (chikari, on-device
+                    // 2026-10-30: home pasted, "No browser").
                     renderWorthTrying = !forceRender &&
                         escalating != null &&
-                        !escalating.renderedAny &&
                         escalating.renderAvailable()
                 )
 
