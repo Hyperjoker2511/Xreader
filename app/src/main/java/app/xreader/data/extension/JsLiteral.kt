@@ -23,12 +23,17 @@ object JsConstructorOptions {
 
     /** The `options` object of the plugin's constructor call,
      * flattened to strings (booleans as "true"/"false", numbers
-     * in plain form); null when no constructor literal is found. */
+     * in plain form); null when no constructor literal is found.
+     *
+     * One filters value rides along: `filters.type.value` — a
+     * family's default listing type — is returned under the
+     * synthetic key "filterType" when the plugin declares it
+     * (ReadNovelFull's popular listing is that type's path). */
     fun extractOptions(compiledPluginJs: String): Map<String, String>? {
         val literal = constructorLiteral(compiledPluginJs) ?: return null
         val parsed = Parser(literal).parseValue() as? Map<*, *> ?: return null
         val options = parsed["options"] as? Map<*, *> ?: return emptyMap()
-        return options.entries.associate { (key, value) ->
+        val flattened = options.entries.associate { (key, value) ->
             key.toString() to when (value) {
                 is Boolean -> value.toString()
                 is Double -> if (value == value.toLong().toDouble()) {
@@ -39,7 +44,13 @@ object JsConstructorOptions {
                 null -> ""
                 else -> value.toString()
             }
+        }.toMutableMap()
+        val filterType = ((parsed["filters"] as? Map<*, *>)
+            ?.get("type") as? Map<*, *>)?.get("value") as? String
+        if (!filterType.isNullOrBlank()) {
+            flattened["filterType"] = filterType
         }
+        return flattened
     }
 
     /** The constructor call's object literal text: the LAST

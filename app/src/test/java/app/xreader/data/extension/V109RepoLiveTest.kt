@@ -279,6 +279,17 @@ class V109RepoLiveTest {
         assertEquals("latest-release-novel", rnf!!["latestPage"])
         assertEquals("2", rnf["versionIncrements"])
         assertNull(JsConstructorOptions.extractOptions("var x = 1;"))
+
+        // The filters' type default rides along as filterType
+        // (ReadNovelFull's popular listing is that type's path;
+        // AllNovel's real filters declare "most-popular").
+        val typedTail = """
+            exports.default = new ReadNovelFullPlugin({id:"allnovel", options:{latestPage:"latest-release-novel"}, filters:{type:{type:"Picker",label:"Novel Listing",value:"most-popular",options:[{label:"Hot Novel",value:"hot-novel"}]}, genres:{type:"Picker",value:""}}});
+        """.trimIndent()
+        assertEquals(
+            "most-popular",
+            JsConstructorOptions.extractOptions(typedTail)!!["filterType"]
+        )
     }
 
     @Test
@@ -333,30 +344,46 @@ class V109RepoLiveTest {
         val lnwp = FamilyTemplates.configFor(
             family = "lightnovelwp", pluginId = "freekolnovel",
             site = "https://free.kolnovel.com/", name = "Free Kol Novel",
-            lang = "ar", options = mapOf("novelSlug" to "kol-novel")
+            lang = "ar", options = mapOf("reverseChapters" to "true")
         )!!
         assertEquals(
-            "https://free.kolnovel.com/kol-novel/page/{page}/?m_orderby=views",
+            "https://free.kolnovel.com/series/?page={page}",
             lnwp.popular!!.url
         )
+        assertEquals(
+            "https://free.kolnovel.com/page/{page}/?s={query}",
+            lnwp.search!!.url
+        )
+        assertEquals("article", lnwp.popular!!.results)
+        assertEquals(".eplister li", lnwp.details!!.chapters!!.list)
+        assertEquals(true, lnwp.details!!.chapters!!.reverse)
+        assertEquals(".epcontent", lnwp.chapter.content)
 
         val rnf = FamilyTemplates.configFor(
             family = "readnovelfull", pluginId = "allnovel",
             site = "https://novelfull.com/", name = "AllNovel", lang = "en",
             options = mapOf(
                 "latestPage" to "latest-release-novel",
-                "searchPage" to "search"
+                "searchPage" to "search",
+                "filterType" to "most-popular"
             )
         )!!
         assertEquals(
-            "https://novelfull.com/latest-release-novel?page={page}",
+            "https://novelfull.com/most-popular/{page}",
             rnf.popular!!.url
+        )
+        assertEquals(
+            "https://novelfull.com/latest-release-novel/{page}",
+            rnf.latest!!.url
         )
         assertEquals(
             "https://novelfull.com/search?keyword={query}",
             rnf.search!!.url
         )
-        assertEquals("#chapter-content || .chapter-content || .content", rnf.chapter.content)
+        assertTrue(rnf.popular!!.title!!.startsWith("a@title"))
+        assertEquals(false, rnf.details!!.chapters!!.reverse)
+        assertTrue(rnf.chapter.content!!.contains("#chapter-content"))
+        assertTrue(rnf.chapter.content!!.contains("#chr-content"))
         assertNull(
             FamilyTemplates.configFor(
                 "fictioneer", "x", "https://x.example", "X", "en", emptyMap()

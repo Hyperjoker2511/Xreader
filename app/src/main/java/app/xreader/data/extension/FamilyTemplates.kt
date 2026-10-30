@@ -157,13 +157,22 @@ object FamilyTemplates {
         )
     }
 
-    // ── LightNovelWP (WordPress) ────────────────────────────
+    // ── LightNovelWP ────────────────────────────────────────
     //
-    // Port of LightNovelWPPlugin: listings live under the
-    // series archive slug (m_orderby pages), details from the
-    // summary block / info table, chapters from the book
-    // page's rendered list-chapter rows, reading text from
-    // .chapter-content .content-inner with the theme fallbacks.
+    // Port of LightNovelWPPlugin (FULL generator extraction,
+    // 2026-10-30 — this family is NOT a Madara theme; the
+    // earlier Madara-shaped template was wrong): catalogue =
+    // {site}{seriesPath || "/series/"}?page={n} (latest adds
+    // &order=latest); items are <article> blocks whose main
+    // anchor carries href + title ATTRIBUTE (the name is the
+    // attribute, cover = img data-src || src); search =
+    // {site}page/{n}/?s={term}; the book page carries the
+    // title/cover on the .ts-post-image element (title attr),
+    // the summary in div.entry-content / [itemprop=description]
+    // and the chapters INSIDE the page's .eplister element
+    // (li rows, .epl-title/.epl-date fields) — no endpoint,
+    // document order unless the plugin sets reverseChapters;
+    // chapter text = the first .epcontent element, p/img only.
 
     private fun lightNovelWp(
         base: String,
@@ -172,17 +181,13 @@ object FamilyTemplates {
         lang: String,
         options: Map<String, String>
     ): DeclarativeConfig {
-        val slug = options["novelSlug"] ?: run {
-            val path = base.substringAfter("://", "").substringAfter("/", "")
-                .trim('/')
-            if (path.isNotEmpty()) path.substringAfterLast("/")
-            else base.substringAfter("://", "").substringBefore(".")
-        }
-        val archive = if (slug.isBlank()) base else "$base/$slug"
+        val seriesPath = options["seriesPath"]?.takeIf { it.isNotBlank() }
+            ?: "/series/"
+        val archive = base + "/" + seriesPath.trim('/')
         val listing = ListSpec(
-            url = "$archive/page/{page}/?m_orderby=views",
-            results = ".page-item-detail, .manga-card, article, .post",
-            title = ".post-title a@text",
+            url = "$archive/?page={page}",
+            results = "article",
+            title = "a@title || a@text",
             link = "a@href",
             cover = "img@data-src || img@src"
         )
@@ -191,11 +196,8 @@ object FamilyTemplates {
             name = name,
             lang = lang.ifBlank { "en" },
             baseUrl = base,
-            // The generator's search URL wasn't visible in its
-            // source; this is the Madara-family WordPress form
-            // these themes ship with.
             search = ListSpec(
-                url = "$base/?s={query}&post_type=wp-manga",
+                url = "$base/page/{page}/?s={query}",
                 results = listing.results,
                 title = listing.title,
                 link = listing.link,
@@ -203,47 +205,59 @@ object FamilyTemplates {
             ),
             popular = listing,
             latest = ListSpec(
-                url = "$archive/page/{page}/?m_orderby=latest",
+                url = "$archive/?page={page}&order=latest",
                 results = listing.results,
                 title = listing.title,
                 link = listing.link,
                 cover = listing.cover
             ),
             details = DetailsSpec(
-                title = "h1",
-                author = ".author-content a@text",
-                description = ".summary__content@text || .summary-text@text",
-                cover = ".summary_image img@data-src || .summary_image img@src",
+                // The label-matched info spans (.spe/.serl) the
+                // generator reads can't be expressed in specs;
+                // author stays to the listing/fallback chain.
+                title = ".ts-post-image@title || h1",
+                description = "div.entry-content@text || " +
+                    "[itemprop=description]@text",
+                cover = ".ts-post-image img@data-src || " +
+                    ".ts-post-image img@src || " +
+                    ".ts-post-image@data-src || .ts-post-image@src",
                 chapters = ChapterListSpec(
-                    list = "ul.list-chapter li, .chapter-list li, " +
-                        ".listing-chapters_wrap li",
-                    name = "a@text",
+                    list = ".eplister li",
+                    name = ".epl-title@text || a@text",
                     link = "a@href",
-                    reverse = true
+                    date = ".epl-date@text",
+                    reverse = options["reverseChapters"] == "true"
                 )
             ),
             chapter = ChapterSpec(
-                content = ".chapter-content .content-inner || " +
-                    ".reading-content-inner || .entry-content || " +
-                    ".reading-content .text-left",
-                remove = listOf(
-                    ".adsbygoogle", ".sharedaddy", ".jp-relatedposts",
-                    ".post-navigation", ".prev-next", ".comments-area",
-                    ".chapter-nav", ".breadcrumbs", ".alert", ".notice",
-                    ".donate-box"
-                )
+                content = ".epcontent",
+                remove = listOf(".code-block")
             )
         )
     }
 
     // ── ReadNovelFull (NovelFull family) ────────────────────
     //
-    // Port of ReadNovelFullPlugin: the site root is the
-    // latest-release listing (?page= paging), search is
-    // {searchPage}?{searchKey}=, details from the book info
-    // block (.desc-text summary, /author/ links), chapters
-    // from the book page's ul.list-chapter rows, reading text
-    // from #chapter-content with the family's ad stripping.
+    // Port of ReadNovelFullPlugin (FULL generator extraction,
+    // 2026-10-30). Catalogue has two modes: when the plugin
+    // sets options.novelListing, listings are that path with
+    // ?{typeParam}={latest|type}&{pageParam}={n}; otherwise
+    // the listing TYPE is a PATH segment — popular = the
+    // plugin's filters.type.value (extracted as "filterType"),
+    // latest = options.latestPage — paged /{n} when
+    // pageAsPath (the default; page 1 then asks for /1, which
+    // this family serves/redirects) else ?{pageParam}={n}.
+    // Item names are the anchors' TITLE ATTRIBUTES; covers
+    // prefer data-src, then data-cfsrc, data-original, src.
+    // Search = {searchPage}?{searchKey}={q} (POST body when
+    // postSearch). The generator's chapter lists come from
+    // AJAX endpoints the declarative engine can't call (POST
+    // chapter-archive, ?ajax=chapters paging) — the book
+    // page's own rows are the v1 road: ul.list-chapter, plus
+    // ul#idData for noAjax sites; document order is kept (the
+    // generator never reverses). Chapter text starts at the
+    // element whose class is exactly "txt", or #chr-content /
+    // #chapter-content.
 
     private fun readNovelFull(
         base: String,
@@ -254,55 +268,85 @@ object FamilyTemplates {
     ): DeclarativeConfig {
         val latestPage = options["latestPage"]?.trim('/') ?: ""
         val pageParam = options["pageParam"] ?: "page"
-        val pageAsPath = options["pageAsPath"] == "true"
-        fun listingUrl(root: String): String = when {
-            pageAsPath -> "$root/{page}"
-            root == base -> "$base/?$pageParam={page}"
-            else -> "$root?$pageParam={page}"
+        val pageAsPath = options["pageAsPath"] != "false"
+        val typeParam = options["typeParam"] ?: "type"
+        val listingPath = options["novelListing"]?.trim('/') ?: ""
+        val typeValue = options["filterType"]?.trim('/') ?: ""
+        fun pathListing(segment: String): String {
+            val root = if (segment.isBlank()) base else "$base/$segment"
+            return if (pageAsPath) "$root/{page}" else "$root?$pageParam={page}"
         }
-        val latestRoot = if (latestPage.isBlank()) base else "$base/$latestPage"
-        val listing = ListSpec(
-            url = listingUrl(latestRoot),
-            results = ".list-novel .row, .archive .row, .col-content .row",
-            title = "h3.title a@text || a@text",
+        fun listingUrl(popular: Boolean): String = if (listingPath.isNotBlank()) {
+            val type = if (popular) {
+                typeValue.ifBlank { latestPage }
+            } else {
+                latestPage.ifBlank { typeValue }
+            }
+            "$base/$listingPath?$typeParam=$type&$pageParam={page}"
+        } else {
+            pathListing(if (popular) typeValue else latestPage.ifBlank { typeValue })
+        }
+        val resultsSpec = ".list-novel .row, .archive .row, .col-content .row"
+        val titleSpec = "a@title || h3.title a@text || a@text"
+        val coverSpec = "img@data-src || img@data-cfsrc || " +
+            "img@data-original || img@src"
+        val popularListing = ListSpec(
+            url = listingUrl(popular = true),
+            results = resultsSpec,
+            title = titleSpec,
             link = "a@href",
-            cover = ".cover img@src || img@src"
+            cover = coverSpec
+        )
+        val latestListing = ListSpec(
+            url = listingUrl(popular = false),
+            results = resultsSpec,
+            title = titleSpec,
+            link = "a@href",
+            cover = coverSpec
         )
         val searchPage = options["searchPage"]?.trim('/') ?: "search"
         val searchKey = options["searchKey"] ?: "keyword"
+        val postSearch = options["postSearch"] == "true"
         return DeclarativeConfig(
             id = "lnreader.$pluginId",
             name = name,
             lang = lang.ifBlank { "en" },
             baseUrl = base,
             search = ListSpec(
-                url = "$base/$searchPage?$searchKey={query}",
-                results = listing.results,
-                title = listing.title,
-                link = listing.link,
-                cover = listing.cover
+                url = "$base/$searchPage" +
+                    if (postSearch) "" else "?$searchKey={query}",
+                results = resultsSpec,
+                title = titleSpec,
+                link = "a@href",
+                cover = coverSpec,
+                method = if (postSearch) "POST" else "GET",
+                body = if (postSearch) "$searchKey={query}" else null
             ),
-            popular = listing,
-            latest = listing,
+            popular = popularListing,
+            latest = latestListing,
             details = DetailsSpec(
-                title = "h1 || .title",
+                title = ".books h3@text || .m-imgtxt h3@text || " +
+                    "h1 || .title",
                 author = "a[href*='/author/']@text",
-                description = ".desc-text@text",
-                cover = ".book img@src || .info img@src",
+                description = ".desc-text@text || .inner@text",
+                cover = ".books img@data-src || .books img@src || " +
+                    ".book img@src || .info img@src",
                 chapters = ChapterListSpec(
-                    list = "ul.list-chapter li",
-                    name = "a@text",
+                    list = "ul.list-chapter li, ul#idData li",
+                    name = "a@title || a@text",
                     link = "a@href",
                     date = ".chapter-time@text",
-                    reverse = true
+                    reverse = false
                 )
             ),
             chapter = ChapterSpec(
-                content = "#chapter-content || .chapter-content || .content",
+                content = "#chapter-content || #chr-content || " +
+                    ".txt || .chapter-content",
                 remove = listOf(
                     "script", "style", ".ads", ".ad",
                     "[class*='advert']", "[class*='chapter-nav']",
-                    "[class*='topnav']", "[class*='botnav']"
+                    "[class*='topnav']", "[class*='botnav']",
+                    "[class*='unlock-buttons']"
                 )
             )
         )
