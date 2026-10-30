@@ -1999,13 +1999,19 @@ class LinkProber(
          * other BOOK pages? True when at least 3 rows remain
          * after dropping any row that points at the book page
          * itself, and at least half of them share the book
-         * URL's path SHAPE (same segment count, same static
-         * segments, final segment free) without containing the
-         * book's own final segment (its slug) anywhere in
-         * their path. The slug condition is what keeps a pasted
-         * CHAPTER link safe: its sibling chapters live under
-         * the book's slug, so they contain it and never judge
-         * as furniture. Real chapter lists differ in shape
+         * URL's path SHAPE (same segment count, same leading
+         * segments, final segment free) while containing NONE
+         * of the book's identity segments — every segment
+         * after the first (the collection word): the book's
+         * slug and anything under it. The identity condition
+         * is what keeps a pasted CHAPTER link safe: the book
+         * URL is then …/<slug>/chapter-1 and its sibling
+         * chapters still contain the slug, so they never judge
+         * as furniture. (Gate fix 3: the first version of this
+         * check protected only the LAST segment — for a
+         * chapter link that is "chapter-1", not the slug, and
+         * the guard misfired on exactly that case.)
+         * Real chapter lists differ in shape
          * (…/book/<slug>/<id>, …/novel/<slug>/chapter-1,
          * /chapter/<id>) and never judge either. Book URLs
          * with fewer than two path segments are never judged —
@@ -2026,7 +2032,8 @@ class LinkProber(
                     .lowercase()
             val bookSegments = segmentsOf(bookUrl)
             if (bookSegments.size < 2) return false
-            val slug = bookSegments.last().lowercase()
+            val identity = bookSegments.drop(1)
+                .map { it.lowercase() }.toSet()
             val bookShape = bookSegments.dropLast(1).map { it.lowercase() }
             val rows = chapterUrls.filter {
                 comparable(it) != comparable(bookUrl)
@@ -2036,7 +2043,7 @@ class LinkProber(
                 val segs = segmentsOf(row)
                 segs.size == bookSegments.size &&
                     segs.dropLast(1).map { it.lowercase() } == bookShape &&
-                    segs.none { it.lowercase() == slug }
+                    segs.none { it.lowercase() in identity }
             }
             return bookShaped * 2 >= rows.size
         }
