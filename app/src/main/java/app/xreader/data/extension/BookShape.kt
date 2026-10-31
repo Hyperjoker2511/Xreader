@@ -70,6 +70,58 @@ object BookShape {
 
     private val CHAPTER_SEGMENT =
         Regex("(?i)^(chapter|chap|ch)[-_]?\\d+(\\.\\d+)?(\\.html?)?$")
+
+    /**
+     * v1.1.1: the FULL Book-Shape Rule for one href — the
+     * generic half [isChapterShapedHref] was only half of it.
+     * A book href's path ENDS AT A SLUG UNDER A COLLECTION
+     * PREFIX: at least two segments (`/novels/<slug>`,
+     * `/series/<slug>`, `/en/novels/<slug>`), the last of
+     * which is the book's own slug (never chapter-shaped).
+     *
+     * What this excludes by construction — the shapes that
+     * reached the catalogue on device in v1.1.0:
+     * - chat/comment endpoints whose identity lives in the
+     *   QUERY (`/chat?comment=4346840` → path `/chat`, ONE
+     *   segment). v1.1.0's filter only asked "is the tail
+     *   chapter-shaped?", and "chat" is not — so the whole
+     *   General Chat rail passed as books.
+     * - bare section paths (`/novels`, `/`) and chapter
+     *   tails (`/novels/<slug>/214`).
+     */
+    fun isBookShapedHref(href: String): Boolean {
+        val segments = normalisedPath(href)
+            .split('/').filter { it.isNotBlank() }
+        if (segments.size < 2) return false
+        return !isChapterShapedHref(href)
+    }
+
+    /** The collection prefix of a book href: its normalised
+     * path minus the slug (`/novels/<slug>` → `/novels`,
+     * `/en/novels/<slug>` → `/en/novels`). Anchors that share
+     * a prefix belong to one collection; a listing cluster
+     * is only ever drawn from ONE prefix group, so sections
+     * can never blend into a catalogue. Blank when the path
+     * has no prefix (not book-shaped). */
+    fun collectionPrefixOf(href: String): String {
+        val path = normalisedPath(href)
+        val cut = path.lastIndexOf('/')
+        return if (cut > 0) path.substring(0, cut) else ""
+    }
+
+    /** The [ListSpec.linkPattern] that enforces one
+     * collection's Book-Shape Rule at fetch time:
+     * `/novels` → `/novels/[^/]+$` (the lane's own spelling).
+     * Regex metacharacters in the prefix are escaped, but
+     * `/` is left plain so stored specs stay readable. */
+    fun linkPatternForPrefix(prefix: String): String {
+        val escaped = StringBuilder()
+        for (ch in prefix) {
+            if (ch in "\\.^$|?*+()[]{}") escaped.append('\\')
+            escaped.append(ch)
+        }
+        return "$escaped/[^/]+$"
+    }
 }
 
 /**

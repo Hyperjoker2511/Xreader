@@ -219,7 +219,10 @@ class V110ChikariLiveFixTest {
     @Test
     fun `stale v1 shape entries are never served after the version bump`() {
         assertEquals(
-            "shape.v2.search.chikari.moe",
+            // v1.1.1: the version moved on to shape.v3 (see
+            // LiveSource.SHAPE_VERSION) — the pin follows it;
+            // the behaviour it guards is unchanged.
+            "shape.v3.search.chikari.moe",
             LiveShapeCache.searchKey("chikari.moe")
         )
         val store = MapStore()

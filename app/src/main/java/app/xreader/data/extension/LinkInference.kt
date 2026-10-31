@@ -74,7 +74,13 @@ object LinkInference {
         val titleSpec: String,
         val linkSpec: String,
         val coverSpec: String?,
-        val count: Int
+        val count: Int,
+        /** v1.1.1: for a books-only derivation, the
+         * Book-Shape pattern of the collection the cluster
+         * came from (`/novels/[^/]+$`) — the derived spec
+         * carries it so the fetch enforces the same rule
+         * the inference applied. Null for probe analyses. */
+        val linkPattern: String? = null
     )
 
     // ── login ───────────────────────────────────────────────────────
@@ -212,29 +218,67 @@ object LinkInference {
         // probe leaves it off: its list-shape verdicts (books
         // vs feed) must SEE chapter/post-shaped anchors to
         // name what a page is.
+        // v1.1.1: the filter is the FULL rule (see
+        // [BookShape.isBookShapedHref]) plus one-prefix
+        // coherence below — v1.1.0 asked only "is the tail
+        // chapter-shaped?", and the real comment shape on
+        // device (`/chat?comment=<id>`, path `/chat`) is not.
         booksOnly: Boolean = false
     ): ListingAnalysis? {
         // Book links live under a shared collection segment
         // ("/novel/…", "/book/…") — different books share only that
         // first segment, so it's the segment that must match the hint.
         val hintSegment = bookUrlHint?.let { pathPrefix(it, 1) }
-        val anchors = doc.select("a[href]").filter { anchor ->
-            val href = anchor.attr("abs:href").ifBlank { absolute(anchor.attr("href"), pageUrl) }
-            if (href.isBlank()) return@filter false
-            // v1.1.0 (design §6.2, Fix 4): the Book-Shape Rule
-            // as a HARD filter — chapter/comment-shaped anchors
-            // (a numeric or chapter-named tail below the book
-            // slug) are never listing candidates. They remain
-            // valid for chapter-list derivation, where they
-            // belong; in a catalogue they were the junk cards.
-            if (booksOnly && BookShape.isChapterShapedHref(href)) {
-                return@filter false
+        val candidates = doc.select("a[href]").mapNotNull { anchor ->
+            val href = anchor.attr("abs:href")
+                .ifBlank { absolute(anchor.attr("href"), pageUrl) }
+            if (href.isBlank()) return@mapNotNull null
+            // v1.1.1 (Fix 4, completed): under booksOnly a
+            // candidate must be BOOK-SHAPED — its path ends
+            // at a slug under a collection prefix. Chapter
+            // tails fail (as in v1.1.0), and so do bare
+            // section endpoints whose identity rides in the
+            // query (`/chat?comment=…`), user/chat rails and
+            // every other non-book shape: they are excluded
+            // by construction, not by recognising each one.
+            if (booksOnly && !BookShape.isBookShapedHref(href)) {
+                return@mapNotNull null
             }
             val wrapsImage = anchor.select("img").isNotEmpty()
             val sharesSegment = hintSegment != null && hintSegment.isNotEmpty() &&
                 pathPrefix(href, 1) == hintSegment &&
                 href != bookUrlHint
-            wrapsImage || sharesSegment
+            if (wrapsImage || sharesSegment) anchor to href else null
+        }
+        // v1.1.1: a book listing is drawn from ONE collection.
+        // Group the book-shaped candidates by their prefix and
+        // keep only the dominant group BEFORE clustering — a
+        // cluster is then book-shaped as a whole by
+        // construction, and sections (a book grid here, a
+        // series grid there) never blend into one catalogue.
+        // (findAnchorCluster alone cannot promise this: its
+        // direct-sibling case short-circuits on the biggest
+        // sibling group, which on a real home page can be a
+        // chat rail.) Ties break toward the book-named
+        // collection, then toward first appearance.
+        var linkPattern: String? = null
+        val anchors = if (booksOnly) {
+            val groups = candidates.groupBy { BookShape.collectionPrefixOf(it.second) }
+            val dominant = groups.entries
+                .sortedWith(
+                    compareByDescending<Map.Entry<String, List<Pair<Element, String>>>> {
+                        it.value.size
+                    }.thenByDescending { entry ->
+                        val segment = entry.key.substringAfterLast('/').lowercase()
+                        BOOKISH_SEGMENTS.any { segment.contains(it) }
+                    }
+                )
+                .firstOrNull()
+                ?: return null
+            linkPattern = BookShape.linkPatternForPrefix(dominant.key)
+            dominant.value.map { it.first }
+        } else {
+            candidates.map { it.first }
         }
         val cluster = findAnchorCluster(doc, anchors) ?: return null
         val itemHasImage = cluster.items.any { it.select("img").isNotEmpty() } ||
@@ -263,7 +307,8 @@ object LinkInference {
                 !cluster.itemsAreAnchors && itemHasImage -> "img@src"
                 else -> null
             },
-            count = cluster.items.size
+            count = cluster.items.size,
+            linkPattern = linkPattern
         )
     }
 
@@ -289,9 +334,10 @@ object LinkInference {
             val href = candidate.attr("abs:href")
                 .ifBlank { absolute(candidate.attr("href"), pageUrl) }
             if (href.isBlank() || href == bookUrlHint) return@firstOrNull false
-            // v1.1.0 (Fix 4): the Book-Shape hard filter binds
-            // the single-item search fallback too.
-            if (booksOnly && BookShape.isChapterShapedHref(href)) {
+            // v1.1.0 (Fix 4) / v1.1.1: the FULL Book-Shape
+            // Rule binds the single-item search fallback too —
+            // a lone "result" must still be a book-shaped link.
+            if (booksOnly && !BookShape.isBookShapedHref(href)) {
                 return@firstOrNull false
             }
             val wrapsImage = candidate.select("img").isNotEmpty()
@@ -689,6 +735,11 @@ object LinkInference {
     const val MIN_CONTENT_CHARS = 300
     const val MIN_READABLE_CHARS = 200
     const val PREVIEW_CHARS = 220
+
+    /** v1.1.1: collection-segment words that name books —
+     * only a TIEBREAK among equal-sized prefix groups in a
+     * books-only listing derivation, never an admission rule. */
+    private val BOOKISH_SEGMENTS = listOf("novel", "book", "stor", "fiction")
 
     private val CHAPTER_HREF = Regex(
         "(?i)(chapter|chap|ch)[-_/.]?\\d+|/\\d{2,6}\\.html?$|/\\d{2,6}/?$"

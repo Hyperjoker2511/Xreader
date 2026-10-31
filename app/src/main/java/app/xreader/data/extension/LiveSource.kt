@@ -115,8 +115,14 @@ class LiveSource(
          * them), so an installed Live Source self-heals on its
          * next open — no reinstall, no migration. The orphaned
          * v1 entries are never read again.
+         *
+         * v1.1.1: bumped to shape.v3 — listings themselves are
+         * re-derived on every call and were never cached, but
+         * per-book shapes derived in v1.1.0 from junk catalogue
+         * rows a user may have tapped (a chat card opened as a
+         * "book") must never be served again either.
          */
-        const val SHAPE_VERSION = "shape.v2"
+        const val SHAPE_VERSION = "shape.v3"
     }
 
     /** Per-book ephemeral configs derived this process. */
@@ -141,6 +147,9 @@ class LiveSource(
         // catalogue is that one book (it still opens, reads and
         // shelves exactly like any other).
         val bookAnalysis = LinkInference.analyseBookPage(doc, spec.startUrl)
+            ?.takeIf { analysis ->
+                bookCoherence(doc, spec.startUrl, analysis) == null
+            }
             ?: throw SourceException(
                 "“$name” didn't show a book list or a book page Xreader can read"
             )
@@ -202,7 +211,12 @@ class LiveSource(
                 results = analysis.resultsSelector,
                 title = analysis.titleSpec,
                 link = analysis.linkSpec,
-                cover = analysis.coverSpec
+                cover = analysis.coverSpec,
+                // v1.1.1: belt and braces — the rule the
+                // inference applied is written into the spec,
+                // so the fetch re-checks every item's href
+                // shape at parse time too.
+                linkPattern = analysis.linkPattern
             ),
             details = DetailsSpec(
                 title = "h1",
@@ -276,11 +290,61 @@ class LiveSource(
         return DeclarativeSource(config, context)
     }
 
+    /**
+     * v1.1.1: the book-entry coherence gate — the details
+     * half of the catalogue fix. A BOOK-SHAPED url
+     * (`/novels/<slug>`) is trusted to [LinkInference]'s
+     * book-page analysis as before. Any OTHER url reaching
+     * book derivation (a chat link, a comment target, any
+     * non-book-shaped address a catalogue or a paste can
+     * carry) must PROVE it is a book page: the majority of
+     * its chapter cluster's links must extend the page's
+     * own path — a book's chapters live below the book.
+     * A chat page fails this by construction (its links
+     * point at comments and books elsewhere, never below
+     * `/chat/`), so it can never be dressed up as a book —
+     * with the site name or a chat heading for a title and
+     * junk for chapters — at any entry point.
+     *
+     * Returns a failure reason, or null when coherent.
+     */
+    private fun bookCoherence(
+        doc: Document,
+        pageUrl: String,
+        analysis: LinkInference.BookPageAnalysis
+    ): String? {
+        if (BookShape.isBookShapedHref(pageUrl)) return null
+        val bookPath = BookShape.normalisedPath(pageUrl)
+        if (bookPath == "/") return "the page address is not a book address"
+        val items = runCatching { doc.select(analysis.chapterListSelector) }
+            .getOrDefault(emptyList())
+        if (items.isEmpty()) return "no chapter list could be checked"
+        var inside = 0
+        for (item in items) {
+            val anchor = if (item.tagName() == "a") item
+                else item.selectFirst("a[href]") ?: continue
+            val href = anchor.attr("abs:href").ifBlank { anchor.attr("href") }
+            if (BookShape.normalisedPath(href).startsWith("$bookPath/")) {
+                inside++
+            }
+        }
+        return if (inside > items.size / 2) {
+            null
+        } else {
+            "its chapter links do not belong to the page"
+        }
+    }
+
     private fun deriveBookConfig(book: SourceBook, bookDoc: Document): DeclarativeConfig {
         val analysis = LinkInference.analyseBookPage(bookDoc, book.id)
             ?: throw SourceException(
                 "that page didn't read as a book page on “$name”"
             )
+        bookCoherence(bookDoc, book.id, analysis)?.let { reason ->
+            throw SourceException(
+                "that page didn't read as a book page on “$name” ($reason)"
+            )
+        }
         val chapterDoc = fetchDoc(analysis.firstChapterUrl)
         val chapterAnalysis = LinkInference.analyseChapterPage(chapterDoc, analysis.firstChapterUrl)
             ?: throw SourceException(
