@@ -421,6 +421,12 @@ class LinkProber(
         // most once per probe, however many candidates judge
         // borderline while competing.
         var aiVerifyUsed = false
+        // v1.2.3: set when a candidate passed the book
+        // test-drive but held no catalogue at all (the gate in
+        // consider()). When no candidate drafts, this failure
+        // outranks the step failures: the book demonstrably
+        // read, so the catalogue is the honest whole story.
+        var catalogueFailure: String? = null
         suspend fun consider(
             proposer: String,
             config: DeclarativeConfig,
@@ -474,6 +480,32 @@ class LinkProber(
                         val failure = bestFailure
                         if (failure == null || 1 > failure.first) {
                             bestFailure = 1 to semanticFailure
+                        }
+                    } else if (
+                        (drive.healedConfig ?: config).popular == null &&
+                        (drive.healedConfig ?: config).latest == null
+                    ) {
+                        // v1.2.3 — THE CATALOGUE GATE: the book
+                        // test-drive passed, but these rules hold
+                        // no book list at all. Before v1.2.3 such
+                        // a candidate was drafted and saved, and
+                        // the source then failed Health with
+                        // "has no catalogue page" before fetching
+                        // anything — a saved-but-broken source
+                        // (botitranslation, novelbuddy). A source
+                        // without a verified catalogue is not a
+                        // source: the candidate is not drafted,
+                        // and if nothing else drafts, the probe
+                        // fails HERE, at add time, in plain words.
+                        stageLines += StageLine(
+                            proposer, "book list",
+                            "the book read fine, but no page on the " +
+                                "site gave a readable book list — a " +
+                                "source needs one, so these rules " +
+                                "weren't saved"
+                        )
+                        if (catalogueFailure == null) {
+                            catalogueFailure = CATALOGUE_MISSING_MESSAGE
                         }
                     } else {
                     stageLines += when {
@@ -581,7 +613,13 @@ class LinkProber(
         fun failOrDraft(message: String): Outcome =
             bestDraft?.let { Outcome.Ready(it, outcomeLines()) }
                 ?: Outcome.Failed(
-                    bestFailure?.takeIf { it.first >= 2 }?.second ?: message,
+                    // v1.2.3: the catalogue gate's failure
+                    // outranks step failures — a candidate's
+                    // book read fully, so "no book list" is the
+                    // honest whole story for this probe.
+                    catalogueFailure
+                        ?: bestFailure?.takeIf { it.first >= 2 }?.second
+                        ?: message,
                     proposersTried.toList(),
                     outcomeLines(),
                     // v1.0.7: a stage failure with a renderer
@@ -956,7 +994,11 @@ class LinkProber(
         ): LinkInference.ListingAnalysis? {
             val (body, finalUrl) = fetch() ?: return null
             val doc = Jsoup.parse(body, finalUrl)
+            // v1.2.3: a results page whose rows live only in
+            // its embedded JSON (novelbuddy's search) analyses
+            // through the payload when the DOM has nothing.
             return LinkInference.analyseSearchResultsPage(doc, finalUrl, bookUrl)
+                ?: LinkInference.analyseListingJson(doc, finalUrl, minItems = 1)
         }
         fun specIds(spec: ListSpec, query: String): Set<String> {
             val checker = DeclarativeSource(
@@ -1017,9 +1059,11 @@ class LinkProber(
                         )
                         if (fetched is AppResult.Ok && fetched.value.status in 200..299) {
                             val doc = Jsoup.parse(fetched.value.body, fetched.value.finalUrl)
-                            LinkInference.analyseSearchResultsPage(
+                            (LinkInference.analyseSearchResultsPage(
                                 doc, fetched.value.finalUrl, bookUrl
-                            )?.let { listing ->
+                            ) ?: LinkInference.analyseListingJson(
+                                doc, fetched.value.finalUrl, minItems = 1
+                            ))?.let { listing ->
                                 ListSpec(
                                     url = form.actionUrl,
                                     results = listing.resultsSelector,
@@ -1027,7 +1071,8 @@ class LinkProber(
                                     link = listing.linkSpec,
                                     cover = listing.coverSpec,
                                     method = "POST",
-                                    body = "${form.inputName}={query}"
+                                    body = "${form.inputName}={query}",
+                                    jsonPath = listing.jsonPath
                                 )
                             }
                         } else {
@@ -1052,7 +1097,8 @@ class LinkProber(
                                 results = it.resultsSelector,
                                 title = it.titleSpec,
                                 link = it.linkSpec,
-                                cover = it.coverSpec
+                                cover = it.coverSpec,
+                                jsonPath = it.jsonPath
                             )
                         }
                     }
@@ -1083,7 +1129,8 @@ class LinkProber(
                                 results = it.resultsSelector,
                                 title = it.titleSpec,
                                 link = it.linkSpec,
-                                cover = it.coverSpec
+                                cover = it.coverSpec,
+                                jsonPath = it.jsonPath
                             )
                         }
                     }.getOrNull()
@@ -1116,24 +1163,118 @@ class LinkProber(
         }
         if (searchSpec == null) searchSpec = unprovenSpec
         val baseUrl = baseOf(bookUrl)
-        val popularSpec = runCatching {
-            val homeFetch = fetcher.get(baseUrl)
-            if (homeFetch is AppResult.Ok && homeFetch.value.status in 200..299) {
-                val homeDoc = Jsoup.parse(homeFetch.value.body, homeFetch.value.finalUrl)
-                LinkInference.analyseListingPage(homeDoc, homeFetch.value.finalUrl, bookUrl)
-                    ?.let { listing ->
-                        ListSpec(
-                            url = baseUrl,
-                            results = listing.resultsSelector,
-                            title = listing.titleSpec,
-                            link = listing.linkSpec,
-                            cover = listing.coverSpec
-                        )
-                    }
-            } else {
-                null
+        // ── v1.2.3: the catalogue hunt ──────────────────────
+        // A source is its catalogue: without a listing spec the
+        // saved source opens empty (v1.2.2's catalogue-less
+        // saves — botitranslation, novelbuddy). The old hunt
+        // read ONLY the home page; modern sites keep their
+        // books elsewhere (novelbuddy's home is a landing page
+        // with no books at all — its catalogue is /latest, and
+        // its rows ride in the page's embedded JSON). So the
+        // hunt walks candidate listing pages — the page the
+        // probe came in on, the home page, the conventional
+        // listing paths, and the book's own collection root —
+        // analyses each as DOM first, then as embedded JSON,
+        // and VERIFIES every derived spec by reading its rows
+        // off the very document it came from. A spec that
+        // doesn't read books on its own page is not a
+        // catalogue, whatever the analysis thought it saw.
+        var popularSpec: ListSpec? = null
+        var latestSpec: ListSpec? = null
+        run {
+            fun flavourOf(url: String): Boolean {
+                val path = runCatching { java.net.URI(url).path }
+                    .getOrNull()?.lowercase() ?: return false
+                return path.contains("latest") || path.contains("recent") ||
+                    path.contains("new-releases") || path.contains("updates")
             }
-        }.getOrNull()
+            fun specFrom(
+                listing: LinkInference.ListingAnalysis,
+                url: String
+            ) = ListSpec(
+                url = url,
+                results = listing.resultsSelector,
+                title = listing.titleSpec,
+                link = listing.linkSpec,
+                cover = listing.coverSpec,
+                jsonPath = listing.jsonPath
+            )
+            fun verified(
+                doc: Document,
+                spec: ListSpec,
+                url: String
+            ): Boolean {
+                val checker = DeclarativeSource(
+                    DeclarativeConfig(
+                        id = "catalogue-check",
+                        name = "catalogue check",
+                        baseUrl = baseUrl,
+                        popular = spec,
+                        details = DetailsSpec(
+                            chapters = ChapterListSpec(
+                                list = "a", name = "@text", link = "@href"
+                            )
+                        ),
+                        chapter = ChapterSpec(content = "body")
+                    ),
+                    context
+                )
+                val rows = runCatching {
+                    checker.readListingRows(doc, spec, url).books
+                }.getOrDefault(emptyList())
+                return rows.size >= 2 &&
+                    rows.count { row ->
+                        CookieParsing.hostOf(row.id) != null &&
+                            LinkInference.isSameSiteHost(baseUrl, row.id)
+                    } * 2 >= rows.size
+            }
+            suspend fun hunt(url: String) {
+                if (popularSpec != null && latestSpec != null) return
+                val fetched = fetcher.get(url)
+                if (fetched !is AppResult.Ok ||
+                    fetched.value.status !in 200..299
+                ) {
+                    return
+                }
+                val finalUrl = fetched.value.finalUrl.ifBlank { url }
+                if ((popularSpec?.url == finalUrl) ||
+                    (latestSpec?.url == finalUrl)
+                ) {
+                    return
+                }
+                val doc = Jsoup.parse(fetched.value.body, finalUrl)
+                val listing = runCatching {
+                    LinkInference.analyseListingPage(doc, finalUrl, bookUrl)
+                }.getOrNull() ?: runCatching {
+                    LinkInference.analyseListingJson(doc, finalUrl, minItems = 3)
+                }.getOrNull() ?: return
+                val spec = specFrom(listing, finalUrl)
+                if (!verified(doc, spec, finalUrl)) return
+                if (flavourOf(finalUrl)) {
+                    if (latestSpec == null) latestSpec = spec
+                } else if (popularSpec == null) {
+                    popularSpec = spec
+                }
+            }
+            // The home page first (the historical source of
+            // popular), then the conventional listing paths,
+            // then the book's collection root (an app mount
+            // like /mobile/), and the page the probe entered
+            // on as the last resort.
+            hunt(baseUrl)
+            for (path in LISTING_PATHS) {
+                if (popularSpec != null && latestSpec != null) break
+                hunt(baseUrl + path)
+            }
+            val bookPath = runCatching { java.net.URI(bookUrl).path }
+                .getOrNull().orEmpty()
+            val firstSegment = bookPath.trimStart('/')
+                .substringBefore('/')
+            if (firstSegment.isNotEmpty()) {
+                hunt("$baseUrl/$firstSegment/")
+            }
+            if (url != bookUrl) hunt(url)
+        }
 
         val reviewsSpec = runCatching {
             LinkInference.detectReviews(bookDoc)
@@ -1149,7 +1290,7 @@ class LinkProber(
                 search = searchSpec,
                 sampleBookUrl = bookUrl,
                 popular = popularSpec,
-                latest = null,
+                latest = latestSpec,
                 details = DetailsSpec(
                     // v1.0.5 (A7): a slug-derived title has no
                     // honest spec — store none, so the engine
@@ -1175,7 +1316,15 @@ class LinkProber(
                         // into the saved rules, so the engine
                         // builds the full list, not the window.
                         urlPattern = candidate.chapterUrlPattern,
-                        totalCount = candidate.chapterTotalCount
+                        totalCount = candidate.chapterTotalCount,
+                        // v1.2.3: the payload's chapter array
+                        // rides in too — the engine merges its
+                        // rows with the rendered ones.
+                        jsonPath = candidate.chapterJsonPath,
+                        jsonNameField = candidate.chapterJsonNameField
+                            ?: "name",
+                        jsonLinkField = candidate.chapterJsonLinkField
+                            ?: "url"
                     )
                 ),
                 chapter = ChapterSpec(
@@ -1204,7 +1353,7 @@ class LinkProber(
         // ── The mandatory test-drive has spoken ─────────────────
         bestDraft?.let { return Outcome.Ready(it, outcomeLines()) }
         return Outcome.Failed(
-            bestFailure?.second
+            catalogueFailure ?: bestFailure?.second
                 ?: "Xreader couldn't read that page well enough to build a source from it.",
             proposersTried.toList(),
             outcomeLines()
@@ -2391,6 +2540,29 @@ class LinkProber(
     companion object {
         /** Chapters sampled for readable text per drive (A3). */
         const val MAX_TEXT_SAMPLES = 3
+
+        /**
+         * v1.2.3: the plain-words outcome when a site's book
+         * read fine but no page on it gave a readable book
+         * list. Said at add time — never discovered later as a
+         * saved-but-broken source.
+         */
+        const val CATALOGUE_MISSING_MESSAGE =
+            "Xreader could read that book, but it couldn't find " +
+                "the site's book list — the page that lists all " +
+                "its books. A source without a book list would " +
+                "open empty, so nothing was saved. If the site " +
+                "has a page that lists its books (often called " +
+                "Latest, Browse or Library), paste that page's " +
+                "link instead."
+
+        /** v1.2.3: the conventional listing paths the catalogue
+         * hunt tries, most common first. */
+        private val LISTING_PATHS = listOf(
+            "/latest", "/popular", "/browse", "/library",
+            "/catalog", "/ranking", "/novels", "/explore",
+            "/new", "/books", "/series", "/catalogue"
+        )
 
         /** Catalogue books a Repair sample pick may read
          * before falling back (v1.0.6). */

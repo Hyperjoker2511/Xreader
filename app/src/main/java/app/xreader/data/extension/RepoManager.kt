@@ -558,6 +558,22 @@ class RepoManager(
         // the derived package.
         packageIdOverride: String? = null
     ): AppResult<InstalledExtension> {
+        // v1.2.3: the save path enforces the same catalogue
+        // rule as the probe's gate. A config with neither a
+        // popular nor a latest spec opens to an empty source
+        // and fails Health with "has no catalogue page" before
+        // any fetch — refusing it HERE turns every caller
+        // (add-from-link, Repair, the heal sweep) honest at
+        // once: nothing catalogue-less is ever persisted.
+        if (config.popular == null && config.latest == null) {
+            return AppResult.Err(
+                AppError.BadFile(
+                    "These rules have no book list (popular or " +
+                        "latest page), so the source would open " +
+                        "empty — nothing was saved."
+                )
+            )
+        }
         val repo = linkRepo()
         val packageId = packageIdOverride ?: "link.${config.id}"
         val existing = extensionDao.getByPackageId(packageId)
@@ -698,7 +714,13 @@ class RepoManager(
                     val siteName = doc.selectFirst("meta[property=og:site_name]")
                         ?.attr("content")?.ifBlank { null }
                     val title = doc.title().ifBlank { null }
-                    name = siteName ?: title?.take(48) ?: name
+                    // v1.2.3: the raw <title> fallback used to
+                    // be the whole tagline, cut mid-word at 48
+                    // chars ("NovelBuddy— Read Web Novels &
+                    // Light Novels Onlin") — the exact defect
+                    // seen on-device. cleanSiteTitle keeps the
+                    // title's HEAD segment: the site's name.
+                    name = siteName ?: title?.let { cleanSiteTitle(it) } ?: name
                 }
                 val touchIcon = doc.selectFirst("link[rel=apple-touch-icon]")
                     ?.attr("abs:href")?.ifBlank { null }
@@ -945,5 +967,37 @@ class RepoManager(
         const val LINK_REPO_URL = "xreader://link-sources"
         const val MAX_INDEX_BYTES = 4 * 1024 * 1024
         const val MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
+
+        /** v1.2.3: separators a page <title> uses between the
+         * site's name and its tagline ("NovelBuddy— Read Web
+         * Novels Online Free", "Site Name | Read Novels"). */
+        private val TITLE_SEPARATORS = listOf(
+            " — ", " – ", " | ", " · ", " - ", "—", "–"
+        )
+
+        /**
+         * v1.2.3: a source name from a raw page title — the
+         * HEAD segment only ("NovelBuddy"), never the tagline,
+         * never a mid-word cut. A head that is implausibly
+         * short (< 2 chars) or long (> 40) falls back to the
+         * whole title trimmed to 40 chars at a word boundary.
+         */
+        fun cleanSiteTitle(rawTitle: String): String? {
+            val title = rawTitle.trim()
+            if (title.isEmpty()) return null
+            var head = title
+            for (separator in TITLE_SEPARATORS) {
+                val index = title.indexOf(separator)
+                if (index >= 2) {
+                    head = title.substring(0, index).trim()
+                    break
+                }
+            }
+            if (head.length in 2..40) return head
+            if (head.length <= 40) return head.ifBlank { null }
+            val cut = head.substring(0, 40)
+            return cut.substringBeforeLast(' ').ifBlank { cut }.trim()
+                .ifBlank { null }
+        }
     }
 }

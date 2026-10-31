@@ -191,7 +191,24 @@ private object OddSite {
             "begun years ago, quietly, in the observatory cellar."
 
     fun transport(): FakeTransport {
+        // v1.2.3: the catalogue gate requires a real book list
+        // somewhere on the site — the home page carries one
+        // (three book cards under /book/), as any real site's
+        // home does. The proposer-only reading challenge this
+        // fixture exists for is unchanged.
+        val homePage = """
+            <html><head><title>Odd Reads</title></head><body>
+            <div class="shelf">
+              <div class="card"><a href="/book/quiet-star">Quiet Star</a></div>
+              <div class="card"><a href="/book/lonely-comet">Lonely Comet</a></div>
+              <div class="card"><a href="/book/ember-tide">Ember Tide</a></div>
+              <div class="card"><a href="/book/pale-harbour">Pale Harbour</a></div>
+            </div>
+            </body></html>
+        """.trimIndent()
         val pages = mapOf(
+            BASE to homePage,
+            "$BASE/" to homePage,
             BOOK_URL to BOOK_PAGE,
             CHAPTER_3_URL to """
                 <html><head><title>3</title></head><body>

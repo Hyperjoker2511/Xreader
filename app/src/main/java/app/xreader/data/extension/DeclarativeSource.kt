@@ -11,6 +11,7 @@ import app.xreader.extensionapi.SourceException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -155,6 +156,44 @@ class DeclarativeSource(
         } else {
             fetchDoc(url)
         }
+        val listing = readListingRows(doc, spec, url)
+        // v1.0.9.1: an empty listing read from a page that is
+        // still a JavaScript shell is not an empty catalogue —
+        // the page never built itself (the browser view was
+        // unavailable, switched off, or gave up upstream), and
+        // returning an empty page would present "nothing here
+        // yet" for a source that simply never loaded. Fail
+        // loudly so the caller offers a retry instead. A built
+        // page with no results (a search with no hits, a list
+        // beyond its end) is not a shell and still returns its
+        // honest empty page.
+        if (listing.books.isEmpty() && spec.jsonPath == null &&
+            LinkInference.isJsShell(doc)
+        ) {
+            throw SourceException(
+                "the site's page never finished loading — try again"
+            )
+        }
+        return listing
+    }
+
+    /**
+     * v1.2.3: the row read of one listing document — the half
+     * of [fetchListing] that turns a fetched page into books.
+     * Split out so the probe can VERIFY a derived spec against
+     * the very document it was derived from (no second fetch,
+     * no render repeated), and so DOM specs and embedded-JSON
+     * specs share one hygiene path (title cleaning, the
+     * Book-Shape link pattern, cover resolution).
+     */
+    fun readListingRows(
+        doc: Document,
+        spec: ListSpec,
+        pageUrl: String
+    ): SourceBookPage {
+        if (spec.jsonPath != null) {
+            return readJsonListingRows(doc, spec, pageUrl)
+        }
         val books = selectChained(doc, spec.results).mapNotNull { el ->
             val rawTitle = readSpec(el, spec.title)?.trim().orEmpty()
             val link = readSpec(el, spec.link)?.trim().orEmpty()
@@ -166,7 +205,7 @@ class DeclarativeSource(
             // never a book, however book-like its card looks
             // (comment cards carry avatar images, so neither
             // title nor cover can separate them).
-            if (!linkShapeAllows(spec, absolute(link, url))) {
+            if (!linkShapeAllows(spec, absolute(link, pageUrl))) {
                 return@mapNotNull null
             }
             // v1.0.5 (A7): listing titles get the shared hygiene —
@@ -178,34 +217,97 @@ class DeclarativeSource(
             val title = when {
                 cleaned.isBlank() -> rawTitle
                 TitleCleaner.isDateOnly(cleaned) ->
-                    TitleCleaner.slugTitle(absolute(link, url)) ?: return@mapNotNull null
+                    TitleCleaner.slugTitle(absolute(link, pageUrl))
+                        ?: return@mapNotNull null
                 else -> cleaned
             }
             SourceBook(
-                id = absolute(link, url),
+                id = absolute(link, pageUrl),
                 title = title,
                 author = spec.author?.let { readSpec(el, it)?.trim()?.ifEmpty { null } },
                 coverUrl = spec.cover?.let { readSpec(el, it)?.trim()?.ifEmpty { null } }
-                    ?.let { absolute(it, url) }
-            )
-        }
-        // v1.0.9.1: an empty listing read from a page that is
-        // still a JavaScript shell is not an empty catalogue —
-        // the page never built itself (the browser view was
-        // unavailable, switched off, or gave up upstream), and
-        // returning an empty page would present "nothing here
-        // yet" for a source that simply never loaded. Fail
-        // loudly so the caller offers a retry instead. A built
-        // page with no results (a search with no hits, a list
-        // beyond its end) is not a shell and still returns its
-        // honest empty page.
-        if (books.isEmpty() && LinkInference.isJsShell(doc)) {
-            throw SourceException(
-                "the site's page never finished loading — try again"
+                    ?.let { absolute(it, pageUrl) }
             )
         }
         val hasNext = spec.nextPage?.let { sel ->
             selectChained(doc, sel).isNotEmpty()
+        } ?: false
+        return SourceBookPage(books, hasNext)
+    }
+
+    /**
+     * v1.2.3: the embedded-JSON row read — the records of the
+     * array at [ListSpec.jsonPath] in the page's embedded
+     * payload become the listing's books, through the same
+     * title hygiene and Book-Shape pattern as DOM rows. A page
+     * whose payload is absent or whose array is misshapen
+     * reads as an EMPTY listing here; the fetch-level checks
+     * (and the health drive) decide what an empty read means —
+     * the read itself never invents rows from a DOM that was
+     * never the data.
+     */
+    private fun readJsonListingRows(
+        doc: Document,
+        spec: ListSpec,
+        pageUrl: String
+    ): SourceBookPage {
+        val path = spec.jsonPath ?: return SourceBookPage(emptyList(), false)
+        var array: kotlinx.serialization.json.JsonArray? = null
+        var parent: kotlinx.serialization.json.JsonObject? = null
+        for (root in EmbeddedJson.roots(doc)) {
+            val found = EmbeddedJson.resolve(root, path)
+                as? kotlinx.serialization.json.JsonArray
+            if (found != null) {
+                array = found
+                val parentPath = path.substringBeforeLast('.', "")
+                parent = if (parentPath.isEmpty()) {
+                    root as? kotlinx.serialization.json.JsonObject
+                } else {
+                    EmbeddedJson.resolve(root, parentPath)
+                        as? kotlinx.serialization.json.JsonObject
+                }
+                break
+            }
+        }
+        val records = array ?: return SourceBookPage(emptyList(), false)
+        val books = records.mapNotNull { element ->
+            val record = element as? kotlinx.serialization.json.JsonObject
+                ?: return@mapNotNull null
+            val rawTitle = EmbeddedJson.stringAt(record, spec.title)
+                ?.trim().orEmpty()
+            val link = EmbeddedJson.stringAt(record, spec.link)
+                ?.trim().orEmpty()
+            if (rawTitle.isEmpty() || link.isEmpty()) return@mapNotNull null
+            if (!linkShapeAllows(spec, absolute(link, pageUrl))) {
+                return@mapNotNull null
+            }
+            val cleaned = TitleCleaner.clean(rawTitle)
+            val title = when {
+                cleaned.isBlank() -> rawTitle
+                TitleCleaner.isDateOnly(cleaned) ->
+                    TitleCleaner.slugTitle(absolute(link, pageUrl))
+                        ?: return@mapNotNull null
+                else -> cleaned
+            }
+            SourceBook(
+                id = absolute(link, pageUrl),
+                title = title,
+                author = spec.author?.let {
+                    EmbeddedJson.stringAt(record, it)?.trim()?.ifEmpty { null }
+                },
+                coverUrl = spec.cover?.let {
+                    EmbeddedJson.stringAt(record, it)?.trim()?.ifEmpty { null }
+                }?.let { absolute(it, pageUrl) }
+            )
+        }
+        // Paging evidence, when the payload states it: the
+        // object holding the array often carries a pagination
+        // block beside it (novelbuddy: total_pages / has_next).
+        val pagination = parent?.get("pagination")
+            as? kotlinx.serialization.json.JsonObject
+        val hasNext = pagination?.let { block ->
+            (block["has_next"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toBoolean()
         } ?: false
         return SourceBookPage(books, hasNext)
     }
@@ -663,6 +765,15 @@ class DeclarativeSource(
     private fun parseAllChapters(doc: Document, pageUrl: String): List<SourceChapter> {
         val spec = config.details.chapters
         val rows = parseChapterRows(doc, pageUrl).toMutableList()
+        // v1.2.3: the embedded-JSON chapter rows merge in —
+        // the payload's list runs longer than the rendered
+        // window on Next.js book pages (novelbuddy: latest 50
+        // in JSON vs ~21 anchors). One entry per chapter URL
+        // is enforced downstream (finishChapterRows), DOM rows
+        // first so their richer data (dates) wins a duplicate.
+        if (spec.jsonPath != null) {
+            rows += jsonChapterRows(doc, pageUrl)
+        }
         val pagination = spec.pagination
         if (pagination != null) {
             walkChapterPages(doc, pageUrl, pagination, rows)
@@ -729,6 +840,48 @@ class DeclarativeSource(
 
     private fun parseChapterRows(doc: Document, pageUrl: String): List<SourceChapter> =
         rowsFromElements(selectChained(doc, config.details.chapters.list), pageUrl)
+
+    /**
+     * v1.2.3: chapter rows from the book page's embedded JSON
+     * (see [ChapterListSpec.jsonPath]). Same admission rules
+     * as DOM rows: the link must exist and stay on the site's
+     * own host (WS3 class G — a foreign row inside the data
+     * is an ad, not a chapter).
+     */
+    private fun jsonChapterRows(
+        doc: Document,
+        pageUrl: String
+    ): List<SourceChapter> {
+        val spec = config.details.chapters
+        val path = spec.jsonPath ?: return emptyList()
+        var array: kotlinx.serialization.json.JsonArray? = null
+        for (root in EmbeddedJson.roots(doc)) {
+            val found = EmbeddedJson.resolve(root, path)
+                as? kotlinx.serialization.json.JsonArray
+            if (found != null) {
+                array = found
+                break
+            }
+        }
+        val records = array ?: return emptyList()
+        return records.mapIndexedNotNull { index, element ->
+            val record = element as? kotlinx.serialization.json.JsonObject
+                ?: return@mapIndexedNotNull null
+            val link = EmbeddedJson.stringAt(record, spec.jsonLinkField)
+                ?.trim().orEmpty()
+            if (link.isEmpty()) return@mapIndexedNotNull null
+            if (!LinkInference.isSameSiteHost(pageUrl, absolute(link, pageUrl))) {
+                return@mapIndexedNotNull null
+            }
+            val name = EmbeddedJson.stringAt(record, spec.jsonNameField)
+                ?.trim()?.ifEmpty { null } ?: "Chapter ${index + 1}"
+            SourceChapter(
+                id = absolute(link, pageUrl),
+                name = name,
+                number = ChapterNumbers.parse(name)
+            )
+        }
+    }
 
     private fun rowsFromElements(
         elements: List<Element>,

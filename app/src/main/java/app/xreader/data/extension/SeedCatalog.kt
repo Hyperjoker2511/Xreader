@@ -32,7 +32,14 @@ object SeedCatalog {
         // Sites this app already knows well.
         "novelight.net" to "Novelight",
         "chikari.moe" to "Chikari",
-        "woopread.com" to "WoopRead"
+        "woopread.com" to "WoopRead",
+        // v1.2.3: novelbuddy's canonical host is .me (the .com
+        // domain redirects there); its home page carries no
+        // og:site_name, which is how the raw <title> defect
+        // reached saved sources on-device.
+        "novelbuddy.com" to "NovelBuddy",
+        "novelbuddy.me" to "NovelBuddy",
+        "botitranslation.com" to "BotiTranslation"
     )
 
     /** The display name a seed carries for [host] (or any URL's

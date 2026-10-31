@@ -21,7 +21,7 @@ import java.net.URI
  */
 object KnownSites {
 
-    enum class Family { MADARA, NOVELFULL, NOVELIGHT, CHIKARI }
+    enum class Family { MADARA, NOVELFULL, NOVELIGHT, CHIKARI, BOTI }
 
     data class Entry(
         val domains: List<String>,
@@ -60,6 +60,22 @@ object KnownSites {
         Entry(
             domains = listOf("chikari.moe", "www.chikari.moe"),
             family = Family.CHIKARI,
+            canSearch = false
+        ),
+        // v1.2.3: botitranslation.com — a Vite SPA whose static
+        // HTML is a 3 KB shell; everything readable lives under
+        // /mobile/ in the RENDERED document (books at
+        // /mobile/book/<id>, chapters at /mobile/chapter/<id>,
+        // prose in <article>). Shape modelled from the site's
+        // own bundle (route table + card templates) and the
+        // user's on-device screenshots (v1.2.1 round); the
+        // lane's config is driven like any other candidate
+        // before it can save. No search shape is derivable from
+        // the bundle, so the hint stays off and Health says so
+        // honestly (the chikari precedent).
+        Entry(
+            domains = listOf("botitranslation.com", "www.botitranslation.com"),
+            family = Family.BOTI,
             canSearch = false
         )
         // MADARA is claimed by page markers, not by domain —
@@ -100,6 +116,10 @@ object KnownSites {
                         .isNotEmpty() &&
                     !path.removePrefix("/novels/").trim('/')
                         .contains('/')
+            Family.BOTI ->
+                // /mobile/book/<id> is a book; /mobile/chapter/
+                // <id> is a chapter — never a book page.
+                path.startsWith("/mobile/book/")
         }
     }
 
@@ -119,6 +139,7 @@ object KnownSites {
     ): DeclarativeConfig? = when (entry.family) {
         Family.NOVELIGHT -> novelightConfig(id, name, baseUrl)
         Family.CHIKARI -> chikariConfig(id, name, baseUrl)
+        Family.BOTI -> botiConfig(id, name, baseUrl)
         Family.NOVELFULL, Family.MADARA -> null
     }
 
@@ -133,6 +154,7 @@ object KnownSites {
         when (entry.family) {
             Family.NOVELIGHT -> config
             Family.CHIKARI -> config
+            Family.BOTI -> config
             Family.NOVELFULL -> config.copy(
                 details = config.details.copy(
                     chapters = ChapterListSpec(
@@ -340,6 +362,68 @@ object KnownSites {
                     reverse = true,
                     urlPattern = "{bookUrl}/{n}",
                     totalCountPattern = "([\\d,]+)\\s+chapters"
+                )
+            ),
+            chapter = ChapterSpec(
+                content = "article",
+                title = null
+            )
+        )
+    }
+
+    /**
+     * v1.2.3: BotiTranslation's shape. The site is a Vite SPA —
+     * the static HTML is an empty shell, so the config reads
+     * the RENDERED document (needsRendering) and its catalogue
+     * is the /mobile/ home's book rails: cards that are anchors
+     * to /mobile/book/<id> with the cover's alt as the title.
+     * Chapters are /mobile/chapter/<id> rows on the book page;
+     * prose sits in <article>. Search: none derivable — the
+     * lane ships search-less and Health labels it honestly.
+     *
+     * Verification status, stated plainly: the rendered DOM
+     * cannot be captured from the build environment (the
+     * site's app only renders in a real browser), so this
+     * shape is verified against fixtures modelled from the
+     * site's own JS bundle (its route table and card
+     * templates) and the user's on-device screenshots — the
+     * same evidence base as the v1.2.1 Live-catalogue fix,
+     * which the user confirmed working on-device.
+     */
+    private fun botiConfig(
+        id: String,
+        name: String,
+        baseUrl: String
+    ): DeclarativeConfig {
+        val base = baseUrl.trimEnd('/')
+        val grid = ListSpec(
+            url = "$base/mobile/",
+            results = "a[href*='/mobile/book/']",
+            title = "img@alt",
+            link = "@href",
+            cover = "img@src",
+            linkPattern = "/mobile/book/[^/]+$"
+        )
+        return DeclarativeConfig(
+            id = id,
+            name = name,
+            lang = "en",
+            baseUrl = base,
+            search = null,
+            popular = grid,
+            latest = null,
+            needsRendering = true,
+            renderWaitSelector = "a[href*='/mobile/book/'], article",
+            details = DetailsSpec(
+                title = "h1",
+                author = null,
+                description = null,
+                cover = "img.cover@src",
+                chapters = ChapterListSpec(
+                    list = "a[href*='/mobile/chapter/']",
+                    name = "@text",
+                    link = "@href",
+                    reverse = false
                 )
             ),
             chapter = ChapterSpec(

@@ -35,6 +35,11 @@ import org.junit.rules.TemporaryFolder
  * stack).
  *
  * Output: build-logs/ws2-raw/saved-source-survey.txt
+ *
+ * v1.2.3 UPDATE: this survey now documents the FIXED chain —
+ * (A) prints a draft WITH a catalogue (the /latest hunt +
+ * embedded-JSON search) and a passing contract, and (B)
+ * asserts the catalogue-less save is refused outright.
  */
 class V122SavedSourceSurveyTest {
 
@@ -190,6 +195,15 @@ class V122SavedSourceSurveyTest {
         })
         val botiSaved = boti.manager.saveLinkSource(botiConfig, "boti.example")
         line("BOTI save: $botiSaved")
+        // v1.2.3 POST-FIX: the catalogue-less config is REFUSED
+        // at the save path — the mechanism that produced the
+        // on-device failure can no longer persist anything.
+        // (Pre-fix this asserted the LIST failure of the saved
+        // config; that state is now unreachable through save.)
+        assertTrue(
+            "v1.2.3: a catalogue-less config must be refused at save",
+            botiSaved is AppResult.Err
+        )
         if (botiSaved is AppResult.Ok) {
             val handle = boti.service.sourcesOf(botiSaved.value.id)
                 .getOrNull()?.firstOrNull()

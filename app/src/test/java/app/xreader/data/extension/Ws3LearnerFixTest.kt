@@ -460,6 +460,16 @@ class Ws3LearnerFixTest {
         for (n in 1..9) {
             pages["$bookUrl/chapter-$n"] = prosePage("Chapter $n")
         }
+        // v1.2.3: the catalogue gate needs a book list on the
+        // site — the home page carries the /novel/ shelf.
+        pages[base] = """
+            <html><body><div class="shelf">
+              <div class="card"><a href="/novel/invented-tale">Invented Window Tale</a></div>
+              <div class="card"><a href="/novel/second-tale">Second Tale</a></div>
+              <div class="card"><a href="/novel/third-tale">Third Tale</a></div>
+              <div class="card"><a href="/novel/fourth-tale">Fourth Tale</a></div>
+            </div></body></html>
+        """.trimIndent()
         val outcome = prober(transportOf(pages)).probe(bookUrl)
         assertTrue("expected Ready, got $outcome", outcome is LinkProber.Outcome.Ready)
         val drive = (outcome as LinkProber.Outcome.Ready).draft.testDrive
@@ -542,6 +552,15 @@ class Ws3LearnerFixTest {
             bookUrl to bookPage,
             "$bookUrl/chapters" to chaptersPage
         )
+        // v1.2.3: the catalogue gate needs a book list on the
+        // site — the home page carries the /novel/ shelf.
+        pages[base] = """
+            <html><body><div class="shelf">
+              <div class="card"><a href="/novel/invented-saga">Invented Saga</a></div>
+              <div class="card"><a href="/novel/second-saga">Second Saga</a></div>
+              <div class="card"><a href="/novel/third-saga">Third Saga</a></div>
+            </div></body></html>
+        """.trimIndent()
         for (n in 1..3) pages["$bookUrl/chapter-$n"] = prosePage("Chapter $n")
         val outcome = prober(transportOf(pages)).probe(bookUrl)
         assertTrue("expected Ready via the chapters hop, got $outcome",
@@ -572,6 +591,16 @@ class Ws3LearnerFixTest {
         for (n in 1..4) {
             pages["$bookUrl/chapter/100$n/part-$n"] = prosePage("Chapter $n")
         }
+        // v1.2.3: the catalogue gate needs a book list on the
+        // site — the home page carries the /fiction/9/ shelf.
+        pages[base] = """
+            <html><body><div class="shelf">
+              <div class="card"><a href="/fiction/9/invented">Invented Order Tale</a></div>
+              <div class="card"><a href="/fiction/9/second">Second Order Tale</a></div>
+              <div class="card"><a href="/fiction/9/third">Third Order Tale</a></div>
+              <div class="card"><a href="/fiction/9/fourth">Fourth Order Tale</a></div>
+            </div></body></html>
+        """.trimIndent()
         val outcome = prober(transportOf(pages)).probe(bookUrl)
         assertTrue("expected Ready, got $outcome", outcome is LinkProber.Outcome.Ready)
     }

@@ -89,7 +89,21 @@ data class ListSpec(
      * however book-like its card looks. Modelled on
      * [ChapterListSpec.urlPattern]. Null (every spec written
      * before v1.1.0) = no shape filter, exactly as before. */
-    val linkPattern: String? = null
+    val linkPattern: String? = null,
+    /** v1.2.3: embedded-JSON mode. Some sites (Next.js apps)
+     * carry their catalogue / search results ONLY as JSON
+     * inside the page — the `__NEXT_DATA__` block or the RSC
+     * stream — while the DOM holds a landing page or a
+     * skeleton. When [jsonPath] is set, the listing's rows are
+     * the records of the JSON array at that dot path in the
+     * page's embedded payload, and [title] / [link] / [cover] /
+     * [author] name FIELDS inside each record instead of CSS
+     * selectors (see [EmbeddedJson]). Null (every spec written
+     * before v1.2.3) = DOM selectors, exactly as before. A JSON
+     * spec whose payload is missing or misshapen fails the
+     * read honestly — it never falls back to scraping a DOM
+     * that was never the data. */
+    val jsonPath: String? = null
 )
 
 /** The book page: fills details and carries the chapter list. When the
@@ -140,7 +154,20 @@ data class ChapterListSpec(
      * the total) rather than from a stated-total text pattern.
      * The engine's pattern completion accepts either source;
      * null (every spec written before) = no numeric total. */
-    val totalCount: Int? = null
+    val totalCount: Int? = null,
+    /** v1.2.3: embedded-JSON chapter rows. When [jsonPath] is
+     * set, the book page's embedded payload carries a chapter
+     * array at that dot path whose records name their chapter
+     * in [jsonNameField] and link it in [jsonLinkField]; the
+     * engine MERGES those rows with the DOM rows (one entry
+     * per chapter URL) — Next.js book pages render only a
+     * window of anchors statically while the payload carries
+     * a longer list (novelbuddy: 21 anchors, latest 50 in
+     * JSON). Null (every spec written before) = DOM rows only,
+     * exactly as before. */
+    val jsonPath: String? = null,
+    val jsonNameField: String = "name",
+    val jsonLinkField: String = "url"
 ) {
 
     /** The chapter total the book page's visible text states,

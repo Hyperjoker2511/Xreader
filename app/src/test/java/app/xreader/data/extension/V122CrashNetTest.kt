@@ -294,12 +294,17 @@ class V122CrashNetTest {
             )
             val ready = outcome as LinkProber.Outcome.Ready
             assertEquals("Eternal Holy Emperor", ready.draft.testDrive.bookTitle)
-            // The static book page exposes ~20 chapter anchors
-            // of the 2,217 the page states; the rest is JS
-            // pagination. This is why novelbuddy is NOT bundled
-            // as a default provider in v1.2.2: the verified
-            // config would silently truncate long novels.
-            assertEquals(20, ready.draft.testDrive.chapterCount)
+            // v1.2.3: the static book page exposes ~20 chapter
+            // anchors, and its embedded JSON carries the latest
+            // 50 chapter records — the engine now merges both,
+            // so the drive reads 50 chapters. Still NOT the
+            // 2,217 the page states: the rest sits behind the
+            // site's unidentified client-side endpoint with
+            // non-patternable slugs. This is why novelbuddy is
+            // still NOT bundled as a default provider: the
+            // verified config would silently truncate long
+            // novels.
+            assertEquals(50, ready.draft.testDrive.chapterCount)
         }
 
     @Test(timeout = 300_000)

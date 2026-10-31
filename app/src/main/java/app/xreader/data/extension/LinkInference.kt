@@ -72,7 +72,16 @@ object LinkInference {
          * generalised). Null when the visible list is not a
          * strict-pattern window. */
         val chapterUrlPattern: String? = null,
-        val chapterTotalCount: Int? = null
+        val chapterTotalCount: Int? = null,
+        /** v1.2.3: the book page's embedded-JSON chapter array
+         * (see [EmbeddedJson.discoverChapterArray]) — where it
+         * lives and which record fields name/link a chapter.
+         * Rides into the derived config's ChapterListSpec so
+         * the engine merges the payload's rows with the DOM
+         * rows. Null when the page carries no such array. */
+        val chapterJsonPath: String? = null,
+        val chapterJsonNameField: String? = null,
+        val chapterJsonLinkField: String? = null
     )
 
     data class ChapterPageAnalysis(
@@ -94,8 +103,54 @@ object LinkInference {
          * came from (`/novels/[^/]+$`) — the derived spec
          * carries it so the fetch enforces the same rule
          * the inference applied. Null for probe analyses. */
-        val linkPattern: String? = null
+        val linkPattern: String? = null,
+        /** v1.2.3: embedded-JSON mode — when [jsonPath] is
+         * set, this listing's rows live in the page's embedded
+         * payload, not its DOM: [titleSpec] / [linkSpec] /
+         * [coverSpec] then name record FIELDS, and
+         * [resultsSelector] is a descriptive placeholder the
+         * engine never evaluates. Null (every analysis before
+         * v1.2.3) = a DOM listing, exactly as before. */
+        val jsonPath: String? = null
     )
+
+    /**
+     * v1.2.3: the listing a page's EMBEDDED JSON declares —
+     * for pages whose DOM is a landing page or a skeleton
+     * while the payload carries the real catalogue / results
+     * (Next.js: novelbuddy's home lists nothing; its /latest
+     * payload lists 24 books; its search results exist ONLY
+     * in the payload). [minItems] is the discovery floor: a
+     * catalogue needs a cluster (3), a search page may
+     * honestly return a single book (1).
+     */
+    fun analyseListingJson(
+        doc: Document,
+        pageUrl: String,
+        minItems: Int
+    ): ListingAnalysis? {
+        val found = EmbeddedJson.discoverBookArray(doc, minItems)
+            ?: return null
+        return ListingAnalysis(
+            resultsSelector = "json:${found.path}",
+            titleSpec = found.titleField,
+            linkSpec = found.linkField,
+            coverSpec = found.coverField,
+            count = found.count,
+            linkPattern = null,
+            jsonPath = found.path
+        )
+    }
+
+    /** v1.2.3: the chapter array a book page's embedded JSON
+     * declares, or null when it carries none. The stated
+     * total rides along on the returned analysis's
+     * [BookPageAnalysis.chapterTotalCount] channel via
+     * [EmbeddedJson.ChapterArray.statedTotal] — callers read
+     * it from here directly. */
+    fun analyseChaptersJson(
+        doc: Document
+    ): EmbeddedJson.ChapterArray? = EmbeddedJson.discoverChapterArray(doc)
 
     // ── login ───────────────────────────────────────────────────────
 
@@ -228,6 +283,13 @@ object LinkInference {
             ?: return null
         val itemIsAnchor = cluster.itemsAreAnchors
         val completion = detectPatternCompletion(doc, pageUrl, cluster)
+        // v1.2.3: the payload's own chapter array, when the
+        // page carries one — its stated total outranks the
+        // pattern-completion guess (it is the site's own
+        // number, not an inference), and the array itself
+        // rides into the derived config for the engine's
+        // merge (see DeclarativeSource.parseAllChapters).
+        val chaptersJson = runCatching { analyseChaptersJson(doc) }.getOrNull()
         return BookPageAnalysis(
             title = title.first,
             titleSpec = title.second,
@@ -243,7 +305,11 @@ object LinkInference {
             firstChapterUrl = firstUrl,
             newestFirst = newestFirst,
             chapterUrlPattern = completion?.first,
-            chapterTotalCount = completion?.second
+            chapterTotalCount = chaptersJson?.statedTotal
+                ?: completion?.second,
+            chapterJsonPath = chaptersJson?.path,
+            chapterJsonNameField = chaptersJson?.nameField,
+            chapterJsonLinkField = chaptersJson?.linkField
         )
     }
 
