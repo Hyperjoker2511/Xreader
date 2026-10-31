@@ -102,6 +102,16 @@ class DeclarativeSource(
             val rawTitle = readSpec(el, spec.title)?.trim().orEmpty()
             val link = readSpec(el, spec.link)?.trim().orEmpty()
             if (rawTitle.isEmpty() || link.isEmpty()) return@mapNotNull null
+            // v1.1.0 (design §6.0/§6.1, Shape B): the shared
+            // Book-Shape Rule — when the spec declares a link
+            // pattern, an item whose link path doesn't end at
+            // the book slug is a chapter or a comment target,
+            // never a book, however book-like its card looks
+            // (comment cards carry avatar images, so neither
+            // title nor cover can separate them).
+            if (!linkShapeAllows(spec, absolute(link, url))) {
+                return@mapNotNull null
+            }
             // v1.0.5 (A7): listing titles get the shared hygiene —
             // trailing date stamps stripped, and a date-only title
             // (the extractor read the date element) falls back to
@@ -202,6 +212,11 @@ class DeclarativeSource(
             val rawTitle = readSpec(el, spec.title)?.trim().orEmpty()
             val link = readSpec(el, spec.link)?.trim().orEmpty()
             if (rawTitle.isEmpty() || link.isEmpty()) return@mapNotNull null
+            // v1.1.0: the Book-Shape Rule binds related() too —
+            // it is the fetchListing loop's twin (design §6.1).
+            if (!linkShapeAllows(spec, absolute(link, url))) {
+                return@mapNotNull null
+            }
             // v1.0.5 (A7): same title hygiene as listings.
             val cleaned = TitleCleaner.clean(rawTitle)
             val title = when {
@@ -935,6 +950,13 @@ class DeclarativeSource(
     }
 
     // ── helpers ─────────────────────────────────────────────────────
+
+    /** v1.1.0: the Book-Shape Rule gate shared by listings
+     * and related() — no declared pattern, no filter. */
+    private fun linkShapeAllows(spec: ListSpec, absoluteLink: String): Boolean {
+        val pattern = spec.linkPattern?.takeIf { it.isNotBlank() } ?: return true
+        return BookShape.matchesPattern(absoluteLink, pattern)
+    }
 
     private fun bookPageUrl(book: SourceBook): String =
         if (book.id.startsWith("http://") || book.id.startsWith("https://")) {

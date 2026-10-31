@@ -20,7 +20,9 @@ data class BookDownloads(
     val items: List<DownloadQueueItem>,
     /** Chapters ready on disk / total chapters known. */
     val readyChapters: Int,
-    val totalChapters: Int
+    val totalChapters: Int,
+    /** v1.1.0 (§5.12): real bytes of this book's files on disk. */
+    val bytesOnDisk: Long = 0L
 ) {
     val activeItems: List<DownloadQueueItem>
         get() = items.filter {
@@ -56,7 +58,17 @@ data class DownloadsUiState(
     val wifiOnlyPrefetch: Boolean = true,
     val loading: Boolean = true,
     /** v1.0.6.2 (D2): bytes of downloaded book files on disk. */
-    val storageBytes: Long = 0L
+    val storageBytes: Long = 0L,
+    /** v1.1.0 (§5.12): real bytes of the cover cache on disk. */
+    val coverCacheBytes: Long = 0L,
+    /** v1.1.0 (§5.12): real total storage of the device volume
+     * the app's files live on (StatFs); 0 when unreadable. */
+    val deviceTotalBytes: Long = 0L,
+    /** v1.1.0 (§5.12): true when the current network is metered —
+     * the snapshot the "Waiting for Wi-Fi" chip reads, taken when
+     * this state was built (the same NetworkGate the download
+     * engine consults). */
+    val onMeteredNetwork: Boolean = false
 ) {
     /** v1.0.6.2 (D2): the one plain header line — storage used
      * and how many books it belongs to. */
@@ -113,11 +125,17 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
     private val bookDao = container.database.bookDao()
     private val chapterDao = container.database.chapterDao()
 
+    /** v1.1.0 (§5.12): bumped after Clean Cache so the storage
+     * metering re-reads the disk instead of serving stale bytes. */
+    private val storageTick =
+        kotlinx.coroutines.flow.MutableStateFlow(0)
+
     val state: StateFlow<DownloadsUiState> = combine(
         queueDao.observeAll(),
         bookDao.observeShelf(),
-        container.downloadPrefs.settings
-    ) { items, books, settings ->
+        container.downloadPrefs.settings,
+        storageTick
+    ) { items, books, settings, _ ->
         val byBook = items.groupBy { it.bookId }
         val grouped = books.mapNotNull { book ->
             val bookItems = byBook[book.id] ?: return@mapNotNull null
@@ -129,20 +147,27 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
                 readyChapters = chapters.count {
                     it.downloadState == app.xreader.data.db.DownloadState.READY
                 },
-                totalChapters = if (book.totalChapters > 0) book.totalChapters else chapters.size
+                totalChapters = if (book.totalChapters > 0) book.totalChapters else chapters.size,
+                // v1.0.6.2 (D2): storage used = the bytes of this
+                // book's files on disk (chapter content + the
+                // book's own files share the books/<id> tree).
+                bytesOnDisk = runCatching {
+                    container.bookStorage.booksDir(book.id)
+                        .walkTopDown()
+                        .filter { it.isFile }
+                        .sumOf { it.length() }
+                }.getOrDefault(0L)
             )
         }
-        // v1.0.6.2 (D2): storage used = the bytes of every
-        // grouped book's files on disk (chapter content + the
-        // book's own files share the books/<id> tree).
-        val storageBytes = grouped.sumOf { group ->
-            runCatching {
-                container.bookStorage.booksDir(group.book.id)
-                    .walkTopDown()
-                    .filter { it.isFile }
-                    .sumOf { it.length() }
-            }.getOrDefault(0L)
-        }
+        val coverCacheBytes = runCatching {
+            container.bookStorage.coversDir()
+                .walkTopDown()
+                .filter { it.isFile }
+                .sumOf { it.length() }
+        }.getOrDefault(0L)
+        val deviceTotalBytes = runCatching {
+            android.os.StatFs(container.bookStorage.filesDir.path).totalBytes
+        }.getOrDefault(0L)
         DownloadsUiState(
             active = grouped.filter { it.activeItems.isNotEmpty() || it.failedItems.isNotEmpty() },
             finished = grouped.filter {
@@ -150,9 +175,31 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
             },
             wifiOnlyPrefetch = settings.wifiOnlyPrefetch,
             loading = false,
-            storageBytes = storageBytes
+            storageBytes = grouped.sumOf { it.bytesOnDisk },
+            coverCacheBytes = coverCacheBytes,
+            deviceTotalBytes = deviceTotalBytes,
+            onMeteredNetwork = runCatching {
+                !container.networkGate.onUnmeteredNetwork()
+            }.getOrDefault(false)
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DownloadsUiState())
+
+    /** v1.1.0 (§5.12): Clean Cache — the same rebuildable caches
+     * Customise → Storage clears (covers + temp + import staging).
+     * Downloaded chapters and book files are never touched here. */
+    fun clearCaches() {
+        viewModelScope.launch(container.ioDispatcher) {
+            runCatching {
+                container.bookStorage.coversDir().listFiles()
+                    ?.forEach { it.deleteRecursively() }
+                container.bookStorage.downloadsTempDir().listFiles()
+                    ?.forEach { it.deleteRecursively() }
+                container.bookStorage.importStagingRoot().listFiles()
+                    ?.forEach { it.deleteRecursively() }
+            }
+            storageTick.value += 1
+        }
+    }
 
     fun pause(item: DownloadQueueItem) {
         viewModelScope.launch { container.downloadController.pause(item.id) }

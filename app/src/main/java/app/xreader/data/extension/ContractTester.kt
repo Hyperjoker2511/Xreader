@@ -103,6 +103,26 @@ class ContractTester(private val service: ExtensionService) {
         val firstBook: SourceBook? = (listResult as? AppResult.Ok)?.value
             ?.books?.firstOrNull()
 
+        // v1.1.0 (design §6.5b): a declarative source whose
+        // config deliberately carries NO search spec has no
+        // search BY DESIGN — the step is recorded as a neutral
+        // fact, never run and never failed. (A config whose
+        // search exists but is unverified still runs the step
+        // exactly as before.)
+        val searchByDesignAbsent =
+            service.declarativeConfigOf(handle)?.let { it.search == null } == true ||
+                // A Live Source carries no search spec at all —
+                // its search is best-effort derivation, so the
+                // same honest line applies (design §6.5b).
+                handle.source is LiveSource
+        if (searchByDesignAbsent) {
+            results += CapabilityResult(
+                capability = SourceCapability.SEARCH,
+                ok = true,
+                detail = ContractVerdict.SEARCH_NOT_SET_UP_LINE,
+                notApplicable = true
+            )
+        }
         // SEARCH — a distinctive word from the first listed title,
         // or a neutral word when the list was empty.
         val probeWord = firstBook?.title
@@ -110,42 +130,44 @@ class ContractTester(private val service: ExtensionService) {
             ?.filter { it.length >= 4 }
             ?.maxByOrNull { it.length }
             ?: "the"
-        val searchResult = service.guarded(handle) { it.search(probeWord, 1) }
-        // v1.0.5 (A5): finding books is not enough — the search
-        // must provably FILTER. A nonsense control word must
-        // return fewer results, and the real results must differ
-        // from the unfiltered list (SearchFilterProof).
-        val controlResult = service.guarded(handle) {
-            it.search(SearchFilterProof.NONSENSE_TERM, 1)
-        }
-        val searchVerdict = if (searchResult is AppResult.Ok) {
-            SearchFilterProof.judge(
-                searchResult.value.books.map { it.id }.toSet(),
-                (controlResult as? AppResult.Ok)?.value?.books
-                    ?.map { it.id }?.toSet() ?: emptySet(),
-                (listResult as? AppResult.Ok)?.value?.books
-                    ?.map { it.id }?.toSet()
-            )
-        } else {
-            null
-        }
-        if (searchResult is AppResult.Ok && searchVerdict?.verified == false) {
-            results += CapabilityResult(
-                capability = SourceCapability.SEARCH,
-                ok = false,
-                detail = searchVerdict.reason ?: "search results couldn't be judged"
-            )
-        } else {
-            record(
-                SourceCapability.SEARCH, searchResult,
-                if (searchResult is AppResult.Ok) {
-                    "searching “$probeWord” found " +
-                        "${searchResult.value.books.size} book(s) — and the " +
-                        "nonsense control word found fewer, so it filters"
-                } else {
-                    ""
-                }
-            )
+        if (!searchByDesignAbsent) {
+            val searchResult = service.guarded(handle) { it.search(probeWord, 1) }
+            // v1.0.5 (A5): finding books is not enough — the search
+            // must provably FILTER. A nonsense control word must
+            // return fewer results, and the real results must differ
+            // from the unfiltered list (SearchFilterProof).
+            val controlResult = service.guarded(handle) {
+                it.search(SearchFilterProof.NONSENSE_TERM, 1)
+            }
+            val searchVerdict = if (searchResult is AppResult.Ok) {
+                SearchFilterProof.judge(
+                    searchResult.value.books.map { it.id }.toSet(),
+                    (controlResult as? AppResult.Ok)?.value?.books
+                        ?.map { it.id }?.toSet() ?: emptySet(),
+                    (listResult as? AppResult.Ok)?.value?.books
+                        ?.map { it.id }?.toSet()
+                )
+            } else {
+                null
+            }
+            if (searchResult is AppResult.Ok && searchVerdict?.verified == false) {
+                results += CapabilityResult(
+                    capability = SourceCapability.SEARCH,
+                    ok = false,
+                    detail = searchVerdict.reason ?: "search results couldn't be judged"
+                )
+            } else {
+                record(
+                    SourceCapability.SEARCH, searchResult,
+                    if (searchResult is AppResult.Ok) {
+                        "searching “$probeWord” found " +
+                            "${searchResult.value.books.size} book(s) — and the " +
+                            "nonsense control word found fewer, so it filters"
+                    } else {
+                        ""
+                    }
+                )
+            }
         }
 
         if (firstBook == null) {

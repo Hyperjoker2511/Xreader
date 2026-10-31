@@ -14,10 +14,9 @@ import org.junit.Test
 
 /**
  * v1.0.2 Stage 2 appearance rules: the R04 fresh-install default
- * (decided by the main agent under the user's autonomy grant —
- * fresh installs get Electric Violet (v1.0.6.2 F8b — was Violet
- * Night until the final-build plan made the user's own palette
- * the default), upgraders keep their look, via
+ * (fresh installs get Nocturne Violet since the v1.1.0 flip —
+ * was Electric Violet in v1.0.6.2 F8b, Violet Night before that;
+ * upgraders keep their look until the v2 migration, via
  * existing-data presence), the custom-scheme cap (3 → 12 in v1.0.7), and the
  * R05/R06/R07 state defaults.
  */
@@ -36,10 +35,12 @@ class AppearanceStage2Test {
     }
 
     @Test
-    fun `fresh install primes to Electric Violet`() = runTest {
+    fun `fresh install primes to Nocturne Violet`() = runTest {
+        // DELIBERATELY updated for v1.1.0 (the Nocturne flip):
+        // FRESH_INSTALL_SCHEME was Electric Violet in v1.0.6.2.
         val prefs = AppearancePrefs(FakeDataStore(), establishedInstall = false)
         prefs.primeDefaultScheme()
-        assertEquals("Electric violet", prefs.state.first().colourScheme)
+        assertEquals("Nocturne violet", prefs.state.first().colourScheme)
     }
 
     @Test
@@ -59,14 +60,16 @@ class AppearanceStage2Test {
     }
 
     @Test
-    fun `fresh install keeps Electric Violet across a later established run`() = runTest {
+    fun `fresh install keeps Nocturne Violet across a later established run`() = runTest {
+        // DELIBERATELY updated for v1.1.0 (the Nocturne flip):
+        // the pinned fresh-install value was Electric Violet.
         val store = FakeDataStore()
         AppearancePrefs(store, establishedInstall = false).primeDefaultScheme()
         // Second process: the database now exists, so the signal
         // says "established" — the primed value must not flip.
         val second = AppearancePrefs(store, establishedInstall = true)
         second.primeDefaultScheme()
-        assertEquals("Electric violet", second.state.first().colourScheme)
+        assertEquals("Nocturne violet", second.state.first().colourScheme)
     }
 
     @Test

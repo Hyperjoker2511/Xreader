@@ -31,7 +31,13 @@ data class CapabilityResult(
      * locked — not because the source is broken. A verdict
      * whose core failures are all limit-only is
      * WORKING_WITH_LIMITS, never NEEDS_SETUP (see [judge]). */
-    val limitOnly: Boolean = false
+    val limitOnly: Boolean = false,
+    /** v1.1.0 (design §6.5b): the capability is not set up
+     * BY DESIGN for this source (a lane that deliberately
+     * ships no search spec). The line is shown as a neutral
+     * fact — "Search: not set up for this site" — never as
+     * a failure, and it never drags the verdict. */
+    val notApplicable: Boolean = false
 )
 
 data class ContractVerdict(
@@ -45,12 +51,14 @@ data class ContractVerdict(
     val checkedAtMillis: Long = 0
 ) {
     fun failedCore(): List<SourceCapability> =
-        results.filter { it.capability in READING_CORE && !it.ok }
-            .map { it.capability }
+        results.filter {
+            it.capability in READING_CORE && !it.ok && !it.notApplicable
+        }.map { it.capability }
 
     fun failedOptional(): List<SourceCapability> =
-        results.filter { it.capability !in READING_CORE && !it.ok }
-            .map { it.capability }
+        results.filter {
+            it.capability !in READING_CORE && !it.ok && !it.notApplicable
+        }.map { it.capability }
 
     /** One plain-words line for source rows and detail headers. */
     fun summaryLine(): String = when (state) {
@@ -99,7 +107,10 @@ data class ContractVerdict(
             if (core.size < READING_CORE.size) {
                 return SourceHealthState.NEEDS_SETUP
             }
-            val coreFailed = core.filter { !it.ok }
+            // v1.1.0 (§6.5b): a by-design absence (notApplicable)
+            // is neither a pass nor a failure — it cannot drag
+            // the verdict, and the remaining core steps decide.
+            val coreFailed = core.filter { !it.ok && !it.notApplicable }
             if (coreFailed.isNotEmpty()) {
                 return if (coreFailed.all { it.limitOnly }) {
                     SourceHealthState.WORKING_WITH_LIMITS
@@ -108,11 +119,15 @@ data class ContractVerdict(
                 }
             }
             val optionalFailed = results.any {
-                it.capability !in READING_CORE && !it.ok
+                it.capability !in READING_CORE && !it.ok && !it.notApplicable
             }
             return if (optionalFailed) SourceHealthState.WORKING_WITH_LIMITS
             else SourceHealthState.WORKING
         }
+
+        /** v1.1.0 (§6.5b): the neutral search line for a source
+         * with no search spec by design. */
+        const val SEARCH_NOT_SET_UP_LINE = "Search: not set up for this site"
     }
 }
 

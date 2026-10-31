@@ -29,19 +29,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -72,7 +73,11 @@ import app.xreader.domain.reader.ReaderConfig
 import app.xreader.domain.reader.ReaderMode
 import app.xreader.domain.reader.SleepMode
 import app.xreader.domain.reader.Soundscape
-import app.xreader.ui.common.XreaderPrimaryButton
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.NocturneSwitch
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.RowItem
+import app.xreader.ui.common.SectionHeader
 import app.xreader.domain.reader.PagedDirection
 import app.xreader.domain.reader.TapZoneLayout
 import app.xreader.ui.theme.Contrast
@@ -105,14 +110,17 @@ fun ReaderSettingsSheet(
     onClearBookOverride: () -> Unit = {},
     /** v1.0.2 (sweep): save a word from this chapter to
      * "Words I'm learning". */
-    onSaveWord: (String) -> Unit = {}
+    onSaveWord: (String) -> Unit = {},
+    /** Nocturne §5.11: the reader chrome's Theme tile opens this
+     * sheet straight on the "page" sub-page. */
+    initialPage: String = "index"
 ) {
     // v1.0.6.2 (F8c): the sheet is a short INDEX of plainly-named
     // groups now — not one long scroll. Each group is its own
     // small page inside the sheet; every control below is the
     // same control with the same stored value, regrouped, with
     // the explanation paragraphs cut to at most one short line.
-    var page by remember { mutableStateOf("index") }
+    var page by remember(initialPage) { mutableStateOf(initialPage) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -146,7 +154,12 @@ fun ReaderSettingsSheet(
         }
         when (page) {
             "index" -> {
-                Text("Reading settings", style = MaterialTheme.typography.titleLarge)
+                SectionHeader(title = "Reading settings", eyebrow = "Reader",
+    modifier = Modifier,
+    actionText = null,
+    onAction = null,
+
+                )
 
                 // R18 scope: at the TOP of the index, as before.
                 SheetSection("Apply colours & text size to") {
@@ -154,15 +167,21 @@ fun ReaderSettingsSheet(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        FilterChip(
+                        NocturneChip(
+                            label = "All books",
                             selected = settingsScope == ReaderSettingsScope.ALL_BOOKS,
                             onClick = { onScopeChange(ReaderSettingsScope.ALL_BOOKS) },
-                            label = { Text("All books") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "This book only",
                             selected = settingsScope == ReaderSettingsScope.THIS_BOOK,
                             onClick = { onScopeChange(ReaderSettingsScope.THIS_BOOK) },
-                            label = { Text("This book only") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
                     }
                     if (hasBookOverride) {
@@ -177,20 +196,32 @@ fun ReaderSettingsSheet(
                     }
                 }
 
-                SettingsIndexRow(
-                    title = "Reading",
-                    summary = if (config.mode == ReaderMode.SCROLL) "Scroll" else "Pages",
-                    onClick = { page = "reading" }
+                RowItem(
+                    icon = Icons.Filled.MenuBook,
+                    label = "Reading",
+                    value = if (config.mode == ReaderMode.SCROLL) "Scroll" else "Pages",
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { page = "reading" },
+                    badge = null,
+                
                 )
-                SettingsIndexRow(
-                    title = "Page & text",
-                    summary = "Page theme · ${config.paletteName}",
-                    onClick = { page = "page" }
+                RowItem(
+                    icon = Icons.Filled.Palette,
+                    label = "Page & text",
+                    value = "Page theme · ${config.paletteName}",
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { page = "page" },
+                    badge = null,
+                
                 )
-                SettingsIndexRow(
-                    title = "Extras",
-                    summary = "Words · Eye-tracking",
-                    onClick = { page = "extras" }
+                RowItem(
+                    icon = Icons.Filled.Science,
+                    label = "Extras",
+                    value = "Words · Eye-tracking",
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { page = "extras" },
+                    badge = null,
+                
                 )
                 TextButton(onClick = onOpenCustomise) {
                     Text("Open the Customise screen — colours, glass, layout and more")
@@ -203,15 +234,21 @@ fun ReaderSettingsSheet(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        FilterChip(
+                        NocturneChip(
+                            label = "Pages",
                             selected = config.mode == ReaderMode.PAGED,
                             onClick = { onUpdate { it.copy(mode = ReaderMode.PAGED) } },
-                            label = { Text("Pages") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "Scroll",
                             selected = config.mode == ReaderMode.SCROLL,
                             onClick = { onUpdate { it.copy(mode = ReaderMode.SCROLL) } },
-                            label = { Text("Scroll") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
                     }
                 }
@@ -228,10 +265,13 @@ fun ReaderSettingsSheet(
                             app.xreader.domain.reader.ChapterTransition.PULL_FOR_NEXT to
                                 "Pull for next"
                         ).forEach { (value, label) ->
-                            FilterChip(
+                            NocturneChip(
+                                label = label,
                                 selected = config.chapterTransition == value,
                                 onClick = { onUpdate { it.copy(chapterTransition = value) } },
-                                label = { Text(label) }
+                                modifier = Modifier,
+                                dotColor = null,
+                            
                             )
                         }
                     }
@@ -253,10 +293,13 @@ fun ReaderSettingsSheet(
                             app.xreader.domain.reader.KeyboardPreset.PAGE_KEYS to "Page keys",
                             app.xreader.domain.reader.KeyboardPreset.OFF to "Off"
                         ).forEach { (value, label) ->
-                            FilterChip(
+                            NocturneChip(
+                                label = label,
                                 selected = config.keyboardPreset == value,
                                 onClick = { onUpdate { it.copy(keyboardPreset = value) } },
-                                label = { Text(label) }
+                                modifier = Modifier,
+                                dotColor = null,
+                            
                             )
                         }
                     }
@@ -287,33 +330,45 @@ fun ReaderSettingsSheet(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        FilterChip(
+                        NocturneChip(
+                            label = "Automatic",
                             selected = config.turnOverride == PageTurnOverride.AUTO,
                             onClick = {
                                 onUpdate { it.copy(turnOverride = PageTurnOverride.AUTO) }
                             },
-                            label = { Text("Automatic") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "Curl",
                             selected = config.turnOverride == PageTurnOverride.FULL,
                             onClick = {
                                 onUpdate { it.copy(turnOverride = PageTurnOverride.FULL) }
                             },
-                            label = { Text("Curl") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "Gooey",
                             selected = config.turnOverride == PageTurnOverride.MID,
                             onClick = {
                                 onUpdate { it.copy(turnOverride = PageTurnOverride.MID) }
                             },
-                            label = { Text("Gooey") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "Fade",
                             selected = config.turnOverride == PageTurnOverride.MINIMAL,
                             onClick = {
                                 onUpdate { it.copy(turnOverride = PageTurnOverride.MINIMAL) }
                             },
-                            label = { Text("Fade") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
                     }
                     Text(
@@ -332,25 +387,37 @@ fun ReaderSettingsSheet(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        FilterChip(
+                        NocturneChip(
+                            label = "Standard",
                             selected = config.tapZoneLayout == TapZoneLayout.STANDARD,
                             onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.STANDARD) } },
-                            label = { Text("Standard") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "Reversed",
                             selected = config.tapZoneLayout == TapZoneLayout.REVERSED,
                             onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.REVERSED) } },
-                            label = { Text("Reversed") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "Nine-zone",
                             selected = config.tapZoneLayout == TapZoneLayout.NINE_ZONE,
                             onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.NINE_ZONE) } },
-                            label = { Text("Nine-zone") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "Off",
                             selected = config.tapZoneLayout == TapZoneLayout.OFF,
                             onClick = { onUpdate { it.copy(tapZoneLayout = TapZoneLayout.OFF) } },
-                            label = { Text("Off") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
                     }
                     Text(
@@ -361,15 +428,21 @@ fun ReaderSettingsSheet(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        FilterChip(
+                        NocturneChip(
+                            label = "Left to right",
                             selected = config.pagedDirection == PagedDirection.LTR,
                             onClick = { onUpdate { it.copy(pagedDirection = PagedDirection.LTR) } },
-                            label = { Text("Left to right") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "Right to left",
                             selected = config.pagedDirection == PagedDirection.RTL,
                             onClick = { onUpdate { it.copy(pagedDirection = PagedDirection.RTL) } },
-                            label = { Text("Right to left") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
                     }
                     SheetSwitch(
@@ -419,7 +492,7 @@ fun ReaderSettingsSheet(
                                     Modifier
                                         .fillMaxWidth()
                                         .height(118.dp)
-                                        .clip(RoundedCornerShape(10.dp))
+                                        .clip(RoundedCornerShape(16.dp))
                                         .background(effective.background)
                                         .border(
                                             width = if (selected) 3.dp else 1.dp,
@@ -428,7 +501,7 @@ fun ReaderSettingsSheet(
                                             } else {
                                                 MaterialTheme.colorScheme.outline
                                             },
-                                            shape = RoundedCornerShape(10.dp)
+                                            shape = RoundedCornerShape(16.dp)
                                         )
                                         .clickable {
                                             onUpdate { it.copy(paletteName = palette.name) }
@@ -487,13 +560,16 @@ fun ReaderSettingsSheet(
                         modifier = Modifier.horizontalScroll(rememberScrollState())
                     ) {
                         pageChoices.forEach { (label, argb) ->
-                            FilterChip(
+                            NocturneChip(
+                                label = label,
                                 selected = config.paletteName == "Custom" &&
                                     config.customPageArgb == argb,
                                 onClick = {
                                     onUpdate { it.copy(paletteName = "Custom", customPageArgb = argb) }
                                 },
-                                label = { Text(label) }
+                                modifier = Modifier,
+                                dotColor = null,
+                            
                             )
                         }
                     }
@@ -503,13 +579,16 @@ fun ReaderSettingsSheet(
                         modifier = Modifier.horizontalScroll(rememberScrollState())
                     ) {
                         textChoices.forEach { (label, argb) ->
-                            FilterChip(
+                            NocturneChip(
+                                label = label,
                                 selected = config.paletteName == "Custom" &&
                                     config.customTextArgb == argb,
                                 onClick = {
                                     onUpdate { it.copy(paletteName = "Custom", customTextArgb = argb) }
                                 },
-                                label = { Text(label) }
+                                modifier = Modifier,
+                                dotColor = null,
+                            
                             )
                         }
                     }
@@ -549,11 +628,14 @@ fun ReaderSettingsSheet(
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.weight(1f)
                         )
-                        Switch(
+                        NocturneSwitch(
                             checked = config.brightness == null,
                             onCheckedChange = { system ->
                                 onUpdate { it.copy(brightness = if (system) null else 0.7f) }
-                            }
+                            },
+                            modifier = Modifier,
+                            enabled = true,
+                        
                         )
                     }
                     if (config.brightness != null) {
@@ -571,30 +653,40 @@ fun ReaderSettingsSheet(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        FilterChip(
+                        NocturneChip(
+                            label = "Literata",
                             selected = config.fontChoice == ReaderFontChoice.LITERATA,
                             onClick = {
                                 onUpdate { it.copy(fontChoice = ReaderFontChoice.LITERATA) }
                             },
-                            label = { Text("Literata") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "Jakarta",
                             selected = config.fontChoice == ReaderFontChoice.JAKARTA,
                             onClick = {
                                 onUpdate { it.copy(fontChoice = ReaderFontChoice.JAKARTA) }
                             },
-                            label = { Text("Jakarta") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "Inter",
                             selected = config.fontChoice == ReaderFontChoice.INTER,
                             onClick = {
                                 onUpdate { it.copy(fontChoice = ReaderFontChoice.INTER) }
                             },
-                            label = { Text("Inter") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
                     }
                     for (fontName in userFonts) {
-                        FilterChip(
+                        NocturneChip(
+                            label = fontName,
                             selected = config.fontChoice == ReaderFontChoice.USER &&
                                 config.userFontName == fontName,
                             onClick = {
@@ -605,8 +697,9 @@ fun ReaderSettingsSheet(
                                     )
                                 }
                             },
-                            label = { Text(fontName) },
-                            modifier = Modifier.padding(top = 6.dp)
+                            modifier = Modifier.padding(top = 6.dp),
+                            dotColor = null,
+                        
                         )
                     }
                     Text(
@@ -653,17 +746,23 @@ fun ReaderSettingsSheet(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        FilterChip(
+                        NocturneChip(
+                            label = "Left",
                             selected = config.alignment == ReaderAlignment.LEFT,
                             onClick = { onUpdate { it.copy(alignment = ReaderAlignment.LEFT) } },
-                            label = { Text("Left") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
-                        FilterChip(
+                        NocturneChip(
+                            label = "Justified",
                             selected = config.alignment == ReaderAlignment.JUSTIFY,
                             onClick = {
                                 onUpdate { it.copy(alignment = ReaderAlignment.JUSTIFY) }
                             },
-                            label = { Text("Justified") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
                     }
                 }
@@ -733,9 +832,12 @@ fun ReaderSettingsSheet(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Switch(
+                        NocturneSwitch(
                             checked = config.eyeTracking,
-                            onCheckedChange = { v -> onUpdate { it.copy(eyeTracking = v) } }
+                            onCheckedChange = { v -> onUpdate { it.copy(eyeTracking = v) } },
+                            modifier = Modifier,
+                            enabled = true,
+                        
                         )
                     }
                     Text(
@@ -747,34 +849,6 @@ fun ReaderSettingsSheet(
             }
         }
         Spacer(Modifier.height(16.dp))
-    }
-}
-
-/** v1.0.6.2 (F8c): one index row — group name, its current
- * choice quietly on the right. */
-@Composable
-private fun SettingsIndexRow(
-    title: String,
-    summary: String,
-    onClick: () -> Unit
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            summary,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
@@ -806,7 +880,13 @@ fun eyeStatusText(state: EyeState, message: String?): String = when (state) {
 @Composable
 private fun SheetSection(title: String, content: @Composable () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(title, style = MaterialTheme.typography.titleSmall)
+        SectionHeader(title = title,
+    modifier = Modifier,
+    eyebrow = null,
+    actionText = null,
+    onAction = null,
+
+        )
         content()
     }
 }
@@ -836,7 +916,11 @@ private fun SheetSlider(
 private fun SheetSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = onChange)
+        NocturneSwitch(checked = checked, onCheckedChange = onChange,
+    modifier = Modifier,
+    enabled = true,
+
+        )
     }
 }
 
@@ -866,7 +950,12 @@ fun ListenSheet(
             .padding(horizontal = 24.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text("Listen", style = MaterialTheme.typography.titleLarge)
+        SectionHeader(title = "Listen", eyebrow = "Read aloud",
+    modifier = Modifier,
+    actionText = null,
+    onAction = null,
+
+        )
 
         if (hasOverlay) {
             SheetSection("This book's own audio") {
@@ -962,10 +1051,13 @@ fun ListenSheet(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 for (rate in listOf(0.75f, 1f, 1.25f, 1.5f, 2f)) {
-                    FilterChip(
+                    NocturneChip(
+                        label = "${rate}×",
                         selected = speechRate == rate,
                         onClick = { onRateChange(rate) },
-                        label = { Text("${rate}×") }
+                        modifier = Modifier,
+                        dotColor = null,
+                    
                     )
                 }
             }
@@ -976,22 +1068,31 @@ fun ListenSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                NocturneChip(
+                    label = "Off",
                     selected = ttsState.sleepMode == SleepMode.Off,
                     onClick = { onSleepChange(SleepMode.Off) },
-                    label = { Text("Off") }
+                    modifier = Modifier,
+                    dotColor = null,
+                
                 )
                 for (minutes in listOf(10, 20, 30)) {
-                    FilterChip(
+                    NocturneChip(
+                        label = "$minutes min",
                         selected = ttsState.sleepMode == SleepMode.AfterMinutes(minutes),
                         onClick = { onSleepChange(SleepMode.AfterMinutes(minutes)) },
-                        label = { Text("$minutes min") }
+                        modifier = Modifier,
+                        dotColor = null,
+                    
                     )
                 }
-                FilterChip(
+                NocturneChip(
+                    label = "End of chapter",
                     selected = ttsState.sleepMode == SleepMode.EndOfChapter,
                     onClick = { onSleepChange(SleepMode.EndOfChapter) },
-                    label = { Text("End of chapter") }
+                    modifier = Modifier,
+                    dotColor = null,
+                
                 )
             }
             val remaining = ttsState.sleepRemainingMs
@@ -1039,6 +1140,13 @@ fun TocSheet(
 ) {
     var tab by remember { mutableIntStateOf(0) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        SectionHeader(title = "Contents", eyebrow = "This book",
+    modifier = Modifier,
+    actionText = null,
+    onAction = null,
+
+        )
+        Spacer(Modifier.height(8.dp))
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Chapters") })
             Tab(
@@ -1258,7 +1366,12 @@ fun FocusSheet(
             .padding(horizontal = 24.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text("Focus timer", style = MaterialTheme.typography.titleLarge)
+        SectionHeader(title = "Focus timer", eyebrow = "Reader",
+    modifier = Modifier,
+    actionText = null,
+    onAction = null,
+
+        )
         when (focus.state) {
             app.xreader.domain.reader.FocusState.IDLE -> {
                 Text(
@@ -1269,10 +1382,13 @@ fun FocusSheet(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     for (preset in listOf(25, 50)) {
-                        FilterChip(
+                        NocturneChip(
+                            label = "$preset min",
                             selected = customMinutes.roundToInt() == preset,
                             onClick = { customMinutes = preset.toFloat() },
-                            label = { Text("$preset min") }
+                            modifier = Modifier,
+                            dotColor = null,
+                        
                         )
                     }
                 }
@@ -1289,26 +1405,28 @@ fun FocusSheet(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         for (sound in Soundscape.entries) {
-                            FilterChip(
-                                selected = soundscape == sound,
-                                onClick = { soundscape = sound },
-                                label = {
-                                    Text(
-                                        when (sound) {
+                            NocturneChip(
+                                label = when (sound) {
                                             Soundscape.NONE -> "Quiet"
                                             Soundscape.RAIN -> "Rain"
                                             Soundscape.FIREPLACE -> "Fireplace"
                                             Soundscape.FOREST -> "Forest"
-                                        }
-                                    )
-                                }
+                                        },
+                                selected = soundscape == sound,
+                                onClick = { soundscape = sound },
+                                modifier = Modifier,
+                                dotColor = null,
+                            
                             )
                         }
                     }
                 }
-                XreaderPrimaryButton(
+                PrimaryPill(
                     text = "Start focusing",
-                    onClick = { onStart(customMinutes.roundToInt(), soundscape) }
+                    onClick = { onStart(customMinutes.roundToInt(), soundscape) },
+                    modifier = Modifier,
+                    enabled = true,
+                
                 )
             }
             app.xreader.domain.reader.FocusState.RUNNING,
@@ -1330,13 +1448,20 @@ fun FocusSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = if (focus.state ==
                             app.xreader.domain.reader.FocusState.RUNNING
                         ) "Pause" else "Resume",
-                        onClick = onPauseResume
+                        onClick = onPauseResume,
+                        modifier = Modifier,
+                        enabled = true,
+                    
                     )
-                    XreaderPrimaryButton(text = "End session", onClick = onStop)
+                    PrimaryPill(text = "End session", onClick = onStop,
+    modifier = Modifier,
+    enabled = true,
+
+                    )
                 }
             }
             app.xreader.domain.reader.FocusState.DONE -> {
@@ -1355,7 +1480,11 @@ fun FocusSheet(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                XreaderPrimaryButton(text = "Done", onClick = onAcknowledgeDone)
+                PrimaryPill(text = "Done", onClick = onAcknowledgeDone,
+    modifier = Modifier,
+    enabled = true,
+
+                )
             }
         }
         Spacer(Modifier.height(8.dp))

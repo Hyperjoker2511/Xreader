@@ -1,6 +1,5 @@
 package app.xreader.ui.sources
 
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,13 +15,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,13 +37,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.listPlacementSpec
-import app.xreader.core.motion.pressBounce
 import app.xreader.data.db.ExtensionRepo
 import app.xreader.data.db.InstalledExtension
 import app.xreader.data.extension.ExtensionKind
 import app.xreader.data.extension.IndexPackage
 import app.xreader.data.extension.RepoManager
+import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.KitEmptyState
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.SearchCapsule
 import app.xreader.ui.theme.errorTextColor
 import app.xreader.ui.theme.primaryTextColor
 
@@ -67,8 +71,6 @@ fun SourceStoreScreen(
     var pendingRepoRemoval by remember { mutableStateOf<ExtensionRepo?>(null) }
     var pendingUninstall by remember { mutableStateOf<InstalledExtension?>(null) }
     var repoQuery by remember { mutableStateOf("") }
-    // v1.0.4 (D11): one shared press source for the filter chips.
-    val repoChipInteraction = remember { MutableInteractionSource() }
     var repoFilter by remember { mutableStateOf("ALL") }
     var repoLanguage by remember { mutableStateOf<String?>(null) }
 
@@ -97,9 +99,11 @@ fun SourceStoreScreen(
         Spacer(Modifier.height(14.dp))
         LazyColumn(
             Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = androidx.compose.foundation.layout
+                .PaddingValues(bottom = 88.dp)
         ) {
-            // ── Changed-index warnings ──────────────────────────
+            // ── Changed-index warnings (§5.5 Banner) ────────────
             items(state.repos.filter { it.id in state.changedRepos }, key = { "changed-${it.id}" }) { repo ->
                 GlassCard(Modifier.animateItem(placementSpec = listPlacementSpec())) {
                     Text(
@@ -113,59 +117,56 @@ fun SourceStoreScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { viewModel.acceptChangedIndex(repo) }) {
-                            Text("Accept the new list")
-                        }
-                        TextButton(onClick = { viewModel.dismissChangedIndex(repo) }) {
-                            Text("Not now")
-                        }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PrimaryPill(
+                            text = "Accept the new list",
+                            onClick = { viewModel.acceptChangedIndex(repo) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        GhostPill(
+                            text = "Not now",
+                            onClick = { viewModel.dismissChangedIndex(repo) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }
 
             // ── Search + filters (v1.0.2 R14 storefront) ────────
             item {
-                OutlinedTextField(
+                SearchCapsule(
                     value = repoQuery,
                     onValueChange = { repoQuery = it },
-                    label = { Text("Search repositories and sources") },
-                    placeholder = {
-                        Text("Name, site address or language…")
-                    },
-                    singleLine = true,
+                    placeholder = "Name, site address or language…",
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(8.dp))
                 androidx.compose.foundation.layout.FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     listOf(
                         "ALL" to "All",
                         "INSTALLED" to "Installed",
                         "UPDATES" to "Updates"
                     ).forEach { (key, label) ->
-                        androidx.compose.material3.FilterChip(
+                        NocturneChip(
+                            label = label,
                             selected = repoFilter == key,
-                            onClick = { repoFilter = key },
-                            label = { Text(label) },
-                            interactionSource = repoChipInteraction,
-                            modifier = Modifier.pressBounce(repoChipInteraction)
+                            onClick = { repoFilter = key }
                         )
                     }
                     val languages = state.catalogues.values.flatten()
                         .flatMap { it.languages }.distinct().sorted()
                     languages.forEach { lang ->
-                        androidx.compose.material3.FilterChip(
+                        NocturneChip(
+                            label = lang.uppercase(),
                             selected = repoFilter == "LANGUAGE" &&
                                 repoLanguage == lang,
                             onClick = {
                                 repoFilter = "LANGUAGE"
                                 repoLanguage = lang
-                            },
-                            label = { Text(lang.uppercase()) },
-                            interactionSource = repoChipInteraction,
-                            modifier = Modifier.pressBounce(repoChipInteraction)
+                            }
                         )
                     }
                 }
@@ -215,11 +216,10 @@ fun SourceStoreScreen(
             }
             if (state.repos.isEmpty()) {
                 item {
-                    Text(
-                        "No repositories yet. Add one from “Add a source” " +
-                            "and its sources will appear here.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    KitEmptyState(
+                        icon = Icons.Filled.Storefront,
+                        message = "No repositories yet. Add one from “Add a source” " +
+                            "and its sources will appear here."
                     )
                 }
             }
@@ -246,10 +246,9 @@ fun SourceStoreScreen(
             }
             if (visibleRepos.isEmpty() && state.repos.isNotEmpty()) {
                 item {
-                    Text(
-                        "Nothing matches that search.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    KitEmptyState(
+                        icon = Icons.Filled.Search,
+                        message = "Nothing matches that search."
                     )
                 }
             }
@@ -427,7 +426,7 @@ private fun RepoCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
                     modifier = Modifier.size(38.dp)
                 ) {
@@ -463,22 +462,28 @@ private fun RepoCard(
                         )
                     }
                 }
+                // §5.5: the package row's ONE action is a state
+                // pill-button — Install / Update as PrimaryPill,
+                // Uninstall as the quieter GhostPill.
                 when {
                     installedExt != null && hasUpdate ->
-                        TextButton(
+                        PrimaryPill(
+                            text = "Update",
                             onClick = { onUpdatePkg(pkg) },
                             enabled = !busy
-                        ) { Text("Update") }
+                        )
                     installedExt != null ->
-                        TextButton(
+                        GhostPill(
+                            text = "Uninstall",
                             onClick = { onUninstall(installedExt) },
                             enabled = !busy
-                        ) { Text("Uninstall") }
+                        )
                     else ->
-                        TextButton(
+                        PrimaryPill(
+                            text = "Install",
                             onClick = { onInstall(pkg) },
                             enabled = !busy
-                        ) { Text("Install") }
+                        )
                 }
             }
         }

@@ -81,7 +81,15 @@ data class ListSpec(
     /** v1.0.1: "GET" (default) or "POST" — POST search forms exist. */
     val method: String = "GET",
     /** For POST listings: the form body template, may use {query}. */
-    val body: String? = null
+    val body: String? = null,
+    /** v1.1.0 (design §6.1, Shape B): the Book-Shape Rule for
+     * this listing — a regex over the item link's normalised
+     * path (query/fragment stripped, one trailing slash
+     * removed); an item whose link doesn't match is dropped,
+     * however book-like its card looks. Modelled on
+     * [ChapterListSpec.urlPattern]. Null (every spec written
+     * before v1.1.0) = no shape filter, exactly as before. */
+    val linkPattern: String? = null
 )
 
 /** The book page: fills details and carries the chapter list. When the

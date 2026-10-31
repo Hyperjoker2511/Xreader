@@ -14,21 +14,35 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.RowItem
 import app.xreader.ui.common.ScreenHeader
 
 /**
- * More (PLAN §3): the settings home in embryo. Phase 1 ships the two
- * destinations that exist — Appearance and About & licences; Providers &
- * keys, Sync & backup and Profile join this list in their own phases,
- * in this same glass-row language.
+ * Me hub (PLAN §3; v1.1.0 §5.15 Nocturne pass): identity mini-card,
+ * the What's-new and heal-note banners, then the RowItem door list.
+ *
+ * v1.1.0 (§7): the Appearance row is REMOVED — AppearanceScreen is
+ * dead code whose route already redirects to Customise, so the row
+ * was a duplicate door. [onAppearance] stays in the signature only
+ * until the shell drops its argument; nothing on this screen calls
+ * it any more.
  */
 @Composable
 fun MoreScreen(
@@ -56,15 +70,22 @@ fun MoreScreen(
     healNote: String? = null,
     onDismissHealNote: () -> Unit = {}
 ) {
+    // §7: the Appearance door is gone from this list. The callback
+    // is retained for call-site compatibility only (referenced so
+    // the parameter stays part of the contract until the shell
+    // drops its argument).
+    onAppearance
     Column(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
             // v1.0.2: the Me list scrolls with breathing room at
             // the fold — v1.0.1's half-cut bottom card is gone.
+            // v1.1.0: bottom padding totals 88dp (dock + the
+            // phone's dead bottom strip clearance).
             .verticalScroll(androidx.compose.foundation.rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 16.dp)
-            .padding(bottom = 24.dp),
+            .padding(bottom = 72.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         ScreenHeader(title = "Me", eyebrow = "Xreader")
@@ -159,47 +180,50 @@ fun MoreScreen(
                 }
             }
         }
-        MoreRow(
+        MeDoor(
+            icon = Icons.Filled.Palette,
             title = "Customise",
             subtitle = "Colours, glass, library layout, navigation, reader look, downloads",
             onClick = onCustomise
         )
-        MoreRow(
+        MeDoor(
+            icon = Icons.AutoMirrored.Filled.MenuBook,
             title = "Words I'm learning",
             subtitle = "Words you saved while reading, with spaced review",
             onClick = onVocab
         )
-        MoreRow(
+        MeDoor(
+            icon = Icons.Filled.History,
             title = "History",
             subtitle = "Everything you've been reading, in time order",
             onClick = onHistory
         )
-        MoreRow(
+        MeDoor(
+            icon = Icons.Filled.VpnKey,
             title = "Providers & keys",
             subtitle = "Gemini key, model choice, AI features",
             onClick = onProviders
         )
-        MoreRow(
+        MeDoor(
+            icon = Icons.Filled.Sync,
             title = "Sync & backup",
             subtitle = "Google Drive, WebDAV, or a backup file",
             onClick = onSync
         )
-        MoreRow(
+        MeDoor(
+            icon = Icons.Filled.SwapHoriz,
             title = "Migration studio",
             subtitle = "Bring your library from Mihon and other readers",
             onClick = onMigration
         )
-        MoreRow(
-            title = "Appearance",
-            subtitle = "Theme, glass, motion",
-            onClick = onAppearance
-        )
-        MoreRow(
+        MeDoor(
+            icon = Icons.Filled.Science,
             title = "Labs",
             subtitle = "Experimental features — eye-tracking page turns",
             onClick = onLabs
         )
-        MoreRow(
+        MeDoor(
+            icon = Icons.Filled.Info,
             title = "About & licences",
             subtitle = "Version and open-source licences",
             onClick = onAbout
@@ -207,33 +231,39 @@ fun MoreScreen(
     }
 }
 
+/**
+ * One Me-hub door (§5.15): the kit RowItem renders the door row
+ * (icon tile + label + chevron) inside the glass card that owns
+ * the tap + bounce; the plain-words subtitle stays under the row
+ * inside the same card, so no explanation the old rows carried
+ * is lost. The RowItem itself is not clickable here — the card
+ * is the one tap target.
+ */
 @Composable
-private fun MoreRow(title: String, subtitle: String, onClick: () -> Unit) {
-    // v1.0.4 (D12): destination rows bounce like the mock's glass
-    // settings rows (GlassCard carries the press plumbing).
+private fun MeDoor(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
     GlassCard(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         bouncePress = true
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column {
-                Text(title, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        RowItem(
+            icon = icon,
+            label = title,
+            modifier = Modifier.fillMaxWidth(),
+            value = null,
+            badge = null,
+            onClick = null
+        )
+        Text(
+            subtitle,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 52.dp, top = 2.dp)
+        )
     }
 }

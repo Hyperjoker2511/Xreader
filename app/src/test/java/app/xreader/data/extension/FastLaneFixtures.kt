@@ -482,6 +482,30 @@ object ChikariSite {
         </main></body></html>
     """.trimIndent()
 
+    /**
+     * v1.1.0 (design §6.1 fixture): the home page WITH the
+     * comment cards the device catalogue mistook for books.
+     * A comment card is an anchor to a CHAPTER page
+     * (/novels/<slug>/<n>) wrapping the commenter's AVATAR
+     * image — its img@alt is a reader's name and its cover
+     * read is the avatar — plus the comment snippet as text.
+     * It satisfies "has an image, has an alt, has text"; only
+     * the href shape separates it from a book card. Synthetic
+     * prose/cards only.
+     */
+    val RENDERED_HOME_WITH_COMMENTS = """
+        <html><body><main>
+          <a href="/novels/shadow-slave"><img src="https://cdn.chikari.moe/novels/53/cover.webp" alt="Shadow Slave"/><button>Bookmark</button>Novel 9.5 9.7M Shadow Slave</a>
+          <a href="/novels/lord-of-ash"><img src="/covers/ash.jpg" alt="Lord of Ash"/><button>Bookmark</button>Novel 8.1 1.2M Lord of Ash</a>
+          <a href="/novels/dim-harbour"><img src="/covers/harbour.jpg" alt="Dim Harbour"/><button>Bookmark</button>Novel 7.4 300K Dim Harbour</a>
+          <section class="comments">
+            <a href="/novels/shadow-slave/214"><img src="/avatars/reader-one.png" alt="Reader One"/>Reader One: the last stand broke me, I reread it twice</a>
+            <a href="/novels/lord-of-ash/57"><img src="/avatars/reader-two.png" alt="Reader Two"/>Reader Two: that reveal was hiding in plain sight</a>
+            <a href="/novels/shadow-slave/9"><img src="/avatars/reader-three.png" alt="Reader Three"/>Reader Three: chapter nine is where it truly starts</a>
+          </section>
+        </main></body></html>
+    """.trimIndent()
+
     /** The rendered pages the browser view hands back, by URL. */
     fun renderedPages(): Map<String, String> = mapOf(
         BOOK_URL to RENDERED_BOOK_PAGE,

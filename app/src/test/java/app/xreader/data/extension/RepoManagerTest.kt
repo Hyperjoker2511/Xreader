@@ -280,6 +280,81 @@ class RepoManagerTest {
         assertTrue(refused is AppResult.Err)
     }
 
+    // ── v1.1.0 (§6.3): Live Repair conversion ───────────────
+
+    @Test
+    fun `repair conversion flips a live row to declarative in place`() =
+        runBlocking {
+            setUp()
+            val installed = manager.installLiveSource("chikari.moe")
+            assertTrue(installed is AppResult.Ok)
+            val liveRow = (installed as AppResult.Ok).value
+            assertEquals(
+                app.xreader.data.db.ExtensionKind.LIVE, liveRow.kind
+            )
+            val config = DeclarativeConfig(
+                id = "chikari",
+                name = "Chikari",
+                baseUrl = "https://chikari.moe",
+                popular = ListSpec(
+                    url = "https://chikari.moe",
+                    results = "a[href*='/novels/']",
+                    title = "img@alt",
+                    link = "@href",
+                    cover = "img@src",
+                    linkPattern = "/novels/[^/]+$"
+                ),
+                details = DetailsSpec(
+                    title = "h1",
+                    chapters = ChapterListSpec(
+                        list = "a", name = "@text", link = "@href"
+                    )
+                ),
+                chapter = ChapterSpec(content = "article")
+            )
+            val saved = manager.saveLinkSource(
+                config, "chikari.moe",
+                packageIdOverride = liveRow.packageId
+            )
+            assertTrue("expected Ok, got $saved", saved is AppResult.Ok)
+            val converted = (saved as AppResult.Ok).value
+            // Same row, same packageId — kind flipped, so the
+            // stored config list (not a LiveSourceSpec) decodes
+            // and the row starts as a DeclarativeSource.
+            assertEquals(liveRow.id, converted.id)
+            assertEquals(liveRow.packageId, converted.packageId)
+            assertEquals(
+                app.xreader.data.db.ExtensionKind.DECLARATIVE,
+                converted.kind
+            )
+            val decoded = DeclarativeFingerprints.decode(
+                store.readText(store.definitionFile(converted.packageId))!!
+            )
+            assertEquals(1, decoded.size)
+            assertEquals("chikari", decoded.first().id)
+            val handles = service.sourcesOf(converted.id)
+            assertTrue(handles is AppResult.Ok)
+            assertTrue(
+                (handles as AppResult.Ok).value.first().source
+                    is DeclarativeSource
+            )
+            // A second in-place save (the setupSearch override
+            // path) still lands on the SAME row — no fork.
+            val again = manager.saveLinkSource(
+                config.copy(name = "Chikari Again"), "chikari.moe",
+                packageIdOverride = liveRow.packageId
+            )
+            assertTrue(again is AppResult.Ok)
+            assertEquals(liveRow.id, (again as AppResult.Ok).value.id)
+            // No forked link.* package was created by either
+            // in-place save.
+            assertNull(extDao.getByPackageId("link.chikari"))
+            assertEquals(
+                liveRow.id,
+                extDao.getByPackageId("live.chikari.moe")?.id
+            )
+        }
+
     companion object {
         const val INDEX_URL = "https://repo.example/index.json"
         const val ARTIFACT_URL = "https://repo.example/bundle.js"

@@ -5,22 +5,24 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -28,14 +30,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
-import app.xreader.ui.common.XreaderPrimaryButton
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.SectionHeader
+import app.xreader.ui.theme.NocturneOverline
+import app.xreader.ui.theme.primaryTextColor
 
 /**
  * Migration Studio (screen #19, PLAN §8). Komga / Kavita /
  * Calibre-Web are SERVERS, not backup formats — the explainer says
  * so and points at OPDS instead of pretending to import them.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun MigrationScreen(
     viewModel: MigrationViewModel,
@@ -43,6 +51,13 @@ fun MigrationScreen(
     onAddFromLink: () -> Unit
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val currentState = state
+    val step = when (currentState) {
+        MigrationUiState.Idle, MigrationUiState.Reading -> 2
+        is MigrationUiState.Preview, MigrationUiState.Importing -> 3
+        is MigrationUiState.Done -> 4
+        is MigrationUiState.Failed -> 2
+    }
     val context = LocalContext.current
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -58,7 +73,7 @@ fun MigrationScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
@@ -66,7 +81,7 @@ fun MigrationScreen(
             }
             Text(
                 "Migration studio",
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.headlineMedium,
                 modifier = Modifier.padding(start = 4.dp)
             )
         }
@@ -75,8 +90,25 @@ fun MigrationScreen(
             Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                listOf("Source", "File", "Preview", "Done").forEachIndexed { index, label ->
+                    val stepNumber = index + 1
+                    Text(
+                        "$stepNumber · $label",
+                        style = NocturneOverline,
+                        color = if (stepNumber == step) {
+                            primaryTextColor()
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
+            }
             GlassCard(Modifier.fillMaxWidth()) {
                 Text(
                     "Bring your library from another reader app. Xreader reads " +
@@ -100,26 +132,30 @@ fun MigrationScreen(
 
             when (val current = state) {
                 MigrationUiState.Idle -> {
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Choose a backup file",
+                        enabled = true,
                         onClick = { picker.launch(arrayOf("*/*")) },
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
                 MigrationUiState.Reading -> {
-                    Text(
-                        "Reading the backup…",
-                        style = MaterialTheme.typography.bodyMedium,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.padding(vertical = 8.dp)
-                    )
+                    ) {
+                        CircularProgressIndicator(Modifier.size(20.dp))
+                        Text(
+                            "Reading the backup…",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
                 is MigrationUiState.Preview -> {
                     val preview = current.preview
                     GlassCard(Modifier.fillMaxWidth()) {
-                        Text(
-                            current.library.formatName,
-                            style = MaterialTheme.typography.titleMedium
-                        )
+                        SectionHeader(title = current.library.formatName)
                         Spacer(Modifier.height(6.dp))
                         Text(
                             "${preview.totalBooks} book(s) · " +
@@ -135,12 +171,25 @@ fun MigrationScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Text(
-                            "${preview.matchedBooks} will link to a source you " +
-                                "have installed.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            NocturneChip(
+                                label = "${preview.matchedBooks} matched",
+                                selected = false,
+                                dotColor = MaterialTheme.colorScheme.secondary,
+                                onClick = null
+                            )
+                            if (preview.unmatchedTitles.isNotEmpty()) {
+                                NocturneChip(
+                                    label = "${preview.unmatchedTitles.size} unmatched",
+                                    selected = false,
+                                    dotColor = MaterialTheme.colorScheme.error,
+                                    onClick = null
+                                )
+                            }
+                        }
                         if (preview.unmatchedTitles.isNotEmpty()) {
                             Text(
                                 "${preview.unmatchedTitles.size} can't be linked " +
@@ -174,26 +223,35 @@ fun MigrationScreen(
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        XreaderPrimaryButton(
+                        PrimaryPill(
                             text = "Import",
+                            enabled = true,
                             onClick = { viewModel.confirmImport() },
                             modifier = Modifier.weight(1f)
                         )
-                        TextButton(onClick = { viewModel.reset() }) {
-                            Text("Start over")
-                        }
+                        GhostPill(
+                            text = "Start over",
+                            enabled = true,
+                            onClick = { viewModel.reset() }
+                        )
                     }
                 }
                 MigrationUiState.Importing -> {
-                    Text(
-                        "Importing…",
-                        style = MaterialTheme.typography.bodyMedium,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.padding(vertical = 8.dp)
-                    )
+                    ) {
+                        CircularProgressIndicator(Modifier.size(20.dp))
+                        Text(
+                            "Importing…",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
                 is MigrationUiState.Done -> {
                     GlassCard(Modifier.fillMaxWidth()) {
-                        Text("Done", style = MaterialTheme.typography.titleMedium)
+                        SectionHeader(title = "Done")
                         Spacer(Modifier.height(6.dp))
                         current.lines.forEach { line ->
                             Text(line, style = MaterialTheme.typography.bodyMedium)
@@ -213,14 +271,16 @@ fun MigrationScreen(
                         }
                     }
                     if (current.unmatchedTitles.isNotEmpty()) {
-                        XreaderPrimaryButton(
+                        PrimaryPill(
                             text = "Add a source from a link",
+                            enabled = true,
                             onClick = onAddFromLink,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
-                    XreaderPrimaryButton(
+                    GhostPill(
                         text = "Import another backup",
+                        enabled = true,
                         onClick = { viewModel.reset() },
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -233,14 +293,15 @@ fun MigrationScreen(
                             color = errorTextColor()
                         )
                     }
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Try another file",
+                        enabled = true,
                         onClick = { viewModel.reset() },
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(88.dp))
         }
     }
 }

@@ -17,7 +17,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -26,7 +25,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import app.xreader.data.extension.CookieParsing
-import app.xreader.ui.common.XreaderPrimaryButton
+import app.xreader.ui.common.GhostPill
+import app.xreader.ui.common.PrimaryPill
 import java.net.URI
 
 /**
@@ -113,7 +113,10 @@ fun LoginScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(8.dp))
-        XreaderPrimaryButton(
+        // §5.9 chrome only: the bottom confirm bar is a PrimaryPill,
+        // lifted clear of the dead bottom strip by the spacer below.
+        // The WebView above is untouched.
+        PrimaryPill(
             text = if (request.mode == LoginMode.SITE_CHECK) {
                 "Done — continue"
             } else {
@@ -142,9 +145,14 @@ fun LoginScreen(
             },
             modifier = Modifier.fillMaxWidth()
         )
-        TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-            Text("Cancel")
-        }
+        GhostPill(
+            text = "Cancel",
+            onClick = onCancel,
+            modifier = Modifier.fillMaxWidth()
+        )
+        // 12dp column padding + this spacer = the bottom action cluster sits
+        // 88dp clear of the screen's bottom edge.
+        Spacer(Modifier.height(76.dp))
     }
 }
 

@@ -206,7 +206,13 @@ object LinkInference {
     fun analyseListingPage(
         doc: Document,
         pageUrl: String,
-        bookUrlHint: String?
+        bookUrlHint: String?,
+        // v1.1.0 (Fix 4): Live derivation passes true — the
+        // Book-Shape Rule as a HARD filter on candidates. The
+        // probe leaves it off: its list-shape verdicts (books
+        // vs feed) must SEE chapter/post-shaped anchors to
+        // name what a page is.
+        booksOnly: Boolean = false
     ): ListingAnalysis? {
         // Book links live under a shared collection segment
         // ("/novel/…", "/book/…") — different books share only that
@@ -215,6 +221,15 @@ object LinkInference {
         val anchors = doc.select("a[href]").filter { anchor ->
             val href = anchor.attr("abs:href").ifBlank { absolute(anchor.attr("href"), pageUrl) }
             if (href.isBlank()) return@filter false
+            // v1.1.0 (design §6.2, Fix 4): the Book-Shape Rule
+            // as a HARD filter — chapter/comment-shaped anchors
+            // (a numeric or chapter-named tail below the book
+            // slug) are never listing candidates. They remain
+            // valid for chapter-list derivation, where they
+            // belong; in a catalogue they were the junk cards.
+            if (booksOnly && BookShape.isChapterShapedHref(href)) {
+                return@filter false
+            }
             val wrapsImage = anchor.select("img").isNotEmpty()
             val sharesSegment = hintSegment != null && hintSegment.isNotEmpty() &&
                 pathPrefix(href, 1) == hintSegment &&
@@ -226,9 +241,22 @@ object LinkInference {
             (cluster.itemsAreAnchors && cluster.items.any {
                 it.select("img").isNotEmpty()
             })
+        // v1.1.0 (Fix 4): listing titles come from the cover
+        // image's alt inside the anchor when one exists —
+        // never from anchor body text, which is where comment
+        // snippets and card chrome live.
+        val itemHasCoverAlt = cluster.items.any { item ->
+            val img = if (item.tagName() == "img") item
+            else item.selectFirst("img")
+            !img?.attr("alt").isNullOrBlank()
+        }
         return ListingAnalysis(
             resultsSelector = SelectorSynthesizer.forList(cluster.items.first()),
-            titleSpec = if (cluster.itemsAreAnchors) "@text" else "a@text",
+            titleSpec = when {
+                itemHasCoverAlt -> "img@alt"
+                cluster.itemsAreAnchors -> "@text"
+                else -> "a@text"
+            },
             linkSpec = if (cluster.itemsAreAnchors) "@href" else "a@href",
             coverSpec = when {
                 cluster.itemsAreAnchors && itemHasImage -> "img@src"
@@ -251,23 +279,32 @@ object LinkInference {
     fun analyseSearchResultsPage(
         doc: Document,
         pageUrl: String,
-        bookUrlHint: String?
+        bookUrlHint: String?,
+        booksOnly: Boolean = false
     ): ListingAnalysis? {
-        analyseListingPage(doc, pageUrl, bookUrlHint)?.let { return it }
+        analyseListingPage(doc, pageUrl, bookUrlHint, booksOnly)
+            ?.let { return it }
         val hintSegment = bookUrlHint?.let { pathPrefix(it, 1) }
         val anchor = doc.select("a[href]").firstOrNull { candidate ->
             val href = candidate.attr("abs:href")
                 .ifBlank { absolute(candidate.attr("href"), pageUrl) }
             if (href.isBlank() || href == bookUrlHint) return@firstOrNull false
+            // v1.1.0 (Fix 4): the Book-Shape hard filter binds
+            // the single-item search fallback too.
+            if (booksOnly && BookShape.isChapterShapedHref(href)) {
+                return@firstOrNull false
+            }
             val wrapsImage = candidate.select("img").isNotEmpty()
             val sharesSegment = hintSegment != null && hintSegment.isNotEmpty() &&
                 pathPrefix(href, 1) == hintSegment
             wrapsImage || sharesSegment
         } ?: return null
         val hasImage = anchor.select("img").isNotEmpty()
+        val coverAlt = anchor.selectFirst("img")?.attr("alt")
+            ?.takeIf { it.isNotBlank() }
         return ListingAnalysis(
             resultsSelector = SelectorSynthesizer.forList(anchor),
-            titleSpec = "@text",
+            titleSpec = if (coverAlt != null) "img@alt" else "@text",
             linkSpec = "@href",
             coverSpec = if (hasImage) "img@src" else null,
             count = 1

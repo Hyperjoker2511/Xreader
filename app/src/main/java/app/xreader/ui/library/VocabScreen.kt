@@ -2,6 +2,7 @@ package app.xreader.ui.library
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -30,10 +33,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import app.xreader.data.db.VocabWord
 import app.xreader.di.AppContainer
-import app.xreader.ui.common.EmptyState
+import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.KitEmptyState
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.ScreenHeader
-import app.xreader.ui.common.XreaderPrimaryButton
+import app.xreader.ui.common.SearchCapsule
+import app.xreader.ui.common.SectionHeader
 import java.io.File
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -199,13 +206,17 @@ fun VocabScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         ScreenHeader(
             title = "Words I'm learning",
             eyebrow = "Library",
             action = {
-                XreaderPrimaryButton(text = "+ Word", onClick = { addOpen = true })
+                PrimaryPill(
+                    text = "+ Word",
+                    enabled = true,
+                    onClick = { addOpen = true }
+                )
             }
         )
         TextButton(onClick = onBack) { Text("← Back") }
@@ -213,15 +224,13 @@ fun VocabScreen(
 
         LazyColumn(
             Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+            contentPadding = PaddingValues(bottom = 88.dp)
         ) {
             item(key = "dictionary") {
                 GlassCard(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            "Offline dictionary",
-                            style = MaterialTheme.typography.titleSmall
-                        )
+                        SectionHeader(title = "Offline dictionary")
                         if (state.dictionaryName != null) {
                             Text(
                                 "${state.dictionaryName} · " +
@@ -231,33 +240,39 @@ fun VocabScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                TextButton(onClick = {
-                                    dictionaryPicker.launch(arrayOf("text/*"))
-                                }) { Text("Replace") }
-                                TextButton(onClick = { viewModel.removeDictionary() }) {
-                                    Text("Remove dictionary")
-                                }
+                                GhostPill(
+                                    text = "Replace",
+                                    enabled = true,
+                                    onClick = {
+                                        dictionaryPicker.launch(arrayOf("text/*"))
+                                    }
+                                )
+                                GhostPill(
+                                    text = "Remove dictionary",
+                                    enabled = true,
+                                    onClick = { viewModel.removeDictionary() }
+                                )
                             }
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                OutlinedTextField(
+                                SearchCapsule(
                                     value = lookupDraft,
                                     onValueChange = { lookupDraft = it },
-                                    label = { Text("Look up a word") },
-                                    singleLine = true,
+                                    placeholder = "Look up a word",
                                     modifier = Modifier.weight(1f)
                                 )
-                                TextButton(
+                                GhostPill(
+                                    text = "Look up",
+                                    enabled = lookupDraft.isNotBlank(),
                                     onClick = {
                                         scope.launch {
                                             lookupResult = viewModel.lookup(lookupDraft)
                                             lookupTried = true
                                         }
-                                    },
-                                    enabled = lookupDraft.isNotBlank()
-                                ) { Text("Look up") }
+                                    }
+                                )
                             }
                             if (lookupTried) {
                                 Text(
@@ -274,9 +289,13 @@ fun VocabScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            TextButton(onClick = {
-                                dictionaryPicker.launch(arrayOf("text/*"))
-                            }) { Text("Add dictionary file") }
+                            PrimaryPill(
+                                text = "Add dictionary file",
+                                enabled = true,
+                                onClick = {
+                                    dictionaryPicker.launch(arrayOf("text/*"))
+                                }
+                            )
                         }
                     }
                 }
@@ -284,10 +303,7 @@ fun VocabScreen(
 
             if (state.due.isNotEmpty()) {
                 item(key = "due-header") {
-                    Text(
-                        "Review today (${state.due.size})",
-                        style = MaterialTheme.typography.titleMedium
-                    )
+                    SectionHeader(title = "Review today (${state.due.size})")
                 }
                 items(state.due, key = { "due-${it.id}" }) { word ->
                     VocabWordCard(
@@ -301,18 +317,16 @@ fun VocabScreen(
             }
 
             item(key = "all-header") {
-                Text(
-                    "All saved words (${state.words.size})",
-                    style = MaterialTheme.typography.titleMedium
-                )
+                SectionHeader(title = "All saved words (${state.words.size})")
             }
             if (state.words.isEmpty()) {
                 item(key = "empty") {
-                    EmptyState(
-                        title = "No words saved yet",
-                        message = "While reading, open the reader settings " +
-                            "and use “Words I'm learning” to save a word " +
-                            "here with its sentence — or add one with + Word.",
+                    KitEmptyState(
+                        icon = Icons.Filled.MenuBook,
+                        message = "No words saved yet. While reading, open the " +
+                            "reader settings and use “Words I'm learning” to " +
+                            "save a word here with its sentence — or add one " +
+                            "with + Word.",
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -382,6 +396,16 @@ private fun VocabWordCard(
     onRemove: () -> Unit
 ) {
     var showMeaning by remember(word.id) { mutableStateOf(!reviewing) }
+    val stateLabel = when (word.state) {
+        app.xreader.data.db.VocabState.NEW -> "New"
+        app.xreader.data.db.VocabState.LEARNING -> "Learning"
+        app.xreader.data.db.VocabState.KNOWN -> "Known"
+    }
+    val stateDot = when (word.state) {
+        app.xreader.data.db.VocabState.NEW -> MaterialTheme.colorScheme.tertiary
+        app.xreader.data.db.VocabState.LEARNING -> MaterialTheme.colorScheme.primary
+        app.xreader.data.db.VocabState.KNOWN -> MaterialTheme.colorScheme.secondary
+    }
     GlassCard(Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -390,14 +414,11 @@ private fun VocabWordCard(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f)
                 )
-                Text(
-                    when (word.state) {
-                        app.xreader.data.db.VocabState.NEW -> "New"
-                        app.xreader.data.db.VocabState.LEARNING -> "Learning"
-                        app.xreader.data.db.VocabState.KNOWN -> "Known"
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                NocturneChip(
+                    label = stateLabel,
+                    selected = false,
+                    dotColor = stateDot,
+                    onClick = null
                 )
             }
             if (word.sentence.isNotBlank()) {

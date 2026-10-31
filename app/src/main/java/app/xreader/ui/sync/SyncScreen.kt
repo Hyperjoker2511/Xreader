@@ -23,7 +23,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,8 +38,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.data.prefs.SyncBackendKind
 import app.xreader.di.AppContainer
+import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
-import app.xreader.ui.common.XreaderPrimaryButton
+import app.xreader.ui.common.NocturneSwitch
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.SectionHeader
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
 import java.text.DateFormat
@@ -121,7 +123,7 @@ fun SyncScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
@@ -129,7 +131,7 @@ fun SyncScreen(
             }
             Text(
                 "Sync & backup",
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.headlineMedium,
                 modifier = Modifier.padding(start = 4.dp)
             )
         }
@@ -138,15 +140,12 @@ fun SyncScreen(
             Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
 
             // ── On this phone (v1.0.1) — above the cloud, first-class ──
             GlassCard {
-                Text(
-                    "On this phone",
-                    style = MaterialTheme.typography.titleMedium
-                )
+                SectionHeader(title = "On this phone")
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "Kept only on this phone. Nothing is uploaded.",
@@ -163,8 +162,9 @@ fun SyncScreen(
                 )
                 Spacer(Modifier.height(10.dp))
                 if (settings.backupFolderUri.isBlank()) {
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Choose a backup folder",
+                        enabled = true,
                         onClick = { backupFolderLauncher.launch(null) },
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -175,7 +175,7 @@ fun SyncScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Back up now",
                         onClick = { viewModel.backupNow(context) },
                         enabled = !state.busy,
@@ -227,11 +227,12 @@ fun SyncScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Switch(
+                        NocturneSwitch(
                             checked = settings.autoBackupWeekly,
                             onCheckedChange = {
                                 viewModel.setAutoBackupWeekly(context, it)
-                            }
+                            },
+                            enabled = true
                         )
                     }
                     TextButton(onClick = { viewModel.forgetBackupFolder(context) }) {
@@ -280,7 +281,7 @@ fun SyncScreen(
             }
 
             GlassCard {
-                Text("Sync route", style = MaterialTheme.typography.titleMedium)
+                SectionHeader(title = "Sync route")
                 BackendRow(
                     label = "Google Drive (private app folder)",
                     selected = settings.backend == SyncBackendKind.DRIVE,
@@ -303,9 +304,10 @@ fun SyncScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("Sync automatically when the app opens", style = MaterialTheme.typography.bodyLarge)
-                    Switch(
+                    NocturneSwitch(
                         checked = settings.autoSync,
-                        onCheckedChange = { viewModel.setAutoSync(it) }
+                        onCheckedChange = { viewModel.setAutoSync(it) },
+                        enabled = true
                     )
                 }
                 Spacer(Modifier.height(8.dp))
@@ -324,16 +326,17 @@ fun SyncScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Switch(
+                    NocturneSwitch(
                         checked = settings.syncBookFiles,
-                        onCheckedChange = { viewModel.setSyncBookFiles(it) }
+                        onCheckedChange = { viewModel.setSyncBookFiles(it) },
+                        enabled = true
                     )
                 }
             }
 
             if (settings.backend == SyncBackendKind.DRIVE) {
                 GlassCard {
-                    Text("Google Drive", style = MaterialTheme.typography.titleMedium)
+                    SectionHeader(title = "Google Drive")
                     Spacer(Modifier.height(6.dp))
                     if (settings.driveEmail.isBlank()) {
                         Text(
@@ -343,8 +346,9 @@ fun SyncScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.height(10.dp))
-                        XreaderPrimaryButton(
+                        PrimaryPill(
                             text = "Sign in with Google",
+                            enabled = true,
                             onClick = {
                                 signInLauncher.launch(
                                     container.googleDriveAuth.signInClient().signInIntent
@@ -373,7 +377,7 @@ fun SyncScreen(
                 }
                 var password by remember { mutableStateOf("") }
                 GlassCard {
-                    Text("WebDAV server", style = MaterialTheme.typography.titleMedium)
+                    SectionHeader(title = "WebDAV server")
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = url,
@@ -410,12 +414,13 @@ fun SyncScreen(
                     )
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        XreaderPrimaryButton(
+                        PrimaryPill(
                             text = "Save",
+                            enabled = true,
                             onClick = { viewModel.saveWebdav(url, username, password) },
                             modifier = Modifier.weight(1f)
                         )
-                        XreaderPrimaryButton(
+                        GhostPill(
                             text = if (state.busy) "Testing…" else "Test connection",
                             onClick = { viewModel.testWebdav() },
                             enabled = !state.busy,
@@ -436,7 +441,7 @@ fun SyncScreen(
                 }
             }
 
-            XreaderPrimaryButton(
+            PrimaryPill(
                 text = if (state.busy) state.busyLabel else "Sync now",
                 onClick = { viewModel.syncNow() },
                 enabled = !state.busy && settings.backend != SyncBackendKind.NONE,
@@ -444,7 +449,7 @@ fun SyncScreen(
             )
 
             GlassCard {
-                Text("Backup file", style = MaterialTheme.typography.titleMedium)
+                SectionHeader(title = "Backup file")
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "No account needed: save one backup file anywhere (USB, a folder, " +
@@ -456,7 +461,7 @@ fun SyncScreen(
                 )
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Save backup",
                         onClick = {
                             exportLauncher.launch("xreader-backup.zip")
@@ -464,7 +469,7 @@ fun SyncScreen(
                         enabled = !state.busy,
                         modifier = Modifier.weight(1f)
                     )
-                    XreaderPrimaryButton(
+                    GhostPill(
                         text = "Restore backup",
                         onClick = {
                             importLauncher.launch(arrayOf("*/*"))
@@ -476,7 +481,7 @@ fun SyncScreen(
             }
 
             if (state.log.isNotEmpty()) {
-                Text("Sync history", style = MaterialTheme.typography.titleMedium)
+                SectionHeader(title = "Sync history")
                 state.log.forEach { entry ->
                     GlassCard(modifier = Modifier.fillMaxWidth()) {
                         Text(
@@ -496,7 +501,7 @@ fun SyncScreen(
                     }
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(88.dp))
         }
     }
     pendingRestore?.let { entry ->

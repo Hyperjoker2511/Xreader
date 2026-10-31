@@ -19,7 +19,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -44,10 +46,13 @@ import app.xreader.data.db.TrustState
 import app.xreader.data.extension.HealthDot
 import app.xreader.data.extension.SourceHealthRecord
 import app.xreader.data.extension.healthDot
-import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.KitEmptyState
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.QuickActionTile
 import app.xreader.ui.common.ScreenHeader
-import app.xreader.ui.common.XreaderPrimaryButton
+import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.theme.primaryTextColor
 
 /**
@@ -105,7 +110,8 @@ fun SourcesScreen(
         Spacer(Modifier.height(12.dp))
         LazyColumn(
             Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 88.dp)
         ) {
             // ── Search everything: the one-line glass pill ──────
             item {
@@ -135,29 +141,43 @@ fun SourcesScreen(
             }
 
             // ── ONE add door; the forms live on their own screen ─
+            // §5.3: a full-width GlassCard door with a PrimaryPill,
+            // visible — never demoted to a plain row.
             item {
-                XreaderPrimaryButton(
-                    text = "Add a source",
-                    onClick = onAddSource,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Add a source",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        "A repository, a novel site's link, or a Legado file.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    PrimaryPill(
+                        text = "Add a source",
+                        onClick = onAddSource,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
 
             // ── Your sources, extensions and OPDS together ──────
             item {
-                Text(
-                    "Your sources",
-                    style = MaterialTheme.typography.titleMedium,
+                SectionHeader(
+                    title = "Your sources",
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
             if (state.extensions.isEmpty() && opdsServers.isEmpty()) {
                 item {
-                    EmptyState(
-                        title = "No sources yet",
-                        message = "Add a repository, paste a novel site's link, " +
-                            "or add a library server — your sources live here.",
-                        actionLabel = "Add a source",
+                    KitEmptyState(
+                        icon = Icons.Filled.LibraryBooks,
+                        message = "No sources yet. Add a repository, paste a novel " +
+                            "site's link, or add a library server — your sources " +
+                            "live here.",
+                        actionText = "Add a source",
                         onAction = onAddSource
                     )
                 }
@@ -195,17 +215,25 @@ fun SourcesScreen(
                 )
             }
 
-            // ── The store and the server manager ────────────────
+            // ── The store and the server manager (§5.3 doors row) ─
             item {
-                GlassCard(onClick = onOpenStore, bouncePress = true) {
-                    Text("Source store", style = MaterialTheme.typography.titleMedium)
-                }
-            }
-            item {
-                GlassCard(onClick = onOpenOpdsServers, bouncePress = true) {
-                    Text(
-                        "Library servers (OPDS)",
-                        style = MaterialTheme.typography.titleMedium
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    QuickActionTile(
+                        icon = Icons.Filled.Storefront,
+                        label = "Source store",
+                        modifier = Modifier.weight(1f),
+                        active = false,
+                        onClick = onOpenStore
+                    )
+                    QuickActionTile(
+                        icon = Icons.Filled.LibraryBooks,
+                        label = "OPDS servers",
+                        modifier = Modifier.weight(1f),
+                        active = false,
+                        onClick = onOpenOpdsServers
                     )
                 }
             }
@@ -245,12 +273,12 @@ private fun SourceRow(
         else -> null
     }
     val typeLabel = if (ext.packageId.startsWith("link.")) "Link source" else null
-    val meta = listOfNotNull(
-        ext.languages.split(",").firstOrNull()?.uppercase()
-            ?.takeIf { it.isNotBlank() },
-        healthRecord?.shortStateWord() ?: "Not checked yet",
-        typeLabel
-    ).joinToString(" · ")
+    // §5.3 row anatomy: language as a NocturneChip, the health word
+    // beside its dot, the alert as a chip — the old joined meta line
+    // split into those same pieces, nothing dropped.
+    val languageLabel = ext.languages.split(",").firstOrNull()?.uppercase()
+        ?.takeIf { it.isNotBlank() }
+    val healthWord = healthRecord?.shortStateWord() ?: "Not checked yet"
     GlassCard(
         modifier = modifier,
         onClick = if (canOpen) onOpen else onDetails,
@@ -266,20 +294,31 @@ private fun SourceRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    meta,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (alert != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (languageLabel != null) {
+                        NocturneChip(
+                            label = languageLabel,
+                            selected = false
+                        )
+                    }
                     Text(
-                        alert.first,
+                        listOfNotNull(healthWord, typeLabel)
+                            .joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall,
-                        color = alert.second,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (alert != null) {
+                    Spacer(Modifier.height(4.dp))
+                    NocturneChip(
+                        label = alert.first,
+                        selected = false,
+                        dotColor = alert.second
                     )
                 }
             }
@@ -331,7 +370,7 @@ private fun OpdsServerRow(
 @Composable
 private fun SourceLetterTile(letter: String) {
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
         modifier = Modifier.size(40.dp)
     ) {

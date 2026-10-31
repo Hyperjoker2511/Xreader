@@ -65,6 +65,12 @@ data class ExtensionDetailUiState(
     /** A plain line about the AI matching pass (or why it's off). */
     val aiMatchNote: String? = null,
     // ── v1.0.4 (D14): Edit parser rules ──────────────────────────
+    /** v1.1.0 (Fix 5): the ONE rebuildability classification
+     * (SourceRebuildability) — Repair, the parser-rules section
+     * and every line of copy on the page read this, never a
+     * packageId prefix test of their own. */
+    val rebuildKind: app.xreader.data.extension.RebuildKind =
+        app.xreader.data.extension.RebuildKind.OTHER,
     val parserEditorOpen: Boolean = false,
     val parserSaving: Boolean = false,
     /** Why an edited candidate was NOT saved (test read failed…). */
@@ -89,6 +95,18 @@ class ExtensionDetailViewModel(
     private val _test = MutableStateFlow<Pair<String?, List<String>>>(null to emptyList())
     private val _linkConfig =
         MutableStateFlow<app.xreader.data.extension.DeclarativeConfig?>(null)
+
+    /** v1.1.0 (Fix 5): the row's rebuildability + (for a Live
+     * row) its stored spec — classified ONCE at load through
+     * [app.xreader.data.extension.SourceRebuildability]. */
+    private val _rowShape = MutableStateFlow<
+        Pair<
+            app.xreader.data.extension.RebuildKind,
+            app.xreader.data.extension.LiveSourceSpec?
+            >
+        >(
+        app.xreader.data.extension.RebuildKind.OTHER to null
+    )
 
     /** v1.0.2 (R10): health card state (record, per-step results,
      * busy flags) in one local flow. */
@@ -167,7 +185,7 @@ class ExtensionDetailViewModel(
     val state: StateFlow<ExtensionDetailUiState> = combine(
         container.database.installedExtensionDao().observeById(extensionId),
         _sessionSaved, _rules, _test, _linkConfig, _health, _bring, _parser,
-        container.sourcePrefs.browserViewNeededIds
+        container.sourcePrefs.browserViewNeededIds, _rowShape
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val ext = values[0] as InstalledExtension?
@@ -177,6 +195,11 @@ class ExtensionDetailViewModel(
         val parser = values[7] as ParserLocal
         @Suppress("UNCHECKED_CAST")
         val browserNeededIds = values[8] as Set<Long>
+        @Suppress("UNCHECKED_CAST")
+        val rowShape = values[9] as Pair<
+            app.xreader.data.extension.RebuildKind,
+            app.xreader.data.extension.LiveSourceSpec?
+            >
         ExtensionDetailUiState(
             extension = ext,
             pending = ext?.let { container.extensionStore.readPending(it.packageId) },
@@ -200,6 +223,7 @@ class ExtensionDetailViewModel(
             aiProposals = bring.aiProposals,
             aiConfirmedMatches = bring.aiConfirmed,
             aiMatchNote = bring.aiNote,
+            rebuildKind = rowShape.first,
             parserEditorOpen = parser.open,
             parserSaving = parser.saving,
             parserMessage = parser.message
@@ -212,10 +236,34 @@ class ExtensionDetailViewModel(
     init {
         viewModelScope.launch {
             container.database.installedExtensionDao().getById(extensionId)?.let { ext ->
-                if (ext.packageId.startsWith("link.")) {
-                    val raw = container.extensionStore.readText(
-                        container.extensionStore.definitionFile(ext.packageId)
-                    )
+                // v1.1.0 (Fix 5): the config load gate is the
+                // shared rebuildability helper, not the link.
+                // prefix — a repo row holding exactly one
+                // config loads it too (Repair and the parser
+                // editor heal it in place); a Live row loads
+                // its spec instead (it has no rules to load).
+                val raw = container.extensionStore.readText(
+                    container.extensionStore.definitionFile(ext.packageId)
+                )
+                val rebuildKind =
+                    app.xreader.data.extension.SourceRebuildability
+                        .classify(ext, raw)
+                _rowShape.value = rebuildKind to
+                    if (
+                        rebuildKind ==
+                        app.xreader.data.extension.RebuildKind.LIVE
+                    ) {
+                        raw?.let {
+                            app.xreader.data.extension.LiveSourceSpec
+                                .decode(it)
+                        }
+                    } else {
+                        null
+                    }
+                if (
+                    app.xreader.data.extension.SourceRebuildability
+                        .hasEditableRules(rebuildKind)
+                ) {
                     _linkConfig.value = raw?.let {
                         app.xreader.data.extension.DeclarativeFingerprints.decode(it)
                     }?.firstOrNull()
@@ -598,13 +646,43 @@ class ExtensionDetailViewModel(
      */
     fun repair() {
         val ext = state.value.extension ?: return
-        if (!ext.packageId.startsWith("link.")) {
-            say(
-                "This source came from a repository, so Xreader can't " +
-                    "rebuild its rules. Run the test-drive; if a step " +
-                    "fails, the source's repository needs to update it."
-            )
-            return
+        // v1.1.0 (Fix 5 + Fix 2, design §6.3/§6.4): ONE helper
+        // decides what Repair may do with this row — the old
+        // link.-prefix refusal is gone, and the repository
+        // message is unreachable for Live rows. Fallbacks cover
+        // a classification that hasn't landed yet.
+        val rebuildKind = state.value.rebuildKind
+            .takeIf { it != app.xreader.data.extension.RebuildKind.OTHER }
+            ?: when {
+                ext.packageId.startsWith("live.") ||
+                    ext.kind == app.xreader.data.db.ExtensionKind.LIVE ->
+                    app.xreader.data.extension.RebuildKind.LIVE
+                ext.packageId.startsWith("link.") ->
+                    app.xreader.data.extension.RebuildKind.LINK
+                ext.kind == app.xreader.data.db.ExtensionKind.JS ||
+                    ext.kind == app.xreader.data.db.ExtensionKind.DEX ->
+                    app.xreader.data.extension.RebuildKind.REPO_CODE
+                _linkConfig.value != null ->
+                    app.xreader.data.extension.RebuildKind
+                        .REPO_DECLARATIVE_SINGLE
+                else ->
+                    app.xreader.data.extension.RebuildKind
+                        .REPO_DECLARATIVE_MULTI
+            }
+        when (rebuildKind) {
+            app.xreader.data.extension.RebuildKind.LIVE -> {
+                repairLive(ext)
+                return
+            }
+            app.xreader.data.extension.RebuildKind.REPO_CODE,
+            app.xreader.data.extension.RebuildKind.REPO_DECLARATIVE_MULTI,
+            app.xreader.data.extension.RebuildKind.OTHER -> {
+                repairCheckOnly(ext, rebuildKind)
+                return
+            }
+            app.xreader.data.extension.RebuildKind.LINK,
+            app.xreader.data.extension.RebuildKind.REPO_DECLARATIVE_SINGLE ->
+                Unit
         }
         val config = _linkConfig.value ?: return
         if (_health.value.repairing) return
@@ -865,6 +943,254 @@ class ExtensionDetailViewModel(
         }
     }
 
+    /**
+     * v1.1.0 (§6.4): Repair for rows with no declarative rules
+     * to rebuild (foreign code, multi-source packages) — a
+     * CHECK, not a dead end: the test-drive runs and its
+     * verdict is the answer, with the honest line up front.
+     */
+    private fun repairCheckOnly(
+        ext: InstalledExtension,
+        rebuildKind: app.xreader.data.extension.RebuildKind
+    ) {
+        val line = app.xreader.data.extension.SourceRebuildability
+            .repairLine(rebuildKind)
+        say(line)
+        viewModelScope.launch {
+            val record = app.xreader.data.extension.SourceRepairRecord(
+                repairedAtMillis = System.currentTimeMillis(),
+                saved = false,
+                note = line,
+                stageLines = emptyList()
+            )
+            val keySourceId = container.extensionService
+                .sourcesOf(extensionId).getOrNull()
+                ?.firstOrNull()?.source?.id
+            if (keySourceId != null) {
+                container.sourcePrefs.setSourceRepairLog(
+                    app.xreader.data.extension.SourceHealthRecord.key(
+                        extensionId, keySourceId
+                    ),
+                    record
+                )
+            }
+            _health.value = _health.value.copy(repairRecord = record)
+        }
+        runTestDrive()
+    }
+
+    /**
+     * v1.1.0 (Fix 2, design §6.3): Repair on a LIVE row.
+     * (1) Re-derive: evict the derived-shape cache and run
+     * the test-drive against the freshly derived shape — a
+     * pass ends here, the row stays Live. (2) On failure,
+     * convert in place: probe (lane-first), and on Ready save
+     * through [app.xreader.data.extension.RepoManager.saveLinkSource]
+     * with this row's packageId — its LIVE branch flips the
+     * row's kind to DECLARATIVE with the probed rules, same
+     * row, same books. (3) Both fail: the test-drive verdict
+     * + Copy details on the Health card. The repository
+     * refusal can never appear here.
+     */
+    private fun repairLive(ext: InstalledExtension) {
+        if (_health.value.repairing) return
+        _health.value = _health.value.copy(repairing = true)
+        viewModelScope.launch {
+            try {
+                var repairSaved = false
+                var repairNote = ""
+                var repairStageLines: List<String> = emptyList()
+                val spec = _rowShape.value.second ?: run {
+                    val raw = container.extensionStore.readText(
+                        container.extensionStore.definitionFile(ext.packageId)
+                    )
+                    raw?.let {
+                        app.xreader.data.extension.LiveSourceSpec.decode(it)
+                    }
+                }
+                // ── step 1: re-derive + test-drive ──────────
+                val handles = container.extensionService
+                    .sourcesOf(extensionId).getOrNull()
+                val handle = handles?.firstOrNull()
+                (handle?.source as? app.xreader.data.extension.LiveSource)
+                    ?.evictDerivedShapes()
+                val verdict = handle?.let { container.contractTester.test(it) }
+                val passes = verdict != null &&
+                    (verdict.state ==
+                        app.xreader.data.extension.SourceHealthState.WORKING ||
+                        verdict.state ==
+                        app.xreader.data.extension.SourceHealthState
+                            .WORKING_WITH_LIMITS)
+                if (passes && verdict != null && handle != null) {
+                    val record = verdict.toRecord()
+                    container.sourcePrefs.setSourceHealth(
+                        app.xreader.data.extension.SourceHealthRecord.key(
+                            extensionId, handle.source.id
+                        ),
+                        record
+                    )
+                    _health.value = _health.value.copy(
+                        record = record, results = verdict.results
+                    )
+                    repairSaved = true
+                    repairNote = "Rebuilt how Xreader reads this site."
+                    say(
+                        "Rebuilt how Xreader reads this site — " +
+                            "the test-drive passes now."
+                    )
+                } else {
+                    if (verdict != null) {
+                        repairStageLines +=
+                            "Live re-derivation — test-drive: " +
+                            verdict.state.name.lowercase()
+                                .replace('_', ' ')
+                    }
+                    // ── step 2: convert in place ────────────
+                    val startUrl = spec?.startUrl ?: spec?.baseUrl
+                    var converted = false
+                    if (!startUrl.isNullOrBlank()) {
+                        when (
+                            val outcome = container.linkProber.probe(
+                                startUrl,
+                                aiAvailable = false,
+                                tryAllProposers = true,
+                                semanticVerifier = { titles, excerpt ->
+                                    container.selectorAi.verifySample(
+                                        titles, excerpt
+                                    )
+                                }
+                            )
+                        ) {
+                            is app.xreader.data.extension.LinkProber
+                                .Outcome.Ready -> {
+                                repairStageLines = repairStageLines +
+                                    outcome.stageLines.map { it.render() }
+                                when (
+                                    container.repoManager.saveLinkSource(
+                                        outcome.draft.config,
+                                        outcome.draft.host,
+                                        packageIdOverride = ext.packageId
+                                    )
+                                ) {
+                                    is AppResult.Ok -> {
+                                        converted = true
+                                        repairSaved = true
+                                        _linkConfig.value =
+                                            outcome.draft.config
+                                        _rowShape.value =
+                                            app.xreader.data.extension
+                                                .RebuildKind
+                                                .REPO_DECLARATIVE_SINGLE to null
+                                        clearStaleHealth(
+                                            spec?.id ?: outcome.draft.config.id
+                                        )
+                                        repairNote =
+                                            "Rebuilt as a regular source — " +
+                                                "Repair can now rewrite its rules."
+                                        say(
+                                            "Rebuilt as a regular source — " +
+                                                "Repair can now rewrite its " +
+                                                "rules. Running the test-drive…"
+                                        )
+                                        runTestDrive()
+                                    }
+                                    is AppResult.Err -> {
+                                        repairNote =
+                                            "Repair found rules that read " +
+                                                "this site, but they " +
+                                                "couldn't be saved — this " +
+                                                "is still a Live Source."
+                                        say(repairNote)
+                                    }
+                                }
+                            }
+                            is app.xreader.data.extension.LinkProber
+                                .Outcome.LoginRequired -> {
+                                repairNote =
+                                    "Repair needs you signed in first — " +
+                                        "use “Sign in” on this source, " +
+                                        "then try Repair again. Nothing " +
+                                        "was changed."
+                                say(repairNote)
+                            }
+                            is app.xreader.data.extension.LinkProber
+                                .Outcome.Failed -> {
+                                repairStageLines = repairStageLines +
+                                    outcome.stageLines.map { it.render() }
+                                repairNote =
+                                    "Repair couldn't rebuild this site " +
+                                        "yet. The test-drive said: " +
+                                        (verdict?.summaryLine()
+                                            ?: outcome.message) +
+                                        " — Copy details on the Health " +
+                                        "card has the full picture."
+                                say(repairNote)
+                            }
+                        }
+                    }
+                    if (!converted && repairNote.isBlank()) {
+                        repairNote =
+                            "Repair couldn't rebuild this site yet. " +
+                                "The test-drive said: " +
+                                (verdict?.summaryLine()
+                                    ?: "the site didn't answer") +
+                                " — Copy details on the Health card " +
+                                "has the full picture."
+                        say(repairNote)
+                    }
+                    if (verdict != null && handle != null && !converted) {
+                        // The honest failure surface (§6.3 step
+                        // 3): the re-derivation's verdict stays
+                        // visible as this source's health.
+                        val record = verdict.toRecord()
+                        container.sourcePrefs.setSourceHealth(
+                            app.xreader.data.extension.SourceHealthRecord
+                                .key(extensionId, handle.source.id),
+                            record
+                        )
+                        _health.value = _health.value.copy(
+                            record = record, results = verdict.results
+                        )
+                    }
+                }
+                val repairRecord =
+                    app.xreader.data.extension.SourceRepairRecord(
+                        repairedAtMillis = System.currentTimeMillis(),
+                        saved = repairSaved,
+                        note = repairNote,
+                        stageLines = repairStageLines
+                    )
+                val repairKeySourceId = container.extensionService
+                    .sourcesOf(extensionId).getOrNull()
+                    ?.firstOrNull()?.source?.id
+                    ?: spec?.id
+                if (repairKeySourceId != null) {
+                    container.sourcePrefs.setSourceRepairLog(
+                        app.xreader.data.extension.SourceHealthRecord.key(
+                            extensionId, repairKeySourceId
+                        ),
+                        repairRecord
+                    )
+                }
+                if (!repairSaved && repairNote.isNotBlank()) {
+                    app.xreader.data.extension.DiagnosticLog.record(
+                        "repair",
+                        repairNote,
+                        "site: " + (
+                            spec?.baseUrl?.let {
+                                app.xreader.data.extension.CookieParsing
+                                    .hostOf(it)
+                            } ?: ext.packageId
+                            )
+                    )
+                }
+                _health.value = _health.value.copy(repairRecord = repairRecord)
+            } finally {
+                _health.value = _health.value.copy(repairing = false)
+            }
+        }
+    }
+
     private fun say(message: String) {
         _messages.tryEmit(message)
     }
@@ -880,7 +1206,18 @@ class ExtensionDetailViewModel(
                     val updated = result.value
                     val host = app.xreader.data.extension.CookieParsing
                         .hostOf(updated.baseUrl) ?: ""
-                    when (container.repoManager.saveLinkSource(updated, host)) {
+                    // v1.1.0 (Fix 5): save into THIS row's
+                    // package, like Repair does — without the
+                    // override a healed repo row would fork a
+                    // new link.* package instead of healing in
+                    // place.
+                    val extNow = current()
+                    when (
+                        container.repoManager.saveLinkSource(
+                            updated, host,
+                            packageIdOverride = extNow?.packageId
+                        )
+                    ) {
                         is AppResult.Ok -> {
                             _linkConfig.value = updated
                             say("Search is set up for this source now.")
@@ -917,7 +1254,14 @@ class ExtensionDetailViewModel(
     ) {
         val original = _linkConfig.value ?: return
         val ext = state.value.extension ?: return
-        if (!ext.packageId.startsWith("link.")) return
+        // v1.1.0 (Fix 5): the shared rebuildability gate —
+        // link rows and single-config repo rows may save.
+        if (
+            !app.xreader.data.extension.SourceRebuildability
+                .hasEditableRules(state.value.rebuildKind)
+        ) {
+            return
+        }
         if (_parser.value.saving) return
         when (
             val built = app.xreader.data.extension.ParserRulesEditor
@@ -969,7 +1313,10 @@ class ExtensionDetailViewModel(
                                     ?: ""
                                 when (
                                     container.repoManager.saveLinkSource(
-                                        proven, host
+                                        proven, host,
+                                        // v1.1.0 (Fix 5): in
+                                        // place, never a fork.
+                                        packageIdOverride = ext.packageId
                                     )
                                 ) {
                                     is AppResult.Ok -> {

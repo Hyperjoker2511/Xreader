@@ -299,15 +299,16 @@ val AppSchemes: List<AppScheme> = listOf(
 )
 
 /**
- * v1.0.6.2 (F8b + the user's 1–3 options rule): the Colour
- * theme PICKER offers exactly three complete themes — Electric
- * Violet (the default) and its two violet-family relatives.
- * The other schemes above stay resolvable for installs that
- * already chose them; they are simply no longer a wall of
- * options.
+ * The Colour theme PICKER. v1.0.6.2 (F8b) offered exactly three
+ * violet-family themes; v1.1.0 (the Nocturne flip, design §2.4)
+ * puts Nocturne Violet FIRST as the app default and keeps its
+ * three violet-family relatives as the other complete options.
+ * Every other scheme above stays resolvable for installs that
+ * already chose it (and for the book page's §3 colour pin);
+ * it is simply not listed here.
  */
 val AppColourThemes: List<AppScheme> = listOf(
-    ElectricVioletScheme, DeepIndigoScheme, MagentaVioletScheme
+    NocturneVioletScheme, ElectricVioletScheme, DeepIndigoScheme, MagentaVioletScheme
 )
 
 /**

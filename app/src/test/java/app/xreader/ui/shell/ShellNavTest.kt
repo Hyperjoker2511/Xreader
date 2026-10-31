@@ -15,8 +15,12 @@ class ShellNavTest {
 
     @Test
     fun `the five tabs are the locked line-up in order`() {
+        // v1.1.0 (2026-10-31): pin updated DELIBERATELY with the
+        // user's tab rename (design Q4) — Browse is labelled
+        // "Explore" and Me is labelled "Profile"; routes below
+        // are unchanged.
         assertEquals(
-            listOf("Library", "Browse", "History", "Downloads", "Me"),
+            listOf("Library", "Explore", "History", "Downloads", "Profile"),
             Tab.entries.map { it.label }
         )
         assertEquals(

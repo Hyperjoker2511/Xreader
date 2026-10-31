@@ -17,7 +17,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,8 +31,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.Home
+import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
-import app.xreader.ui.common.XreaderPrimaryButton
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.QuickActionTile
 
 /**
  * "Add source from link" (Amendment 7): paste a book page link →
@@ -102,7 +105,7 @@ fun AddFromLinkScreen(
         Spacer(Modifier.height(10.dp))
         when (val current = state) {
             is LinkAddUiState.Idle -> {
-                XreaderPrimaryButton(
+                PrimaryPill(
                     text = "Look at this site",
                     onClick = { viewModel.probe(url) },
                     enabled = url.isNotBlank(),
@@ -114,13 +117,12 @@ fun AddFromLinkScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                OutlinedButton(
+                PrimaryPill(
+                    text = "Install as a Live Source — works for any site",
                     onClick = { viewModel.installLive(url) },
                     enabled = url.isNotBlank(),
                     modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Install as a Live Source — works for any site")
-                }
+                )
                 Text(
                     "A Live Source is read fresh from the site every time you open " +
                         "it, in Xreader's own screens — nothing is saved that can go " +
@@ -183,7 +185,7 @@ fun AddFromLinkScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(10.dp))
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = if (current.siteCheck) {
                             "Open ${current.host}"
                         } else {
@@ -194,10 +196,11 @@ fun AddFromLinkScreen(
                         },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    TextButton(
+                    GhostPill(
+                        text = "Use a different link",
                         onClick = { viewModel.reset() },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("Use a different link") }
+                    )
                 }
             }
             is LinkAddUiState.Ready -> {
@@ -215,12 +218,18 @@ fun AddFromLinkScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(Modifier.height(6.dp))
+                    NocturneChip(
+                        label = "${drive.chapterCount} chapters",
+                        selected = false
+                    )
                     Spacer(Modifier.height(8.dp))
                     // v1.0.1: search is part of the proof — verified
                     // in plain words, or honestly flagged.
-                    if (drive.searchVerified && drive.searchProof != null) {
+                    val searchProof = drive.searchProof
+                    if (drive.searchVerified && searchProof != null) {
                         Text(
-                            drive.searchProof!!,
+                            searchProof,
                             style = MaterialTheme.typography.bodyMedium
                         )
                     } else {
@@ -250,9 +259,10 @@ fun AddFromLinkScreen(
                     }
                     // v1.0.5 (A6): a missing cover is flagged
                     // here, never a silent surprise later.
-                    if (drive.coverWarning != null) {
+                    val coverWarning = drive.coverWarning
+                    if (coverWarning != null) {
                         Text(
-                            drive.coverWarning!!,
+                            coverWarning,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -283,15 +293,16 @@ fun AddFromLinkScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(10.dp))
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Save this source",
                         onClick = { viewModel.save() },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    TextButton(
+                    GhostPill(
+                        text = "Don't save",
                         onClick = { viewModel.reset() },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("Don't save") }
+                    )
                 }
             }
             is LinkAddUiState.Failed -> {
@@ -304,7 +315,7 @@ fun AddFromLinkScreen(
                     )
                     Spacer(Modifier.height(10.dp))
                     if (aiAvailable) {
-                        XreaderPrimaryButton(
+                        PrimaryPill(
                             text = "Try the AI detector",
                             onClick = { viewModel.probeWithAi() },
                             modifier = Modifier.fillMaxWidth()
@@ -317,7 +328,7 @@ fun AddFromLinkScreen(
                         }
                         Spacer(Modifier.height(6.dp))
                     }
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Install as a Live Source instead",
                         onClick = { viewModel.installLive(url) },
                         enabled = url.isNotBlank(),
@@ -331,11 +342,12 @@ fun AddFromLinkScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(4.dp))
-                    TextButton(
+                    GhostPill(
+                        text = "Try again",
                         onClick = { viewModel.probe(url) },
                         enabled = url.isNotBlank(),
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("Try again") }
+                    )
                     TextButton(
                         onClick = { viewModel.reset() },
                         modifier = Modifier.fillMaxWidth()
@@ -414,15 +426,18 @@ fun AddFromLinkScreen(
                     )
                     Spacer(Modifier.height(10.dp))
                     if (current.bookId != null) {
-                        XreaderPrimaryButton(
+                        val savedBookId = current.bookId
+                        PrimaryPill(
                             text = "Open the book",
-                            onClick = { onOpenBook(current.bookId) },
+                            onClick = { onOpenBook(savedBookId) },
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
-                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                        Text("Back to Sources")
-                    }
+                    GhostPill(
+                        text = "Back to Sources",
+                        onClick = onBack,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
             is LinkAddUiState.InstallingLive -> {
@@ -455,13 +470,17 @@ fun AddFromLinkScreen(
                     )
                     Spacer(Modifier.height(10.dp))
                     if (current.bookId != null) {
-                        XreaderPrimaryButton(
+                        PrimaryPill(
                             text = "Open the book",
                             onClick = { onOpenBook(current.bookId) },
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
-                    TextButton(
+                    QuickActionTile(
+                        icon = Icons.Filled.Home,
+                        label = "Add to home screen",
+                        modifier = Modifier.fillMaxWidth(),
+                        active = false,
                         onClick = {
                             scope.launch {
                                 val bytes = viewModel.liveIconBytes(current.iconUrl)
@@ -473,9 +492,8 @@ fun AddFromLinkScreen(
                                     iconBytes = bytes
                                 )
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Add to home screen") }
+                        }
+                    )
                     if (pinFailed) {
                         Text(
                             "Your launcher doesn't allow pinning from apps — " +
@@ -484,9 +502,11 @@ fun AddFromLinkScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                        Text("Back to Sources")
-                    }
+                    GhostPill(
+                        text = "Back to Sources",
+                        onClick = onBack,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         }

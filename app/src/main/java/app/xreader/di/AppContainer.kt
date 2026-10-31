@@ -941,6 +941,15 @@ class AppContainer(context: Context) {
         // Violet Night, established installs keep Ember/their look.
         // Runs before any screen composes (the container is built in
         // XreaderApp.onCreate); idempotent after the first run.
-        appScope.launch { runCatching { appearancePrefs.primeDefaultScheme() } }
+        // v1.1.0 (Nocturne flip, design §2.3): the one-time v2
+        // migration runs FIRST at the same prime point — it must
+        // snapshot/migrate the pre-flip stored scheme before
+        // priming can write a fresh-install default over the
+        // empty slot (a fresh install then gets Nocturne from
+        // priming, with no snapshot, exactly as designed).
+        appScope.launch {
+            runCatching { appearancePrefs.migrateToNocturneV2() }
+            runCatching { appearancePrefs.primeDefaultScheme() }
+        }
     }
 }

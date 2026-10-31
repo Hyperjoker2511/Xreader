@@ -92,7 +92,10 @@ class V106StageBTest {
             results = "a[href*='/novels/']",
             title = "img@alt",
             link = "@href",
-            cover = "img@src"
+            cover = "img@src",
+            // v1.1.0: mirrors the production lane's Book-Shape
+            // Rule (KnownSites.chikariConfig, Shape B).
+            linkPattern = "/novels/[^/]+$"
         ),
         details = DetailsSpec(
             title = "h1",

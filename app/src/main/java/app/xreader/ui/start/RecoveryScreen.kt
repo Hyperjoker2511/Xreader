@@ -6,16 +6,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.RowItem
 import app.xreader.ui.common.ScreenHeader
-import app.xreader.ui.common.XreaderPrimaryButton
 
 /**
  * The friendly recovery screen (PLAN §1.5): shown on the launch after a
@@ -30,6 +32,12 @@ import app.xreader.ui.common.XreaderPrimaryButton
  * background and provides onBackground as the content colour for the
  * whole subtree. This screen never composes a Haze effect (R01
  * topology), so a persisted appearance choice cannot re-crash it.
+ *
+ * Nocturne reskin (§5.27, hard exception): this screen composes ZERO
+ * glass machinery — no GlassCard, no frostedGlass, no Haze. The crash
+ * note sits on a solid Tier-1 surface (surfaceContainerLow role,
+ * 24dp corners); the restyle is tokens + type only, so the screen
+ * still composes even if every glass setting is broken.
  *
  * [onSafeAppearance] is the crash-loop escape: it persistently
  * switches glass to Tinted BEFORE entering the app, so a bad
@@ -50,7 +58,7 @@ fun RecoveryScreen(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
+                .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             ScreenHeader(title = "Something went wrong", eyebrow = "Recovery")
@@ -61,8 +69,15 @@ fun RecoveryScreen(
                 style = MaterialTheme.typography.bodyLarge
             )
             if (!note.isNullOrBlank()) {
-                GlassCard(Modifier.fillMaxWidth()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text("Crash note", style = MaterialTheme.typography.titleMedium)
                         Text(
                             note.trim(),
@@ -79,11 +94,17 @@ fun RecoveryScreen(
                     }
                 }
             }
-            XreaderPrimaryButton(text = "Continue to your library", onClick = onContinue)
+            PrimaryPill(
+                text = "Continue to your library",
+                enabled = true,
+                onClick = onContinue
+            )
             if (onSafeAppearance != null) {
-                TextButton(onClick = onSafeAppearance) {
-                    Text("Open with safe appearance")
-                }
+                RowItem(
+                    icon = Icons.Filled.Shield,
+                    label = "Open with safe appearance",
+                    onClick = onSafeAppearance
+                )
                 Text(
                     "If the problem was the app's appearance (for example " +
                         "frosted glass), safe appearance switches to plain " +

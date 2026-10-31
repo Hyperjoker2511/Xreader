@@ -19,7 +19,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,10 +36,15 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.data.db.TrustState
 import app.xreader.data.extension.ExtensionKind
+import app.xreader.data.extension.healthDot
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.GhostPill
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.NocturneSwitch
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.common.StatusPill
-import app.xreader.ui.common.XreaderPrimaryButton
 
 /**
  * A source's page (PLAN §5/§9.1): what it is, what changed (when it's
@@ -87,7 +91,15 @@ fun ExtensionDetailScreen(
                 saving = state.parserSaving,
                 message = state.parserMessage,
                 onSave = { viewModel.saveParserRules(it) },
-                onBack = { viewModel.closeParserEditor() }
+                onBack = { viewModel.closeParserEditor() },
+                // v1.1.0 (§5.10): read-only with the honest
+                // line for kinds whose rules can't be rebuilt.
+                editable = app.xreader.data.extension
+                    .SourceRebuildability
+                    .hasEditableRules(state.rebuildKind),
+                readOnlyNote = app.xreader.data.extension
+                    .SourceRebuildability
+                    .parserRulesLine(state.rebuildKind)
             )
             return@Column
         }
@@ -101,7 +113,7 @@ fun ExtensionDetailScreen(
                 modifier = Modifier.weight(1f)
             )
             if (ext != null) {
-                Switch(
+                NocturneSwitch(
                     checked = ext.enabled,
                     onCheckedChange = { viewModel.setEnabled(it) }
                 )
@@ -140,7 +152,7 @@ fun ExtensionDetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        XreaderPrimaryButton(
+                        PrimaryPill(
                             text = "Re-trust it",
                             onClick = { viewModel.retrust() }
                         )
@@ -166,7 +178,7 @@ fun ExtensionDetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        XreaderPrimaryButton(
+                        PrimaryPill(
                             text = "Accept update",
                             onClick = { viewModel.acceptPending() }
                         )
@@ -199,7 +211,7 @@ fun ExtensionDetailScreen(
                 Spacer(Modifier.height(8.dp))
                 val sourceIds = ext.sourceIds.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 if (sourceIds.size == 1 && ext.trustState == TrustState.TRUSTED) {
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Open source",
                         onClick = { onOpenSource(sourceIds.first()) },
                         enabled = ext.enabled,
@@ -221,7 +233,7 @@ fun ExtensionDetailScreen(
             // a source's trustworthiness is a first-class fact.
             GlassCard {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Health", style = MaterialTheme.typography.titleMedium)
+                    SectionHeader(title = "Health", eyebrow = "Test-drive")
                     val health = state.health
                     if (health == null) {
                         Text(
@@ -235,6 +247,22 @@ fun ExtensionDetailScreen(
                         Text(
                             health.summaryLine(),
                             style = MaterialTheme.typography.bodyLarge
+                        )
+                        NocturneChip(
+                            label = health.shortStateWord(),
+                            dotColor = when (
+                                health.state.healthDot()
+                            ) {
+                                app.xreader.data.extension.HealthDot.GREEN ->
+                                    MaterialTheme.colorScheme.secondary
+                                app.xreader.data.extension.HealthDot.AMBER ->
+                                    MaterialTheme.colorScheme.tertiary
+                                app.xreader.data.extension.HealthDot.RED ->
+                                    MaterialTheme.colorScheme.error
+                                app.xreader.data.extension.HealthDot.GREY ->
+                                    MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                            }
                         )
                         if (health.proofBookTitle.isNotBlank()) {
                             Text(
@@ -295,9 +323,18 @@ fun ExtensionDetailScreen(
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                if (result.ok) "✓ ${result.detail}" else "✗ ${result.detail}",
+                                // v1.1.0 (§6.5b): a by-design
+                                // absence reads as a neutral
+                                // fact, never a failure.
+                                if (result.notApplicable) {
+                                    "— ${result.detail}"
+                                } else if (result.ok) {
+                                    "✓ ${result.detail}"
+                                } else {
+                                    "✗ ${result.detail}"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (result.ok) {
+                                color = if (result.ok || result.notApplicable) {
                                     MaterialTheme.colorScheme.onSurfaceVariant
                                 } else {
                                     errorTextColor()
@@ -306,27 +343,22 @@ fun ExtensionDetailScreen(
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        XreaderPrimaryButton(
+                        PrimaryPill(
                             text = if (state.testing) "Testing…" else "Run test-drive",
                             onClick = { viewModel.runTestDrive() },
                             enabled = !state.testing && ext.enabled
                         )
-                        TextButton(
+                        GhostPill(
+                            text = if (state.repairing) "Repairing…" else "Repair",
                             onClick = { repairConfirm = true },
                             enabled = !state.repairing
-                        ) {
-                            Text(if (state.repairing) "Repairing…" else "Repair")
-                        }
+                        )
                     }
                     Text(
-                        if (ext.packageId.startsWith("link.")) {
-                            "Repair re-reads the site and rebuilds its rules, " +
-                                "then tests again. Your current rules are kept " +
-                                "if the rebuild can't be saved."
-                        } else {
-                            "This source came from a repository — if a step " +
-                                "fails, its repository needs to update it."
-                        },
+                        // v1.1.0 (Fix 5): the true per-kind
+                        // Repair behaviour (§6.4), one helper.
+                        app.xreader.data.extension.SourceRebuildability
+                            .repairLine(state.rebuildKind),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -455,22 +487,25 @@ fun ExtensionDetailScreen(
             // sources (their rules live on this device); repo
             // sources say plainly why theirs can't be edited here —
             // the same distinction Repair already makes.
-            if (kind == ExtensionKind.DECLARATIVE) {
+            if (
+                kind == ExtensionKind.DECLARATIVE ||
+                state.rebuildKind ==
+                app.xreader.data.extension.RebuildKind.LIVE
+            ) {
                 GlassCard {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            "Parser rules",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        if (ext.packageId.startsWith("link.")) {
+                        SectionHeader(title = "Parser rules")
+                        if (
+                            app.xreader.data.extension
+                                .SourceRebuildability.hasEditableRules(
+                                    state.rebuildKind
+                                )
+                        ) {
                             Text(
-                                "These rules are how Xreader reads this " +
-                                    "site's pages — where the book list, " +
-                                    "synopsis, chapter list and story text " +
-                                    "live. If the site changes its layout " +
-                                    "and reading breaks, you can fix them " +
-                                    "here. A test read must pass before " +
-                                    "new rules are saved.",
+                                app.xreader.data.extension
+                                    .SourceRebuildability.parserRulesLine(
+                                        state.rebuildKind
+                                    ),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme
                                     .onSurfaceVariant
@@ -520,17 +555,21 @@ fun ExtensionDetailScreen(
                                 color = MaterialTheme.colorScheme
                                     .onSurfaceVariant
                             )
-                            XreaderPrimaryButton(
+                            PrimaryPill(
                                 text = "Edit parser rules",
                                 onClick = { viewModel.openParserEditor() },
                                 modifier = Modifier.fillMaxWidth()
                             )
                         } else {
                             Text(
-                                "This source's rules come from its " +
-                                    "repository and can't be edited here — " +
-                                    "if they break, the repository needs " +
-                                    "to update them.",
+                                // v1.1.0 (Fix 5): the honest
+                                // per-kind line — read-only while
+                                // LIVE, package-bound for code and
+                                // multi-config rows (§6.4).
+                                app.xreader.data.extension
+                                    .SourceRebuildability.parserRulesLine(
+                                        state.rebuildKind
+                                    ),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme
                                     .onSurfaceVariant
@@ -543,10 +582,7 @@ fun ExtensionDetailScreen(
             // ── v1.0.2 (R24): Bring my library ───────────────────
             GlassCard {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        "Bring my library",
-                        style = MaterialTheme.typography.titleMedium
-                    )
+                    SectionHeader(title = "Bring my library")
                     if (!state.hasBookshelf) {
                         Text(
                             "This source doesn't know its account bookshelf " +
@@ -658,7 +694,7 @@ fun ExtensionDetailScreen(
                                 horizontalArrangement =
                                     Arrangement.spacedBy(8.dp)
                             ) {
-                                XreaderPrimaryButton(
+                                PrimaryPill(
                                     text = if (state.bringBusy) {
                                         "Bringing over…"
                                     } else {
@@ -674,7 +710,7 @@ fun ExtensionDetailScreen(
                                 ) { Text("Not now") }
                             }
                         } ?: run {
-                            XreaderPrimaryButton(
+                            PrimaryPill(
                                 text = if (state.bringBusy) {
                                     "Looking…"
                                 } else {
@@ -696,7 +732,7 @@ fun ExtensionDetailScreen(
 
             // ── permissions ─────────────────────────────────────────
             GlassCard {
-                Text("Sites it may open", style = MaterialTheme.typography.titleMedium)
+                SectionHeader(title = "Sites it may open")
                 Text(
                     "Requests to any other site are blocked inside Xreader — " +
                         "the source can't reach them at all.",
@@ -717,7 +753,7 @@ fun ExtensionDetailScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(domain, Modifier.weight(1f))
-                        Switch(
+                        NocturneSwitch(
                             checked = allowed,
                             onCheckedChange = { viewModel.toggleDomain(domain, it) }
                         )
@@ -735,7 +771,7 @@ fun ExtensionDetailScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Switch(
+                    NocturneSwitch(
                         checked = permissions.canNotify,
                         onCheckedChange = { viewModel.setCanNotify(it) }
                     )
@@ -755,7 +791,7 @@ fun ExtensionDetailScreen(
                                 color = errorTextColor()
                             )
                         }
-                        Switch(
+                        NocturneSwitch(
                             checked = permissions.dexOptIn,
                             onCheckedChange = { wanted ->
                                 if (wanted) showDexConsent = true
@@ -768,7 +804,7 @@ fun ExtensionDetailScreen(
 
             // ── session ─────────────────────────────────────────────
             GlassCard {
-                Text("Sign-in", style = MaterialTheme.typography.titleMedium)
+                SectionHeader(title = "Sign-in")
                 if (state.sessionSaved) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -792,7 +828,7 @@ fun ExtensionDetailScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(6.dp))
-                XreaderPrimaryButton(
+                PrimaryPill(
                     text = if (state.sessionSaved) "Sign in again" else "Log in",
                     onClick = onLogin,
                     modifier = Modifier.fillMaxWidth()
@@ -801,7 +837,7 @@ fun ExtensionDetailScreen(
 
             // ── cleaner rules ───────────────────────────────────────
             GlassCard {
-                Text("Text cleaners", style = MaterialTheme.typography.titleMedium)
+                SectionHeader(title = "Text cleaners")
                 Text(
                     "Search-and-replace rules applied to this source's chapters " +
                         "as they download — for site footers, watermarks and " +
@@ -829,7 +865,7 @@ fun ExtensionDetailScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Switch(
+                        NocturneSwitch(
                             checked = rule.enabled,
                             onCheckedChange = { viewModel.toggleRule(index, it) }
                         )
@@ -896,7 +932,7 @@ fun ExtensionDetailScreen(
             // ── search setup (v1.0.1) ───────────────────────────────
             state.linkConfig?.let { config ->
                 GlassCard {
-                    Text("Search", style = MaterialTheme.typography.titleMedium)
+                    SectionHeader(title = "Search")
                     Spacer(Modifier.height(4.dp))
                     if (config.search == null || config.searchNeedsSetup) {
                         Text(
@@ -907,7 +943,7 @@ fun ExtensionDetailScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.height(8.dp))
-                        XreaderPrimaryButton(
+                        PrimaryPill(
                             text = "Set up search",
                             onClick = { viewModel.setupSearch() },
                             modifier = Modifier.fillMaxWidth()
@@ -937,7 +973,9 @@ fun ExtensionDetailScreen(
             ) {
                 Text("Uninstall this source", color = errorTextColor())
             }
-            Spacer(Modifier.height(12.dp))
+            // v1.1.0: 88dp bottom clearance — clears the
+            // floating dock AND the phone's dead bottom strip.
+            Spacer(Modifier.height(88.dp))
         }
     }
 
@@ -947,16 +985,11 @@ fun ExtensionDetailScreen(
             title = { Text("Repair this source?") },
             text = {
                 Text(
-                    if (ext?.packageId?.startsWith("link.") == true) {
-                        "Xreader will re-read the site's pages and rebuild " +
-                            "this source's rules, then run the test-drive " +
-                            "again. Your current rules are backed up first " +
-                            "and restored if the rebuild can't be saved."
-                    } else {
-                        "This source came from a repository, so its rules " +
-                            "can't be rebuilt here. Repair will run the " +
-                            "test-drive and show exactly which step fails."
-                    }
+                    // v1.1.0 (Fix 5): the dialog promises
+                    // exactly what Repair will do for THIS
+                    // row's kind (§6.4) — no more, no less.
+                    app.xreader.data.extension.SourceRebuildability
+                        .repairLine(state.rebuildKind)
                 )
             },
             confirmButton = {

@@ -83,10 +83,23 @@ data class AppearanceState(
     val glassElevationScale: Float = AppearanceValidation.DEFAULT_ELEVATION_SCALE,
     val reduceMotion: Boolean = false,
     /** Name of the chosen app colour scheme (see AppSchemes), or
-     * `custom:<id>` for a make-your-own scheme. */
-    val colourScheme: String = "Ember",
-    /** The user's glass CHOICE (the effective style may fall back). */
-    val glassStyle: GlassStyle = GlassStyle.TINTED,
+     * `custom:<id>` for a make-your-own scheme. v1.1.0 (Nocturne
+     * flip): the pre-load default is Nocturne violet so first
+     * frames match the primed fresh-install default. */
+    val colourScheme: String = "Nocturne violet",
+    /** The user's glass CHOICE (the effective style may fall back).
+     * v1.1.0 (user answer Q5): FROSTED is the default choice; the
+     * per-device effective-style gate still falls back to TINTED
+     * where blur can't run (SDK < 31 / low RAM). */
+    val glassStyle: GlassStyle = GlassStyle.FROSTED,
+    /** v1.1.0 (Nocturne flip, design §3): the book page's pinned
+     * scheme — a verbatim snapshot of the stored colour scheme
+     * taken by the one-time v2 migration BEFORE the flip, so the
+     * frozen Book Detail screen keeps exactly its pre-flip
+     * colours. Null = no pin: the book page follows the app
+     * scheme like every other screen. Written only by the
+     * migration; cleared only by an explicit [AppearancePrefs.setColourScheme]. */
+    val bookDetailScheme: String? = null,
     /** True black (v1.0.2, R04): dark-mode surfaces collapse to pure
      * black for AMOLED. Off by default. */
     val trueBlack: Boolean = false,
@@ -163,7 +176,7 @@ object AppearanceValidation {
         runCatching { ThemeMode.valueOf(raw ?: "") }.getOrDefault(ThemeMode.FOLLOW_SYSTEM)
 
     fun parseGlassStyle(raw: String?): GlassStyle =
-        runCatching { GlassStyle.valueOf(raw ?: "") }.getOrDefault(GlassStyle.TINTED)
+        runCatching { GlassStyle.valueOf(raw ?: "") }.getOrDefault(GlassStyle.FROSTED)
 
     fun parseBookColours(raw: String?): BookColoursScope =
         runCatching { BookColoursScope.valueOf(raw ?: "") }
@@ -190,17 +203,17 @@ object AppearanceValidation {
     val COLOUR_SCHEMES = listOf(
         "Ember", "Violet night", "Ocean", "Forest", "Rose", "Mono",
         "Nebula violet", "Emerald", "Sunset", "Electric violet", "Wallpaper",
-        "Deep indigo", "Magenta violet"
+        "Deep indigo", "Magenta violet", "Nocturne violet"
     )
 
     /** The fresh-install default scheme: a brand-new install
-     * starts on Electric Violet — v1.0.6.2 (F8b) makes it the
-     * default of the three-theme picker, per the final-build
-     * plan (it is the user's own palette; he is not a fan of
-     * the amber Ember scheme). Established installs and stored
-     * choices are untouched (see ESTABLISHED_INSTALL_SCHEME and
-     * primeDefaultScheme's never-overwrite rule). */
-    const val FRESH_INSTALL_SCHEME = "Electric violet"
+     * starts on Nocturne Violet — v1.1.0 (the Nocturne flip,
+     * design §2; it was Electric Violet in v1.0.6.2 F8b).
+     * Established installs are moved by the one-time v2
+     * migration (see AppearancePrefs.migrateToNocturneV2), not
+     * by this constant; primeDefaultScheme's never-overwrite
+     * rule still holds. */
+    const val FRESH_INSTALL_SCHEME = "Nocturne violet"
 
     /** The upgrade-preserving default: an install that already has
      * data keeps the look it had (Ember unless the user chose). */
@@ -348,6 +361,45 @@ class AppearancePrefs(
         }
     }
 
+    /**
+     * One-time Nocturne flip migration (v1.1.0, design §2.3 +
+     * §3.1; user answer Q1: everyone migrates). Runs once, from
+     * the same AppContainer prime point as [primeDefaultScheme]
+     * — and BEFORE it, so a genuinely fresh install (no stored
+     * scheme yet) is never snapshotted: priming afterwards gives
+     * it Nocturne with no pin, exactly as designed.
+     *
+     * In one edit, in this order:
+     *  a. Snapshot: copy the currently stored colour scheme
+     *     VERBATIM into `appearance.book_detail_scheme` (the
+     *     frozen book page's colour pin, §3) — only when a
+     *     stored value exists.
+     *  b. Migrate: if the stored value is one of the 13 preset
+     *     names (every [AppearanceValidation.COLOUR_SCHEMES]
+     *     entry except `Wallpaper`; for "Nocturne violet" itself
+     *     the write is a no-op), set the scheme to Nocturne
+     *     violet. `custom:<id>` and `Wallpaper` values are the
+     *     user's own creations and are preserved untouched.
+     *  c. Mark `appearance.scheme_primed_v2` done. Idempotent:
+     *     a re-run is a no-op, so a pin cleared later (or a
+     *     scheme re-chosen later) is never resurrected.
+     */
+    suspend fun migrateToNocturneV2() {
+        store.edit { prefs ->
+            if (prefs[KEY_SCHEME_PRIMED_V2] == true) return@edit
+            prefs[KEY_SCHEME_PRIMED_V2] = true
+            val stored = prefs[KEY_COLOUR_SCHEME]
+            if (stored != null) {
+                prefs[KEY_BOOK_DETAIL_SCHEME] = stored
+                val isPreset = stored in AppearanceValidation.COLOUR_SCHEMES &&
+                    stored != "Wallpaper"
+                if (isPreset) {
+                    prefs[KEY_COLOUR_SCHEME] = AppearanceValidation.FRESH_INSTALL_SCHEME
+                }
+            }
+        }
+    }
+
     val state: Flow<AppearanceState> = store.data.map { prefs ->
         val customs = AppearanceValidation.decodeCustomSchemes(prefs[KEY_CUSTOM_SCHEMES])
         AppearanceValidation.validate(
@@ -360,6 +412,11 @@ class AppearancePrefs(
                 colourScheme = AppearanceValidation.parseColourScheme(
                     prefs[KEY_COLOUR_SCHEME], customs.map { it.id }.toSet()
                 ),
+                // The §3 pin is exposed VERBATIM (not run through
+                // parseColourScheme): the BookDetailTheme wrapper
+                // resolves it exactly the way XreaderTheme resolves
+                // the app scheme, fallbacks included.
+                bookDetailScheme = prefs[KEY_BOOK_DETAIL_SCHEME],
                 glassStyle = AppearanceValidation.parseGlassStyle(prefs[KEY_GLASS_STYLE]),
                 trueBlack = prefs[KEY_TRUE_BLACK] ?: false,
                 customSchemes = customs,
@@ -394,12 +451,24 @@ class AppearancePrefs(
     suspend fun setReduceMotion(value: Boolean) =
         store.edit { it[KEY_REDUCE_MOTION] = value }
 
+    /**
+     * The one explicit scheme-choice write. v1.1.0 (design
+     * §3.2): any deliberate choice also CLEARS the book page's
+     * colour pin — from then on the book page follows the chosen
+     * scheme like the rest of the app. Folding the clear in here
+     * (rather than in each ViewModel) means every caller —
+     * Customise, the dead-code Appearance VM, the custom-scheme
+     * editor's select/delete paths — gets the same behaviour.
+     * The migration and priming write the scheme key directly,
+     * never through here, so they cannot clear the pin they set.
+     */
     suspend fun setColourScheme(name: String) =
         store.edit { prefs ->
             val customs = AppearanceValidation.decodeCustomSchemes(prefs[KEY_CUSTOM_SCHEMES])
             prefs[KEY_COLOUR_SCHEME] = AppearanceValidation.parseColourScheme(
                 name, customs.map { it.id }.toSet()
             )
+            prefs.remove(KEY_BOOK_DETAIL_SCHEME)
         }
 
     suspend fun setGlassStyle(style: GlassStyle) =
@@ -490,6 +559,8 @@ class AppearancePrefs(
         val KEY_TRUE_BLACK = booleanPreferencesKey("appearance.true_black")
         val KEY_CUSTOM_SCHEMES = stringPreferencesKey("appearance.custom_schemes")
         val KEY_SCHEME_PRIMED = booleanPreferencesKey("appearance.scheme_primed")
+        val KEY_SCHEME_PRIMED_V2 = booleanPreferencesKey("appearance.scheme_primed_v2")
+        val KEY_BOOK_DETAIL_SCHEME = stringPreferencesKey("appearance.book_detail_scheme")
         val KEY_BOOK_COLOURS = stringPreferencesKey("appearance.book_colours")
         val KEY_COVER_GLOW = booleanPreferencesKey("appearance.cover_glow")
         val KEY_PERF_MODE = stringPreferencesKey("appearance.performance_mode")

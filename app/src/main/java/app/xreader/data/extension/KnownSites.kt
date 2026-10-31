@@ -290,7 +290,19 @@ object KnownSites {
             results = "a[href*='/novels/']",
             title = "img@alt",
             link = "@href",
-            cover = "img@src"
+            cover = "img@src",
+            // v1.1.0 (design §6.1, Shape B): the Book-Shape
+            // Rule as data. The live rendered href shapes
+            // could not be re-verified clean in-build (the
+            // site's fetch timed out and its search index
+            // exposes no hrefs), so the `$`-anchored selector
+            // (Shape A) was NOT trusted: this pattern is
+            // enforced by the engine over the NORMALISED path
+            // (query/fragment stripped, trailing slash
+            // removed), which admits clean AND slash/query
+            // hrefs while dropping chapter-shaped comment
+            // anchors (/novels/<slug>/<n>) either way.
+            linkPattern = "/novels/[^/]+$"
         )
         return DeclarativeConfig(
             id = id,

@@ -10,8 +10,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -23,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,6 +65,10 @@ import app.xreader.domain.reader.PagedDirection
 import app.xreader.domain.reader.ReaderConfig
 import app.xreader.domain.reader.TapZoneLayout
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.NocturneSwitch
+import app.xreader.ui.common.ProgressPillBar
+import app.xreader.ui.common.SectionHeader
+import app.xreader.ui.common.StatusPill
 import app.xreader.ui.theme.ReaderPalettes
 import app.xreader.ui.theme.maxContrast
 import kotlinx.coroutines.flow.SharingStarted
@@ -451,6 +458,76 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
+        // v1.1.0 (§5.16): the live preview tile — a mini book tile
+        // + text sample drawn in the CURRENT Material roles inside
+        // a real GlassCard, so it mutates with the scheme and glass
+        // controls below the moment they change (the same sample
+        // line the Reader palette previews already use; the pill
+        // bar's fill is the preview's own sample fraction, not
+        // reading data).
+        val schemeDisplayName = if (
+            appearance.colourScheme.startsWith(CUSTOM_SCHEME_PREFIX)
+        ) {
+            appearance.customSchemes.firstOrNull {
+                CUSTOM_SCHEME_PREFIX + it.id == appearance.colourScheme
+            }?.name ?: "Your theme"
+        } else {
+            appearance.colourScheme
+        }
+        val glassDisplayName = when (appearance.glassStyle) {
+            GlassStyle.FROSTED -> "Frosted glass"
+            GlassStyle.TINTED -> "Tinted glass"
+            GlassStyle.SOLID -> "Solid"
+        }
+        GlassCard(Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeader(
+                    title = "Preview",
+                    modifier = Modifier.fillMaxWidth(),
+                    eyebrow = "Live"
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        Modifier
+                            .size(width = 48.dp, height = 68.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.MenuBook,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
+                    Column(
+                        Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text("A sample book", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "The gate opened at dawn.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2
+                        )
+                        ProgressPillBar(
+                            fraction = 0.42f,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+                Text(
+                    "Now using: $schemeDisplayName · $glassDisplayName",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
         CustomiseSection("Colour theme") {
             Text(
                 "The colours the whole app wears.",
@@ -489,7 +566,19 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             .background(colors.primary)
                     )
                     Column(Modifier.weight(1f)) {
-                        Text(scheme.name, style = MaterialTheme.typography.titleSmall, color = colors.onSurface)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(scheme.name, style = MaterialTheme.typography.titleSmall, color = colors.onSurface)
+                            // v1.1.0 (§2.4/§5.16): Nocturne violet
+                            // is the app default — badged in the
+                            // picker. (The picker list itself comes
+                            // from AppColourThemes, Nocturne first.)
+                            if (scheme.name == "Nocturne violet") {
+                                StatusPill(text = "App default", color = colors.primary)
+                            }
+                        }
                         Text(
                             "Sample text in this theme",
                             style = MaterialTheme.typography.bodySmall,
@@ -510,6 +599,14 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     }
                 }
             }
+            // v1.1.0 (§3.2): the pin's honest line — picking a
+            // scheme here is the deliberate act that clears the
+            // book page's preserved colours.
+            Text(
+                "Changing this also changes the book page's colours.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             // Theme mode (moved here from the old Appearance door —
             // R07: one Customise home, "Appearance" no longer exists
             // as a separate destination).
@@ -606,9 +703,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(
+                NocturneSwitch(
                     checked = appearance.trueBlack,
-                    onCheckedChange = { viewModel.setTrueBlack(it) }
+                    onCheckedChange = { viewModel.setTrueBlack(it) },
+                    modifier = Modifier,
+                    enabled = true
                 )
             }
             // Make your own (R04 foundation): pick a colour, the app
@@ -750,9 +849,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(
+                NocturneSwitch(
                     checked = appearance.bloom,
-                    onCheckedChange = { viewModel.setBloom(it) }
+                    onCheckedChange = { viewModel.setBloom(it) },
+                    modifier = Modifier,
+                    enabled = true
                 )
             }
             Row(
@@ -774,9 +875,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(
+                NocturneSwitch(
                     checked = appearance.grain,
-                    onCheckedChange = { viewModel.setGrain(it) }
+                    onCheckedChange = { viewModel.setGrain(it) },
+                    modifier = Modifier,
+                    enabled = true
                 )
             }
             if (appearance.grain) {
@@ -1484,6 +1587,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 )
             }
         }
+        // v1.1.0: bottom clearance — 72dp here + the column's 16dp
+        // vertical padding = the standard 88dp (dock + dead strip).
+        Spacer(Modifier.height(72.dp))
     }
 }
 
@@ -1639,9 +1745,12 @@ private fun SeedSwatchRow(
 
 @Composable
 private fun CustomiseSection(title: String, content: @Composable () -> Unit) {
+    // v1.1.0 (§5.16): every section stays, in its current order —
+    // the restyle is furniture only: GlassCard section + the kit
+    // SectionHeader, controls untouched inside.
     GlassCard(Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
+            SectionHeader(title = title, modifier = Modifier.fillMaxWidth())
             content()
         }
     }
@@ -1667,7 +1776,14 @@ private fun CustomiseSwitch(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Switch(checked = checked, onCheckedChange = onChange)
+        // v1.1.0 (§4/§5.16): the kit switch is the app-wide switch
+        // styling — every Customise toggle goes through it now.
+        NocturneSwitch(
+            checked = checked,
+            onCheckedChange = onChange,
+            modifier = Modifier,
+            enabled = true
+        )
     }
 }
 

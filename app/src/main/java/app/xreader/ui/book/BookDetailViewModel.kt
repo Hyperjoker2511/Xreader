@@ -557,7 +557,26 @@ class BookDetailViewModel(
                 ]
             }
             storyLocal.value = storyLocal.value.copy(
-                isLinkSource = extension.packageId.startsWith("link."),
+                // v1.1.0 (Fix 5): the Repair door follows the
+                // ONE rebuildability helper, not the link.
+                // prefix — Live rows and single-config repo
+                // rows can be repaired too (§6.3/§6.4).
+                isLinkSource =
+                    app.xreader.data.extension.SourceRebuildability
+                        .isRebuildable(
+                            app.xreader.data.extension.SourceRebuildability
+                                .classify(
+                                    extension,
+                                    runCatching {
+                                        container.extensionStore.readText(
+                                            container.extensionStore
+                                                .definitionFile(
+                                                    extension.packageId
+                                                )
+                                        )
+                                    }.getOrNull()
+                                )
+                        ),
                 sourceNeedsSiteCheck =
                     handle?.let {
                         container.extensionService.declarativeConfigOf(it)

@@ -44,6 +44,36 @@ data class LiveSourceSpec(
 private val liveJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
 /**
+ * v1.1.0: the derived-shape cache keys, in one place so the
+ * version bump (design §6.2) and Repair's eviction (§6.3)
+ * can never drift apart from the reads that use them.
+ */
+object LiveShapeCache {
+
+    fun searchKey(host: String): String =
+        "${LiveSource.SHAPE_VERSION}.search.$host"
+
+    fun chapterKey(host: String): String =
+        "${LiveSource.SHAPE_VERSION}.chapter.$host"
+
+    fun bookKey(bookId: String): String =
+        "${LiveSource.SHAPE_VERSION}.book." +
+            Hashes.sha256Hex(bookId).take(16)
+
+    /** Forget the host-keyed shapes (search template +
+     * chapter shape, values and fingerprints). */
+    fun evictHostShapes(
+        store: app.xreader.extensionapi.HostStore,
+        host: String
+    ) {
+        for (key in listOf(searchKey(host), chapterKey(host))) {
+            store.remove(key)
+            store.remove("$key.fp")
+        }
+    }
+}
+
+/**
  * A Live Source (v1.0.9, the user's install-a-site idea): the
  * site is loaded for real through the host's escalating fetch
  * stack (the hidden browser engine covers JavaScript-shell
@@ -76,6 +106,19 @@ class LiveSource(
         runCatching { URI(spec.baseUrl).host ?: spec.baseUrl }
             .getOrDefault(spec.baseUrl)
 
+    companion object {
+        /**
+         * v1.1.0 (design §6.2): the derived-shape cache KEY
+         * VERSION. Every derived shape lives under this prefix;
+         * bumping it orphans every shape derived by older logic
+         * (v1's admitted comment/chapter-shaped junk among
+         * them), so an installed Live Source self-heals on its
+         * next open — no reinstall, no migration. The orphaned
+         * v1 entries are never read again.
+         */
+        const val SHAPE_VERSION = "shape.v2"
+    }
+
     /** Per-book ephemeral configs derived this process. */
     private val bookConfigs = ConcurrentHashMap<String, DeclarativeConfig>()
 
@@ -88,7 +131,9 @@ class LiveSource(
     override fun popular(page: Int): SourceBookPage {
         if (page > 1) return SourceBookPage(emptyList(), hasNextPage = false)
         val doc = fetchDoc(spec.startUrl)
-        val analysis = LinkInference.analyseListingPage(doc, spec.startUrl, null)
+        val analysis = LinkInference.analyseListingPage(
+            doc, spec.startUrl, null, booksOnly = true
+        )
         if (analysis != null) {
             return listingFrom(doc, spec.startUrl, analysis)
         }
@@ -115,7 +160,7 @@ class LiveSource(
 
     override fun search(query: String, page: Int): SourceBookPage {
         if (page > 1) return SourceBookPage(emptyList(), hasNextPage = false)
-        val cacheKey = "shape.search.$host"
+        val cacheKey = LiveShapeCache.searchKey(host)
         val cachedTemplate = context.store.get(cacheKey)
         val attempts = LinkedHashSet<String>()
         if (cachedTemplate != null) {
@@ -126,7 +171,9 @@ class LiveSource(
         attempts += SearchCandidates.conventionUrls(spec.baseUrl, query)
         for (url in attempts) {
             val doc = runCatching { fetchDoc(url) }.getOrNull() ?: continue
-            val analysis = LinkInference.analyseSearchResultsPage(doc, url, null)
+            val analysis = LinkInference.analyseSearchResultsPage(
+                doc, url, null, booksOnly = true
+            )
                 ?: continue
             if (analysis.count <= 0) continue
             context.store.put(
@@ -205,7 +252,7 @@ class LiveSource(
      */
     private fun bookDelegate(book: SourceBook): DeclarativeSource {
         bookConfigs[book.id]?.let { return DeclarativeSource(it, context) }
-        val cacheKey = "shape.book." + Hashes.sha256Hex(book.id).take(16)
+        val cacheKey = LiveShapeCache.bookKey(book.id)
         val doc = fetchDoc(book.id)
         val fingerprint = skeletonFingerprint(doc)
         val cached = context.store.get(cacheKey)
@@ -278,7 +325,7 @@ class LiveSource(
     }
 
     private fun deriveChapterOnlyConfig(chapter: SourceChapter): DeclarativeConfig {
-        val cacheKey = "shape.chapter.$host"
+        val cacheKey = LiveShapeCache.chapterKey(host)
         val doc = fetchDoc(chapter.id)
         val fingerprint = skeletonFingerprint(doc)
         val cached = context.store.get(cacheKey)
@@ -327,6 +374,16 @@ class LiveSource(
             throw SourceException("the site answered HTTP ${response.status}")
         }
         return Jsoup.parse(response.body, response.finalUrl.ifBlank { url })
+    }
+
+    /** v1.1.0 (§6.3 step 1): forget this source's host-keyed
+     * derived shapes (search template + chapter shape), so
+     * the next read derives again under the current rules.
+     * Per-book shapes need no eviction — they are only ever
+     * served while the book page's fingerprint still matches,
+     * and their keys are versioned (see [SHAPE_VERSION]). */
+    fun evictDerivedShapes() {
+        LiveShapeCache.evictHostShapes(context.store, host)
     }
 
     /** A cheap structural fingerprint of a page: the tag +

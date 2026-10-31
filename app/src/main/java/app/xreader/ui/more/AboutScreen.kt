@@ -3,8 +3,10 @@ package app.xreader.ui.more
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -23,7 +25,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.xreader.BuildConfig
+import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.SectionHeader
 
 /** About & licences (PLAN §3): what this build is, and the open-source
  * licences of everything bundled in it. */
@@ -38,15 +42,15 @@ fun AboutScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             }
-            Text("About & licences", style = MaterialTheme.typography.headlineSmall)
+            Text("About & licences", style = MaterialTheme.typography.headlineMedium)
         }
 
         GlassCard(Modifier.fillMaxWidth()) {
@@ -72,10 +76,7 @@ fun AboutScreen(
         // this version, kept with the app (no network, no feed).
         GlassCard(Modifier.fillMaxWidth()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    "What's new in ${BuildConfig.VERSION_NAME}",
-                    style = MaterialTheme.typography.titleMedium
-                )
+                SectionHeader(title = "What's new in ${BuildConfig.VERSION_NAME}")
                 listOf(
                     // v1.0.6.2 (full chapter lists, live reading,
                     // meaning-checked site rules).
@@ -335,7 +336,7 @@ fun AboutScreen(
 
         GlassCard(Modifier.fillMaxWidth()) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Open-source licences", style = MaterialTheme.typography.titleMedium)
+                SectionHeader(title = "Open-source licences")
                 LICENCES.forEach { (name, licence) ->
                     Column {
                         Text(name, style = MaterialTheme.typography.bodyLarge)
@@ -348,6 +349,7 @@ fun AboutScreen(
                 }
             }
         }
+        Spacer(Modifier.height(88.dp))
     }
 }
 
@@ -390,7 +392,9 @@ private fun CopyAppDetailsButton(container: app.xreader.di.AppContainer) {
     var copied by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(false)
     }
-    androidx.compose.material3.TextButton(
+    GhostPill(
+        text = if (copied) "Copied" else "Copy app details",
+        enabled = true,
         onClick = {
             val sourceLines = extensions.flatMap { ext ->
                 val ids = ext.sourceIds.split(",")
@@ -421,7 +425,5 @@ private fun CopyAppDetailsButton(container: app.xreader.di.AppContainer) {
             )
             copied = true
         }
-    ) {
-        Text(if (copied) "Copied" else "Copy app details")
-    }
+    )
 }

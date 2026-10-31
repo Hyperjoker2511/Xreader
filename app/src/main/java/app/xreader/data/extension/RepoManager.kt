@@ -549,6 +549,21 @@ class RepoManager(
         val row = if (existing != null) {
             existing.copy(
                 displayName = config.name,
+                // v1.1.0 (design §6.3 step 2): converting a
+                // LIVE row in place — the stored definition was
+                // a LiveSourceSpec and is now a declarative
+                // config list, so the row's KIND must flip with
+                // it, or the source fails to start on the decode
+                // mismatch (ExtensionService reads LIVE rows as
+                // LiveSourceSpec, DECLARATIVE rows as configs).
+                // Same row, same packageId, same library links.
+                kind = if (
+                    existing.kind == app.xreader.data.db.ExtensionKind.LIVE
+                ) {
+                    app.xreader.data.db.ExtensionKind.DECLARATIVE
+                } else {
+                    existing.kind
+                },
                 versionCode = existing.versionCode + 1,
                 sha256 = fingerprint,
                 sourceIds = config.id,

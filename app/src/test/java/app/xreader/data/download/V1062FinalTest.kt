@@ -111,9 +111,16 @@ class V1062FinalTest {
         assertFalse(empty.contains("Recent problems"))
     }
 
-    @Test fun theColourThemePickerIsExactlyThreeVioletFamilyThemes() {
+    @Test fun theColourThemePickerIsExactlyTheFourVioletFamilyThemes() {
+        // DELIBERATELY updated for v1.1.0 (the Nocturne flip,
+        // design §2.4): the picker was exactly three violet-family
+        // themes in v1.0.6.2; Nocturne violet now leads it as the
+        // app default, ahead of the same three relatives.
         assertEquals(
-            listOf("Electric violet", "Deep indigo", "Magenta violet"),
+            listOf(
+                "Nocturne violet", "Electric violet",
+                "Deep indigo", "Magenta violet"
+            ),
             AppColourThemes.map { it.name }
         )
     }

@@ -75,8 +75,6 @@ import app.xreader.ui.downloads.DownloadsViewModel
 import app.xreader.ui.library.LibraryScreen
 import app.xreader.ui.library.LibraryViewModel
 import app.xreader.ui.more.AboutScreen
-import app.xreader.ui.more.AppearanceScreen
-import app.xreader.ui.more.AppearanceViewModel
 import app.xreader.ui.more.LabsScreen
 import app.xreader.ui.more.MoreScreen
 import app.xreader.ui.opds.BrowseScreen
@@ -132,13 +130,19 @@ import kotlin.math.roundToInt
  * Library · Browse · History · Downloads · Me. "More" dissolved into
  * Me; History is a first-class tab. Order, routes and labels are
  * pinned by ShellNavTest.
+ *
+ * v1.1.0 (2026-10-31): the user renamed two LABELS to match the
+ * Nocturne Violet design (design Q4) — Browse is now labelled
+ * "Explore" and Me is now labelled "Profile". Labels only: the
+ * routes ("browse", "me"), icons, enum entries and slot order are
+ * unchanged, and ShellNavTest's pin was updated in the same change.
  */
 enum class Tab(val route: String, val label: String, val icon: ImageVector) {
     Library("library", "Library", Icons.Filled.MenuBook),
-    Browse("browse", "Browse", Icons.Filled.Explore),
+    Browse("browse", "Explore", Icons.Filled.Explore),
     History("history", "History", Icons.Filled.History),
     Downloads("downloads", "Downloads", Icons.Filled.Download),
-    Me("me", "Me", Icons.Filled.Person)
+    Me("me", "Profile", Icons.Filled.Person)
 }
 
 internal val BarHeight = 64.dp
@@ -935,7 +939,8 @@ private fun XreaderNavHost(
                 coverFile = coverFile,
                 reduceMotion = reduceMotion,
                 onMakeEpub = { group: BookDownloads -> onExport(group.book, "epub") },
-                onOpenBook = { bookId -> navController.navigate("book/$bookId") }
+                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
+                onOpenCustomise = { navController.navigate("customise") }
             )
         }
         composable(Tab.Me.route) {
@@ -1073,7 +1078,8 @@ private fun XreaderNavHost(
                 },
                 onOpenHistory = { navController.navigate("history") },
                 onOpenSync = { navController.navigate("sync") },
-                onOpenCustomise = { navController.navigate("customise") }
+                onOpenCustomise = { navController.navigate("customise") },
+                onOpenVocab = { navController.navigate("vocab") }
             )
         }
         composable("migration") {
@@ -1140,6 +1146,15 @@ private fun XreaderNavHost(
             androidx.compose.runtime.LaunchedEffect(viewModel) {
                 viewModel.messages.collect { msg -> onPhaseNote(msg) }
             }
+            // v1.1.0 (Nocturne §3): the frozen book page keeps the
+            // colours it had before the flip — the pin wrapper
+            // resolves the migration snapshot for this subtree
+            // only. BookDetailScreen.kt itself is untouched.
+            val bookAppearance by container.appearancePrefs.state
+                .collectAsStateWithLifecycle(
+                    initialValue = app.xreader.data.prefs.AppearanceState()
+                )
+            app.xreader.ui.book.BookDetailTheme(appearance = bookAppearance) {
             BookDetailScreen(
                 viewModel = viewModel,
                 coverFile = coverFile,
@@ -1202,6 +1217,7 @@ private fun XreaderNavHost(
                     }
                 }
             )
+            }
         }
         composable(
             "tag/{slug}",

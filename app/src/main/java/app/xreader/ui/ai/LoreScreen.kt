@@ -5,6 +5,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -14,18 +15,24 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -50,10 +58,12 @@ import app.xreader.data.db.LoreArt
 import app.xreader.data.db.LoreEntity
 import app.xreader.data.db.LoreType
 import app.xreader.data.db.TerminologyEntry
-import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
-import app.xreader.ui.common.StatusPill
-import app.xreader.ui.common.XreaderPrimaryButton
+import app.xreader.ui.common.KitEmptyState
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.NocturneSwitch
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.QuickActionTile
 import coil.compose.AsyncImage
 import java.io.File
 import kotlin.math.cos
@@ -92,14 +102,14 @@ fun LoreScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             }
             Column(Modifier.padding(start = 4.dp)) {
-                Text("Lore & glossary", style = MaterialTheme.typography.headlineSmall)
+                Text("Lore & glossary", style = MaterialTheme.typography.headlineMedium)
                 Text(
                     state.book?.title ?: "",
                     style = MaterialTheme.typography.bodyMedium,
@@ -126,12 +136,19 @@ fun LoreScreen(
                 modifier = Modifier.padding(top = 8.dp)
             )
         }
-        TabRow(selectedTabIndex = tab, modifier = Modifier.padding(top = 8.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             listOf("Lore", "Map", "Glossary", "Art").forEachIndexed { index, label ->
-                Tab(
+                NocturneChip(
+                    label = label,
+                    modifier = Modifier.weight(1f),
                     selected = tab == index,
-                    onClick = { tab = index },
-                    text = { Text(label) }
+                    dotColor = null,
+                    onClick = { tab = index }
                 )
             }
         }
@@ -193,16 +210,12 @@ fun LoreScreen(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         LoreType.entries.forEach { candidate ->
-                            TextButton(onClick = { type = candidate }) {
-                                Text(
-                                    candidate.label(),
-                                    color = if (type == candidate) {
-                                        MaterialTheme.colorScheme.tertiary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    }
-                                )
-                            }
+                            NocturneChip(
+                                label = candidate.label(),
+                                selected = type == candidate,
+                                dotColor = null,
+                                onClick = { type = candidate }
+                            )
                         }
                     }
                     OutlinedTextField(
@@ -254,7 +267,8 @@ private fun LoreTab(
 ) {
     LazyColumn(
         Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+        contentPadding = PaddingValues(bottom = 88.dp)
     ) {
         item(key = "actions") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -269,7 +283,7 @@ private fun LoreTab(
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = when {
                             state.building -> state.buildProgress.ifBlank { "Reading…" }
                             else -> "Build lore from my chapters"
@@ -278,8 +292,9 @@ private fun LoreTab(
                         enabled = state.hasKey && !state.building,
                         modifier = Modifier.weight(1f)
                     )
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Add by hand",
+                        enabled = true,
                         onClick = onAdd,
                         modifier = Modifier.weight(1f)
                     )
@@ -291,10 +306,11 @@ private fun LoreTab(
         }
         if (state.entities.isEmpty()) {
             item(key = "empty") {
-                EmptyState(
-                    title = "No lore yet",
-                    message = "Once chapters are read or downloaded, LoreKeeper " +
-                        "remembers who everyone is — names, factions, places, terms."
+                KitEmptyState(
+                    icon = Icons.Filled.AutoStories,
+                    message = "No lore yet. Once chapters are read or downloaded, " +
+                        "LoreKeeper remembers who everyone is — names, factions, " +
+                        "places, terms."
                 )
             }
         }
@@ -313,14 +329,18 @@ private fun LoreTab(
                 ) {
                     Text(entity.name, style = MaterialTheme.typography.titleMedium)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        StatusPill(
-                            text = entity.type.label(),
-                            color = MaterialTheme.colorScheme.tertiary
+                        NocturneChip(
+                            label = entity.type.label(),
+                            selected = false,
+                            dotColor = MaterialTheme.colorScheme.tertiary,
+                            onClick = null
                         )
                         if (entity.userLocked) {
-                            StatusPill(
-                                text = "Your edit",
-                                color = MaterialTheme.colorScheme.secondary
+                            NocturneChip(
+                                label = "Your edit",
+                                selected = false,
+                                dotColor = MaterialTheme.colorScheme.secondary,
+                                onClick = null
                             )
                         }
                     }
@@ -348,19 +368,23 @@ private fun LoreTab(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(
-                        onClick = { onArt(entity) },
-                        enabled = state.artBusyFor == null
-                    ) {
-                        Text(
-                            if (state.artBusyFor == entity.id) {
-                                "Painting…"
-                            } else {
-                                "Generate art"
-                            }
-                        )
-                    }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    QuickActionTile(
+                        icon = Icons.Filled.Brush,
+                        label = if (state.artBusyFor == entity.id) {
+                            "Painting…"
+                        } else {
+                            "Generate art"
+                        },
+                        modifier = Modifier.weight(1f),
+                        active = state.artBusyFor == entity.id,
+                        onClick = {
+                            if (state.artBusyFor == null) onArt(entity)
+                        }
+                    )
                     TextButton(onClick = { confirmDelete = true }) {
                         Text("Remove")
                     }
@@ -389,7 +413,6 @@ private fun LoreTab(
                 }
             }
         }
-        item(key = "pad") { Spacer(Modifier.height(8.dp)) }
     }
 }
 
@@ -397,32 +420,33 @@ private fun LoreTab(
 private fun MapTab(state: LoreUiState) {
     val entities = state.entities
     if (entities.size < 2 || state.relations.isEmpty()) {
-        EmptyState(
-            title = "No relationships yet",
-            message = "When LoreKeeper finds how people and factions connect, " +
-                "the map draws itself here."
+        KitEmptyState(
+            icon = Icons.Filled.Share,
+            message = "No relationships yet. When LoreKeeper finds how people " +
+                "and factions connect, the map draws itself here."
         )
         return
     }
     var scale by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
     val measurer = rememberTextMeasurer()
-    val nodeColor = MaterialTheme.colorScheme.tertiary
-    val lineColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+    val nodeColor = MaterialTheme.colorScheme.primary
+    val lineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
     val textColor = MaterialTheme.colorScheme.onSurface
     val textStyle = MaterialTheme.typography.labelSmall
     Column(Modifier.fillMaxSize()) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, gesturePan, zoom, _ ->
-                        scale = (scale * zoom).coerceIn(0.5f, 3f)
-                        pan += gesturePan
+        GlassCard(Modifier.fillMaxWidth()) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(300.dp)
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, gesturePan, zoom, _ ->
+                            scale = (scale * zoom).coerceIn(0.5f, 3f)
+                            pan += gesturePan
+                        }
                     }
-                }
-        ) {
+            ) {
             Canvas(
                 Modifier
                     .fillMaxSize()
@@ -463,7 +487,9 @@ private fun MapTab(state: LoreUiState) {
                     )
                 }
             }
+            }
         }
+        Spacer(Modifier.height(12.dp))
         Text(
             "Pinch to zoom, drag to pan. Who connects to whom:",
             style = MaterialTheme.typography.bodySmall,
@@ -472,7 +498,8 @@ private fun MapTab(state: LoreUiState) {
         Spacer(Modifier.height(6.dp))
         LazyColumn(
             Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            contentPadding = PaddingValues(bottom = 88.dp)
         ) {
             items(state.relations, key = { "rel-${it.id}" }) { relation ->
                 val from = entities.firstOrNull { it.id == relation.fromEntityId }?.name ?: "?"
@@ -495,7 +522,8 @@ private fun GlossaryTab(
 ) {
     LazyColumn(
         Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+        contentPadding = PaddingValues(bottom = 88.dp)
     ) {
         item(key = "intro") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -506,8 +534,9 @@ private fun GlossaryTab(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                XreaderPrimaryButton(
+                PrimaryPill(
                     text = "Add a term",
+                    enabled = true,
                     onClick = onAdd,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -515,10 +544,11 @@ private fun GlossaryTab(
         }
         if (state.terms.isEmpty()) {
             item(key = "empty") {
-                EmptyState(
-                    title = "No glossary terms yet",
-                    message = "Add the names and terms that must always translate " +
-                        "the same way — sect names, techniques, titles."
+                KitEmptyState(
+                    icon = Icons.Filled.Translate,
+                    message = "No glossary terms yet. Add the names and terms " +
+                        "that must always translate the same way — sect names, " +
+                        "techniques, titles."
                 )
             }
         }
@@ -539,9 +569,11 @@ private fun GlossaryTab(
                         style = MaterialTheme.typography.titleSmall
                     )
                     if (term.locked) {
-                        StatusPill(
-                            text = "Locked",
-                            color = MaterialTheme.colorScheme.secondary
+                        NocturneChip(
+                            label = "Locked",
+                            selected = false,
+                            dotColor = MaterialTheme.colorScheme.secondary,
+                            onClick = null
                         )
                     }
                 }
@@ -550,7 +582,6 @@ private fun GlossaryTab(
                 }
             }
         }
-        item(key = "pad") { Spacer(Modifier.height(8.dp)) }
     }
 }
 
@@ -561,23 +592,23 @@ private fun ArtTab(
     onDelete: (LoreArt) -> Unit
 ) {
     if (state.art.isEmpty()) {
-        EmptyState(
-            title = "No art yet",
-            message = "Generate art from any lore entry and it will live here — " +
-                "painted from what the book itself says about them."
+        KitEmptyState(
+            icon = Icons.Filled.Image,
+            message = "No art yet. Generate art from any lore entry and it " +
+                "will live here — painted from what the book itself says " +
+                "about them."
         )
         return
     }
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier.fillMaxSize(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(bottom = 88.dp)
     ) {
         items(state.art, key = { "art-${it.id}" }) { art ->
-            GlassCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .animateItem(placementSpec = listPlacementSpec())
-            ) {
+            Column {
                 AsyncImage(
                     model = artFile(art.imagePath),
                     contentDescription = art.passageQuote,
@@ -585,21 +616,20 @@ private fun ArtTab(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(1f)
+                        .clip(RoundedCornerShape(24.dp))
                 )
                 if (art.passageQuote.isNotBlank()) {
                     Text(
                         "“${art.passageQuote}”",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp)
+                        modifier = Modifier.padding(top = 8.dp),
+                        maxLines = 3
                     )
                 }
-                Row {
-                    TextButton(onClick = { onDelete(art) }) { Text("Remove") }
-                }
+                TextButton(onClick = { onDelete(art) }) { Text("Remove") }
             }
         }
-        item(key = "pad") { Spacer(Modifier.height(8.dp)) }
     }
 }
 
@@ -682,7 +712,11 @@ private fun TermEditor(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("Locked (an order, not a hint)")
-                    Switch(checked = locked, onCheckedChange = { locked = it })
+                    NocturneSwitch(
+                        checked = locked,
+                        onCheckedChange = { locked = it },
+                        enabled = true
+                    )
                 }
             }
         },

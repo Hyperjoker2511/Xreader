@@ -8,6 +8,7 @@ import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -35,6 +37,8 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
@@ -226,6 +230,9 @@ fun ReaderScreen(
     }
 
     var activeSheet by remember { mutableStateOf<ActiveSheet?>(null) }
+    // Nocturne §5.11: the chrome's Theme tile opens the Settings
+    // sheet straight on its Page & text sub-page.
+    var settingsInitialPage by remember { mutableStateOf("index") }
 
     // v1.0.1 reading comfort: the chrome fades away on its own after
     // a few seconds of reading (the return is the gentle engine-driven
@@ -586,7 +593,25 @@ fun ReaderScreen(
             onOpenToc = { activeSheet = ActiveSheet.TOC },
             onOpenListen = { activeSheet = ActiveSheet.LISTEN },
             onOpenFocus = { activeSheet = ActiveSheet.FOCUS },
-            onOpenSettings = { activeSheet = ActiveSheet.SETTINGS },
+            onOpenSettings = {
+                settingsInitialPage = "index"
+                activeSheet = ActiveSheet.SETTINGS
+            },
+            onOpenTheme = {
+                settingsInitialPage = "page"
+                activeSheet = ActiveSheet.SETTINGS
+            },
+            autoScrollActive = config.autoScrollEnabled,
+            onToggleAutoScroll = {
+                viewModel.updateConfig {
+                    it.copy(autoScrollEnabled = !it.autoScrollEnabled)
+                }
+                notice = if (config.autoScrollEnabled) {
+                    "Auto-scroll off"
+                } else {
+                    "Auto-scroll on"
+                }
+            },
             onOpenAi = { onOpenAiPage() },
             onTopBarHeight = { px -> if (px > 0) topChromePx = px },
             onBottomBarHeight = { px -> if (px > 0) bottomChromePx = px }
@@ -598,6 +623,7 @@ fun ReaderScreen(
                 shape = RoundedCornerShape(50),
                 color = palette.background.copy(alpha = 0.92f),
                 contentColor = palette.text,
+                border = BorderStroke(1.dp, palette.text.copy(alpha = 0.15f)),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 108.dp)
@@ -671,6 +697,7 @@ fun ReaderScreen(
                 shape = RoundedCornerShape(50),
                 color = palette.background.copy(alpha = 0.92f),
                 contentColor = palette.text,
+                border = BorderStroke(1.dp, palette.text.copy(alpha = 0.15f)),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     // v1.0.6.2 (F7): float above the real bottom
@@ -697,10 +724,13 @@ fun ReaderScreen(
     activeSheet?.let { sheet ->
         ModalBottomSheet(
             onDismissRequest = { activeSheet = null },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
         ) {
             when (sheet) {
                 ActiveSheet.SETTINGS -> ReaderSettingsSheet(
+                    initialPage = settingsInitialPage,
                     config = config,
                     effectiveTier = state.pageTurnTier,
                     userFonts = container.userFonts.list(),
@@ -885,6 +915,9 @@ private fun ReaderChrome(
     onOpenListen: () -> Unit,
     onOpenFocus: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenTheme: () -> Unit = {},
+    autoScrollActive: Boolean = false,
+    onToggleAutoScroll: () -> Unit = {},
     onOpenAi: () -> Unit,
     /** v1.0.6.2 (F7): the bars' measured heights (px), so the
      * text insets match the real chrome, never a guess. */
@@ -898,46 +931,61 @@ private fun ReaderChrome(
             enter = sharedAxisYEnter(reduceMotion = reduceMotion),
             exit = sharedAxisYExit(reduceMotion = reduceMotion)
         ) {
-            Surface(
-                color = chromeColor,
-                contentColor = palette.text,
-                modifier = Modifier.onSizeChanged { onTopBarHeight(it.height) }
+            // Nocturne §5.11: the top bar is TRANSPARENT now —
+            // every action rides in its own frosted-glass chip
+            // (palette-tinted, reader-local), and the book/chapter
+            // context is a glass ribbon pill in the middle.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { onTopBarHeight(it.height) }
             ) {
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
                         .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    IconButton(onClick = onBack) {
+                    GlassChipButton(palette = palette, onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            bookTitle,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = palette.text,
-                            maxLines = 1
-                        )
-                        Text(
-                            chapterTitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = palette.muted,
-                            maxLines = 1
-                        )
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = palette.background.copy(alpha = 0.85f),
+                        contentColor = palette.text,
+                        border = BorderStroke(1.dp, palette.text.copy(alpha = 0.12f)),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(
+                            Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                bookTitle,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = palette.text,
+                                maxLines = 1
+                            )
+                            Text(
+                                chapterTitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.muted,
+                                maxLines = 1
+                            )
+                        }
                     }
-                    IconButton(onClick = onToggleBookmark) {
+                    GlassChipButton(palette = palette, onClick = onToggleBookmark) {
                         Icon(
                             if (bookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
                             if (bookmarked) "Remove bookmark" else "Bookmark here",
                             tint = palette.accent
                         )
                     }
-                    IconButton(onClick = onOpenListen) {
+                    GlassChipButton(palette = palette, onClick = onOpenListen) {
                         Icon(Icons.Filled.Headphones, "Listen", tint = palette.text)
                     }
-                    IconButton(onClick = onOpenSettings) {
+                    GlassChipButton(palette = palette, onClick = onOpenSettings) {
                         Icon(Icons.Filled.Settings, "Reading settings", tint = palette.text)
                     }
                 }
@@ -949,22 +997,31 @@ private fun ReaderChrome(
             enter = sharedAxisYEnter(reduceMotion = reduceMotion),
             exit = sharedAxisYExit(reduceMotion = reduceMotion)
         ) {
+            // Nocturne §5.11: the controls dock is a FROSTED
+            // CAPSULE (24dp corners, Q12) floating above the nav
+            // inset + the shared dead-strip lift. The measured
+            // height still includes the lift, so the reader's
+            // text insets (F7) stay exact.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(bottom = app.xreader.ui.theme.FloatingChromeLift)
+                    .padding(horizontal = 12.dp)
+                    .onSizeChanged { onBottomBarHeight(it.height) }
+            ) {
             Surface(
+                shape = RoundedCornerShape(24.dp),
                 color = chromeColor,
                 contentColor = palette.text,
-                modifier = Modifier.onSizeChanged { onBottomBarHeight(it.height) }
+                border = BorderStroke(1.dp, palette.text.copy(alpha = 0.12f)),
+                shadowElevation = 8.dp,
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        // v1.0.6.2 (F7 + lift): the bar floats —
-                        // above the system navigation inset, plus
-                        // the shared extra lift, so nothing sits
-                        // at the screen's very bottom edge. The
-                        // slider lives inside this padded area.
-                        .navigationBarsPadding()
-                        .padding(bottom = app.xreader.ui.theme.FloatingChromeLift)
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
                     var sliderFraction by remember { mutableStateOf(bookFraction) }
                     var sliderDragging by remember { mutableStateOf(false) }
@@ -994,65 +1051,167 @@ private fun ReaderChrome(
                             Icon(Icons.AutoMirrored.Filled.ArrowForward, "Next chapter")
                         }
                     }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    // Telemetry pill (Nocturne §5.11): REAL fields
+                    // only — chapter, book %, and the app's existing
+                    // time-left labels. No battery/clock is added.
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = palette.text.copy(alpha = 0.07f),
+                        contentColor = palette.text,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(
-                            if (chapterCount > 0) {
-                                "Chapter ${chapterIndex + 1} of $chapterCount"
-                            } else {
-                                ""
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = palette.muted
-                        )
-                        Text(
-                            "${WpmEstimator.formatMinutes(minutesLeftInChapter)} in chapter · " +
-                                "${WpmEstimator.formatMinutes(minutesLeftInBook)} in book",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = palette.muted
-                        )
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (chapterCount > 0) {
+                                    "Chapter ${chapterIndex + 1} of $chapterCount"
+                                } else {
+                                    ""
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = palette.muted
+                            )
+                            Text(
+                                "${(bookFraction * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = palette.accent
+                            )
+                            Text(
+                                "${WpmEstimator.formatMinutes(minutesLeftInChapter)} in chapter · " +
+                                    "${WpmEstimator.formatMinutes(minutesLeftInBook)} in book",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = palette.muted
+                            )
+                        }
                     }
+                    // Quick actions (Nocturne §5.11): tile doors
+                    // that OPEN the real sheets — Contents → TOC,
+                    // Type → Settings, Theme → the page-theme
+                    // sub-page, Auto → the auto-scroll toggle. The
+                    // existing Listen / Ask AI / Focus doors stay.
                     Row(
                         Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        ChromeAction(Icons.Filled.List, "Chapters", palette, onOpenToc)
-                        ChromeAction(Icons.Filled.Headphones, "Listen", palette, onOpenListen)
+                        ChromeAction(
+                            Icons.Filled.List, "Contents", palette, onOpenToc,
+                            modifier = Modifier.weight(1f)
+                        )
+                        ChromeAction(
+                            Icons.Filled.Headphones, "Listen", palette, onOpenListen,
+                            modifier = Modifier.weight(1f)
+                        )
                         ChromeAction(
                             Icons.Filled.AutoAwesome, "Ask AI",
                             palette,
                             onOpenAi,
-                            tint = aiAccentColor()
+                            tint = aiAccentColor(),
+                            modifier = Modifier.weight(1f)
                         )
-                        ChromeAction(Icons.Filled.Timer, "Focus", palette, onOpenFocus)
-                        ChromeAction(Icons.Filled.Settings, "Display", palette, onOpenSettings)
+                        ChromeAction(
+                            Icons.Filled.Timer, "Focus", palette, onOpenFocus,
+                            modifier = Modifier.weight(1f)
+                        )
+                        ChromeAction(
+                            Icons.Filled.Settings, "Type", palette, onOpenSettings,
+                            modifier = Modifier.weight(1f)
+                        )
+                        ChromeAction(
+                            Icons.Filled.Palette, "Theme", palette, onOpenTheme,
+                            modifier = Modifier.weight(1f)
+                        )
+                        ChromeAction(
+                            Icons.Filled.PlayArrow, "Auto",
+                            palette,
+                            onToggleAutoScroll,
+                            active = autoScrollActive,
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 }
+            }
             }
         }
     }
 }
 
+/**
+ * Nocturne §5.11: one frosted-glass chip button for the reader's
+ * top bar — a palette-tinted circle with a hairline border. The
+ * reader is palette-local (page themes are reader-local), so the
+ * glass here is built from the PALETTE, not the app scheme.
+ */
+@Composable
+private fun GlassChipButton(
+    palette: ReaderPalette,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        shape = CircleShape,
+        color = palette.background.copy(alpha = 0.85f),
+        contentColor = palette.text,
+        border = BorderStroke(1.dp, palette.text.copy(alpha = 0.12f)),
+        modifier = Modifier.size(40.dp)
+    ) {
+        IconButton(onClick = onClick) { content() }
+    }
+}
+
+/**
+ * Nocturne §5.11: a quick-action TILE — 16dp rounded tile, icon
+ * over label, accent-tinted when active. Palette-local like
+ * [GlassChipButton]; every tile opens a real sheet or toggles a
+ * real setting.
+ */
 @Composable
 private fun ChromeAction(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     palette: ReaderPalette,
     onClick: () -> Unit,
-    tint: androidx.compose.ui.graphics.Color = palette.text
+    tint: androidx.compose.ui.graphics.Color = palette.text,
+    active: Boolean = false,
+    modifier: Modifier = Modifier
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        IconButton(onClick = onClick, modifier = Modifier.size(44.dp)) {
-            Icon(icon, label, tint = tint)
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = if (active) {
+            palette.accent.copy(alpha = 0.20f)
+        } else {
+            palette.text.copy(alpha = 0.07f)
+        },
+        contentColor = palette.text,
+        border = BorderStroke(
+            1.dp,
+            if (active) palette.accent.copy(alpha = 0.45f)
+            else palette.text.copy(alpha = 0.10f)
+        ),
+        onClick = onClick,
+        modifier = modifier
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp)
+        ) {
+            Icon(
+                icon, label,
+                tint = if (active) palette.accent else tint,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (active) palette.accent else palette.muted,
+                maxLines = 1
+            )
         }
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = palette.muted
-        )
     }
 }
 

@@ -2,13 +2,18 @@ package app.xreader.ui.start
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ContentTransform
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -20,16 +25,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.xreader.core.motion.sharedAxisXEnter
 import app.xreader.core.motion.sharedAxisXExit
+import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.ScreenHeader
-import app.xreader.ui.common.XreaderPrimaryButton
 
 /**
  * First-run onboarding (PLAN §3): three plain pages, all skippable.
  * Page changes ride the engine's Shared Axis (single motion source,
  * Amendment 5) — no local animation constants.
+ *
+ * Nocturne reskin (§5.26): each page's hero sits on the HaloStage
+ * recipe from the book page (320dp primary-16% radial top-centre +
+ * 240dp tertiary-13%), page dots replace the "1 of 3" counter, and
+ * there is no dock (as today). Colours come from Material roles
+ * only.
  */
 @Composable
 fun OnboardingScreen(onDone: () -> Unit) {
@@ -47,7 +60,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         ScreenHeader(title = "Welcome to Xreader", eyebrow = "First run")
         AnimatedContent(
@@ -61,20 +74,52 @@ fun OnboardingScreen(onDone: () -> Unit) {
             label = "onboardingPage",
             modifier = Modifier.weight(1f)
         ) { current ->
-            Column(
-                Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    PAGES[current].first,
-                    style = MaterialTheme.typography.headlineMedium
+            Box(Modifier.fillMaxSize()) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .offset(y = (-48).dp)
+                        .size(320.dp)
+                        .background(
+                            Brush.radialGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.primary
+                                        .copy(alpha = 0.16f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
                 )
-                Text(
-                    PAGES[current].second,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 12.dp)
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .offset(x = (-64).dp, y = 150.dp)
+                        .size(240.dp)
+                        .background(
+                            Brush.radialGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.tertiary
+                                        .copy(alpha = 0.13f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
                 )
+                Column(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        PAGES[current].first,
+                        style = MaterialTheme.typography.headlineMedium
+                    )
+                    Text(
+                        PAGES[current].second,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+                }
             }
         }
         Row(
@@ -83,13 +128,25 @@ fun OnboardingScreen(onDone: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             TextButton(onClick = onDone) { Text("Skip") }
-            Text(
-                "${page + 1} of ${PAGES.size}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            XreaderPrimaryButton(
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PAGES.indices.forEach { index ->
+                    Box(
+                        Modifier
+                            .size(8.dp)
+                            .background(
+                                if (index == page) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerHigh
+                                },
+                                CircleShape
+                            )
+                    )
+                }
+            }
+            PrimaryPill(
                 text = if (page == last) "Get started" else "Next",
+                enabled = true,
                 onClick = { if (page == last) onDone() else page++ }
             )
         }

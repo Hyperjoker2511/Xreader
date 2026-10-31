@@ -2,6 +2,7 @@ package app.xreader.ui.ai
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,7 +20,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,9 +37,12 @@ import app.xreader.data.ai.hub.AiProtocol
 import app.xreader.data.ai.hub.AiProviders
 import app.xreader.data.prefs.AiFeature
 import app.xreader.data.prefs.EnginePick
+import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
-import app.xreader.ui.common.StatusPill
-import app.xreader.ui.common.XreaderPrimaryButton
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.NocturneSwitch
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.SectionHeader
 
 /** Friendly names for the cascade (the ids stay in GeminiModels). */
 fun geminiModelLabel(model: String): String = when (model) {
@@ -60,6 +63,7 @@ fun geminiModelLabel(model: String): String = when (model) {
  * Without any key this screen explains itself and the rest of the
  * app simply carries on — AI is an upgrade here, never a requirement.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -68,7 +72,7 @@ fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
@@ -76,7 +80,7 @@ fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
             }
             Text(
                 "Providers & keys",
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.headlineMedium,
                 modifier = Modifier.padding(start = 4.dp)
             )
         }
@@ -85,7 +89,7 @@ fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
             Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             state.statusMessage?.let { message ->
                 Text(
@@ -112,7 +116,7 @@ fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
             AddProviderCard(state, viewModel)
 
             GlassCard {
-                Text("AI features", style = MaterialTheme.typography.titleMedium)
+                SectionHeader(title = "AI features")
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "Turn individual features off to save quota or keep things " +
@@ -135,14 +139,15 @@ fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.weight(1f)
                         )
-                        Switch(
+                        NocturneSwitch(
                             checked = state.settings.enabled(feature),
-                            onCheckedChange = { viewModel.setFeature(feature, it) }
+                            onCheckedChange = { viewModel.setFeature(feature, it) },
+                            enabled = true
                         )
                     }
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(88.dp))
         }
     }
 }
@@ -150,11 +155,12 @@ fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
 /** The picking rule, as a card: Automatic, or one specific
  * provider + model. Unconfigured providers are listed but can't be
  * picked — the card says what to do instead. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun EngineCard(state: ProvidersUiState, viewModel: ProvidersViewModel) {
     val pick = state.settings.enginePick
     GlassCard {
-        Text("AI engine", style = MaterialTheme.typography.titleMedium)
+        SectionHeader(title = "AI engine")
         Spacer(Modifier.height(4.dp))
         Text(
             "Automatic routes across your set-up providers and says which one " +
@@ -257,14 +263,23 @@ private fun EngineCard(state: ProvidersUiState, viewModel: ProvidersViewModel) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Row {
-                TextButton(onClick = { viewModel.setModelChoice(GeminiModels.AUTO) }) {
-                    Text("Lightest first")
-                }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                NocturneChip(
+                    label = "Lightest first",
+                    selected = state.settings.modelChoice == GeminiModels.AUTO,
+                    dotColor = null,
+                    onClick = { viewModel.setModelChoice(GeminiModels.AUTO) }
+                )
                 GeminiModels.CASCADE.forEach { model ->
-                    TextButton(onClick = { viewModel.setModelChoice(model) }) {
-                        Text(model.removePrefix("gemini-").replace('-', ' '))
-                    }
+                    NocturneChip(
+                        label = model.removePrefix("gemini-").replace('-', ' '),
+                        selected = state.settings.modelChoice == model,
+                        dotColor = null,
+                        onClick = { viewModel.setModelChoice(model) }
+                    )
                 }
             }
         }
@@ -311,7 +326,7 @@ private fun GeminiCard(
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(10.dp))
-            XreaderPrimaryButton(
+            PrimaryPill(
                 text = if (testing) "Testing…" else "Test & save key",
                 onClick = { viewModel.testAndSave(keyInput) },
                 enabled = !testing && keyInput.isNotBlank(),
@@ -369,7 +384,7 @@ private fun KeyedProviderCard(
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(10.dp))
-            XreaderPrimaryButton(
+            PrimaryPill(
                 text = if (testing) "Testing…" else "Test & save key",
                 onClick = { viewModel.testAndSaveKey(card.def.id, keyInput) },
                 enabled = !testing && keyInput.isNotBlank(),
@@ -455,15 +470,17 @@ private fun OllamaCard(
         }
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            XreaderPrimaryButton(
+            PrimaryPill(
                 text = if (state.testingOllama) "Testing…" else "Test & save",
                 onClick = { viewModel.testOllama(address, model) },
                 enabled = !state.testingOllama && address.isNotBlank(),
                 modifier = Modifier.weight(1f)
             )
-            TextButton(onClick = { viewModel.saveOllama(address, model) }) {
-                Text("Save")
-            }
+            GhostPill(
+                text = "Save",
+                enabled = true,
+                onClick = { viewModel.saveOllama(address, model) }
+            )
         }
     }
 }
@@ -480,7 +497,7 @@ private fun AddProviderCard(
     var site by remember { mutableStateOf("") }
     var key by remember { mutableStateOf("") }
     GlassCard {
-        Text("Add a provider", style = MaterialTheme.typography.titleMedium)
+        SectionHeader(title = "Add a provider")
         Spacer(Modifier.height(4.dp))
         Text(
             "Using another AI service — OpenRouter, Oxion, or a new one? Paste " +
@@ -543,16 +560,19 @@ private fun AddProviderCard(
             AddPhase.CONFIRMED_KEY -> Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                XreaderPrimaryButton(
+                PrimaryPill(
                     text = "Add provider",
+                    enabled = true,
                     onClick = { viewModel.addCheckedProvider() },
                     modifier = Modifier.weight(1f)
                 )
-                TextButton(onClick = { viewModel.cancelAdd() }) {
-                    Text("Cancel")
-                }
+                GhostPill(
+                    text = "Cancel",
+                    enabled = true,
+                    onClick = { viewModel.cancelAdd() }
+                )
             }
-            else -> XreaderPrimaryButton(
+            else -> PrimaryPill(
                 text = if (add.phase == AddPhase.CHECKING) {
                     "Checking…"
                 } else if (add.phase == AddPhase.NEEDS_KEY) {
@@ -577,13 +597,15 @@ private fun ProviderHeader(card: ProviderCardState) {
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(card.def.name, style = MaterialTheme.typography.titleMedium)
-        StatusPill(
-            text = if (card.configured) "Set up" else "Not set up",
-            color = if (card.configured) {
+        NocturneChip(
+            label = if (card.configured) "Set up" else "Not set up",
+            selected = false,
+            dotColor = if (card.configured) {
                 MaterialTheme.colorScheme.secondary
             } else {
                 MaterialTheme.colorScheme.tertiary
-            }
+            },
+            onClick = null
         )
     }
 }

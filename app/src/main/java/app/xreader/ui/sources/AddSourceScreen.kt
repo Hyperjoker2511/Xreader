@@ -12,12 +12,12 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,8 +27,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
-import app.xreader.ui.common.XreaderPrimaryButton
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.QuickActionTile
+import app.xreader.ui.theme.NocturneOverline
+import app.xreader.ui.theme.primaryTextColor
 
 /**
  * v1.0.5 (C3/D23): "Add a source" is its OWN screen now — the
@@ -84,11 +89,13 @@ fun AddSourceScreen(
         Spacer(Modifier.height(14.dp))
         LazyColumn(
             Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)
         ) {
             // ── Door 1: a repository, form and all ──────────────
             item {
                 GlassCard {
+                    DoorOverline("Door 1")
                     Text(
                         "Add a repository",
                         style = MaterialTheme.typography.titleMedium
@@ -119,7 +126,7 @@ fun AddSourceScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(8.dp))
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Add repository",
                         onClick = {
                             viewModel.addRepo(repoName, repoUrl)
@@ -135,6 +142,7 @@ fun AddSourceScreen(
             // ── Door 2: a site link ─────────────────────────────
             item {
                 GlassCard {
+                    DoorOverline("Door 2")
                     Text(
                         "Add from link",
                         style = MaterialTheme.typography.titleMedium
@@ -148,7 +156,7 @@ fun AddSourceScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(12.dp))
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Add from link",
                         onClick = onAddFromLink,
                         modifier = Modifier.fillMaxWidth()
@@ -163,6 +171,7 @@ fun AddSourceScreen(
             // the feature at all) ────────────────────────────
             item {
                 GlassCard {
+                    DoorOverline("Door 2.5")
                     Text(
                         "Install a site as an app",
                         style = MaterialTheme.typography.titleMedium
@@ -179,7 +188,7 @@ fun AddSourceScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(12.dp))
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Install a site as an app",
                         onClick = onAddFromLink,
                         modifier = Modifier.fillMaxWidth()
@@ -190,9 +199,15 @@ fun AddSourceScreen(
             // ── Door 3: a Legado file ───────────────────────────
             item {
                 GlassCard {
+                    DoorOverline("Door 3")
                     Text(
                         "Import a Legado file",
                         style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    NocturneChip(
+                        label = "Supports v2 / v3",
+                        selected = false
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
@@ -202,7 +217,7 @@ fun AddSourceScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(12.dp))
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Choose a Legado file (.json)",
                         onClick = {
                             legadoFileLauncher.launch(
@@ -214,17 +229,15 @@ fun AddSourceScreen(
                 }
             }
 
-            // ── The store door ──────────────────────────────────
+            // ── The store door (§5.7: a QuickActionTile door) ───
             item {
-                GlassCard(onClick = onOpenStore, bouncePress = true) {
-                    Text("Source store", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Browse the repositories you've added and install " +
-                            "their sources.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                QuickActionTile(
+                    icon = Icons.Filled.Storefront,
+                    label = "Source store",
+                    modifier = Modifier.fillMaxWidth(),
+                    active = false,
+                    onClick = onOpenStore
+                )
             }
 
             // ── Foreign repo explanation (v1.0.1, re-homed) ─────
@@ -303,17 +316,19 @@ fun AddSourceScreen(
                                     // v1.0.9: the family's reading
                                     // logic is already known — the
                                     // source installs ready-made.
-                                    TextButton(
+                                    PrimaryPill(
+                                        text = "Install ready source",
                                         onClick = {
                                             viewModel.installFamilySource(site)
                                         },
                                         enabled = !state.busy
-                                    ) { Text("Install ready source") }
+                                    )
                                 } else {
-                                    TextButton(
+                                    GhostPill(
+                                        text = "Create Xreader source",
                                         onClick = { viewModel.createSourceFromSite(site) },
                                         enabled = !state.busy
-                                    ) { Text("Create Xreader source") }
+                                    )
                                 }
                             }
                         }
@@ -324,9 +339,10 @@ fun AddSourceScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        TextButton(onClick = { viewModel.dismissForeignRepo() }) {
-                            Text("Dismiss")
-                        }
+                        GhostPill(
+                            text = "Dismiss",
+                            onClick = { viewModel.dismissForeignRepo() }
+                        )
                     }
                 }
             }
@@ -357,4 +373,15 @@ fun AddSourceScreen(
             }
         }
     }
+}
+
+/** §5.7: the numbered overline above each door card's title. */
+@Composable
+private fun DoorOverline(text: String) {
+    Text(
+        text.uppercase(),
+        style = NocturneOverline,
+        color = primaryTextColor()
+    )
+    Spacer(Modifier.height(4.dp))
 }

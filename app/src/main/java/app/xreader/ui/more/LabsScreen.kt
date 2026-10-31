@@ -12,7 +12,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -24,6 +23,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.di.AppContainer
 import app.xreader.domain.reader.ReaderConfig
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.NocturneSwitch
 import kotlinx.coroutines.launch
 
 /**
@@ -41,14 +41,14 @@ fun LabsScreen(container: AppContainer, onBack: () -> Unit) {
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             }
-            Text("Labs", style = MaterialTheme.typography.headlineSmall)
+            Text("Labs", style = MaterialTheme.typography.headlineMedium)
         }
         Text(
             "Experiments live here. They're real features, but their " +
@@ -76,13 +76,14 @@ fun LabsScreen(container: AppContainer, onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(
+                NocturneSwitch(
                     checked = config.eyeTracking,
                     onCheckedChange = { on ->
                         scope.launch {
                             container.readerPrefs.update { it.copy(eyeTracking = on) }
                         }
-                    }
+                    },
+                    enabled = true
                 )
             }
         }

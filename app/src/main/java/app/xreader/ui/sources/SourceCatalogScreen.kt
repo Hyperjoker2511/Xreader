@@ -1,59 +1,47 @@
 package app.xreader.ui.sources
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.listPlacementSpec
-import app.xreader.core.motion.pressSquish
-import app.xreader.ui.common.EmptyState
-import app.xreader.ui.common.GlassCard
-import app.xreader.ui.common.XreaderPrimaryButton
-import coil.compose.AsyncImage
+import app.xreader.ui.common.GhostPill
+import app.xreader.ui.common.KitEmptyState
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.SearchCapsule
 
 /**
  * A source's catalogue (PLAN §5): Popular / Latest / Search with
  * paging. Covers load straight from the source's site; tapping a book
  * adds it to the library (details + chapter list) and opens it.
  */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun SourceCatalogScreen(
     viewModel: SourceCatalogViewModel,
@@ -112,14 +100,13 @@ fun SourceCatalogScreen(
             TextButton(onClick = onLogin) { Text("Log in") }
         }
         Spacer(Modifier.height(8.dp))
-        // v1.0.5 (B3): a FlowRow — the three mode chips wrap
-        // instead of ever squeezing on narrow screens.
-        androidx.compose.foundation.layout.FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        // §5.4 SegmentedPills: a Row of NocturneChips, the active
+        // mode selected — replaces the private ModeChip copy.
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             CatalogMode.entries.forEach { mode ->
-                ModeChip(
+                NocturneChip(
                     label = when (mode) {
                         CatalogMode.POPULAR -> "Popular"
                         CatalogMode.LATEST -> "Latest"
@@ -139,14 +126,13 @@ fun SourceCatalogScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedTextField(
+                SearchCapsule(
                     value = state.query,
                     onValueChange = { viewModel.setQuery(it) },
-                    label = { Text("Search this source") },
-                    singleLine = true,
+                    placeholder = "Search this source",
                     modifier = Modifier.weight(1f)
                 )
-                XreaderPrimaryButton(
+                PrimaryPill(
                     text = "Search",
                     onClick = { viewModel.submitSearch() },
                     enabled = state.query.isNotBlank()
@@ -157,23 +143,27 @@ fun SourceCatalogScreen(
             LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 10.dp))
         }
         Spacer(Modifier.height(10.dp))
+        // Hoisted before the null check (the #54 lesson): the
+        // delegated state's nullable fields are read into locals
+        // first, never force-dereferenced inside the branches.
+        val errorMessage = state.errorMessage
         when {
-            state.errorMessage != null && state.books.isEmpty() -> {
-                EmptyState(
-                    title = "This source didn't answer",
-                    message = state.errorMessage!!,
-                    actionLabel = "Try again",
+            errorMessage != null && state.books.isEmpty() -> {
+                KitEmptyState(
+                    icon = Icons.Filled.CloudOff,
+                    message = "This source didn't answer. $errorMessage",
+                    actionText = "Try again",
                     onAction = { viewModel.retry() },
                     modifier = Modifier.weight(1f)
                 )
             }
             !state.loading && state.books.isEmpty() -> {
-                EmptyState(
-                    title = "Nothing here yet",
+                KitEmptyState(
+                    icon = Icons.Filled.AutoStories,
                     message = if (state.mode == CatalogMode.SEARCH) {
-                        "No matches — try a different title."
+                        "Nothing here yet. No matches — try a different title."
                     } else {
-                        "This page of the catalogue is empty."
+                        "Nothing here yet. This page of the catalogue is empty."
                     },
                     modifier = Modifier.weight(1f)
                 )
@@ -187,7 +177,9 @@ fun SourceCatalogScreen(
                         .GridCells.Adaptive(minSize = 118.dp),
                     modifier = Modifier.weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    contentPadding = androidx.compose.foundation.layout
+                        .PaddingValues(bottom = 88.dp)
                 ) {
                     items(
                         state.books, key = { "book-${it.id}" }
@@ -214,12 +206,14 @@ fun SourceCatalogScreen(
                                     .GridItemSpan(maxLineSpan)
                             }
                         ) {
-                            TextButton(
+                            // §5.4: paging keeps its visible
+                            // affordance — a GhostPill remainder row,
+                            // not only invisible scroll.
+                            GhostPill(
+                                text = if (state.loading) "Loading…" else "Load more",
                                 onClick = { viewModel.loadMore() },
                                 modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(if (state.loading) "Loading…" else "Load more")
-                            }
+                            )
                         }
                     }
                     if (!state.hasNext && state.page > 1 && state.books.isNotEmpty()) {
@@ -247,26 +241,5 @@ fun SourceCatalogScreen(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun ModeChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = if (selected) MaterialTheme.colorScheme.primary
-        else MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = if (selected) MaterialTheme.colorScheme.onPrimary
-        else MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier
-            .pressSquish(interaction)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-        )
     }
 }

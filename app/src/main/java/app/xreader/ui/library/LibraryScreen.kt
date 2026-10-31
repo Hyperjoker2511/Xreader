@@ -8,10 +8,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Switch
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,6 +24,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +33,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlaylistRemove
@@ -52,7 +53,6 @@ import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -71,11 +71,17 @@ import app.xreader.core.motion.itemExit
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.core.motion.pressBounce
 import app.xreader.ui.common.DialogDangerOption
-import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.GlassSheetActionRow
-import app.xreader.ui.common.pressTilt
+import app.xreader.ui.common.KitEmptyState
+import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.NocturneSwitch
+import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.common.ProgressPillBar
+import app.xreader.ui.common.QuickActionTile
 import app.xreader.ui.common.ScreenHeader
+import app.xreader.ui.common.SearchCapsule
+import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.common.StatusPill
 import app.xreader.ui.common.XreaderPrimaryButton
 import coil.compose.AsyncImage
@@ -219,11 +225,11 @@ fun LibraryScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 10.dp)
+            .padding(horizontal = 20.dp, vertical = 10.dp)
     ) {
         ScreenHeader(
-            title = "Your library",
-            eyebrow = "Xreader",
+            title = "Library",
+            eyebrow = "XREADER",
             action = {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -306,10 +312,12 @@ fun LibraryScreen(
             )
         ) {
             Spacer(Modifier.height(10.dp))
-            XreaderPrimaryButton(
+            PrimaryPill(
                 text = "+ Add a book",
                 onClick = onAddBook,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                enabled = true,
+            
             )
         }
         Spacer(Modifier.height(12.dp))
@@ -317,36 +325,21 @@ fun LibraryScreen(
         // v1.0.4 (D3): the empty decision is the pure predicate in
         // LibraryEmptyState (unit-tested), and when it fires the
         // empty state OWNS the screen — search, toolbar and chips
-        // never render over it. The D13 hover drift is perf-gated:
-        // full motion tier only, never under reduce-motion.
-        val context = androidx.compose.ui.platform.LocalContext.current
-        val totalRamMb = remember(context) {
-            runCatching {
-                val am = context.getSystemService(android.content.Context.ACTIVITY_SERVICE)
-                    as android.app.ActivityManager
-                val info = android.app.ActivityManager.MemoryInfo()
-                am.getMemoryInfo(info)
-                info.totalMem / (1024L * 1024L)
-            }.getOrDefault(4096L)
-        }
-        val hoverEmpty = !reduceMotion &&
-            app.xreader.core.motion.SpringMotionEngine.tierFor(
-                totalRamMb, animationsOn = true
-            ) != app.xreader.core.motion.SpringMotionEngine.MotionTier.Minimal
+        // never render over it. (The old D13 hover drift is gone:
+        // the kit EmptyState is static by design.)
         if (app.xreader.data.library.LibraryEmptyState.show(
                 loading = state.loading,
                 bookCount = state.books.size,
                 candidateCount = candidates.size
             )
         ) {
-            EmptyState(
-                title = "No books yet",
-                message = "Add your first book — EPUB, PDF, TXT and more — " +
-                    "and it will live here, ready to read.",
-                actionLabel = "Add a book",
+            KitEmptyState(
+                icon = Icons.Filled.LibraryBooks,
+                message = "No books yet — add your first book (EPUB, PDF, " +
+                    "TXT and more) and it will live here, ready to read.",
+                actionText = "Add a book",
                 onAction = onAddBook,
-                modifier = Modifier.weight(1f),
-                hover = hoverEmpty
+                modifier = Modifier.weight(1f)
             )
             return@Column
         }
@@ -357,29 +350,34 @@ fun LibraryScreen(
         // field renders only while searching (opened from the
         // header icon); its filtering behaviour is unchanged.
         if (searchOpen) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                label = { Text("Search your library") },
-                placeholder = { Text("Title or author") },
-                singleLine = true,
-                trailingIcon = {
-                    androidx.compose.material3.IconButton(
-                        onClick = {
-                            query = ""
-                            searchOpen = false
-                        }
-                    ) {
-                        androidx.compose.material3.Icon(
-                            Icons.Filled.Close,
-                            contentDescription = "Close search"
-                        )
+            // Nocturne §5.1: the in-library search is the kit
+            // SearchCapsule; its behaviour (live filtering by
+            // title/author) is the existing one. The close button
+            // keeps the old clear-and-close door beside it.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SearchCapsule(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = "Search your library — title or author",
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(searchFocus)
+                )
+                androidx.compose.material3.IconButton(
+                    onClick = {
+                        query = ""
+                        searchOpen = false
                     }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(searchFocus)
-            )
+                ) {
+                    androidx.compose.material3.Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Close search"
+                    )
+                }
+            }
             Spacer(Modifier.height(10.dp))
         }
         // v1.0.5 (C1/D20): the Library decluttered to ONE chip row.
@@ -394,62 +392,50 @@ fun LibraryScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             item(key = "filter") {
-                val filterInteraction = remember {
-                    androidx.compose.foundation.interaction.MutableInteractionSource()
-                }
                 val activeStatus = statusOptions.firstOrNull {
                     it.first == statusFilter && statusFilter != "ALL"
                 }
-                FilterChip(
+                NocturneChip(
+                    label = if (activeStatus != null) {
+                        "Filter & sort · ${activeStatus.second}"
+                    } else {
+                        "Filter & sort"
+                    },
                     selected = statusFilter != "ALL",
                     onClick = { filterSheetOpen = true },
-                    label = {
-                        Text(
-                            if (activeStatus != null) {
-                                "Filter · ${activeStatus.second}"
-                            } else {
-                                "Filter"
-                            }
-                        )
-                    },
-                    interactionSource = filterInteraction,
-                    modifier = Modifier.pressBounce(filterInteraction)
+                    modifier = Modifier,
+                    dotColor = null,
+                
                 )
             }
             items(shelfChips, key = { "shelf-${it.ref}" }) { chip ->
-                val chipInteraction = remember {
-                    androidx.compose.foundation.interaction.MutableInteractionSource()
-                }
-                FilterChip(
+                NocturneChip(
+                    label = "${chip.name} · ${chip.count}",
                     selected = state.selectedShelf == chip.ref,
                     onClick = { viewModel.selectShelf(chip.ref) },
-                    label = { Text("${chip.name} · ${chip.count}") },
-                    interactionSource = chipInteraction,
-                    modifier = Modifier.pressBounce(chipInteraction)
+                    modifier = Modifier,
+                    dotColor = null,
+                
                 )
             }
             item(key = "shelf-add") {
-                val addInteraction = remember {
-                    androidx.compose.foundation.interaction.MutableInteractionSource()
-                }
-                FilterChip(
+                NocturneChip(
+                    label = "+ Shelf",
                     selected = false,
                     onClick = { manageShelvesOpen = true },
-                    label = { Text("+ Shelf") },
-                    interactionSource = addInteraction,
-                    modifier = Modifier.pressBounce(addInteraction)
+                    modifier = Modifier,
+                    dotColor = null,
+                
                 )
             }
             item(key = "add-list") {
-                val listInteraction = remember {
-                    androidx.compose.foundation.interaction.MutableInteractionSource()
-                }
-                FilterChip(
+                NocturneChip(
+                    label = "+ Add a list",
                     selected = false,
                     onClick = onOpenAddList,
-                    label = { Text("+ Add a list") },
-                    interactionSource = listInteraction,
-                    modifier = Modifier.pressBounce(listInteraction)
+                    modifier = Modifier,
+                    dotColor = null,
+                
                 )
             }
         }
@@ -461,7 +447,18 @@ fun LibraryScreen(
         // at the start of the first row instead of a weight, which
         // a scrolling row can't honour.
         selection?.let { picked ->
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            // Nocturne §5.1: the batch actions ride in ONE frosted
+            // capsule bar (24dp corners, Q12) instead of two bare
+            // text rows.
+            androidx.compose.material3.Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shadowElevation = 6.dp
+            ) {
+            Column(
+                Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
                 Row(
                     Modifier.horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
@@ -501,6 +498,7 @@ fun LibraryScreen(
                     }) { Text("Remove…") }
                 }
             }
+            }
         }
         // v1.0.4 (D10 — the user's ruling): the auto-download switch
         // no longer lives in the Library. It moved to Settings →
@@ -516,7 +514,8 @@ fun LibraryScreen(
         ) {
         LazyColumn(
             Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 88.dp)
         ) {
             (state.continueReading.takeIf { state.libraryPrefs.showContinueReading })?.let { hero ->
                 item(key = "continue") {
@@ -529,6 +528,7 @@ fun LibraryScreen(
                             hero = hero,
                             coverFile = coverFile,
                             wpm = state.wpm,
+                            continueChapterIndex = state.continueChapterIndex,
                             onContinue = {
                                 onContinueReading(hero.book.id, state.continueChapterIndex)
                             }
@@ -541,9 +541,12 @@ fun LibraryScreen(
                 state.selectedShelf == "all" && query.isBlank()
             ) {
                 item(key = "foryou-header") {
-                    Text(
-                        "For you — from tags you follow",
-                        style = MaterialTheme.typography.titleMedium
+                    SectionHeader(title = "For you — from tags you follow",
+    modifier = Modifier,
+    eyebrow = null,
+    actionText = null,
+    onAction = null,
+
                     )
                 }
                 item(key = "foryou-row") {
@@ -565,14 +568,14 @@ fun LibraryScreen(
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier
                                             .size(width = 96.dp, height = 136.dp)
-                                            .clip(RoundedCornerShape(10.dp))
+                                            .clip(RoundedCornerShape(14.dp))
                                     )
                                 } else {
                                     PlaceholderCover(
                                         title = book.title,
                                         modifier = Modifier
                                             .size(width = 96.dp, height = 136.dp)
-                                            .clip(RoundedCornerShape(10.dp))
+                                            .clip(RoundedCornerShape(14.dp))
                                     )
                                 }
                                 Spacer(Modifier.height(4.dp))
@@ -589,16 +592,14 @@ fun LibraryScreen(
             }
             if (candidates.isNotEmpty()) {
                 item(key = "import-header") {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Adding books", style = MaterialTheme.typography.titleMedium)
-                        TextButton(onClick = { viewModel.clearFinishedCandidates() }) {
-                            Text("Clear finished")
-                        }
-                    }
+                    SectionHeader(
+                        title = "Adding books",
+                        actionText = "Clear finished",
+                        onAction = { viewModel.clearFinishedCandidates() },
+                        modifier = Modifier,
+                        eyebrow = null,
+                    
+                    )
                 }
                 items(candidates, key = { "cand-${it.token()}" }) { candidateState ->
                     ImportCandidateCard(
@@ -611,10 +612,17 @@ fun LibraryScreen(
             }
             if (visibleBooks.isNotEmpty()) {
                 item(key = "recent-header") {
-                    Text(
-                        if (query.isBlank() && statusFilter == "ALL") "Recent books"
-                        else "${visibleBooks.size} book(s)",
-                        style = MaterialTheme.typography.titleMedium
+                    SectionHeader(
+                        title = if (query.isBlank() && statusFilter == "ALL") {
+                            "Recent books"
+                        } else {
+                            "${visibleBooks.size} book(s)"
+                        },
+                        modifier = Modifier,
+                        eyebrow = null,
+                        actionText = null,
+                        onAction = null,
+                    
                     )
                 }
             } else if (memberFilter != null && candidates.isEmpty()) {
@@ -766,38 +774,61 @@ fun LibraryScreen(
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 2
                     )
-                    GlassSheetActionRow(
-                        icon = Icons.Filled.MenuBook,
-                        label = "Open",
-                        onClick = {
-                            quickActionsFor = null
-                            onBookClick(target)
-                        }
-                    )
-                    GlassSheetActionRow(
-                        icon = if (isFavourite) {
-                            Icons.Filled.Favorite
-                        } else {
-                            Icons.Filled.FavoriteBorder
-                        },
-                        label = if (isFavourite) {
-                            "Remove from Favourites"
-                        } else {
-                            "Add to Favourites"
-                        },
-                        onClick = {
-                            viewModel.setFavourite(target.book.id, !isFavourite)
-                            quickActionsFor = null
-                        }
-                    )
-                    GlassSheetActionRow(
-                        icon = Icons.Filled.PlaylistAdd,
-                        label = "Add to shelf…",
-                        onClick = {
-                            shelfPickerFor = setOf(target.book.id)
-                            quickActionsFor = null
-                        }
-                    )
+                    // Nocturne §5.1: the four everyday actions as
+                    // a QuickActionTile grid; the rest stay as
+                    // labelled rows below — nothing is buried.
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        QuickActionTile(
+                            icon = Icons.Filled.MenuBook,
+                            label = "Open",
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                quickActionsFor = null
+                                onBookClick(target)
+                            },
+                            active = false,
+                        
+                        )
+                        QuickActionTile(
+                            icon = if (isFavourite) {
+                                Icons.Filled.Favorite
+                            } else {
+                                Icons.Filled.FavoriteBorder
+                            },
+                            label = "Favourite",
+                            modifier = Modifier.weight(1f),
+                            active = isFavourite,
+                            onClick = {
+                                viewModel.setFavourite(target.book.id, !isFavourite)
+                                quickActionsFor = null
+                            }
+                        )
+                        QuickActionTile(
+                            icon = Icons.Filled.PlaylistAdd,
+                            label = "Add to shelf",
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                shelfPickerFor = setOf(target.book.id)
+                                quickActionsFor = null
+                            },
+                            active = false,
+                        
+                        )
+                        QuickActionTile(
+                            icon = Icons.Filled.CheckBox,
+                            label = "Select",
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                selection = setOf(target.book.id)
+                                quickActionsFor = null
+                            },
+                            active = false,
+                        
+                        )
+                    }
                     selectedUserShelf?.takeIf {
                         it.kind == app.xreader.data.db.ShelfKind.MANUAL
                     }?.let { shelf ->
@@ -823,14 +854,6 @@ fun LibraryScreen(
                         label = "Delete downloads",
                         onClick = {
                             viewModel.bulkDeleteDownloads(listOf(target.book.id))
-                            quickActionsFor = null
-                        }
-                    )
-                    GlassSheetActionRow(
-                        icon = Icons.Filled.CheckBox,
-                        label = "Select",
-                        onClick = {
-                            selection = setOf(target.book.id)
                             quickActionsFor = null
                         }
                     )
@@ -905,44 +928,42 @@ fun LibraryScreen(
                         "Filter & sort",
                         style = MaterialTheme.typography.titleLarge
                     )
-                    Text(
-                        "Reading status",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    SectionHeader(title = "Reading status",
+    modifier = Modifier,
+    eyebrow = null,
+    actionText = null,
+    onAction = null,
+
                     )
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         statusOptions.forEach { (value, label) ->
-                            val chipInteraction = remember {
-                                androidx.compose.foundation.interaction
-                                    .MutableInteractionSource()
-                            }
-                            FilterChip(
+                            NocturneChip(
+                                label = label,
                                 selected = statusFilter == value,
                                 onClick = { statusFilter = value },
-                                label = { Text(label) },
-                                interactionSource = chipInteraction,
-                                modifier = Modifier.pressBounce(chipInteraction)
+                                modifier = Modifier,
+                                dotColor = null,
+                            
                             )
                         }
                     }
-                    Text(
-                        "Sort by",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    SectionHeader(title = "Sort by",
+    modifier = Modifier,
+    eyebrow = null,
+    actionText = null,
+    onAction = null,
+
                     )
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         app.xreader.data.library.LibrarySort.entries.forEach { option ->
-                            val chipInteraction = remember {
-                                androidx.compose.foundation.interaction
-                                    .MutableInteractionSource()
-                            }
-                            FilterChip(
+                            NocturneChip(
+                                label = sortLabel(option),
                                 selected = effectiveSort == option,
                                 onClick = {
                                     sort = option
@@ -951,9 +972,9 @@ fun LibraryScreen(
                                         viewModel.setShelfSort(it.id, option)
                                     }
                                 },
-                                label = { Text(sortLabel(option)) },
-                                interactionSource = chipInteraction,
-                                modifier = Modifier.pressBounce(chipInteraction)
+                                modifier = Modifier,
+                                dotColor = null,
+                            
                             )
                         }
                     }
@@ -1207,49 +1228,75 @@ private fun ContinueReadingHero(
     hero: ShelfBook,
     coverFile: (String?) -> File?,
     wpm: Double,
+    continueChapterIndex: Int,
     onContinue: () -> Unit
 ) {
     val progress = animateProgressAsState(hero.fraction, label = "heroProgress")
-    // v1.0.4 (D7): the showcase stage from the user's Liquid Glass
-    // demo — his trio (cyan → purple → pink) as a gradient stage
-    // behind the glass card. Under FROSTED the card really blurs
-    // the gradient; under TINTED/SOLID it reads as a slim vibrant
-    // frame. The whole card is the Continue action now, with the
-    // Apple bounce press; the button inside still works too.
-    val glass = app.xreader.ui.theme.LocalGlassSettings.current
+    // Nocturne §5.1: the old trio-gradient stage is replaced by the
+    // frozen book page's HALO recipe — a 320dp primary-16% radial at
+    // top-centre + a 240dp tertiary-13% radial, role colours only.
+    // The GlassCard and the whole-card Continue tap are unchanged.
+    val scheme = MaterialTheme.colorScheme
     Box(Modifier.fillMaxWidth()) {
         Box(
             Modifier
-                .matchParentSize()
-                .clip(RoundedCornerShape(glass.cardRadius + 4.dp))
+                .size(320.dp)
+                .align(Alignment.TopCenter)
+                .offset(y = (-140).dp)
                 .background(
-                    androidx.compose.ui.graphics.Brush.linearGradient(
+                    androidx.compose.ui.graphics.Brush.radialGradient(
                         listOf(
-                            app.xreader.ui.theme.VibrantCyan.copy(alpha = 0.85f),
-                            app.xreader.ui.theme.ElectricPurple.copy(alpha = 0.85f),
-                            app.xreader.ui.theme.ApplePink.copy(alpha = 0.85f)
+                            scheme.primary.copy(alpha = 0.16f),
+                            androidx.compose.ui.graphics.Color.Transparent
+                        )
+                    )
+                )
+        )
+        Box(
+            Modifier
+                .size(240.dp)
+                .align(Alignment.TopCenter)
+                .offset(y = (-80).dp)
+                .background(
+                    androidx.compose.ui.graphics.Brush.radialGradient(
+                        listOf(
+                            scheme.tertiary.copy(alpha = 0.13f),
+                            androidx.compose.ui.graphics.Color.Transparent
                         )
                     )
                 )
         )
         GlassCard(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(3.dp),
+            modifier = Modifier.fillMaxWidth(),
             onClick = onContinue,
             bouncePress = true
         ) {
         Row(Modifier.fillMaxWidth()) {
-            // v1.0.6.3 (P2): the hero is COMPACT now — a slimmer
-            // cover, one title line, no full button row inside
-            // (the whole card already IS the Continue tap). The
-            // Library's books start visibly higher on the screen.
-            AsyncImage(
-                model = coverFile(hero.book.coverPath),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(width = 60.dp, height = 88.dp)
-            )
+            // Cover: 14dp corners with the halo glow underlay
+            // (blurred primary-30% disc behind the art).
+            Box {
+                Box(
+                    Modifier
+                        .size(width = 60.dp, height = 88.dp)
+                        .offset(y = 6.dp)
+                        .background(
+                            androidx.compose.ui.graphics.Brush.radialGradient(
+                                listOf(
+                                    scheme.primary.copy(alpha = 0.30f),
+                                    androidx.compose.ui.graphics.Color.Transparent
+                                )
+                            )
+                        )
+                )
+                AsyncImage(
+                    model = coverFile(hero.book.coverPath),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(width = 60.dp, height = 88.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                )
+            }
             Column(
                 Modifier
                     .weight(1f)
@@ -1269,17 +1316,19 @@ private fun ContinueReadingHero(
                         maxLines = 1
                     )
                 }
-                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                ProgressPillBar(fraction = progress, modifier = Modifier.fillMaxWidth())
                 Text(
                     "${(progress * 100).toInt()}% • ${hero.book.totalChapters} chapters" +
                         timeLeftSuffix(hero, wpm),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Text(
-                    "Continue ›",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary
+                PrimaryPill(
+                    text = "Continue · Ch. ${continueChapterIndex + 1}",
+                    onClick = onContinue,
+                    modifier = Modifier,
+                    enabled = true,
+                
                 )
             }
         }
@@ -1316,11 +1365,11 @@ private fun ShelfRow(
 ) {
     val progress = animateProgressAsState(shelfBook.fraction, label = "shelfProgress")
     val cover = coverFile(shelfBook.book.coverPath)
-    val coverModifier = if (compact) {
+    val coverModifier = (if (compact) {
         Modifier.size(width = 32.dp, height = 45.dp)
     } else {
         Modifier.size(width = 44.dp, height = 62.dp)
-    }
+    }).clip(RoundedCornerShape(12.dp))
     GlassCard(modifier = modifier.fillMaxWidth(), onClick = onOpen) {
         Row(
             Modifier
@@ -1367,8 +1416,8 @@ private fun ShelfRow(
                 )
                 if (shelfBook.fraction > 0f) {
                     Spacer(Modifier.height(6.dp))
-                    LinearProgressIndicator(
-                        progress = { progress },
+                    ProgressPillBar(
+                        fraction = progress,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -1410,13 +1459,25 @@ private fun ImportCandidateCard(
                     maxLines = 1,
                     modifier = Modifier.weight(1f)
                 )
+                // Nocturne §5.1: the card's chip is its STATUS
+                // (Ready / Importing / Done / Failed); the format
+                // rides the size line below instead.
                 StatusPill(
-                    text = candidate.format.name,
-                    color = MaterialTheme.colorScheme.primary
+                    text = when (state) {
+                        is CandidateState.Ready -> "Ready"
+                        is CandidateState.Importing -> "Importing"
+                        is CandidateState.Done -> "Done"
+                        is CandidateState.Failed -> "Failed"
+                    },
+                    color = when (state) {
+                        is CandidateState.Failed -> MaterialTheme.colorScheme.error
+                        is CandidateState.Done -> MaterialTheme.colorScheme.secondary
+                        else -> MaterialTheme.colorScheme.primary
+                    }
                 )
             }
             Text(
-                "${candidate.sizeBytes / 1024} KB",
+                "${candidate.format.name} · ${candidate.sizeBytes / 1024} KB",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1424,28 +1485,49 @@ private fun ImportCandidateCard(
                 is CandidateState.Ready -> Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    XreaderPrimaryButton(
+                    PrimaryPill(
                         text = "Add to library",
-                        onClick = { onImport(candidate) }
+                        onClick = { onImport(candidate) },
+                        modifier = Modifier,
+                        enabled = true,
+                    
                     )
                     TextButton(onClick = { onDismiss(candidate) }) { Text("Not now") }
                 }
-                is CandidateState.Importing -> Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                is CandidateState.Importing -> Column(
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    CircularProgressIndicator(Modifier.size(20.dp))
-                    Text(
-                        state.progress?.let { "Reading the book… ${(it * 100).toInt()}%" }
-                            ?: "Reading the book…",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    val importProgress = state.progress
+                    if (importProgress != null) {
+                        ProgressPillBar(
+                            fraction = importProgress,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CircularProgressIndicator(Modifier.size(20.dp))
+                        Text(
+                            importProgress?.let { "Reading the book… ${(it * 100).toInt()}%" }
+                                ?: "Reading the book…",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
-                is CandidateState.Done -> Text(
-                    "Added “${state.bookTitle}” to your library",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = sageTextColor()
-                )
+                is CandidateState.Done -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        "Added “${state.bookTitle}” to your library",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = sageTextColor(),
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { onDismiss(candidate) }) { Text("Dismiss") }
+                }
                 is CandidateState.Failed -> Column {
                     Text(
                         state.message,
@@ -1580,7 +1662,7 @@ private fun ManageShelvesDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
-                XreaderPrimaryButton(
+                PrimaryPill(
                     text = "Add shelf",
                     onClick = {
                         if (newName.isNotBlank()) {
@@ -1597,7 +1679,10 @@ private fun ManageShelvesDialog(
                             newRule = null
                             newRuleValue = ""
                         }
-                    }
+                    },
+                    modifier = Modifier,
+                    enabled = true,
+                
                 )
 
                 Text("Built-in shelves", style = MaterialTheme.typography.titleSmall)
@@ -1611,9 +1696,12 @@ private fun ManageShelvesDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(label, Modifier.weight(1f))
-                        Switch(
+                        NocturneSwitch(
                             checked = key !in state.hiddenBuiltins,
-                            onCheckedChange = { shown -> onBuiltinHidden(key, !shown) }
+                            onCheckedChange = { shown -> onBuiltinHidden(key, !shown) },
+                            modifier = Modifier,
+                            enabled = true,
+                        
                         )
                     }
                 }

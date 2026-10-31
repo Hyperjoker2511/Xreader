@@ -34,10 +34,13 @@ import androidx.compose.material.icons.filled.DirectionsRun
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -70,6 +73,9 @@ import app.xreader.core.motion.animateProgressAsState
 import app.xreader.di.AppContainer
 import app.xreader.domain.game.Achievements
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.ProgressPillBar
+import app.xreader.ui.common.RowItem
+import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.common.XreaderPrimaryButton
 import coil.compose.AsyncImage
 import java.io.File
@@ -95,7 +101,12 @@ fun ProfileScreen(
     lowRam: Boolean = false,
     onOpenHistory: () -> Unit = {},
     onOpenSync: () -> Unit = {},
-    onOpenCustomise: () -> Unit = {}
+    onOpenCustomise: () -> Unit = {},
+    /** v1.1.0 (§5.14): the tools list's Vocab door, with the real
+     * word count as its badge (read live from VocabDao below).
+     * Optional so older call sites keep compiling; the shell wires
+     * it to the vocab route. */
+    onOpenVocab: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -286,6 +297,13 @@ fun ProfileScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        // v1.1.0 (§5.14): the kit pill bar under
+                        // the ring — the same real fraction.
+                        Spacer(Modifier.height(10.dp))
+                        ProgressPillBar(
+                            fraction = state.progress.fraction,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
 
@@ -392,77 +410,125 @@ fun ProfileScreen(
                     )
                 }
 
-                // Shortcuts (v1.0.1): LINK to the real screens —
-                // never duplicates of their content.
+                // Preferences & tools (v1.0.1 "Shortcuts", v1.1.0
+                // §5.14 RowItem form): LINK to the real screens —
+                // never duplicates of their content. The Vocab
+                // badge is the REAL saved-word count, observed
+                // from the same VocabDao the Vocab screen reads.
+                // (§5.14 drops the drawing's "Manage Account &
+                // Privacy" row: the app has no account, so the
+                // button would be a lie — it is not added.)
+                val vocabWords by container.database.vocabDao().observeAll()
+                    .collectAsStateWithLifecycle(initialValue = emptyList())
+                SectionHeader(title = "Preferences & tools", modifier = Modifier.fillMaxWidth())
                 GlassCard(Modifier.fillMaxWidth()) {
-                    Text("Shortcuts", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(6.dp))
-                    TextButton(onClick = onOpenHistory) {
-                        Text("History — what you read, day by day")
-                    }
-                    TextButton(onClick = onOpenSync) {
-                        Text("Backup — on this phone and in the cloud")
-                    }
-                    TextButton(onClick = onOpenCustomise) {
-                        Text("Customise — colours, glass, layout, reader")
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        RowItem(
+                            icon = Icons.Filled.Sync,
+                            label = "Sync & Backup",
+                            modifier = Modifier.fillMaxWidth(),
+                            value = null,
+                            badge = null,
+                            onClick = onOpenSync
+                        )
+                        RowItem(
+                            icon = Icons.Filled.Palette,
+                            label = "Customise",
+                            modifier = Modifier.fillMaxWidth(),
+                            value = null,
+                            badge = null,
+                            onClick = onOpenCustomise
+                        )
+                        RowItem(
+                            icon = Icons.AutoMirrored.Filled.MenuBook,
+                            label = "Words I'm Learning",
+                            modifier = Modifier.fillMaxWidth(),
+                            value = null,
+                            badge = if (vocabWords.isNotEmpty()) {
+                                "${vocabWords.size}"
+                            } else {
+                                null
+                            },
+                            onClick = onOpenVocab
+                        )
+                        RowItem(
+                            icon = Icons.Filled.History,
+                            label = "History",
+                            modifier = Modifier.fillMaxWidth(),
+                            value = null,
+                            badge = null,
+                            onClick = onOpenHistory
+                        )
                     }
                 }
 
-                // Lifetime stats (design: hours / books / chapters + pace).
-                // v1.0.4 (D12): the numbers ROLL UP on entry (the
-                // mock's animated counters) via the showpiece's
-                // CountUpText, bound to the same real stats; static
-                // under reduce-motion. Words/min keeps its "—" for
-                // no-pace-yet and its trend arrow in the label.
+                // Summary metrics (design §5.14: 2×2 tiles over
+                // the REAL stats — Time Spent, Completed, Progress
+                // chapters, Pace). v1.0.4 (D12): the numbers ROLL
+                // UP on entry (the mock's animated counters) via
+                // the showpiece's CountUpText, bound to the same
+                // real stats; static under reduce-motion. Pace
+                // keeps its "—" for no-pace-yet and its trend
+                // arrow in the label. (Books-in-library still
+                // shows on the identity card's back.)
+                SectionHeader(title = "Your reading", modifier = Modifier.fillMaxWidth())
                 GlassCard(Modifier.fillMaxWidth()) {
-                    Row(Modifier.fillMaxWidth()) {
-                        StatCountCell(
-                            value = state.stats.totalActiveMinutes / 60,
-                            suffix = "h",
-                            label = "hours read",
-                            reduceMotion = reduceMotion,
-                            modifier = Modifier.weight(1f)
-                        )
-                        StatCountCell(
-                            value = state.stats.booksTotal,
-                            label = "books",
-                            reduceMotion = reduceMotion,
-                            modifier = Modifier.weight(1f)
-                        )
-                        StatCountCell(
-                            value = state.stats.chaptersFinished,
-                            label = "chapters",
-                            reduceMotion = reduceMotion,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (state.wpmNow > 0) {
+                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Row(Modifier.fillMaxWidth()) {
                             StatCountCell(
-                                value = state.wpmNow,
-                                label = "words/min" + when {
-                                    state.wpmDelta > 0 -> " ↑${state.wpmDelta}"
-                                    state.wpmDelta < 0 -> " ↓${-state.wpmDelta}"
-                                    else -> ""
-                                },
+                                value = state.stats.totalActiveMinutes / 60,
+                                suffix = "h",
+                                label = "Time spent",
                                 reduceMotion = reduceMotion,
                                 modifier = Modifier.weight(1f)
                             )
-                        } else {
-                            StatCell(
-                                value = "—",
-                                label = "words/min",
+                            StatCountCell(
+                                value = state.stats.booksFinished,
+                                label = "Completed",
+                                reduceMotion = reduceMotion,
                                 modifier = Modifier.weight(1f)
                             )
+                        }
+                        Row(Modifier.fillMaxWidth()) {
+                            StatCountCell(
+                                value = state.stats.chaptersFinished,
+                                label = "Progress chapters",
+                                reduceMotion = reduceMotion,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (state.wpmNow > 0) {
+                                StatCountCell(
+                                    value = state.wpmNow,
+                                    label = "Pace · words/min" + when {
+                                        state.wpmDelta > 0 -> " ↑${state.wpmDelta}"
+                                        state.wpmDelta < 0 -> " ↓${-state.wpmDelta}"
+                                        else -> ""
+                                    },
+                                    reduceMotion = reduceMotion,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            } else {
+                                StatCell(
+                                    value = "—",
+                                    label = "Pace · words/min",
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                         }
                     }
                 }
 
-                // Achievements.
+                // Milestones (§5.14): the achievements grid.
+                // (A plain header row, not the kit SectionHeader:
+                // the kit renders its right-hand text only as a
+                // tappable action, and this count is a readout,
+                // not a door — a dead button would be a lie.)
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Achievements", style = MaterialTheme.typography.titleMedium)
+                    Text("Milestones", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "${state.unlockedCount} of ${Achievements.ALL.size}",
                         style = MaterialTheme.typography.bodyMedium,
@@ -480,7 +546,9 @@ fun ProfileScreen(
                         if (pair.size == 1) Spacer(Modifier.weight(1f))
                     }
                 }
-                Spacer(Modifier.height(8.dp))
+                // v1.1.0: 88dp bottom clearance (dock + the
+                // phone's dead bottom strip).
+                Spacer(Modifier.height(88.dp))
             }
         }
 
