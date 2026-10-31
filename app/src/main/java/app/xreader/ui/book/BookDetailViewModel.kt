@@ -3,6 +3,7 @@ package app.xreader.ui.book
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import app.xreader.data.db.Book
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.DownloadState
@@ -784,16 +785,27 @@ class BookDetailViewModel(
     /** E: free the space, keep the book + progress + bookmarks. */
     fun deleteDownloadedChapters() {
         viewModelScope.launch {
-            val chapters = container.database.chapterDao().forBook(bookId)
-            chapters.filter { it.downloadState == DownloadState.READY }
-                .forEach { chapter ->
-                    container.database.chapterDao().update(
-                        chapter.copy(
-                            downloadState = DownloadState.NONE,
-                            contentPath = null
+            val chapterDao = container.database.chapterDao()
+            val ready = chapterDao.forBook(bookId)
+                .filter { it.downloadState == DownloadState.READY }
+            // v1.2.0 (WS4): the row resets run in ONE transaction
+            // (the LibraryViewModel.bulkDeleteDownloads pattern) —
+            // a several-thousand-chapter book used to pay one
+            // commit + one Flow emission per chapter here. The
+            // file deletion below stays outside the transaction,
+            // exactly as before; only the writes are now atomic.
+            if (ready.isNotEmpty()) {
+                container.database.withTransaction {
+                    ready.forEach { chapter ->
+                        chapterDao.update(
+                            chapter.copy(
+                                downloadState = DownloadState.NONE,
+                                contentPath = null
+                            )
                         )
-                    )
+                    }
                 }
+            }
             val book = container.database.bookDao().getById(bookId)
             if (book != null) {
                 runCatching { container.bookStorage.deleteDownloadedContent(book) }

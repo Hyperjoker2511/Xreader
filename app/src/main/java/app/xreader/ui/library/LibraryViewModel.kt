@@ -2,6 +2,7 @@ package app.xreader.ui.library
 
 import android.net.Uri
 import androidx.lifecycle.ViewModel
+import androidx.room.withTransaction
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import app.xreader.core.error.AppResult
@@ -295,9 +296,13 @@ class LibraryViewModel(
         }
     }
 
-    /** Downloaded size for the remove dialog's honest MB line. */
+    /** Downloaded size for the remove dialog's honest MB line.
+     * v1.2.0 (audit D2): the cached variant — the raw walk of a
+     * book's whole file tree ran per dialog/per bulk selection;
+     * BookStorage invalidates the cache on its own writes and
+     * deletes, and download completion writes through it. */
     suspend fun downloadedSizeBytes(book: Book): Long =
-        container.bookStorage.bookFilesSizeBytes(book)
+        container.bookStorage.bookFilesSizeBytesCached(book)
 
     /** Remove from library (v1.0.1): cancel downloads, one
      * cascading delete, app-side files only on request. */
@@ -527,6 +532,36 @@ class LibraryViewModel(
                 runCatching { container.downloadController.cancelAllForBook(id) }
                 freed += downloadedSizeBytes(book)
                 runCatching { container.bookStorage.deleteDownloadedContent(book) }
+                // v1.2.0 (audit D10): the chapter rows must agree
+                // with the files just deleted (READY + a
+                // contentPath pointing at a gone file is a lie
+                // the reader trips over) — this bulk path deleted
+                // the files without ever resetting the rows. The
+                // reset runs inside ONE Room transaction per
+                // book, so a several-thousand-chapter book costs
+                // one commit and one Flow emission, not the
+                // row-by-row commits the book page's writer of
+                // the same shape (BookDetailViewModel, outside
+                // this change's files) still pays per chapter.
+                val chapterDao = container.database.chapterDao()
+                val ready = chapterDao.forBook(id).filter {
+                    it.downloadState == app.xreader.data.db.DownloadState.READY
+                }
+                if (ready.isNotEmpty()) {
+                    container.database.withTransaction {
+                        ready.forEach { chapter ->
+                            chapterDao.update(
+                                chapter.copy(
+                                    downloadState =
+                                        app.xreader.data.db.DownloadState.NONE,
+                                    contentPath = null
+                                )
+                            )
+                        }
+                    }
+                }
+                // Files changed on disk above; the cached size
+                // was already invalidated by the delete itself.
             }
             _messages.emit(
                 "Downloads deleted — freed " +

@@ -64,7 +64,8 @@ class AppContainer(context: Context) {
         app.xreader.data.db.MIGRATION_1_2,
         app.xreader.data.db.MIGRATION_2_3,
         app.xreader.data.db.MIGRATION_3_4,
-        app.xreader.data.db.MIGRATION_4_5
+        app.xreader.data.db.MIGRATION_4_5,
+        app.xreader.data.db.MIGRATION_5_6
     ).build()
 
     val appearancePrefs: AppearancePrefs = AppearancePrefs(
@@ -169,7 +170,9 @@ class AppContainer(context: Context) {
         storage = bookStorage,
         registry = parserRegistry,
         bookDao = database.bookDao(),
-        chapterDao = database.chapterDao()
+        chapterDao = database.chapterDao(),
+        // D9: an import's thousands of chapter writes commit once.
+        inTransaction = { block -> database.withTransaction(block) }
     )
 
     val bookExporter: BookExporter = BookExporter(bookStorage, database.chapterDao())
@@ -295,30 +298,49 @@ class AppContainer(context: Context) {
     )
 
     // -- Phase 3: extension sandbox -----------------------------------------
+    //
+    // v1.2.0 (audit finding 7 / S1): the whole extension stack is
+    // `by lazy`. Cold start used to construct it eagerly on the
+    // main thread in XreaderApp.onCreate — the WebView fetcher's
+    // class load, the second OkHttp client, the QuickJS plumbing
+    // seam, the extension store's mkdirs — before first paint,
+    // for features the first screen doesn't use. The public API
+    // is unchanged (same property names/types); a lazy property
+    // is built on first ACCESS, and every eager consumer left in
+    // this container reaches these only through call-time lambdas
+    // (the download engine's resolver/deferral, the chapter text
+    // loader), so nothing's construction order or behaviour
+    // changes — the cost just moves off the startup path. No
+    // constructor here started doing I/O it didn't before.
 
     /** Extensions NEVER use [httpTransport]: their client must not
      * auto-follow redirects (whitelist re-check per hop, §9.1). */
-    val extensionTransport: HttpTransport =
+    val extensionTransport: HttpTransport by lazy {
         OkHttpTransport(OkHttpTransport.extensionClient())
+    }
 
-    val extensionStore: app.xreader.data.extension.ExtensionStore =
+    val extensionStore: app.xreader.data.extension.ExtensionStore by lazy {
         app.xreader.data.extension.ExtensionStore(appContext.filesDir)
+    }
 
-    val sessionStore: app.xreader.data.extension.SessionStore =
+    val sessionStore: app.xreader.data.extension.SessionStore by lazy {
         app.xreader.data.extension.SessionStore(keyVault)
+    }
 
-    val cleanerRuleStore: app.xreader.data.extension.CleanerRuleStore =
+    val cleanerRuleStore: app.xreader.data.extension.CleanerRuleStore by lazy {
         app.xreader.data.extension.CleanerRuleStore(extensionStore)
+    }
 
     /** v1.0.6 (W1.2): the device browser view behind the
      * [app.xreader.data.extension.RenderedPageFetcher] seam —
      * JVM tests substitute a fake and never load this class. */
-    val renderedPageFetcher: app.xreader.data.extension.RenderedPageFetcher =
+    val renderedPageFetcher: app.xreader.data.extension.RenderedPageFetcher by lazy {
         app.xreader.data.extension.WebViewRenderedFetcher(
             appContext, sessionStore
         ) { renderRuntime.currentTier }
+    }
 
-    val hostContextFactory: app.xreader.data.extension.HostContextFactory =
+    val hostContextFactory: app.xreader.data.extension.HostContextFactory by lazy {
         app.xreader.data.extension.HostContextFactory(
             store = extensionStore,
             sessionStore = sessionStore,
@@ -330,8 +352,9 @@ class AppContainer(context: Context) {
                 appScope.launch { sourcePrefs.markBrowserViewNeeded(rowId) }
             }
         )
+    }
 
-    val extensionService: app.xreader.data.extension.ExtensionService =
+    val extensionService: app.xreader.data.extension.ExtensionService by lazy {
         app.xreader.data.extension.ExtensionService(
             extensionDao = database.installedExtensionDao(),
             store = extensionStore,
@@ -339,8 +362,9 @@ class AppContainer(context: Context) {
             dexLoader = app.xreader.data.extension.AndroidDexLoader(appContext),
             jsRuntimeFactory = { app.xreader.data.extension.QuickJsRuntime() }
         )
+    }
 
-    val repoManager: app.xreader.data.extension.RepoManager =
+    val repoManager: app.xreader.data.extension.RepoManager by lazy {
         app.xreader.data.extension.RepoManager(
             repoDao = database.extensionRepoDao(),
             extensionDao = database.installedExtensionDao(),
@@ -349,8 +373,9 @@ class AppContainer(context: Context) {
             service = extensionService,
             sessionStore = sessionStore
         )
+    }
 
-    val sourceBookSync: app.xreader.data.extension.SourceBookSync =
+    val sourceBookSync: app.xreader.data.extension.SourceBookSync by lazy {
         app.xreader.data.extension.SourceBookSync(
             bookDao = database.bookDao(),
             chapterDao = database.chapterDao(),
@@ -358,11 +383,16 @@ class AppContainer(context: Context) {
             extensionDao = database.installedExtensionDao(),
             service = extensionService,
             storage = bookStorage,
-            transport = httpTransport
+            transport = httpTransport,
+            // v1.2.0 (audit D10, Wave-1 seam): a chapter-list
+            // refresh's row writes land in ONE Room transaction.
+            inTransaction = { block -> database.withTransaction(block) }
         )
+    }
 
-    val linkProber: app.xreader.data.extension.LinkProber =
+    val linkProber: app.xreader.data.extension.LinkProber by lazy {
         app.xreader.data.extension.LinkProber(hostContextFactory, sessionStore)
+    }
 
     /** v1.0.2 (R20): the shared whole-library refresher — Library
      * button, pull gesture (via LibraryRefreshWorker) and any
@@ -435,16 +465,24 @@ class AppContainer(context: Context) {
     val aiPrefs: app.xreader.data.prefs.AiPrefs =
         app.xreader.data.prefs.AiPrefs(appContext.settingsDataStore)
 
+    // v1.2.0 (audit finding 7 / S1): the AI stack is `by lazy`
+    // for the same reason as the extension stack above — none of
+    // it is needed for first paint, and the eager consumers
+    // (chapter text loader, download engine) reach aiChapterHooks
+    // only through call-time lambdas. Same names/types; the cost
+    // moves to first actual AI use.
+
     /** The one Gemini client: the key is read from the KeyVault per
      * call (never held), and the model picker is read live. Since
      * v1.0.3 it is one engine among several — features talk to
      * [aiHub]'s client, and Gemini specifics live behind it. */
-    val geminiClient: app.xreader.data.ai.GeminiClient =
+    val geminiClient: app.xreader.data.ai.GeminiClient by lazy {
         app.xreader.data.ai.GeminiClient(
             transport = httpTransport,
             keyProvider = { keyVault.get(KeyVault.GEMINI_KEY) },
             pickerProvider = { aiPrefs.settings.first().modelChoice }
         )
+    }
 
     /** v1.0.3 (AI hub): user-added providers + per-provider model
      * memory (no keys — those stay in the KeyVault). */
@@ -455,7 +493,7 @@ class AppContainer(context: Context) {
      * picking rule (Automatic routes; a specific pick is used as
      * picked). A Specific Gemini pick builds a dedicated client
      * whose picker is pinned to the picked model. */
-    val aiHub: app.xreader.data.ai.hub.AiHub =
+    val aiHub: app.xreader.data.ai.hub.AiHub by lazy {
         app.xreader.data.ai.hub.AiHub(
             transport = httpTransport,
             keyVault = keyVault,
@@ -473,20 +511,22 @@ class AppContainer(context: Context) {
                 }
             }
         )
+    }
 
     private val aiSettingsProvider: suspend () -> app.xreader.data.prefs.AiSettings =
         { aiPrefs.settings.first() }
 
-    val summarizer: app.xreader.data.ai.Summarizer =
+    val summarizer: app.xreader.data.ai.Summarizer by lazy {
         app.xreader.data.ai.Summarizer(
             client = aiHub.client,
             summaryDao = database.aiSummaryDao(),
             settingsProvider = aiSettingsProvider
         )
+    }
 
     /** v1.0.3: "Catch me up" — the recap bounded by the saved
      * reading position, filling in summaries for on-device chapters. */
-    val catchUp: app.xreader.data.ai.CatchUp =
+    val catchUp: app.xreader.data.ai.CatchUp by lazy {
         app.xreader.data.ai.CatchUp(
             summarizer = summarizer,
             progressDao = database.readingProgressDao(),
@@ -494,23 +534,26 @@ class AppContainer(context: Context) {
             loader = chapterTextLoader,
             settingsProvider = aiSettingsProvider
         )
+    }
 
     /** v1.0.3: AI tag suggestions from a book's synopsis. */
-    val tagSuggester: app.xreader.data.ai.TagSuggester =
+    val tagSuggester: app.xreader.data.ai.TagSuggester by lazy {
         app.xreader.data.ai.TagSuggester(
             client = aiHub.client,
             settingsProvider = aiSettingsProvider
         )
+    }
 
     /** v1.0.3: AI proposals for "Bring my library" near-matches —
      * proposals only; the user confirms each one. */
-    val libraryMatchAi: app.xreader.data.ai.LibraryMatchAi =
+    val libraryMatchAi: app.xreader.data.ai.LibraryMatchAi by lazy {
         app.xreader.data.ai.LibraryMatchAi(
             client = aiHub.client,
             settingsProvider = aiSettingsProvider
         )
+    }
 
-    val loreKeeper: app.xreader.data.ai.LoreKeeper =
+    val loreKeeper: app.xreader.data.ai.LoreKeeper by lazy {
         app.xreader.data.ai.LoreKeeper(
             client = aiHub.client,
             entityDao = database.loreEntityDao(),
@@ -518,14 +561,16 @@ class AppContainer(context: Context) {
             storage = bookStorage,
             settingsProvider = aiSettingsProvider
         )
+    }
 
-    val loreChat: app.xreader.data.ai.LoreChat =
+    val loreChat: app.xreader.data.ai.LoreChat by lazy {
         app.xreader.data.ai.LoreChat(
             client = aiHub.client,
             settingsProvider = aiSettingsProvider
         )
+    }
 
-    val conceptArt: app.xreader.data.ai.ConceptArt =
+    val conceptArt: app.xreader.data.ai.ConceptArt by lazy {
         app.xreader.data.ai.ConceptArt(
             client = aiHub.client,
             artDao = database.loreArtDao(),
@@ -533,23 +578,26 @@ class AppContainer(context: Context) {
             transcoder = app.xreader.data.ai.AndroidImageTranscoder,
             settingsProvider = aiSettingsProvider
         )
+    }
 
-    val rawTranslator: app.xreader.data.ai.RawTranslator =
+    val rawTranslator: app.xreader.data.ai.RawTranslator by lazy {
         app.xreader.data.ai.RawTranslator(
             client = aiHub.client,
             storage = bookStorage,
             settingsProvider = aiSettingsProvider
         )
+    }
 
-    val selectorAi: app.xreader.data.ai.SelectorAi =
+    val selectorAi: app.xreader.data.ai.SelectorAi by lazy {
         app.xreader.data.ai.SelectorAi(
             client = aiHub.client,
             prober = linkProber,
             contextFactory = hostContextFactory,
             settingsProvider = aiSettingsProvider
         )
+    }
 
-    val aiChapterHooks: app.xreader.data.ai.AiChapterHooks =
+    val aiChapterHooks: app.xreader.data.ai.AiChapterHooks by lazy {
         app.xreader.data.ai.AiChapterHooks(
             scope = appScope,
             loreKeeper = loreKeeper,
@@ -559,24 +607,33 @@ class AppContainer(context: Context) {
             client = aiHub.client,
             settingsProvider = aiSettingsProvider
         )
+    }
 
     val syncPrefs: app.xreader.data.prefs.SyncPrefs =
         app.xreader.data.prefs.SyncPrefs(appContext.settingsDataStore)
 
-    val tombstoneStore: app.xreader.data.sync.TombstoneStore =
+    // v1.2.0 (audit finding 7 / S1): the sync stack is `by lazy`
+    // too — Drive auth/client, tombstone/log stores and the sync
+    // service itself are only needed when the user syncs, backs
+    // up, or the weekly backup worker runs. Same names/types.
+    val tombstoneStore: app.xreader.data.sync.TombstoneStore by lazy {
         app.xreader.data.sync.TombstoneStore(
             storage = bookStorage,
             deviceIdProvider = { syncPrefs.deviceId() }
         )
+    }
 
-    val syncLogStore: app.xreader.data.sync.SyncLogStore =
+    val syncLogStore: app.xreader.data.sync.SyncLogStore by lazy {
         app.xreader.data.sync.SyncLogStore(bookStorage)
+    }
 
-    val googleDriveAuth: app.xreader.data.sync.GoogleDriveAuth =
+    val googleDriveAuth: app.xreader.data.sync.GoogleDriveAuth by lazy {
         app.xreader.data.sync.GoogleDriveAuth(appContext)
+    }
 
-    val driveSyncBackend: app.xreader.data.sync.DriveClient =
+    val driveSyncBackend: app.xreader.data.sync.DriveClient by lazy {
         app.xreader.data.sync.DriveClient(httpTransport, googleDriveAuth)
+    }
 
     /** Latest WebDAV folder URL, kept warm for the backend's
      * synchronous provider (settings themselves live in DataStore). */
@@ -605,7 +662,7 @@ class AppContainer(context: Context) {
     /** Phase 6: the opt-in book-file channel (Drive/WebDAV/backup).
      * Constructed before [syncService] with its own key provider so
      * there's no DI cycle — it computes the same sync keys. */
-    val bookFileSync: app.xreader.data.sync.BookFileSync =
+    val bookFileSync: app.xreader.data.sync.BookFileSync by lazy {
         app.xreader.data.sync.BookFileSync(
             bookDao = database.bookDao(),
             chapterDao = database.chapterDao(),
@@ -617,8 +674,9 @@ class AppContainer(context: Context) {
                 app.xreader.data.sync.SyncKeys.bookKey(book, packageId)
             }
         )
+    }
 
-    val syncService: app.xreader.data.sync.SyncService =
+    val syncService: app.xreader.data.sync.SyncService by lazy {
         app.xreader.data.sync.SyncService(
             bookDao = database.bookDao(),
             chapterDao = database.chapterDao(),
@@ -805,11 +863,12 @@ class AppContainer(context: Context) {
                 }
             }
         )
+    }
 
     /** Downloads: extension-backed chapters resolve through their
      * sources (with cross-source failover); everything else keeps the
      * Phase 2 URL resolver. */
-    val extensionChapterResolver: app.xreader.data.extension.ExtensionChapterResolver =
+    val extensionChapterResolver: app.xreader.data.extension.ExtensionChapterResolver by lazy {
         app.xreader.data.extension.ExtensionChapterResolver(
             bookDao = database.bookDao(),
             sourceMapDao = database.chapterSourceMapDao(),
@@ -824,6 +883,7 @@ class AppContainer(context: Context) {
             // session; see ExtensionService.fetchBytes).
             storage = bookStorage
         )
+    }
 
     // -- Phase 6: gamification, migration, file sync -------------------------
 
@@ -857,13 +917,14 @@ class AppContainer(context: Context) {
     val pendingOpenSource =
         kotlinx.coroutines.flow.MutableStateFlow<Pair<Long, String>?>(null)
 
-    val migrationService: app.xreader.data.migration.MigrationService =
+    val migrationService: app.xreader.data.migration.MigrationService by lazy {
         app.xreader.data.migration.MigrationService(
             bookDao = database.bookDao(),
             chapterDao = database.chapterDao(),
             progressDao = database.readingProgressDao(),
             extensionDao = database.installedExtensionDao()
         )
+    }
 
     /** Total device RAM in MB (0 when unreadable — the motion tier treats
      * unknown as Full, never stranding a device on Minimal by accident). */    fun totalRamMb(): Long = runCatching {

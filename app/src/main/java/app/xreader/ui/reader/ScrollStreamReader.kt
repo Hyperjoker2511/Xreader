@@ -35,7 +35,6 @@ import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.reader.ChapterText
 import app.xreader.domain.reader.ReaderConfig
 import app.xreader.ui.theme.ReaderPalette
-import coil.compose.AsyncImage
 import java.io.File
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.SharedFlow
@@ -79,6 +78,12 @@ fun ScrollStreamReader(
 ) {
     val listState = rememberLazyListState()
     var restoredGeneration by remember { mutableStateOf(-1) }
+    // v1.2.0 (WS2): scroll lock for image zoom — the flat-item
+    // keys whose ZoomableImage reports a pinch/pan in progress or
+    // a zoomed-in state. While any is active the column must not
+    // scroll: drags belong to the image. Zoom state itself stays
+    // per-item inside ZoomableImage; this set is only the lock.
+    var zoomLockedItems by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     // Flatten the window into stable item keys once per window.
     val flat = remember(entries, totalChapters) {
@@ -192,6 +197,7 @@ fun ScrollStreamReader(
         SelectionContainer {
             LazyColumn(
                 state = listState,
+                userScrollEnabled = zoomLockedItems.isEmpty(),
                 contentPadding = PaddingValues(
                     start = config.marginHorizontalDp.dp,
                     end = config.marginHorizontalDp.dp,
@@ -261,6 +267,18 @@ fun ScrollStreamReader(
                             val text = entry?.text
                             val block = text?.content?.blocks
                                 ?.getOrNull(flatItem.blockIndex)
+                            // v1.2.0 (Wave 3): the per-chapter
+                            // highlight filter is remembered — a
+                            // fresh list identity per recomposition
+                            // would defeat StreamBlock's own
+                            // per-block memoisation below.
+                            val chapterHighlights = remember(
+                                highlights, entry?.chapterId
+                            ) {
+                                highlights.filter {
+                                    it.chapterId == entry?.chapterId
+                                }
+                            }
                             if (text != null && block != null) {
                                 StreamBlock(
                                     block = block,
@@ -269,10 +287,15 @@ fun ScrollStreamReader(
                                     config = config,
                                     palette = palette,
                                     fontFamily = fontFamily,
-                                    highlights = highlights.filter {
-                                        it.chapterId == entry.chapterId
-                                    },
-                                    assetFile = assetFile
+                                    highlights = chapterHighlights,
+                                    assetFile = assetFile,
+                                    onZoomActiveChanged = { active ->
+                                        zoomLockedItems = if (active) {
+                                            zoomLockedItems + flatItem.key
+                                        } else {
+                                            zoomLockedItems - flatItem.key
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -401,14 +424,21 @@ private fun StreamBlock(
     palette: ReaderPalette,
     fontFamily: FontFamily,
     highlights: List<Highlight>,
-    assetFile: (String) -> File
+    assetFile: (String) -> File,
+    onZoomActiveChanged: (Boolean) -> Unit = {}
 ) {
     val range = chapterText.rangeOf(blockIndex) ?: return
     when (block) {
-        is ChapterBlock.Image -> AsyncImage(
+        // v1.2.0 (WS2): image blocks zoom via the shared
+        // ZoomableImage (see ScrollReader) — graphicsLayer-only,
+        // so stream position reporting is unaffected.
+        is ChapterBlock.Image -> ZoomableImage(
             model = assetFile(block.fileName),
             contentDescription = block.alt,
             contentScale = ContentScale.FillWidth,
+            doubleTapToZoom = config.doubleTapToZoom,
+            disableZoomOut = config.disableZoomOut,
+            onZoomActiveChanged = onZoomActiveChanged,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 8.dp)
@@ -422,22 +452,36 @@ private fun StreamBlock(
                 .padding(vertical = 12.dp)
         )
         else -> {
-            val backgrounds = blockBackgrounds(
-                blockStart = range.start,
-                blockEnd = range.end,
-                highlightRanges = highlights.map { it.startOffset to it.endOffset },
-                spokenRange = null,
-                overlayActive = false,
-                highlightColor = palette.accent.copy(alpha = 0.38f),
-                spokenColor = palette.accent.copy(alpha = 0.30f),
-                overlayColor = palette.accent.copy(alpha = 0.20f)
-            )
-            Text(
+            // v1.2.0 (Wave 3, audit #2): remembered per block, as
+            // in ScrollReader — keyed by the block, its range, the
+            // highlights and the rendering inputs (bionic, palette).
+            val highlightColor = palette.accent.copy(alpha = 0.38f)
+            val spokenColor = palette.accent.copy(alpha = 0.30f)
+            val overlayColor = palette.accent.copy(alpha = 0.20f)
+            val backgrounds = remember(
+                block, range.start, range.end, highlights,
+                highlightColor, spokenColor, overlayColor
+            ) {
+                blockBackgrounds(
+                    blockStart = range.start,
+                    blockEnd = range.end,
+                    highlightRanges = highlights.map { it.startOffset to it.endOffset },
+                    spokenRange = null,
+                    overlayActive = false,
+                    highlightColor = highlightColor,
+                    spokenColor = spokenColor,
+                    overlayColor = overlayColor
+                )
+            }
+            val annotated = remember(block, config.bionicReading, backgrounds) {
                 annotatedForBlock(
                     block = block,
                     bionic = config.bionicReading,
                     backgrounds = backgrounds
-                ),
+                )
+            }
+            Text(
+                annotated,
                 style = blockTextStyle(block, config, fontFamily),
                 color = palette.text,
                 modifier = Modifier

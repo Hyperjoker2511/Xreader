@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.animateProgressAsState
@@ -57,6 +58,7 @@ import app.xreader.ui.common.rememberHoverEmptyState
 import app.xreader.ui.common.StatusPill
 import app.xreader.ui.theme.EmberAmber
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import java.io.File
 
 /** The finished list's sort choices — all over real book fields. */
@@ -105,13 +107,12 @@ fun DownloadsScreen(
             .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
         ScreenHeader(title = "Downloads", eyebrow = "Queue")
-        Spacer(Modifier.height(4.dp))
-        Text(
-            stateNow.statusSummary,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(12.dp))
+        // v1.2.0 (WS4 declutter): the old "N active • M finished"
+        // line under the header repeated the segmented pills'
+        // counts verbatim a few centimetres below it. The pills
+        // carry the counts now; the header flows straight into
+        // the storage card with one gap of air.
+        Spacer(Modifier.height(16.dp))
 
         // ── Offline Storage (§5.12.1): real metering only — book
         // files and the cover cache are measured on disk by the
@@ -146,18 +147,13 @@ fun DownloadsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(8.dp))
+            // v1.2.0 (WS4): the "N books saved" chip repeated the
+            // tab counts a third time on this screen — gone. The
+            // row is now just the one action it exists for.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                val booksSaved = stateNow.active.size + stateNow.finished.size
-                NocturneChip(
-                    label = if (booksSaved == 1) "1 book saved" else "$booksSaved books saved",
-                    modifier = Modifier,
-                    selected = false,
-                    dotColor = null,
-                    onClick = null
-                )
                 Spacer(Modifier.weight(1f))
                 GhostPill(
                     text = "Clean cache",
@@ -358,6 +354,30 @@ private fun BookDownloads.waitingForWifi(state: DownloadsUiState): Boolean =
             it.state == QueueState.QUEUED && it.kind == DownloadKind.PREFETCH
         }
 
+/**
+ * v1.2.0 (WS4, sized Coil requests): decode a download card's
+ * cover near its drawn size (48×68dp here) instead of the full
+ * stored image. Same pattern as the Library's helper.
+ */
+@Composable
+private fun rememberSizedCover(file: File?, widthDp: Int, heightDp: Int): ImageRequest? {
+    val context = LocalContext.current
+    return remember(file, widthDp, heightDp) {
+        if (file == null) {
+            null
+        } else {
+            val density = context.resources.displayMetrics.density
+            ImageRequest.Builder(context)
+                .data(file)
+                .size(
+                    (widthDp * density).toInt().coerceAtLeast(1),
+                    (heightDp * density).toInt().coerceAtLeast(1)
+                )
+                .build()
+        }
+    }
+}
+
 @Composable
 private fun ActiveDownloadCard(
     group: BookDownloads,
@@ -372,10 +392,11 @@ private fun ActiveDownloadCard(
     val progress = animateProgressAsState(group.fraction, label = "downloadProgress")
     val paused = group.activeItems.any { it.state == QueueState.PAUSED } &&
         group.activeItems.none { it.state == QueueState.RUNNING }
+    val coverRequest = rememberSizedCover(coverFile(group.book.coverPath), 48, 68)
     GlassCard(modifier = modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth()) {
             AsyncImage(
-                model = coverFile(group.book.coverPath),
+                model = coverRequest ?: coverFile(group.book.coverPath),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -424,19 +445,31 @@ private fun ActiveDownloadCard(
                         modifier = Modifier.padding(start = 8.dp)
                     )
                 }
-                Text(
-                    when {
-                        group.failedItems.isNotEmpty() ->
-                            "${group.failedItems.size} couldn't download — tap play to retry"
-                        else -> group.statusLine
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (group.failedItems.isNotEmpty()) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                )
+                // v1.2.0 (WS4 declutter): the status line under
+                // the progress bar used to repeat what the bar,
+                // the percent and the chapter line already said
+                // ("Downloading…" under a moving bar). It now
+                // renders ONLY when it adds information: a
+                // failure (with its retry instruction) or a
+                // paused book whose chapter line isn't already
+                // the status line.
+                val detailLine = when {
+                    group.failedItems.isNotEmpty() ->
+                        "${group.failedItems.size} couldn't download — tap play to retry"
+                    paused && group.totalChapters > 0 -> "Paused"
+                    else -> null
+                }
+                if (detailLine != null) {
+                    Text(
+                        detailLine,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (group.failedItems.isNotEmpty()) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
                 if (errorText != null && group.failedItems.isNotEmpty()) {
                     Text(
                         errorText,
@@ -472,6 +505,7 @@ private fun FinishedDownloadRow(
     onOpen: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val coverRequest = rememberSizedCover(coverFile(group.book.coverPath), 48, 68)
     GlassCard(
         modifier = modifier.fillMaxWidth(),
         onClick = onOpen,
@@ -484,7 +518,7 @@ private fun FinishedDownloadRow(
             // Cover with the downloaded check badge (§5.12.5).
             Box {
                 AsyncImage(
-                    model = coverFile(group.book.coverPath),
+                    model = coverRequest ?: coverFile(group.book.coverPath),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier

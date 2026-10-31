@@ -43,6 +43,16 @@ class BookImporter(
     private val registry: ParserRegistry,
     private val bookDao: BookDao,
     private val chapterDao: ChapterDao,
+    /** v1.2.0 (audit D9): runs a block of DAO writes as ONE
+     * database transaction, so a whole import commits once.
+     * AppContainer wires Room's withTransaction; tests and other
+     * embeddings default to running the block directly. Declared
+     * BEFORE [clock] on purpose: existing callers pass the clock
+     * as a trailing lambda, and a trailing lambda binds to the
+     * LAST function-type parameter (the DownloadController
+     * pattern). */
+    private val inTransaction: suspend (suspend () -> Unit) -> Unit =
+        { block -> block() },
     private val clock: () -> Long = System::currentTimeMillis
 ) {
 
@@ -158,53 +168,63 @@ class BookImporter(
                 addedAt = now,
                 updatedAt = now
             )
-            val bookId = bookDao.insert(book)
-            book = book.copy(id = bookId)
-            createdBook = book
+            // v1.2.0 (audit D9): every Room write of the import —
+            // the book row, two calls per chapter (insert +
+            // setContent, the two-step the content path's chapter
+            // id forces), and the cover update — lands in ONE
+            // transaction. A 1,500-chapter EPUB used to cost
+            // 3,000+ separate commits; now it commits once, and a
+            // failure mid-import rolls the rows back whole (the
+            // catch below still removes any files that landed).
+            inTransaction {
+                val bookId = bookDao.insert(book)
+                book = book.copy(id = bookId)
+                createdBook = book
 
-            // Assets (images, overlay audio) into the content dir —
-            // on disk they carry the img- prefix (§1.4 layout).
-            parsed.assetsDir?.let { assets ->
-                assets.listFiles()?.forEach { asset ->
-                    storage.copyIntoContentDir(bookId, asset, asset.name)
-                }
-            }
-            // Chapter rows + content files. The content path contains
-            // the chapter id, so: insert → move file → setContent.
-            parsed.chapters.forEachIndexed { index, meta ->
-                val chapterId = chapterDao.insert(
-                    Chapter(
-                        bookId = bookId,
-                        index = index,
-                        title = meta.title,
-                        wordCount = meta.wordCount,
-                        downloadState = DownloadState.READY,
-                        updatedAt = now
-                    )
-                )
-                val relative = storage.chapterContentRelative(bookId, chapterId)
-                val stagedChapter = File(parsed.chaptersDir, meta.contentFileName)
-                val dest = storage.resolve(relative)
-                dest.parentFile?.mkdirs()
-                if (stagedChapter.isFile) {
-                    if (!stagedChapter.renameTo(dest)) {
-                        stagedChapter.copyTo(dest, overwrite = true)
-                        stagedChapter.delete()
+                // Assets (images, overlay audio) into the content dir —
+                // on disk they carry the img- prefix (§1.4 layout).
+                parsed.assetsDir?.let { assets ->
+                    assets.listFiles()?.forEach { asset ->
+                        storage.copyIntoContentDir(bookId, asset, asset.name)
                     }
                 }
-                chapterDao.setContent(chapterId, relative, meta.wordCount, DownloadState.READY)
-            }
-            // Cover.
-            parsed.coverFile?.let { cover ->
-                val ext = cover.extension.ifBlank { "jpg" }
-                val dest = storage.resolve(storage.coverRelative(bookId, ext))
-                val copied = runCatching {
-                    cover.copyTo(dest, overwrite = true)
-                    true
-                }.getOrDefault(false)
-                if (copied) {
-                    book = book.copy(coverPath = storage.coverRelative(bookId, ext))
-                    bookDao.update(book)
+                // Chapter rows + content files. The content path contains
+                // the chapter id, so: insert → move file → setContent.
+                parsed.chapters.forEachIndexed { index, meta ->
+                    val chapterId = chapterDao.insert(
+                        Chapter(
+                            bookId = bookId,
+                            index = index,
+                            title = meta.title,
+                            wordCount = meta.wordCount,
+                            downloadState = DownloadState.READY,
+                            updatedAt = now
+                        )
+                    )
+                    val relative = storage.chapterContentRelative(bookId, chapterId)
+                    val stagedChapter = File(parsed.chaptersDir, meta.contentFileName)
+                    val dest = storage.resolve(relative)
+                    dest.parentFile?.mkdirs()
+                    if (stagedChapter.isFile) {
+                        if (!stagedChapter.renameTo(dest)) {
+                            stagedChapter.copyTo(dest, overwrite = true)
+                            stagedChapter.delete()
+                        }
+                    }
+                    chapterDao.setContent(chapterId, relative, meta.wordCount, DownloadState.READY)
+                }
+                // Cover.
+                parsed.coverFile?.let { cover ->
+                    val ext = cover.extension.ifBlank { "jpg" }
+                    val dest = storage.resolve(storage.coverRelative(bookId, ext))
+                    val copied = runCatching {
+                        cover.copyTo(dest, overwrite = true)
+                        true
+                    }.getOrDefault(false)
+                    if (copied) {
+                        book = book.copy(coverPath = storage.coverRelative(bookId, ext))
+                        bookDao.update(book)
+                    }
                 }
             }
             AppResult.Ok(book)

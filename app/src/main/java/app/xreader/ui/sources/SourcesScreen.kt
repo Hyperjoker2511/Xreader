@@ -145,10 +145,11 @@ fun SourcesScreen(
             // visible — never demoted to a plain row.
             item {
                 GlassCard(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        "Add a source",
-                        style = MaterialTheme.typography.titleMedium
-                    )
+                    // v1.2.0 (WS4 declutter): the card used to say
+                    // "Add a source" twice — a title and the pill
+                    // under it. The pill IS the action and keeps
+                    // the words; the card now opens with the one
+                    // explanatory line, then the big visible door.
                     Text(
                         "A repository, a novel site's link, or a Legado file.",
                         style = MaterialTheme.typography.bodyMedium,
@@ -273,9 +274,10 @@ private fun SourceRow(
         else -> null
     }
     val typeLabel = if (ext.packageId.startsWith("link.")) "Link source" else null
-    // §5.3 row anatomy: language as a NocturneChip, the health word
-    // beside its dot, the alert as a chip — the old joined meta line
-    // split into those same pieces, nothing dropped.
+    // §5.3 row anatomy (WS4-demoted): language, the health word
+    // and the kind share ONE plain meta line; the health dot sits
+    // at the row's end and an alert, when one exists, is the
+    // row's only chip.
     val languageLabel = ext.languages.split(",").firstOrNull()?.uppercase()
         ?.takeIf { it.isNotBlank() }
     val healthWord = healthRecord?.shortStateWord() ?: "Not checked yet"
@@ -294,25 +296,22 @@ private fun SourceRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    if (languageLabel != null) {
-                        NocturneChip(
-                            label = languageLabel,
-                            selected = false
-                        )
-                    }
-                    Text(
-                        listOfNotNull(healthWord, typeLabel)
-                            .joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                // v1.2.0 (WS4 declutter): the language used to
+                // ride in its own chip beside the meta line —
+                // a pill's worth of visual weight for a two-letter
+                // code on every row. It is plain meta text now,
+                // first in the same quiet line as the health word
+                // and kind; the row's only chip is an alert when
+                // one exists (below). Nothing is dropped, just
+                // demoted to the weight it deserves.
+                Text(
+                    listOfNotNull(languageLabel, healthWord, typeLabel)
+                        .joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
                 if (alert != null) {
                     Spacer(Modifier.height(4.dp))
                     NocturneChip(

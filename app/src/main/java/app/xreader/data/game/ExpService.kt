@@ -70,14 +70,68 @@ class ExpService(
         return created
     }
 
+    /**
+     * v1.2.0 (audit D12): the last full settle's change watermark.
+     * In-memory only — a process restart simply pays one full
+     * settle, which is always safe (every award is ledger- /
+     * flag-guarded). The fields are the cheap COUNTs the guard
+     * below compares against; [settle] refreshes it at the end of
+     * every full pass from the stats it already computed.
+     */
+    private data class SettleWatermark(
+        val finishedBooks: Int,
+        val totalBooks: Int,
+        val sourcesInstalled: Int,
+        val profileTotalExp: Long,
+        val profileLevel: Int
+    )
+
+    @Volatile private var lastSettleWatermark: SettleWatermark? = null
+
     suspend fun settle(): SettleResult {
         var profile = ensureProfile()
         val levelBefore = profile.level
+
+        // 1) Sessions: pay each unprocessed session exactly once.
+        val unprocessed = sessionDao.unprocessed()
+
+        // v1.2.0 (audit D12): change-driven guard. The full pass
+        // below re-scans finished books, ALL daily rows and eight
+        // aggregates — on every app start, reader exit and Profile
+        // open, even when nothing changed. When (a) no session is
+        // waiting to be paid, (b) the finished/total book counts
+        // and the installed-source count match the watermark, and
+        // (c) the profile's banked EXP and level are exactly what
+        // the last full pass left (a sync that raised totalExp
+        // without touching level breaks this and falls through to
+        // the level-repair in step 4), this settle is a no-op and
+        // returns without the scans. Daily-goal changes are
+        // covered transitively: minutes only reach a day row via
+        // SessionRecorder, which always leaves an unprocessed
+        // session row behind it, and settle's own addToDay runs
+        // inside the full pass. Payout correctness never depends
+        // on the guard: the ledger and expProcessed flags still
+        // guard every award on the full path. The COUNT queries
+        // the guard itself pays are single-row aggregates, two of
+        // them index-backed after DB v6 (books.finished).
+        val watermark = lastSettleWatermark
+        if (unprocessed.isEmpty() && watermark != null &&
+            profile.totalExp == watermark.profileTotalExp &&
+            profile.level == watermark.profileLevel &&
+            profile.level == ExpCurve.levelFor(profile.totalExp) &&
+            bookDao.finishedCount() == watermark.finishedBooks &&
+            bookDao.count() == watermark.totalBooks &&
+            extensionDao.countAll() == watermark.sourcesInstalled
+        ) {
+            return SettleResult(
+                levelBefore = levelBefore,
+                levelAfter = profile.level
+            )
+        }
         var gained = 0L
         var goalJustMet = false
 
-        // 1) Sessions: pay each unprocessed session exactly once.
-        for (session in sessionDao.unprocessed()) {
+        for (session in unprocessed) {
             val endedAt = session.endedAt ?: session.startedAt
             val wallMinutes = ((endedAt - session.startedAt) / 60_000L)
                 .toInt().coerceAtLeast(session.activeMinutes)
@@ -148,6 +202,18 @@ class ExpService(
         for (id in fresh) {
             achievementDao.insert(AchievementUnlock(id = id, unlockedAt = clock()))
         }
+
+        // v1.2.0 (D12): this full pass leaves the library in the
+        // settled state its stats describe — record the watermark
+        // the next settle's guard compares against (no extra
+        // queries: buildStats already produced every number).
+        lastSettleWatermark = SettleWatermark(
+            finishedBooks = stats.booksFinished,
+            totalBooks = stats.booksTotal,
+            sourcesInstalled = stats.sourcesInstalled,
+            profileTotalExp = profile.totalExp,
+            profileLevel = profile.level
+        )
 
         return SettleResult(
             expGained = gained,

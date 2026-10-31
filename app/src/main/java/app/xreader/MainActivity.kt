@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.withFrameNanos
@@ -15,7 +17,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.data.prefs.AppearanceState
 import app.xreader.data.prefs.GlassStyle
 import app.xreader.data.prefs.ThemeMode
+import androidx.compose.ui.Modifier
+import app.xreader.core.motion.rememberMotionEnabled
 import app.xreader.di.AppContainer
+import app.xreader.ui.shell.LaunchIntro
 import app.xreader.ui.shell.MainScaffold
 import app.xreader.ui.start.OnboardingScreen
 import app.xreader.ui.start.RecoveryScreen
@@ -113,6 +118,17 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.FOLLOW_SYSTEM -> isSystemInDarkTheme()
             }
             var showRecovery by remember { mutableStateOf(crashNote != null) }
+            // v1.2.0 (WS6): the launch intro's two signals. The
+            // motion decision is the app's own: the system animator
+            // scale AND the Appearance reduce-motion preference,
+            // combined by SpringMotionEngine.animationsEnabled (via
+            // rememberMotionEnabled) — disabled motion skips the
+            // intro entirely. `libraryReady` is fed by the shell's
+            // LibraryViewModel loading flag (see MainScaffold).
+            val motionEnabled = rememberMotionEnabled(
+                userEnabled = !appearance.reduceMotion
+            )
+            var libraryReady by remember { mutableStateOf(false) }
             // R01 boot sequence: compose the first frame WITHOUT a
             // haze state, then enable glass once a frame has drawn —
             // a bad appearance state can never crash the first frame,
@@ -150,13 +166,36 @@ class MainActivity : ComponentActivity() {
                             activityScope.launch { container.onboardingPrefs.markCompleted() }
                         }
                     )
-                    onboardingDone == true -> MainScaffold(
-                        container = container,
-                        appearance = appearance
-                    )
-                    // null = preferences not read yet; the theme's first
-                    // frame is the splash — render nothing for a beat.
-                    else -> Unit
+                    // v1.2.0 (audit finding 7 / S4): first paint is
+                    // no longer gated on the onboarding DataStore
+                    // read. The shell composes IMMEDIATELY — with
+                    // the default appearance (collectAsState's
+                    // initialValue above), the stored appearance
+                    // applying when it arrives — for both the
+                    // loaded `true` case and the not-yet-read null
+                    // case, which is the overwhelmingly common
+                    // returning-user state. A genuinely new user
+                    // sees the shell for the beat it takes the
+                    // read to land, then onboarding replaces it;
+                    // once loaded, behaviour is exactly as before.
+                    else -> Box(Modifier.fillMaxSize()) {
+                        MainScaffold(
+                            container = container,
+                            appearance = appearance,
+                            onLibraryReady = { libraryReady = true }
+                        )
+                        // v1.2.0 (WS6): the animated launch intro
+                        // — a pure overlay ABOVE the shell. It is
+                        // composed as a sibling, never instead of
+                        // or before the shell, so first content is
+                        // never gated on it; it dismisses on the
+                        // Library-ready signal above and is hard-
+                        // capped at 1,000 ms by its controller.
+                        LaunchIntro(
+                            libraryReady = libraryReady,
+                            animationsEnabled = motionEnabled
+                        )
+                    }
                 }
             }
         }

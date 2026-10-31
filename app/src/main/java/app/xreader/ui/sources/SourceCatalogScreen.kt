@@ -14,7 +14,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -78,24 +77,14 @@ fun SourceCatalogScreen(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    state.baseUrl,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            IconButton(
-                onClick = {
-                    viewModel.setMode(CatalogMode.SEARCH)
-                    searchOpen = true
-                }
-            ) {
-                Icon(
-                    Icons.Filled.Search,
-                    contentDescription = "Search this source"
-                )
+                // v1.2.0 (WS4 declutter): the raw base URL under
+                // the name is gone — the name identifies the
+                // source here; the URL lives on its Details page.
+                // The header's search ICON is also gone: the
+                // labelled "Search" chip in the mode row below
+                // does the same job in plain words (the credo —
+                // labelled beats icon-only), so search keeps
+                // exactly one visible door.
             }
             TextButton(onClick = onLogin) { Text("Log in") }
         }

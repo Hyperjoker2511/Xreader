@@ -57,8 +57,18 @@ class ExtensionHttpClient(
     /** Human label for error messages ("NovelFull"). */
     private val label: String,
     private val whitelist: () -> ExtensionPermissions,
-    private val rateLimiter: RateLimiter
+    private val rateLimiter: RateLimiter,
+    /** v1.2.0 (B1): byte fetches (chapter images) get their OWN,
+     * much lighter limiter — the 350 ms page politeness interval
+     * must not serialise a chapter's images one by one. Null =
+     * this client makes its own (unshared) byte limiter; the
+     * host factory passes a per-extension shared one so the
+     * context client and the byte-fetch twin pace together. */
+    byteRateLimiter: RateLimiter? = null
 ) : PageFetcher {
+
+    private val byteLimiter: RateLimiter = byteRateLimiter
+        ?: RateLimiter(minIntervalMs = BYTE_MIN_INTERVAL_MS)
 
     override suspend fun get(
         url: String,
@@ -82,7 +92,8 @@ class ExtensionHttpClient(
         when (
             val raw = requestRaw(
                 method, url, body, contentType, headers,
-                ::readBody, PAGE_TOO_LARGE_MESSAGE
+                ::readBody, PAGE_TOO_LARGE_MESSAGE,
+                limiter = rateLimiter
             )
         ) {
             is AppResult.Err -> raw
@@ -114,7 +125,8 @@ class ExtensionHttpClient(
         when (
             val raw = requestRaw(
                 "GET", url, null, null, headers,
-                ::readByteBody, FILE_TOO_LARGE_MESSAGE
+                ::readByteBody, FILE_TOO_LARGE_MESSAGE,
+                limiter = byteLimiter
             )
         ) {
             is AppResult.Err -> raw
@@ -148,7 +160,8 @@ class ExtensionHttpClient(
         contentType: String?,
         headers: Map<String, String>,
         readBody: (HttpTransport.Response) -> T?,
-        tooLargeMessage: String
+        tooLargeMessage: String,
+        limiter: RateLimiter
     ): AppResult<RawResponse<T>> {
         var currentUrl = url
         var currentMethod = method
@@ -169,7 +182,7 @@ class ExtensionHttpClient(
                     )
                 )
             }
-            rateLimiter.awaitTurn()
+            limiter.awaitTurn()
             val session = sessionStore.load(sessionKey)
             val requestHeaders = LinkedHashMap(headers)
             session?.cookieHeaderFor(host)?.let { cookie ->
@@ -287,6 +300,11 @@ class ExtensionHttpClient(
     }
 
     companion object {
+        /** v1.2.0 (B1): the byte limiter's spacing — enough to
+         * stay polite per host, light enough that a 30-image
+         * chapter's floor is ~2 s of spacing, not ~10 s. */
+        const val BYTE_MIN_INTERVAL_MS = 60L
+
         const val MAX_BODY_BYTES = 8L * 1024 * 1024
         const val MAX_REDIRECTS = 5
         const val PAGE_TOO_LARGE_MESSAGE = "the page was too large to load (over 8 MB)"

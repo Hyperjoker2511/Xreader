@@ -73,7 +73,6 @@ import app.xreader.core.motion.animateProgressAsState
 import app.xreader.di.AppContainer
 import app.xreader.domain.game.Achievements
 import app.xreader.ui.common.GlassCard
-import app.xreader.ui.common.ProgressPillBar
 import app.xreader.ui.common.RowItem
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.common.XreaderPrimaryButton
@@ -167,7 +166,10 @@ fun ProfileScreen(
                 Modifier
                     .weight(1f)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                // v1.2.0 (WS4): cards breathe a little more —
+                // 16dp between cards instead of 12dp, now that
+                // several in-card redundancies are gone.
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 state.message?.let { message ->
                     GlassCard(Modifier.fillMaxWidth()) {
@@ -193,11 +195,11 @@ fun ProfileScreen(
                 // the screen's expressive signature (Celebration
                 // family; static under Reduce Motion / low RAM).
                 MeGradientHeader(reduceMotion = reduceMotion, lowRam = lowRam)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "Me",
-                    style = MaterialTheme.typography.headlineSmall
-                )
+                // v1.2.0 (WS4 declutter): the "Me" headline that
+                // used to sit here was the screen's SECOND title —
+                // the header above already says "Profile". One
+                // title per screen; the gradient strip flows
+                // straight into the identity card.
 
                 // v1.0.2 (R29/R30): the Identity Card — Ember
                 // Stage behind, 3D tilt + glare, flip for stats.
@@ -297,13 +299,11 @@ fun ProfileScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        // v1.1.0 (§5.14): the kit pill bar under
-                        // the ring — the same real fraction.
-                        Spacer(Modifier.height(10.dp))
-                        ProgressPillBar(
-                            fraction = state.progress.fraction,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        // v1.2.0 (WS4 declutter): the kit pill bar
+                        // that used to sit under the ring showed
+                        // the ring's own fraction a second time —
+                        // removed. The ring IS the progress view;
+                        // the two EXP lines keep the numbers.
                     }
                 }
 
@@ -403,11 +403,12 @@ fun ProfileScreen(
                         valueRange = 5f..180f,
                         steps = 34
                     )
-                    Text(
-                        "Daily goal: ${goalDraft.toInt()} minutes",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    // v1.2.0 (WS4 declutter): the "Daily goal: N
+                    // minutes" caption under the slider is gone —
+                    // the line above the bar already states the
+                    // goal ("X of Y minutes read today"), and the
+                    // slider still sets it on release, exactly as
+                    // before.
                 }
 
                 // Preferences & tools (v1.0.1 "Shortcuts", v1.1.0

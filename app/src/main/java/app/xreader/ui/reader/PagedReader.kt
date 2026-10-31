@@ -25,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -67,14 +68,19 @@ import app.xreader.domain.reader.ReaderAlignment
 import app.xreader.domain.reader.ReaderConfig
 import app.xreader.ui.theme.EmberAmber
 import app.xreader.ui.theme.ReaderPalette
-import coil.compose.AsyncImage
 import java.io.File
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.max
+
+/** v1.2.0: re-pagination debounce — font-size slider ticks
+ * coalesce for this long before the chapter is re-measured. */
+private const val PAGINATION_DEBOUNCE_MS = 150L
 
 /**
  * The paged reader (PLAN §6): the chapter is measured once per
@@ -129,57 +135,97 @@ fun PagedReader(
         val columnWidthPx = with(density) { columnWidth.toPx() }
         val contentHeightPx = with(density) { contentHeight.toPx() }
 
-        val pages = remember(
-            chapterText, config, fontFamily, columnWidthPx, contentHeightPx
+        // v1.2.0 (Wave 3, audit #5): pagination OFF the
+        // composition path. The whole chapter used to be measured
+        // + packed synchronously inside a remember{} during
+        // composition — a freeze on chapter open and a full redo
+        // on EVERY font-size slider tick (the sheet persists each
+        // tick immediately). Now the request is keyed by
+        // (chapterText, config, fontFamily, page size) in a
+        // produceState, the work runs on Dispatchers.Default, and
+        // a re-pagination of the SAME chapter first waits out a
+        // debounce window so slider ticks coalesce into one run.
+        // While a re-pagination is in flight the PREVIOUS pages
+        // stay on screen (never a blank flash); a new chapter
+        // starts from a single empty placeholder page.
+        // Audit-claim check: the audit's "Paginator.awaitReady()
+        // awaits one DB query per paragraph (N+1)" does NOT exist
+        // in this tree — domain/reader/Paginator.kt is a pure
+        // calculator over MeasuredBlocks (no awaitReady, no DB),
+        // and the measuring loop below is the only per-block work:
+        // one text measurement per prose block per pagination.
+        var lastPages by remember { mutableStateOf<List<Page>>(emptyList()) }
+        var lastPagesText by remember { mutableStateOf<ChapterText?>(null) }
+        val computedPages by produceState<List<Page>?>(
+            null, chapterText, config, fontFamily, columnWidthPx, contentHeightPx
         ) {
+            value = null
+            if (lastPagesText == chapterText) {
+                delay(PAGINATION_DEBOUNCE_MS)
+            }
             val paraSpacingPx = with(density) { config.paragraphSpacingDp.dp.toPx() }
-            val measured = chapterText.content.blocks.mapIndexed { index, block ->
-                val range = chapterText.rangeOf(index)!!
-                when (block) {
-                    is ChapterBlock.Image -> MeasuredBlock(
-                        blockIndex = index, blockStart = range.start, blockEnd = range.end,
-                        fixedHeightPx = contentHeightPx * 0.5f
-                    )
-                    is ChapterBlock.Rule -> MeasuredBlock(
-                        blockIndex = index, blockStart = range.start, blockEnd = range.end,
-                        fixedHeightPx = with(density) { 30.dp.toPx() }
-                    )
-                    else -> {
-                        val style = blockTextStyle(block, config, fontFamily)
-                        val layout = measurer.measure(
-                            annotatedForBlock(block, bionic = config.bionicReading),
-                            style,
-                            constraints = Constraints(maxWidth = columnWidthPx.toInt())
+            value = withContext(Dispatchers.Default) {
+                val measured = chapterText.content.blocks.mapIndexed { index, block ->
+                    val range = chapterText.rangeOf(index)!!
+                    when (block) {
+                        is ChapterBlock.Image -> MeasuredBlock(
+                            blockIndex = index, blockStart = range.start, blockEnd = range.end,
+                            fixedHeightPx = contentHeightPx * 0.5f
                         )
-                        val lineStarts = if (layout.lineCount == 0) {
-                            listOf(range.start)
-                        } else {
-                            (0 until layout.lineCount).map {
-                                range.start + layout.getLineStart(it)
-                            }
-                        }
-                        val lineHeightPx = if (layout.lineCount > 0) {
-                            layout.size.height.toFloat() / layout.lineCount
-                        } else {
-                            with(density) { config.fontSizeSp.sp.toPx() } * 1.4f
-                        }
-                        MeasuredBlock(
-                            blockIndex = index, blockStart = range.start,
-                            blockEnd = range.end,
-                            lineStarts = lineStarts,
-                            lineHeightPx = lineHeightPx,
-                            spaceBeforePx = if (block is ChapterBlock.Heading) {
-                                lineHeightPx * 0.7f
+                        is ChapterBlock.Rule -> MeasuredBlock(
+                            blockIndex = index, blockStart = range.start, blockEnd = range.end,
+                            fixedHeightPx = with(density) { 30.dp.toPx() }
+                        )
+                        else -> {
+                            val style = blockTextStyle(block, config, fontFamily)
+                            val layout = measurer.measure(
+                                annotatedForBlock(block, bionic = config.bionicReading),
+                                style,
+                                constraints = Constraints(maxWidth = columnWidthPx.toInt())
+                            )
+                            val lineStarts = if (layout.lineCount == 0) {
+                                listOf(range.start)
                             } else {
-                                0f
-                            },
-                            spaceAfterPx = paraSpacingPx
-                        )
+                                (0 until layout.lineCount).map {
+                                    range.start + layout.getLineStart(it)
+                                }
+                            }
+                            val lineHeightPx = if (layout.lineCount > 0) {
+                                layout.size.height.toFloat() / layout.lineCount
+                            } else {
+                                with(density) { config.fontSizeSp.sp.toPx() } * 1.4f
+                            }
+                            MeasuredBlock(
+                                blockIndex = index, blockStart = range.start,
+                                blockEnd = range.end,
+                                lineStarts = lineStarts,
+                                lineHeightPx = lineHeightPx,
+                                spaceBeforePx = if (block is ChapterBlock.Heading) {
+                                    lineHeightPx * 0.7f
+                                } else {
+                                    0f
+                                },
+                                spaceAfterPx = paraSpacingPx
+                            )
+                        }
                     }
                 }
+                Paginator(contentHeightPx).paginate(measured)
             }
-            Paginator(contentHeightPx).paginate(measured)
         }
+        LaunchedEffect(computedPages) {
+            val ready = computedPages
+            if (ready != null) {
+                lastPages = ready
+                lastPagesText = chapterText
+            }
+        }
+        val pages = computedPages
+            ?: if (lastPagesText == chapterText) {
+                lastPages
+            } else {
+                listOf(Page(emptyList(), 0, 0))
+            }
 
         val step = if (spread) 2 else 1
         // v1.0.1: page position lives in the PageTurnMachine, not in
@@ -196,6 +242,16 @@ fun PagedReader(
         // Auto page-turn pause state (v1.0.1): any touch pauses;
         // a centre tap (the menu control) resumes.
         var autoPaused by remember(chapterText) { mutableStateOf(false) }
+        // v1.2.0: the last char offset actually reported upward —
+        // a re-pagination (font change, rotation) re-anchors the
+        // machine at THIS offset in the new page list, never back
+        // at the chapter's original restore offset.
+        var lastReportedOffset by remember(chapterText) {
+            mutableIntStateOf(restoreOffset)
+        }
+        // v1.2.0 (WS2 contract): a page image reporting zoom
+        // active suppresses page-turn drags until it reports back.
+        var imageZoomActive by remember(chapterText) { mutableStateOf(false) }
 
         fun alignPage(index: Int): Int {
             val clamped = index.coerceIn(0, pages.lastIndex)
@@ -227,14 +283,22 @@ fun PagedReader(
         // blocks are zero-width in the chapter text), so the
         // char offset alone can never say how far into the
         // chapter the reader is; the page's own position can.
-        LaunchedEffect(currentPage, pages, targetPage) {
-            if (targetPage == null) {
+        LaunchedEffect(currentPage, pages, targetPage, computedPages) {
+            // v1.2.0: never report from the placeholder / previous
+            // page list while the current keys' pagination is still
+            // in flight — the single placeholder page would read as
+            // "page 1 of 1" (fraction 1.0) for a beat on chapter
+            // open. Reporting resumes the moment the real pages
+            // land (this effect re-runs on computedPages).
+            if (targetPage == null && computedPages != null) {
                 val pageFraction = if (pages.isEmpty()) {
                     0f
                 } else {
                     ((currentPage + 1).toFloat() / pages.size).coerceIn(0f, 1f)
                 }
-                onPosition(PageLocator.offsetForPage(pages, currentPage), pageFraction)
+                val offset = PageLocator.offsetForPage(pages, currentPage)
+                lastReportedOffset = offset
+                onPosition(offset, pageFraction)
             }
         }
 
@@ -287,14 +351,31 @@ fun PagedReader(
             }
         }
 
-        LaunchedEffect(restoreGeneration) {
-            val anchor = when (restoreHint) {
-                PageHint.FIRST -> 0
-                PageHint.LAST -> pages.last().endChar
-                PageHint.OFFSET -> restoreOffset
+        // Restore + re-pagination anchoring (v1.2.0): pagination
+        // is asynchronous now, so anchoring waits for the page
+        // list that belongs to the current keys. A NEW restore
+        // generation anchors at the restore hint exactly as
+        // before; a fresh page list under the SAME generation
+        // (font-size change, rotation) re-anchors at the last
+        // reported offset instead — the reader stays on the same
+        // words under new typography.
+        var restoredGeneration by remember { mutableIntStateOf(-1) }
+        LaunchedEffect(restoreGeneration, computedPages) {
+            val ready = computedPages ?: return@LaunchedEffect
+            if (restoredGeneration != restoreGeneration) {
+                restoredGeneration = restoreGeneration
+                val anchor = when (restoreHint) {
+                    PageHint.FIRST -> 0
+                    PageHint.LAST -> ready.lastOrNull()?.endChar ?: 0
+                    PageHint.OFFSET -> restoreOffset
+                }
+                machine.jumpTo(alignPage(PageLocator.pageIndexForOffset(ready, anchor)))
+                progress.snapTo(0f)
+            } else {
+                machine.jumpTo(
+                    alignPage(PageLocator.pageIndexForOffset(ready, lastReportedOffset))
+                )
             }
-            machine.jumpTo(alignPage(PageLocator.pageIndexForOffset(pages, anchor)))
-            progress.snapTo(0f)
             bump()
         }
 
@@ -367,7 +448,11 @@ fun PagedReader(
                         // Only arm a drag when the machine is Idle —
                         // a commit animation in flight OWNS progress;
                         // snapping it from here was the v1.0.0 wedge.
-                        if (machine.state is PageTurnMachine.State.Idle && amount != 0f) {
+                        // v1.2.0: a zoomed page image owns drags too
+                        // (ZoomableImage's onZoomActiveChanged).
+                        if (machine.state is PageTurnMachine.State.Idle &&
+                            amount != 0f && !imageZoomActive
+                        ) {
                             val direction = if (amount < 0) 1 else -1
                             if (machine.dragStart(direction)) {
                                 turnDirection = direction
@@ -394,7 +479,7 @@ fun PagedReader(
                                 if (machine.state is PageTurnMachine.State.Idle) {
                                     val widthPx = size.width.toFloat()
                                     if (kotlin.math.abs(dragTotal) > widthPx * 0.22f &&
-                                        progress.value == 0f
+                                        progress.value == 0f && !imageZoomActive
                                     ) {
                                         // Drag began at a chapter edge
                                         // (no page to arm): change chapter.
@@ -434,7 +519,8 @@ fun PagedReader(
                 PageTurnTier.EINK -> SpreadOrSingle(
                     pages, currentPage, spread, columnWidth, contentHeight,
                     chapterText, config, palette, fontFamily,
-                    highlights, spokenRange, overlayBlockId, assetFile
+                    highlights, spokenRange, overlayBlockId, assetFile,
+                    onZoomActiveChanged = { active -> imageZoomActive = active }
                 )
                 PageTurnTier.MINIMAL -> AnimatedContent(
                     targetState = currentPage,
@@ -446,7 +532,8 @@ fun PagedReader(
                     SpreadOrSingle(
                         pages, page, spread, columnWidth, contentHeight,
                         chapterText, config, palette, fontFamily,
-                        highlights, spokenRange, overlayBlockId, assetFile
+                        highlights, spokenRange, overlayBlockId, assetFile,
+                        onZoomActiveChanged = { active -> imageZoomActive = active }
                     )
                 }
                 PageTurnTier.MID -> {
@@ -461,7 +548,8 @@ fun PagedReader(
                             SpreadOrSingle(
                                 pages, displayPage, spread, columnWidth, contentHeight,
                                 chapterText, config, palette, fontFamily,
-                                highlights, spokenRange, overlayBlockId, assetFile
+                                highlights, spokenRange, overlayBlockId, assetFile,
+                                onZoomActiveChanged = { active -> imageZoomActive = active }
                             )
                         }
                     }
@@ -474,7 +562,8 @@ fun PagedReader(
                         SpreadOrSingle(
                             pages, currentPage, spread, columnWidth, contentHeight,
                             chapterText, config, palette, fontFamily,
-                            highlights, spokenRange, overlayBlockId, assetFile
+                            highlights, spokenRange, overlayBlockId, assetFile,
+                            onZoomActiveChanged = { active -> imageZoomActive = active }
                         )
                     }
                     if (displayPage != currentPage) {
@@ -515,7 +604,8 @@ fun PagedReader(
                         SpreadOrSingle(
                             pages, displayPage, spread, columnWidth, contentHeight,
                             chapterText, config, palette, fontFamily,
-                            highlights, spokenRange, overlayBlockId, assetFile
+                            highlights, spokenRange, overlayBlockId, assetFile,
+                            onZoomActiveChanged = { active -> imageZoomActive = active }
                         )
                     }
                     Box(
@@ -533,7 +623,8 @@ fun PagedReader(
                         SpreadOrSingle(
                             pages, currentPage, spread, columnWidth, contentHeight,
                             chapterText, config, palette, fontFamily,
-                            highlights, spokenRange, overlayBlockId, assetFile
+                            highlights, spokenRange, overlayBlockId, assetFile,
+                            onZoomActiveChanged = { active -> imageZoomActive = active }
                         )
                     }
                     if (displayPage != currentPage && progress.value > 0f) {
@@ -656,7 +747,8 @@ private fun SpreadOrSingle(
     highlights: List<Highlight>,
     spokenRange: IntRange?,
     overlayBlockId: String?,
-    assetFile: (String) -> File
+    assetFile: (String) -> File,
+    onZoomActiveChanged: (Boolean) -> Unit = {}
 ) {
     if (!spread) {
         PageContent(
@@ -665,6 +757,7 @@ private fun SpreadOrSingle(
             fontFamily = fontFamily, highlights = highlights,
             spokenRange = spokenRange, overlayBlockId = overlayBlockId,
             assetFile = assetFile,
+            onZoomActiveChanged = onZoomActiveChanged,
             modifier = Modifier
                 .width(columnWidth)
                 .height(contentHeight)
@@ -678,6 +771,7 @@ private fun SpreadOrSingle(
             fontFamily = fontFamily, highlights = highlights,
             spokenRange = spokenRange, overlayBlockId = overlayBlockId,
             assetFile = assetFile,
+            onZoomActiveChanged = onZoomActiveChanged,
             modifier = Modifier
                 .width(columnWidth)
                 .height(contentHeight)
@@ -691,6 +785,7 @@ private fun SpreadOrSingle(
                 fontFamily = fontFamily, highlights = highlights,
                 spokenRange = spokenRange, overlayBlockId = overlayBlockId,
                 assetFile = assetFile,
+                onZoomActiveChanged = onZoomActiveChanged,
                 modifier = Modifier
                     .width(columnWidth)
                     .height(contentHeight)
@@ -712,6 +807,7 @@ private fun PageContent(
     spokenRange: IntRange?,
     overlayBlockId: String?,
     assetFile: (String) -> File,
+    onZoomActiveChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val highlightColor = palette.accent.copy(alpha = 0.38f)
@@ -726,10 +822,19 @@ private fun PageContent(
             val block = chapterText.content.blocks.getOrNull(slice.blockIndex) ?: continue
             val range = chapterText.rangeOf(slice.blockIndex) ?: continue
             when (block) {
-                is ChapterBlock.Image -> AsyncImage(
+                // v1.2.0 (WS2 reuse contract, per ZoomableImage's
+                // KDoc): page images zoom exactly as scroll-mode
+                // images do — ContentScale.Fit, the image modifier
+                // fills the page, and zoom-active suppresses the
+                // page-turn drags in the host above.
+                is ChapterBlock.Image -> ZoomableImage(
                     model = assetFile(block.fileName),
                     contentDescription = block.alt,
                     contentScale = ContentScale.Fit,
+                    imageModifier = Modifier.fillMaxSize(),
+                    doubleTapToZoom = config.doubleTapToZoom,
+                    disableZoomOut = config.disableZoomOut,
+                    onZoomActiveChanged = onZoomActiveChanged,
                     modifier = if (page.slices.size == 1) {
                         Modifier.fillMaxSize()
                     } else {
@@ -747,27 +852,47 @@ private fun PageContent(
                         .padding(vertical = 6.dp)
                 )
                 else -> {
-                    val backgrounds = blockBackgrounds(
-                        blockStart = range.start,
-                        blockEnd = range.end,
-                        highlightRanges = highlights.map {
-                            it.startOffset to it.endOffset
-                        },
-                        spokenRange = spokenRange,
-                        overlayActive = overlayBlockId != null &&
-                            range.blockId == overlayBlockId,
-                        highlightColor = highlightColor,
-                        spokenColor = spokenColor,
-                        overlayColor = overlayColor
-                    )
-                    Text(
+                    // v1.2.0 (Wave 3, audit #2): remembered per
+                    // slice — PageContent recomposes on EVERY turn
+                    // animation frame, and the AnnotatedString +
+                    // washes used to be rebuilt on each one. Keyed
+                    // by the block, the slice's char range, and
+                    // every rendering input (highlights, spoken
+                    // range, overlay, bionic, palette colours).
+                    val overlayActive = overlayBlockId != null &&
+                        range.blockId == overlayBlockId
+                    val backgrounds = remember(
+                        block, range.start, range.end, highlights,
+                        spokenRange, overlayActive,
+                        highlightColor, spokenColor, overlayColor
+                    ) {
+                        blockBackgrounds(
+                            blockStart = range.start,
+                            blockEnd = range.end,
+                            highlightRanges = highlights.map {
+                                it.startOffset to it.endOffset
+                            },
+                            spokenRange = spokenRange,
+                            overlayActive = overlayActive,
+                            highlightColor = highlightColor,
+                            spokenColor = spokenColor,
+                            overlayColor = overlayColor
+                        )
+                    }
+                    val annotated = remember(
+                        block, slice.startChar, slice.endChar,
+                        config.bionicReading, backgrounds
+                    ) {
                         annotatedForBlock(
                             block = block,
                             fromChar = slice.startChar - range.start,
                             toChar = slice.endChar - range.start,
                             bionic = config.bionicReading,
                             backgrounds = backgrounds
-                        ),
+                        )
+                    }
+                    Text(
+                        annotated,
                         style = blockTextStyle(block, config, fontFamily),
                         color = palette.text
                     )

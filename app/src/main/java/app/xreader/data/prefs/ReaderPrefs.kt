@@ -63,6 +63,8 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
             prefs[KEY_AUTO_SCROLL_SPEED] = next.autoScrollSpeed
             prefs[KEY_TAP_ZONES] = next.tapZoneLayout.name
             prefs[KEY_PAGED_DIR] = next.pagedDirection.name
+            prefs[KEY_DOUBLE_TAP_ZOOM] = next.doubleTapToZoom
+            prefs[KEY_DISABLE_ZOOM_OUT] = next.disableZoomOut
             prefs[KEY_TRANSITION] = next.chapterTransition.name
             prefs[KEY_PAGE_OVERLAY] = next.showPageOverlay
             prefs[KEY_READING_LINE] = next.readingLine
@@ -116,6 +118,8 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
                 this[KEY_PAGED_DIR], PagedDirection.entries.toTypedArray(),
                 PagedDirection.LTR
             ),
+            doubleTapToZoom = this[KEY_DOUBLE_TAP_ZOOM] ?: true,
+            disableZoomOut = this[KEY_DISABLE_ZOOM_OUT] ?: false,
             chapterTransition = ReaderValidation.parseEnum(
                 this[KEY_TRANSITION], ChapterTransition.entries.toTypedArray(),
                 ChapterTransition.CHAPTER_BY_CHAPTER
@@ -158,6 +162,8 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
         val KEY_AUTO_SCROLL_SPEED = floatPreferencesKey("reader.auto_scroll_speed")
         val KEY_TAP_ZONES = stringPreferencesKey("reader.tap_zones")
         val KEY_PAGED_DIR = stringPreferencesKey("reader.paged_direction")
+        val KEY_DOUBLE_TAP_ZOOM = booleanPreferencesKey("reader.double_tap_zoom")
+        val KEY_DISABLE_ZOOM_OUT = booleanPreferencesKey("reader.disable_zoom_out")
         val KEY_TRANSITION = stringPreferencesKey("reader.chapter_transition")
         val KEY_PAGE_OVERLAY = booleanPreferencesKey("reader.page_overlay")
         val KEY_READING_LINE = booleanPreferencesKey("reader.reading_line")

@@ -137,34 +137,44 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
         storageTick
     ) { items, books, settings, _ ->
         val byBook = items.groupBy { it.bookId }
+        // v1.2.0 (WS4, completing optimisation 1b): the projection
+        // used to load EVERY chapter row of every queued book and
+        // walk its whole file tree on EVERY queue emission — and
+        // the queue emits per chapter during a bulk download. It
+        // now reads the DAO's indexed ready COUNT (one query per
+        // queued book, no chapter rows materialised) and the
+        // BookStorage size caches (disk walks only on a cache
+        // miss; BookStorage invalidates on its own writes and
+        // deletes, and clearCaches invalidates explicitly).
         val grouped = books.mapNotNull { book ->
             val bookItems = byBook[book.id] ?: return@mapNotNull null
             if (bookItems.isEmpty()) return@mapNotNull null
-            val chapters = chapterDao.forBook(book.id)
+            val ready = chapterDao.readyCount(book.id)
             BookDownloads(
                 book = book,
                 items = bookItems,
-                readyChapters = chapters.count {
-                    it.downloadState == app.xreader.data.db.DownloadState.READY
+                readyChapters = ready,
+                // When the book row knows no total, the ready
+                // count is the only honest chapter total left
+                // without loading the chapter list (queue items
+                // are NOT chapters — a whole-book acquisition is
+                // a single item — so they are never counted as
+                // one). fraction handles a 0 total via isFinished.
+                totalChapters = if (book.totalChapters > 0) {
+                    book.totalChapters
+                } else {
+                    ready
                 },
-                totalChapters = if (book.totalChapters > 0) book.totalChapters else chapters.size,
-                // v1.0.6.2 (D2): storage used = the bytes of this
-                // book's files on disk (chapter content + the
-                // book's own files share the books/<id> tree).
-                bytesOnDisk = runCatching {
-                    container.bookStorage.booksDir(book.id)
-                        .walkTopDown()
-                        .filter { it.isFile }
-                        .sumOf { it.length() }
-                }.getOrDefault(0L)
+                // BookStorage's book-files definition (content +
+                // the book's own file + cover) — the same number
+                // the Library's remove dialogs quote, where the
+                // old books/<id>-only walk read 0 for source
+                // books whose chapters live under content/.
+                bytesOnDisk = container.bookStorage
+                    .bookFilesSizeBytesCached(book)
             )
         }
-        val coverCacheBytes = runCatching {
-            container.bookStorage.coversDir()
-                .walkTopDown()
-                .filter { it.isFile }
-                .sumOf { it.length() }
-        }.getOrDefault(0L)
+        val coverCacheBytes = container.bookStorage.coversDirSizeBytesCached()
         val deviceTotalBytes = runCatching {
             android.os.StatFs(container.bookStorage.filesDir.path).totalBytes
         }.getOrDefault(0L)
@@ -197,6 +207,11 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
                 container.bookStorage.importStagingRoot().listFiles()
                     ?.forEach { it.deleteRecursively() }
             }
+            // The deletions above bypass BookStorage's own write
+            // paths, so its size caches would serve the pre-clear
+            // numbers forever — invalidate explicitly (the cached
+            // APIs' documented contract for out-of-band changes).
+            container.bookStorage.invalidateAllBookFileSizes()
             storageTick.value += 1
         }
     }

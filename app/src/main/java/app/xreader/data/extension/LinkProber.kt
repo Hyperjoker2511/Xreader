@@ -118,7 +118,14 @@ class LinkProber(
          * proposals, Legado imports, the parser editor)
          * saves the rules that actually passed. Null when
          * no heal happened. */
-        val healedConfig: DeclarativeConfig? = null
+        val healedConfig: DeclarativeConfig? = null,
+        /** WS3 (class J): the drive proved the book through an
+         * IMAGE chapter — the sampled chapter's content is
+         * pictures, not prose (comic-style books the app reads
+         * by design). The pass is recorded, like the all-locked
+         * pass-with-limits, so the verdict stays honest about
+         * what was actually proven. */
+        val imageChapter: Boolean = false
     )
 
     /** v1.0.6.2 (F5): what a test-drive's semantic gate made of
@@ -446,6 +453,11 @@ class LinkProber(
                         }
                     } else {
                     stageLines += when {
+                        result.value.imageChapter -> StageLine(
+                            proposer, "chapter text",
+                            "the sampled chapter is pictures, not prose — " +
+                                "an image chapter, which this app reads"
+                        )
                         result.value.allChaptersLocked -> StageLine(
                             proposer, "chapter text",
                             "all ${result.value.chapterCount} chapters on " +
@@ -650,6 +662,59 @@ class LinkProber(
         tried("inference")
         var analysis = LinkInference.analyseBookPage(bookDoc, bookUrl)
 
+        // WS3 (class D-ii): the book page itself may carry no
+        // chapter rows — its list lives one hop away on a
+        // dedicated "all chapters" page the book page links to
+        // (the path EXTENDS the book's own path by one segment).
+        // Follow that one hop and analyse the chapters page as
+        // the chapter-list page; details are then read from it
+        // too, which is honest — it is the book's own index page.
+        if (analysis == null) {
+            val hop = followChaptersHop(bookDoc, bookUrl, fetcher)
+            if (hop != null) {
+                bookUrl = hop.first
+                bookDoc = hop.second
+                analysis = LinkInference.analyseBookPage(bookDoc, bookUrl)
+            }
+        }
+
+        // WS3 (class D-i): a Madara page the inference cannot
+        // read (its chapter rows carry no chapter-shaped text
+        // or hrefs for the cluster rules) still has a FAMILY
+        // shape — the repo-conversion family template encodes
+        // it. Drive that candidate through the same mandatory
+        // test-drive; a failed drive never blocks the ordinary
+        // pipeline below. Madara's true POST chapter endpoint
+        // doesn't fit declarative pagination, so a book whose
+        // page renders NO rows still fails honestly at the
+        // chapter-list step — the family candidate is a reader
+        // for the rows the page DOES render, nothing more.
+        if (analysis == null && LinkInference.isMadaraPage(bookDoc)) {
+            val familyConfig = runCatching {
+                FamilyTemplates.configFor(
+                    family = "madara",
+                    pluginId = "learner",
+                    site = baseOf(bookUrl),
+                    name = LinkInference.siteName(bookDoc) ?: host,
+                    lang = "en",
+                    options = emptyMap()
+                )
+            }.getOrNull()?.copy(
+                id = sourceIdFor(host, bookUrl),
+                sampleBookUrl = bookUrl
+            )
+            if (familyConfig != null) {
+                tried("templates")
+                consider(
+                    "templates", familyConfig, bookUrl,
+                    testDriveScored(familyConfig, bookUrl, context)
+                )
+                bestDraft?.let {
+                    if (!tryAllProposers) return Outcome.Ready(it, outcomeLines())
+                }
+            }
+        }
+
         // The pasted link may be a CHAPTER page: find its book page.
         if (analysis == null) {
             val chapterAnalysis = LinkInference.analyseChapterPage(bookDoc, bookUrl)
@@ -737,11 +802,28 @@ class LinkProber(
                         // v1.0.6.2 (F4): a home/listing page is
                         // refused for what it IS — the chapter
                         // copy below is for chapter links only.
-                        if (siteRoot || listing != null) {
-                            HOME_PAGE_COPY
-                        } else {
-                            "That link opened a chapter, but Xreader couldn't find the book's own page " +
-                                "from it. Paste the book's main page (the one with the whole chapter list) instead."
+                        // WS3 (class H): the chapter copy is ALSO
+                        // only for chapter-shaped links — a book
+                        // page whose synopsis tripped the chapter
+                        // analysis (its list unreadable or loaded
+                        // later) is not a chapter, and saying so
+                        // sent the reader hunting for a page they
+                        // were already on. Such a page gets the
+                        // honest no-chapter-list wording instead.
+                        when {
+                            // WS3 (class H, refined): the home
+                            // copy is for roots and for listing
+                            // pages — a BOOK-shaped URL whose page
+                            // happens to contain a listing cluster
+                            // (a book page's popular rail) is not
+                            // the site's home page.
+                            siteRoot || (listing != null &&
+                                !BookShape.isBookShapedHref(bookUrl)) ->
+                                HOME_PAGE_COPY
+                            BookShape.isChapterShapedHref(bookUrl) ->
+                                "That link opened a chapter, but Xreader couldn't find the book's own page " +
+                                    "from it. Paste the book's main page (the one with the whole chapter list) instead."
+                            else -> NO_CHAPTER_LIST_COPY
                         }
                     )
                 }
@@ -759,7 +841,13 @@ class LinkProber(
                         // yielded no readable book is refused for
                         // what it is; every other unreadable page
                         // keeps the copy it has always had.
-                        if (siteRoot || listing != null) {
+                        // WS3 (class H, refined): the same gate
+                        // as the rescue branch — a listing found
+                        // on a BOOK-shaped URL doesn't make that
+                        // URL the home page.
+                        if (siteRoot || (listing != null &&
+                                !BookShape.isBookShapedHref(bookUrl))
+                        ) {
                             HOME_PAGE_COPY
                         } else if (aiAvailable) {
                             "Xreader couldn't spot a chapter list or readable chapter text on that page. " +
@@ -1057,7 +1145,13 @@ class LinkProber(
                         list = candidate.chapterListSelector,
                         name = candidate.chapterNameSpec,
                         link = candidate.chapterLinkSpec,
-                        reverse = candidate.newestFirst
+                        reverse = candidate.newestFirst,
+                        // WS3 (class D): a windowed strict-
+                        // pattern list carries its completion
+                        // into the saved rules, so the engine
+                        // builds the full list, not the window.
+                        urlPattern = candidate.chapterUrlPattern,
+                        totalCount = candidate.chapterTotalCount
                     )
                 ),
                 chapter = ChapterSpec(
@@ -1132,6 +1226,55 @@ class LinkProber(
             )
             else -> null
         }
+    }
+
+    /**
+     * WS3 (class D-ii): the one-hop "all chapters" follow — a
+     * book page with no chapter cluster may link to a dedicated
+     * chapters page whose path extends the book's own path by
+     * exactly one segment (`…/mad-god` → `…/mad-god/chapters`),
+     * or whose link text names the whole list. Same host only,
+     * one hop only. Returns the fetched page (URL + document)
+     * or null when no such link exists or doesn't load.
+     */
+    private suspend fun followChaptersHop(
+        doc: Document,
+        pageUrl: String,
+        fetcher: PageFetcher
+    ): Pair<String, Document>? {
+        val bookPath = BookShape.normalisedPath(pageUrl)
+        if (bookPath == "/") return null
+        val anchor = doc.select("a[href]").firstOrNull { a ->
+            val href = a.attr("abs:href")
+                .ifBlank { a.attr("href") }
+            if (href.isBlank()) return@firstOrNull false
+            val resolved = runCatching {
+                java.net.URI(pageUrl).resolve(href).toString()
+            }.getOrDefault(href)
+            if (CookieParsing.hostOf(resolved) !=
+                CookieParsing.hostOf(pageUrl)
+            ) {
+                return@firstOrNull false
+            }
+            val path = BookShape.normalisedPath(resolved)
+            val extendsBook = path.startsWith("$bookPath/") &&
+                !path.removePrefix("$bookPath/").contains('/')
+            val segment = path.substringAfterLast('/').lowercase()
+            val text = a.text().trim()
+            (extendsBook && segment in CHAPTERS_HOP_SEGMENTS) ||
+                (extendsBook && CHAPTERS_HOP_TEXT.containsMatchIn(text))
+        } ?: return null
+        val href = anchor.attr("abs:href").ifBlank { anchor.attr("href") }
+        val target = runCatching {
+            java.net.URI(pageUrl).resolve(href).toString()
+        }.getOrDefault(href)
+        if (target.isBlank() || target == pageUrl) return null
+        val fetched = fetcher.get(target)
+        if (fetched !is AppResult.Ok || fetched.value.status !in 200..299) {
+            return null
+        }
+        val finalUrl = fetched.value.finalUrl.ifBlank { target }
+        return finalUrl to Jsoup.parse(fetched.value.body, finalUrl)
     }
 
     /** The first usable book link of a listing page, resolved
@@ -1344,6 +1487,10 @@ class LinkProber(
         )
     }
 
+    /** WS3 (class J): one sampled chapter's read — its prose
+     * text and the picture count of its content container. */
+    private data class SampleRead(val text: String, val images: Int)
+
     /** A test-drive outcome plus how far it got (v1.0.5, A4):
      * steps 0 = page/title, 1 = chapter list, 2 = chapter text,
      * 3 = passed. When several candidates fail, the failure with
@@ -1410,6 +1557,29 @@ class LinkProber(
                 RELATIVE_TIME_ANYWHERE.containsMatchIn(it)
         }
         if (hits * 2 >= titles.size) {
+            return SemanticShape(ListShapeVerdict.FEED, titles)
+        }
+        // WS3 (class C): two more general non-book signals, each
+        // defensible on its own — a book catalogue lists THIS
+        // site's books, so a list whose links mostly leave the
+        // site (a language menu pointing at sister domains) or
+        // mostly name taxonomy/feed sections (genre indexes,
+        // announcement rails, release-year archives) is not a
+        // catalogue, whatever its titles look like.
+        val foreign = books.count { book ->
+            CookieParsing.hostOf(book.id) != null &&
+                !LinkInference.isSameSiteHost(config.baseUrl, book.id)
+        }
+        if (foreign * 2 >= books.size) {
+            return SemanticShape(ListShapeVerdict.FEED, titles)
+        }
+        val taxonomy = books.count { book ->
+            val segments = BookShape.normalisedPath(book.id)
+                .split('/').filter { it.isNotBlank() }
+                .map { it.lowercase() }
+            segments.any { it in NON_BOOK_SEGMENTS }
+        }
+        if (taxonomy * 2 >= books.size) {
             return SemanticShape(ListShapeVerdict.FEED, titles)
         }
         if (hits == 0) {
@@ -1824,15 +1994,29 @@ class LinkProber(
         var lockedEvidence = false
         var firstError: Throwable? = null
         var timeoutError: Throwable? = null
+        // WS3 (class J): the richest image count any sample
+        // carried, and the chapter that carried it — an image-
+        // dominant chapter proves an image book (below).
+        var bestImages = 0
+        var imageCandidate: app.xreader.extensionapi.SourceChapter? = null
+        // Phase B repair: declared here (before its first read in
+        // the recovery gate below) and SET by the image-chapter
+        // pass further down; at the recovery gate it is still
+        // false, exactly as the WS3 edit intended.
+        var imageChapterPass = false
         // v1.0.8.3: one sampling read, hoisted so the first
         // pass and the recovery passes below share the exact
         // same read + timeout-retry + error bookkeeping.
-        fun sampleText(
+        // WS3: a sample now reads TEXT and IMAGE COUNT from the
+        // same chapter fetch — the returned HTML is the content
+        // container's own markup, so its <img> count is the
+        // chapter's picture count.
+        fun sampleRead(
             candidate: app.xreader.extensionapi.SourceChapter
-        ): String {
-            fun readText(): String {
-                source.chapterContent(candidate)
-                return source.contentOf(candidate.id)?.blocks
+        ): SampleRead {
+            fun readOnce(): SampleRead {
+                val content = source.chapterContent(candidate)
+                val text = source.contentOf(candidate.id)?.blocks
                     ?.joinToString("\n") { block ->
                         when (block) {
                             is app.xreader.domain.content.ChapterBlock.Paragraph ->
@@ -1842,27 +2026,41 @@ class LinkProber(
                             else -> ""
                         }
                     }?.trim().orEmpty()
+                val images = IMG_TAG.findAll(content.html).count()
+                return SampleRead(text, images)
             }
-            return runCatching { readText() }.getOrElse { e ->
+            return runCatching { readOnce() }.getOrElse { e ->
                 when {
                     e is kotlinx.coroutines.CancellationException -> throw e
                     // v1.0.6: a timed-out chapter fetch is
                     // retried once before it counts as a failure.
                     isTimeoutFailure(e) ->
-                        runCatching { readText() }.getOrElse { retryError ->
+                        runCatching { readOnce() }.getOrElse { retryError ->
                             if (retryError is
                                 kotlinx.coroutines.CancellationException
                             ) {
                                 throw retryError
                             }
                             if (timeoutError == null) timeoutError = retryError
-                            ""
+                            SampleRead("", 0)
                         }
                     else -> {
                         if (firstError == null) firstError = e
-                        ""
+                        SampleRead("", 0)
                     }
                 }
+            }
+        }
+        fun sampleText(
+            candidate: app.xreader.extensionapi.SourceChapter
+        ): String = sampleRead(candidate).text
+        fun noteSample(
+            candidate: app.xreader.extensionapi.SourceChapter,
+            read: SampleRead
+        ) {
+            if (read.images > bestImages) {
+                bestImages = read.images
+                imageCandidate = candidate
             }
         }
         // v1.0.8.3: spread the first pass (first / middle /
@@ -1871,7 +2069,9 @@ class LinkProber(
         // shouldn't sink a drive its later chapters would pass.
         val firstPass = spreadSamples(unlocked)
         for (candidate in firstPass) {
-            val text = sampleText(candidate)
+            val read = sampleRead(candidate)
+            noteSample(candidate, read)
+            val text = read.text
             if (text.length > bestText.length) bestText = text
             if (text.length >= LinkInference.MIN_READABLE_CHARS) {
                 sampled = candidate
@@ -1892,12 +2092,14 @@ class LinkProber(
         // genuine prose, redrive once with the healed rules
         // and draft those. A site is only refused when its
         // pages defeat the fresh analysis too.
-        if (!laneVerified && !healAttempted &&
+        if (!laneVerified && !healAttempted && !imageChapterPass &&
             (sampled == null || !isGenuineProse(bestText))
         ) {
             for (candidate in unlocked.drop(firstPass.size)
                 .take(MAX_TEXT_SAMPLES)) {
-                val text = sampleText(candidate)
+                val read = sampleRead(candidate)
+                noteSample(candidate, read)
+                val text = read.text
                 if (text.length > bestText.length) bestText = text
                 if (text.length >= LinkInference.MIN_READABLE_CHARS &&
                     isGenuineProse(text)
@@ -1910,7 +2112,24 @@ class LinkProber(
                 }
             }
         }
-        if (!laneVerified && !healAttempted &&
+        // WS3 (class J): the IMAGE-CHAPTER pass. No sample read
+        // as prose, but a sampled chapter's content container is
+        // image-dominant — the book is a comic-style title this
+        // app reads by design, and a text-only gate could never
+        // pass it however good its rules are. The pass mirrors
+        // the all-locked pass-with-limits: it is recorded on the
+        // result, ranks below a fully-proven prose pass in
+        // candidate ranking only through its shorter text, and
+        // never applies when a sample suggested a lock/paywall.
+        if ((sampled == null || !isGenuineProse(bestText)) &&
+            !lockedEvidence &&
+            bestImages >= MIN_IMAGE_CHAPTER_IMAGES &&
+            imageCandidate != null
+        ) {
+            sampled = imageCandidate
+            imageChapterPass = true
+        }
+        if (!laneVerified && !healAttempted && !imageChapterPass &&
             (sampled == null || !isGenuineProse(bestText))
         ) {
             val healed = healedChapterConfig(config, context, unlocked)
@@ -1958,7 +2177,7 @@ class LinkProber(
         // no sentence punctuation; real story text always does.
         // The hand-verified lane stays exempt (P4's rule), and
         // the lock-failed case keeps its own precise words.
-        if (!laneVerified && !isGenuineProse(bestText)) {
+        if (!laneVerified && !imageChapterPass && !isGenuineProse(bestText)) {
             return ScoredDrive(
                 2,
                 AppResult.Err(
@@ -2010,7 +2229,10 @@ class LinkProber(
                     // rides out for the flow's borderline
                     // AI check.
                     listShape = shape.verdict,
-                    sampleTitles = shape.sampleTitles
+                    sampleTitles = shape.sampleTitles,
+                    // WS3 (class J): an image-chapter pass is
+                    // recorded as what it proved.
+                    imageChapter = imageChapterPass
                 )
             )
         )
@@ -2140,6 +2362,15 @@ class LinkProber(
          * before falling back (v1.0.6). */
         const val MAX_SAMPLE_BOOKS = 3
 
+        /** WS3 (class J): content images at or above this count
+         * in a sampled chapter's content container make the
+         * chapter image-dominant — a prose chapter carries a
+         * frontispiece or two; a comic chapter carries a strip. */
+        const val MIN_IMAGE_CHAPTER_IMAGES = 5
+
+        /** WS3 (class J): picture tags in a chapter read's HTML. */
+        private val IMG_TAG = Regex("(?i)<img[\\s>]")
+
         /** v1.0.6.2 (F5): listing items sampled per drive for
          * the list-shape judge. */
         const val LIST_SHAPE_SAMPLE = 8
@@ -2148,7 +2379,8 @@ class LinkProber(
          * time" ("Monarch just now …", "Theonebeggar21 · 2h
          * ago …"). Anchored at the title's start. */
         private val RELATIVE_TIME_TITLE = Regex(
-            "^\\S+\\s+(?:just now|\\d{1,3}\\s*[mhdw]\\s*ago|yesterday|·)",
+            "^\\S+\\s+(?:just now|\\d{1,3}\\s*[mhdw]\\s*ago|" +
+                "\\d{1,3}\\s*(?:years?|months?)\\s+ago|yesterday|·)",
             RegexOption.IGNORE_CASE
         )
 
@@ -2157,10 +2389,38 @@ class LinkProber(
          * Only ever counted toward the ≥half threshold, and the
          * borderline band still earns a book-page proof, so a
          * novel honestly titled with a time word can't fail on
-         * this alone. */
+         * this alone. WS3 (class C): the patterns also cover
+         * the long-form stamps announcement rails actually use
+         * ("1 year ago", "3 months ago", "last week") — every
+         * woopread sample title carried one and still judged
+         * CLEAN before this widening. */
         private val RELATIVE_TIME_ANYWHERE = Regex(
-            "(?:·\\s*\\d|\\bjust now\\b|\\b\\d{1,3}\\s*[mhdw]\\s+ago\\b)",
+            "(?:·\\s*\\d|\\bjust now\\b|\\b\\d{1,3}\\s*[mhdw]\\s+ago\\b|" +
+                "\\b\\d{1,3}\\s*(?:years?|months?)\\s+ago\\b|" +
+                "\\blast\\s+(?:year|month|week)\\b)",
             RegexOption.IGNORE_CASE
+        )
+
+        /** WS3 (class C): path segments that name a taxonomy or
+         * feed section, never a book — a catalogue cluster whose
+         * links mostly live under one of these is an index of
+         * genres/announcements/releases, not of books. */
+        private val NON_BOOK_SEGMENTS = setOf(
+            "genre", "genres", "category", "categories",
+            "tag", "tags", "announcement", "announcements",
+            "news", "blog", "release", "releases"
+        )
+
+        /** WS3 (class D-ii): last path segments that name a
+         * book's dedicated chapter-list page. */
+        private val CHAPTERS_HOP_SEGMENTS = setOf(
+            "chapters", "chapter-list", "all-chapters", "toc"
+        )
+
+        /** WS3 (class D-ii): link texts that name the whole
+         * chapter list ("All Chapters", "Chapter List"). */
+        private val CHAPTERS_HOP_TEXT = Regex(
+            "(?i)(all chapters|chapter list|full chapter list)"
         )
 
         /** v1.0.6.3 (P6): first path segments that smell like a
@@ -2267,6 +2527,18 @@ class LinkProber(
                 "there to learn from, but couldn't read one well enough to " +
                 "build the source. Paste one book's page instead — the one " +
                 "with the whole chapter list."
+
+        /** WS3 (class H): the honest refusal for a page that is
+         * neither a home/listing page nor a chapter-shaped link,
+         * yet yielded no readable chapter list — a book page
+         * whose list loads after the page opens, or whose shape
+         * the learner can't cluster. It names what was looked
+         * for and not found, and never calls the page a chapter. */
+        const val NO_CHAPTER_LIST_COPY =
+            "Xreader couldn't find a chapter list on that page. The list may " +
+                "load after the page opens, or the page may use a layout the " +
+                "automatic detector can't read. Paste the book's main page " +
+                "(the one with the whole chapter list) instead."
 
         /** v1.0.6.1 (P1): characters stripped from a pasted
          * address before parsing — the whitespace/control range

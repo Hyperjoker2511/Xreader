@@ -50,7 +50,20 @@ object SelectorSynthesizer {
                 break
             }
             var segment = tag
-            val classes = stableClasses(el).take(2)
+            // WS3 (class C2): in LIST mode the item's own segment
+            // must match EVERY row — a class only the synthesised
+            // item itself carries (a rank/position class like
+            // `top-1` on the first row) collapses the selector to
+            // that one row at read time (a 13-book catalogue read
+            // back as 1). When the item has enough same-tag
+            // siblings to judge by, classes no sibling shares are
+            // dropped from the item segment. Ancestor segments
+            // are untouched: a container is unique by nature.
+            val classes = if (listMode && isItem) {
+                sharedClasses(el).take(2)
+            } else {
+                stableClasses(el).take(2)
+            }
             if (classes.isNotEmpty()) {
                 segment += classes.joinToString("") { ".$it" }
             }
@@ -74,6 +87,25 @@ object SelectorSynthesizer {
             depth++
         }
         return segments.asReversed().joinToString(" > ")
+    }
+
+    /**
+     * WS3 (class C2): [element]'s stable classes that at least
+     * one same-tag sibling under the same parent ALSO carries —
+     * the classes that describe the LIST, not this row's rank in
+     * it. With fewer than three same-tag siblings there is no
+     * list to judge by and every stable class is kept, exactly
+     * as before.
+     */
+    fun sharedClasses(element: Element): List<String> {
+        val own = stableClasses(element)
+        if (own.isEmpty()) return own
+        val siblings = element.parent()?.children()
+            ?.filter { it.tagName() == element.tagName() && it !== element }
+            ?: return own
+        if (siblings.size + 1 < 3) return own
+        val siblingClasses = siblings.flatMapTo(HashSet()) { stableClasses(it) }
+        return own.filter { it in siblingClasses }
     }
 
     fun stableClasses(element: Element): List<String> =

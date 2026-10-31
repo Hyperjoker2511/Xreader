@@ -112,6 +112,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import dev.chrisbanes.haze.hazeSource
 import java.io.File
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -150,7 +151,14 @@ private val RailWidth = 104.dp
 private val RailSlotHeight = 76.dp
 
 @Composable
-fun MainScaffold(container: AppContainer, appearance: AppearanceState) {
+fun MainScaffold(
+    container: AppContainer,
+    appearance: AppearanceState,
+    // v1.2.0 (WS6): the launch intro's ready signal — fired once,
+    // the first time the Library's state leaves `loading` (its
+    // first real content). Default no-op keeps other callers as-is.
+    onLibraryReady: () -> Unit = {}
+) {
     val navController = rememberNavController()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -178,6 +186,15 @@ fun MainScaffold(container: AppContainer, appearance: AppearanceState) {
     )
     androidx.compose.runtime.LaunchedEffect(libraryViewModel) {
         libraryViewModel.messages.collect { msg -> snackbar.showSnackbar(msg) }
+    }
+    // v1.2.0 (WS6): the Library-ready signal for the launch intro —
+    // the existing LibraryViewModel `loading` flag is the shell's
+    // first-real-content marker (it clears when the shelf combine
+    // first emits, books or honest empty state alike). Suspends
+    // until then, fires once, and the effect ends.
+    androidx.compose.runtime.LaunchedEffect(libraryViewModel) {
+        libraryViewModel.state.first { !it.loading }
+        onLibraryReady()
     }
     androidx.compose.runtime.LaunchedEffect(opdsViewModel) {
         opdsViewModel.messages.collect { msg -> snackbar.showSnackbar(msg) }

@@ -19,8 +19,13 @@ import app.xreader.extensionapi.SourceChapter
 import java.io.File
 import java.net.URI
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 
 /**
  * How extension locators are encoded in existing columns (no schema
@@ -138,7 +143,17 @@ class ExtensionChapterFetcher(
         val base = candidate.locator.takeIf {
             it.startsWith("http://") || it.startsWith("https://")
         } ?: handle.source.baseUrl
-        val imageNames = downloadImages(handle, html, base, store)
+        // v1.2.0 (C2): when the declarative engine produced this
+        // chapter, it still holds the parsed document — the
+        // image pass takes its URLs from there instead of
+        // re-parsing the returned HTML. Other source kinds (and
+        // an evicted cache entry) fall back to the re-parse
+        // inside downloadImages, exactly as before. Conversion
+        // OUTPUT is unchanged either way: the same resolver
+        // below runs over the same fragment.
+        val parsedDoc = (handle.source as? DeclarativeSource)
+            ?.documentOf(candidate.locator)
+        val imageNames = downloadImages(handle, html, base, store, parsedDoc)
         return HtmlToContent.fromFragment(html, base) { src ->
             resolveImageKey(src, base)?.let { key -> imageNames[key] }
         }
@@ -159,32 +174,94 @@ class ExtensionChapterFetcher(
         handle: SourceHandle,
         html: String,
         base: String,
-        store: BookStorage
+        store: BookStorage,
+        parsedDoc: Document? = null
     ): Map<String, String> {
-        val doc = runCatching {
+        val doc = parsedDoc ?: runCatching {
             Jsoup.parseBodyFragment(html, base)
         }.getOrNull() ?: return emptyMap()
         val urls = doc.select("img[src]").mapNotNull { element ->
             element.absUrl("src").takeIf { it.isNotBlank() }
         }.distinct().take(UrlChapterFetcher.MAX_CHAPTER_IMAGES)
         if (urls.isEmpty()) return emptyMap()
+        // v1.2.0 (B1/B2): names are assigned UP FRONT, in page
+        // order (the used-names set is order-sensitive), so the
+        // fetches below can run in parallel without the result
+        // ever depending on completion order. An image whose
+        // file already exists non-empty is NOT fetched again —
+        // it still lands in the returned map, so the content
+        // resolves to it exactly as if it had just downloaded.
         val usedNames = mutableSetOf<String>()
         val contentDir = store.contentDir(bookId)
-        val stored = mutableMapOf<String, String>()
+        val planned = mutableListOf<PlannedImage>()
+        val stored = LinkedHashMap<String, String>()
         for (url in urls) {
             val uri = runCatching { URI(url) }.getOrNull() ?: continue
             if (uri.scheme != "http" && uri.scheme != "https") continue
-            val bytes = when (val result = service.fetchBytes(handle, url)) {
-                is AppResult.Err -> continue
-                is AppResult.Ok -> result.value
-            }
-            if (bytes.isEmpty()) continue
             val name = ZipPaths.assetFileName(uri.path ?: url, usedNames)
             val target = File(contentDir, "img-$name")
-            if (writeBytesAtomic(target, bytes)) stored[url] = name
+            if (target.isFile && target.length() > 0L) {
+                stored[url] = name
+            } else {
+                planned += PlannedImage(url, name, target)
+            }
+        }
+        if (planned.isNotEmpty()) {
+            // Bounded-parallel fetch (B1): at most
+            // MAX_PARALLEL_IMAGE_FETCHES in flight; the byte
+            // limiter inside the client (60 ms) still paces the
+            // starts. Every failure stays per-image.
+            val semaphore = Semaphore(MAX_PARALLEL_IMAGE_FETCHES)
+            val fetched: List<Pair<String, String>?> = coroutineScope {
+                planned.map { image ->
+                    async {
+                        semaphore.withPermit {
+                            val bytes = runCatching {
+                                when (
+                                    val result =
+                                        service.fetchBytes(handle, image.url)
+                                ) {
+                                    is AppResult.Err -> null
+                                    is AppResult.Ok -> result.value
+                                }
+                            }.getOrElse { error ->
+                                if (error is kotlinx.coroutines
+                                        .CancellationException
+                                ) {
+                                    throw error
+                                }
+                                null
+                            }
+                            val okBytes = bytes?.takeIf { it.isNotEmpty() }
+                            if (okBytes == null) {
+                                null
+                            } else if (
+                                writeBytesAtomic(image.target, okBytes)
+                            ) {
+                                image.url to image.name
+                            } else {
+                                null
+                            }
+                        }
+                    }
+                }.map { it.await() }
+            }
+            // Deterministic result: page order, not the order
+            // the parallel fetches happened to finish in.
+            for (entry in fetched) {
+                if (entry != null) stored[entry.first] = entry.second
+            }
         }
         return stored
     }
+
+    /** One image to fetch: its resolved URL, its assigned
+     * stored name and the file it lands in. */
+    private data class PlannedImage(
+        val url: String,
+        val name: String,
+        val target: File
+    )
 
     /** The converter hands over the raw src attribute; resolve it
      * against the chapter URL exactly as the download pass's jsoup
@@ -227,6 +304,14 @@ class ExtensionChapterFetcher(
             )
         }
         return cleaned
+    }
+
+    private companion object {
+        /** v1.2.0 (B1): image fetches in flight at once —
+         * enough to hide transfer latency, few enough to stay
+         * polite to a small site (the byte limiter paces the
+         * starts on top of this). */
+        const val MAX_PARALLEL_IMAGE_FETCHES = 4
     }
 }
 

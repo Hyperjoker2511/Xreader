@@ -62,7 +62,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.animateProgressAsState
@@ -85,6 +87,7 @@ import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.common.StatusPill
 import app.xreader.ui.common.XreaderPrimaryButton
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import java.io.File
 
 /**
@@ -263,9 +266,11 @@ fun LibraryScreen(
                             )
                         ) {
                             val avatar = state.avatarFile
+                            val avatarRequest =
+                                rememberSizedCover(coverFile(avatar), 22, 22)
                             if (avatar != null) {
                                 AsyncImage(
-                                    model = coverFile(avatar),
+                                    model = avatarRequest ?: coverFile(avatar),
                                     contentDescription = "Your profile",
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
@@ -317,10 +322,10 @@ fun LibraryScreen(
                 onClick = onAddBook,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = true,
-            
+
             )
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(8.dp))
 
         // v1.0.4 (D3): the empty decision is the pure predicate in
         // LibraryEmptyState (unit-tested), and when it fires the
@@ -387,7 +392,11 @@ fun LibraryScreen(
         // live in its sheet), then the shelves, then "+ Shelf" and
         // "+ Add a list" trailing. The row scrolls sideways, so
         // nothing can crush here either (D2's property, kept).
-        Spacer(Modifier.height(10.dp))
+        // v1.2.0 (WS4 declutter): the stacked spacers above this
+        // row (10 + 12 + 10) are consolidated — the header block
+        // now flows into the chip row with one rhythm of air
+        // instead of three accumulated gaps.
+        Spacer(Modifier.height(2.dp))
         androidx.compose.foundation.lazy.LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -561,9 +570,11 @@ fun LibraryScreen(
                                     .clickable { onOpenBook(book.id) }
                             ) {
                                 val cover = coverFile(book.coverPath)
+                                val coverRequest =
+                                    rememberSizedCover(cover, 96, 136)
                                 if (cover != null) {
                                     AsyncImage(
-                                        model = cover,
+                                        model = coverRequest ?: cover,
                                         contentDescription = null,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier
@@ -675,8 +686,23 @@ fun LibraryScreen(
                                 coverGlow = coverGlow,
                                 onOpen = { onBookClick(shelfBook) },
                                 onLongPress = { onBookLongPress(shelfBook) },
+                                // v1.2.0 (WS4): the wide 2f slot
+                                // only exists when the row has a
+                                // partner card to balance it — a
+                                // LONE book in a bento row used to
+                                // stretch to half the screen width
+                                // (an oversized cover for a
+                                // one-book library). It now takes
+                                // one normal column, with the row's
+                                // spacer weights holding the rest.
                                 modifier = Modifier.weight(
-                                    if (bigFirst && index == 0) 2f else 1f
+                                    if (bigFirst && index == 0 &&
+                                        rowBooks.size > 1
+                                    ) {
+                                        2f
+                                    } else {
+                                        1f
+                                    }
                                 )
                             )
                         }
@@ -1161,6 +1187,35 @@ internal fun PlaceholderCover(title: String, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * v1.2.0 (WS4, sized Coil requests): a cover [ImageRequest] that
+ * asks Coil to decode near the size the cover is actually drawn
+ * at ([widthDp] × [heightDp] display size, converted with the
+ * device density) instead of decoding the full stored image into
+ * a 44dp row thumbnail. Returns null for a null file so callers
+ * keep their placeholder path. Always called unconditionally at
+ * each site (the request is remembered by file + size), per the
+ * Compose rules for conditional content.
+ */
+@Composable
+private fun rememberSizedCover(file: File?, widthDp: Int, heightDp: Int): ImageRequest? {
+    val context = LocalContext.current
+    return remember(file, widthDp, heightDp) {
+        if (file == null) {
+            null
+        } else {
+            val density = context.resources.displayMetrics.density
+            ImageRequest.Builder(context)
+                .data(file)
+                .size(
+                    (widthDp * density).toInt().coerceAtLeast(1),
+                    (heightDp * density).toInt().coerceAtLeast(1)
+                )
+                .build()
+        }
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ShelfGridCard(
@@ -1189,18 +1244,28 @@ private fun ShelfGridCard(
     // (the spec's "3228 chapters · 12 unread" shape).
     val unread = shelfBook.book.totalChapters -
         (shelfBook.fraction * shelfBook.book.totalChapters).toInt()
-    val metaLine = buildString {
-        append("${shelfBook.book.totalChapters} chapters")
-        if (downloaded > 0) append(" · $downloaded downloaded")
+    // v1.2.0 (WS4): every fragment of the ONE meta line must earn
+    // its place — a 0-chapter fragment said nothing, and when no
+    // fragment survives the line is null (the poster card hides
+    // a null line entirely instead of reserving an empty row).
+    val metaLine = listOfNotNull(
+        if (shelfBook.book.totalChapters > 0) {
+            "${shelfBook.book.totalChapters} chapters"
+        } else {
+            null
+        },
+        if (downloaded > 0) "$downloaded downloaded" else null,
         if (shelfBook.fraction > 0f && shelfBook.fraction < 1f && unread > 0) {
-            append(" · $unread unread")
+            "$unread unread"
+        } else {
+            null
         }
-    }
+    ).joinToString(" · ")
     app.xreader.ui.common.BookPosterCard(
         title = shelfBook.book.title,
         author = shelfBook.book.author.takeIf { it.isNotBlank() },
         coverModel = cover?.takeIf { it.exists() },
-        metaLine = metaLine,
+        metaLine = metaLine.ifBlank { null },
         onClick = onOpen,
         onLongClick = onLongPress,
         progressFraction = if (showProgress) shelfBook.fraction else null,
@@ -1236,36 +1301,51 @@ private fun ContinueReadingHero(
     // frozen book page's HALO recipe — a 320dp primary-16% radial at
     // top-centre + a 240dp tertiary-13% radial, role colours only.
     // The GlassCard and the whole-card Continue tap are unchanged.
+    // v1.2.0 (WS4, the wasted-middle fix): the halo used to be two
+    // layout Boxes (320dp / 240dp) inside this wrap Box. A Box
+    // sizes to its LARGEST child and offsets do not shrink the
+    // measured size, so the wrap measured 320dp tall while the
+    // card is ~160dp — leaving a ~160dp band of dead space under
+    // the hero, between it and Recent books, in every short
+    // library. The halo is now drawn with drawBehind (identical
+    // gradients, radii and top-centre placement), which never
+    // affects layout: the hero is exactly as tall as its card,
+    // and the sections below sit directly under it.
     val scheme = MaterialTheme.colorScheme
-    Box(Modifier.fillMaxWidth()) {
-        Box(
-            Modifier
-                .size(320.dp)
-                .align(Alignment.TopCenter)
-                .offset(y = (-140).dp)
-                .background(
-                    androidx.compose.ui.graphics.Brush.radialGradient(
+    val heroCoverRequest = rememberSizedCover(coverFile(hero.book.coverPath), 60, 88)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val topCenter = Offset(size.width / 2f, 0f)
+                val primaryRadius = 160.dp.toPx()
+                drawCircle(
+                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
                         listOf(
                             scheme.primary.copy(alpha = 0.16f),
                             androidx.compose.ui.graphics.Color.Transparent
-                        )
-                    )
+                        ),
+                        center = topCenter,
+                        radius = primaryRadius
+                    ),
+                    center = topCenter,
+                    radius = primaryRadius
                 )
-        )
-        Box(
-            Modifier
-                .size(240.dp)
-                .align(Alignment.TopCenter)
-                .offset(y = (-80).dp)
-                .background(
-                    androidx.compose.ui.graphics.Brush.radialGradient(
+                val tertiaryRadius = 120.dp.toPx()
+                drawCircle(
+                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
                         listOf(
                             scheme.tertiary.copy(alpha = 0.13f),
                             androidx.compose.ui.graphics.Color.Transparent
-                        )
-                    )
+                        ),
+                        center = topCenter,
+                        radius = tertiaryRadius
+                    ),
+                    center = topCenter,
+                    radius = tertiaryRadius
                 )
-        )
+            }
+    ) {
         GlassCard(
             modifier = Modifier.fillMaxWidth(),
             onClick = onContinue,
@@ -1289,7 +1369,7 @@ private fun ContinueReadingHero(
                         )
                 )
                 AsyncImage(
-                    model = coverFile(hero.book.coverPath),
+                    model = heroCoverRequest ?: coverFile(hero.book.coverPath),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -1303,10 +1383,20 @@ private fun ContinueReadingHero(
                     .padding(start = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                StatusPill(
-                    text = hero.book.localFormat.name,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                // v1.2.0 (WS4): the format chip only renders when
+                // the format is actually known — an UNKNOWN book
+                // (every source book, most imports before sniffing)
+                // used to wear a chip that literally read
+                // "UNKNOWN", saying nothing in the loudest place
+                // on the screen.
+                if (hero.book.localFormat !=
+                    app.xreader.data.db.BookFormat.UNKNOWN
+                ) {
+                    StatusPill(
+                        text = hero.book.localFormat.name,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Text(hero.book.title, style = MaterialTheme.typography.titleLarge, maxLines = 1)
                 if (hero.book.author.isNotBlank()) {
                     Text(
@@ -1318,8 +1408,19 @@ private fun ContinueReadingHero(
                 }
                 ProgressPillBar(fraction = progress, modifier = Modifier.fillMaxWidth())
                 Text(
-                    "${(progress * 100).toInt()}% • ${hero.book.totalChapters} chapters" +
-                        timeLeftSuffix(hero, wpm),
+                    // A 0-chapter count says nothing (a source
+                    // book whose list hasn't loaded) — the percent
+                    // and the time-left suffix carry the line.
+                    listOfNotNull(
+                        "${(progress * 100).toInt()}%",
+                        if (hero.book.totalChapters > 0) {
+                            "${hero.book.totalChapters} chapters"
+                        } else {
+                            null
+                        },
+                        timeLeftSuffix(hero, wpm).removePrefix(" • ")
+                            .takeIf { it.isNotBlank() }
+                    ).joinToString(" • "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1365,6 +1466,12 @@ private fun ShelfRow(
 ) {
     val progress = animateProgressAsState(shelfBook.fraction, label = "shelfProgress")
     val cover = coverFile(shelfBook.book.coverPath)
+    // v1.2.0 (WS4): decode the row cover near its drawn size.
+    val coverRequest = rememberSizedCover(
+        cover?.takeIf { it.exists() },
+        if (compact) 32 else 44,
+        if (compact) 45 else 62
+    )
     val coverModifier = (if (compact) {
         Modifier.size(width = 32.dp, height = 45.dp)
     } else {
@@ -1379,7 +1486,7 @@ private fun ShelfRow(
         ) {
             if (cover != null && cover.exists()) {
                 AsyncImage(
-                    model = cover,
+                    model = coverRequest ?: cover,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = coverModifier
@@ -1398,22 +1505,33 @@ private fun ShelfRow(
                         (if (favourite) " ♥" else ""),
                     style = MaterialTheme.typography.titleMedium, maxLines = 1
                 )
-                Text(
-                    listOfNotNull(
-                        shelfBook.book.author.takeIf { it.isNotBlank() },
-                        "${shelfBook.book.totalChapters} chapters",
-                        if (downloaded > 0) {
-                            "$downloaded downloaded" +
-                                if (unreadDownloaded > 0) " ($unreadDownloaded unread)" else ""
-                        } else {
-                            null
-                        },
-                        timeLeftSuffix(shelfBook, wpm).removePrefix(" • ")
-                            .takeIf { it.isNotBlank() }
-                    ).joinToString(" • "),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                // v1.2.0 (WS4): the meta line renders only when
+                // at least one fragment has something to say —
+                // a "0 chapters" fragment (and an otherwise empty
+                // line reserving a row of height) is gone.
+                val rowMeta = listOfNotNull(
+                    shelfBook.book.author.takeIf { it.isNotBlank() },
+                    if (shelfBook.book.totalChapters > 0) {
+                        "${shelfBook.book.totalChapters} chapters"
+                    } else {
+                        null
+                    },
+                    if (downloaded > 0) {
+                        "$downloaded downloaded" +
+                            if (unreadDownloaded > 0) " ($unreadDownloaded unread)" else ""
+                    } else {
+                        null
+                    },
+                    timeLeftSuffix(shelfBook, wpm).removePrefix(" • ")
+                        .takeIf { it.isNotBlank() }
+                ).joinToString(" • ")
+                if (rowMeta.isNotBlank()) {
+                    Text(
+                        rowMeta,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 if (shelfBook.fraction > 0f) {
                     Spacer(Modifier.height(6.dp))
                     ProgressPillBar(
@@ -1477,7 +1595,19 @@ private fun ImportCandidateCard(
                 )
             }
             Text(
-                "${candidate.format.name} · ${candidate.sizeBytes / 1024} KB",
+                // Same UNKNOWN rule as the hero chip: an
+                // unrecognised format (a Failed candidate) shows
+                // its size only, never the word "UNKNOWN".
+                listOfNotNull(
+                    if (candidate.format !=
+                        app.xreader.data.db.BookFormat.UNKNOWN
+                    ) {
+                        candidate.format.name
+                    } else {
+                        null
+                    },
+                    "${candidate.sizeBytes / 1024} KB"
+                ).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

@@ -42,11 +42,47 @@ class DeclarativeSource(
     override val lang: String get() = config.lang
     override val baseUrl: String get() = config.baseUrl
 
-    /** Normalised content of the most recent chapterContent() call,
-     * keyed by chapter id — the host's fetch path reads this. */
-    private val contentCache = LinkedHashMap<String, ChapterContent>()
+    /** One cached chapter: its normalised content AND the
+     * parsed document it was converted from (v1.2.0, C2 — the
+     * host's image pass reads image URLs from the document
+     * instead of re-parsing the returned HTML). */
+    private class CachedChapter(
+        val content: ChapterContent,
+        val document: Document
+    )
 
-    fun contentOf(chapterId: String): ChapterContent? = contentCache[chapterId]
+    /** Normalised content of recent chapterContent() calls,
+     * keyed by chapter id — the host's fetch path reads this.
+     * v1.2.0 (audit #4): BOUNDED access-ordered LRU — the old
+     * plain map held every chapter read for the process
+     * lifetime (~100 chapters ≈ tens of MB that could never be
+     * reclaimed, on a 2 GB tablet the app elsewhere caps at
+     * 96 MB). A miss costs nothing but a re-read: callers
+     * already treat null as "convert it yourself". */
+    private val contentCache =
+        object : LinkedHashMap<String, CachedChapter>(16, 0.75f, true) {
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<String, CachedChapter>
+            ): Boolean = size > MAX_CONTENT_CACHE_ENTRIES
+        }
+
+    fun contentOf(chapterId: String): ChapterContent? =
+        synchronized(contentCache) { contentCache[chapterId]?.content }
+
+    /** v1.2.0 (C2): the parsed document of a cached chapter, or
+     * null when the chapter isn't cached (evicted / never read
+     * through this instance) — callers fall back to parsing the
+     * returned HTML themselves, exactly as before. */
+    fun documentOf(chapterId: String): Document? =
+        synchronized(contentCache) { contentCache[chapterId]?.document }
+
+    private fun cacheChapter(chapterId: String, document: Document) {
+        val cached = CachedChapter(
+            content = HtmlToContent.fromDocument(document, chapterId),
+            document = document
+        )
+        synchronized(contentCache) { contentCache[chapterId] = cached }
+    }
 
     // ── listings ────────────────────────────────────────────────────
 
@@ -237,11 +273,30 @@ class DeclarativeSource(
 
     /** Details + chapters from ONE book-page fetch — book pages
      * carry both (plus the F1 pagination walk when declared). */
-    fun detailsAndChapters(book: SourceBook): Pair<SourceBook, List<SourceChapter>> {
+    fun detailsAndChapters(book: SourceBook): Pair<SourceBook, List<SourceChapter>> =
+        detailsAndChapters(book, prefetched = null)
+
+    /** v1.2.0 (A2): the same one-fetch read, handed a document
+     * the CALLER just fetched for this exact book page (a Live
+     * Source's derivation fetch) so the page isn't fetched —
+     * on a rendered site, RENDERED — twice for one open. The
+     * prefetched document is used ONLY when its own URL is the
+     * book page's URL; anything else is ignored and the page is
+     * fetched normally. No other behaviour changes. */
+    fun detailsAndChapters(
+        book: SourceBook,
+        prefetched: Document?
+    ): Pair<SourceBook, List<SourceChapter>> {
         val url = bookPageUrl(book)
-        val doc = fetchDoc(url)
+        val doc = prefetched?.takeIf { documentUrl(it) == url }
+            ?: fetchDoc(url)
         return readDetails(book, doc, url) to parseAllChapters(doc, url)
     }
+
+    /** A document's own URL (its parse-time base), for the
+     * prefetched-document identity checks. */
+    private fun documentUrl(doc: Document): String =
+        doc.location().ifBlank { doc.baseUri() }
 
     private fun readDetails(
         book: SourceBook,
@@ -622,10 +677,15 @@ class DeclarativeSource(
         parsedRows: List<SourceChapter>
     ): List<SourceChapter>? {
         val spec = config.details.chapters
-        if (spec.urlPattern == null || spec.totalCountPattern == null) {
+        if (spec.urlPattern == null) {
             return null
         }
+        // WS3 (class D): the total comes from the stated-total
+        // text pattern when the spec declares one (the chikari
+        // lane), or from the learner's numeric total (a strict-
+        // pattern window completed from the page's own links).
         val total = spec.statedTotalIn(doc.body()?.text().orEmpty())
+            ?: spec.totalCount?.takeIf { it > 0 }
             ?: return null
         if (total <= parsedRows.size || total > MAX_PATTERN_CHAPTERS) {
             return null
@@ -657,6 +717,14 @@ class DeclarativeSource(
         return elements.mapIndexedNotNull { index, el ->
             val link = readSpec(el, spec.link)?.trim().orEmpty()
             if (link.isEmpty()) return@mapIndexedNotNull null
+            // WS3 (class G): chapter rows admit only the site's
+            // own host — a foreign-host ad row inside the list
+            // markup must never become a chapter of this book
+            // (it became "chapter 1" on one batch site and the
+            // whitelist then killed the whole probe).
+            if (!LinkInference.isSameSiteHost(pageUrl, absolute(link, pageUrl))) {
+                return@mapIndexedNotNull null
+            }
             val chapterName = readSpec(el, spec.name)?.trim()
                 ?.ifEmpty { null } ?: "Chapter ${index + 1}"
             SourceChapter(
@@ -865,7 +933,34 @@ class DeclarativeSource(
 
     // ── chapter content ─────────────────────────────────────────────
 
-    override fun chapterContent(chapter: SourceChapter): SourceChapterContent {
+    override fun chapterContent(chapter: SourceChapter): SourceChapterContent =
+        chapterContent(chapter, prefetchedFirstPage = null)
+
+    /** v1.2.0 (A2): the chapter read, handed the document the
+     * CALLER just fetched for this chapter's FIRST page (a Live
+     * Source's chapter-shape derivation fetch) so the page
+     * isn't fetched — on a rendered site, RENDERED — twice for
+     * one open. Only the first page can come from the caller:
+     * the nextPage chain fetches normally. The document is
+     * used only when its own URL matches the page it stands in
+     * for. The AJAX text mode never fetches the chapter page,
+     * so it ignores the hint. No other behaviour changes.
+     *
+     * v1.2.0 (C1) note: the nextPage walk below stays
+     * SEQUENTIAL by design here — a page's next URL is only
+     * known after that page parses, the per-page work between
+     * fetches is a clone/strip of the content element (the
+     * expensive conversion runs ONCE, over the combined
+     * fragment, after the walk), and this read is synchronous
+     * host code whose fetch seam (HostHttp) is itself a
+     * blocking runBlocking per call, so an overlapped fetch
+     * would need a second thread rendezvousing with the
+     * single-WebView render mutex and the shared rate limiter
+     * for a gain measured in the clone/strip time only. */
+    fun chapterContent(
+        chapter: SourceChapter,
+        prefetchedFirstPage: Document?
+    ): SourceChapterContent {
         val spec = config.chapter
         // v1.0.5 Stage 1.5: AJAX text mode — when the config
         // declares it AND this chapter's URL yields a numeric id,
@@ -883,7 +978,13 @@ class DeclarativeSource(
         var pages = 0
         while (url != null && pages < MAX_CHAPTER_PAGES) {
             pages++
-            val doc = fetchDoc(url)
+            val pageUrl: String = url!!
+            val doc = if (pages == 1) {
+                prefetchedFirstPage?.takeIf { documentUrl(it) == pageUrl }
+                    ?: fetchDoc(pageUrl)
+            } else {
+                fetchDoc(pageUrl)
+            }
             if (title == null) {
                 title = spec.title?.let { readDocSpec(doc, it) }?.ifBlank { null }
             }
@@ -904,14 +1005,26 @@ class DeclarativeSource(
                 } else {
                     nextEl.attr("href").ifBlank { nextEl.selectFirst("a")?.attr("href") }
                 }
-                href?.takeIf { it.isNotBlank() }?.let { absolute(it, url!!) }
+                val target = href?.takeIf { it.isNotBlank() }
+                    ?.let { absolute(it, url!!) } ?: return@let null
+                // WS3 (class F): the chaining guard — a stored
+                // next-page rule that actually points at the
+                // NEXT CHAPTER stops the chain at this chapter's
+                // end instead of gluing the next chapter's text
+                // onto this one. Same-chapter pagination (same
+                // path / sub-path) chains exactly as before.
+                if (LinkInference.isNextChapterHref(url!!, target, nextEl.text())) {
+                    null
+                } else {
+                    target
+                }
             }
         }
         val combined = fragments.joinToString("\n")
         // Convert once, on the concatenated fragment, so multi-page
         // chapters read as one continuous text.
         val doc = Jsoup.parseBodyFragment(combined, chapter.id)
-        contentCache[chapter.id] = HtmlToContent.fromDocument(doc, chapter.id)
+        cacheChapter(chapter.id, doc)
         return SourceChapterContent(html = combined, title = title)
     }
 
@@ -963,7 +1076,7 @@ class DeclarativeSource(
         if (clone.text().isBlank()) throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
         val html = clone.html()
         val doc = Jsoup.parseBodyFragment(html, chapter.id)
-        contentCache[chapter.id] = HtmlToContent.fromDocument(doc, chapter.id)
+        cacheChapter(chapter.id, doc)
         return SourceChapterContent(html = html, title = title)
     }
 
@@ -1119,6 +1232,13 @@ class DeclarativeSource(
     }
 
     companion object {
+        /** v1.2.0 (audit #4): the content/document cache cap —
+         * enough for a reading session's working set (current +
+         * neighbours + recent history), small enough that the
+         * cache is tens of chapters' DOMs at most, never the
+         * whole book. */
+        const val MAX_CONTENT_CACHE_ENTRIES = 24
+
         /** Multi-page chapter chaining cap (§5: no runaway pagination). */
         const val MAX_CHAPTER_PAGES = 10
 

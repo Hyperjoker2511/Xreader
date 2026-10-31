@@ -27,6 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -44,6 +46,7 @@ import app.xreader.ui.common.ScreenHeader
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.common.rememberHoverEmptyState
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import java.io.File
 import java.time.LocalDate
 import java.time.ZoneId
@@ -313,6 +316,8 @@ fun HistoryScreen(
                     }
                     items(group.entries, key = { "hist-${it.bookId}" }) { entry ->
                         val compact = group.label == "Earlier"
+                        val coverRequest =
+                            rememberSizedCover(coverFile(entry.coverPath), 40, 58)
                         GlassCard(
                             onClick = {
                                 entry.bookId.toLongOrNull()?.let {
@@ -327,7 +332,7 @@ fun HistoryScreen(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 AsyncImage(
-                                    model = coverFile(entry.coverPath),
+                                    model = coverRequest ?: coverFile(entry.coverPath),
                                     contentDescription = null,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
@@ -338,24 +343,23 @@ fun HistoryScreen(
                                     Modifier.weight(1f),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Text(
-                                            entry.title,
-                                            style = MaterialTheme.typography.titleSmall,
-                                            maxLines = 1,
-                                            modifier = Modifier.weight(1f, fill = false)
-                                        )
-                                        NocturneChip(
-                                            label = "Ch. ${entry.chapterIndex + 1}",
-                                            modifier = Modifier,
-                                            selected = false,
-                                            dotColor = null,
-                                            onClick = null
-                                        )
-                                    }
+                                    // v1.2.0 (WS4 declutter): the
+                                    // chapter number used to appear
+                                    // up to three times in this card —
+                                    // a "Ch. N" chip beside the
+                                    // title, the chapter-title line
+                                    // (whose fallback IS "Chapter
+                                    // N"), and the Continue pill.
+                                    // The chip is gone; the title
+                                    // stands alone, the chapter
+                                    // line and the pill keep the
+                                    // number where it is used.
+                                    Text(
+                                        entry.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                     val chapterTitleNow = entry.chapterTitle
                                     Text(
                                         if (chapterTitleNow.isNullOrBlank()) {
@@ -373,10 +377,18 @@ fun HistoryScreen(
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                    ProgressPillBar(
-                                        fraction = entry.fraction.coerceIn(0f, 1f),
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
+                                    // An untouched book's empty
+                                    // track was pure noise under a
+                                    // line that already says "0%
+                                    // through the book" — the bar
+                                    // renders only once there is
+                                    // progress to show.
+                                    if (entry.fraction > 0f) {
+                                        ProgressPillBar(
+                                            fraction = entry.fraction.coerceIn(0f, 1f),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
                                 }
                             }
                             Spacer(Modifier.height(8.dp))
@@ -439,6 +451,30 @@ fun HistoryScreen(
                 TextButton(onClick = { confirmClear = false }) { Text("Keep it") }
             }
         )
+    }
+}
+
+/**
+ * v1.2.0 (WS4, sized Coil requests): decode a history cover near
+ * its drawn size (40×58dp here) instead of the full stored image.
+ * Same pattern as the Library's helper.
+ */
+@Composable
+private fun rememberSizedCover(file: File?, widthDp: Int, heightDp: Int): ImageRequest? {
+    val context = LocalContext.current
+    return remember(file, widthDp, heightDp) {
+        if (file == null) {
+            null
+        } else {
+            val density = context.resources.displayMetrics.density
+            ImageRequest.Builder(context)
+                .data(file)
+                .size(
+                    (widthDp * density).toInt().coerceAtLeast(1),
+                    (heightDp * density).toInt().coerceAtLeast(1)
+                )
+                .build()
+        }
     }
 }
 

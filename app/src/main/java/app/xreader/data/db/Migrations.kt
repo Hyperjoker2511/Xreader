@@ -84,6 +84,53 @@ val MIGRATION_4_5: Migration = object : Migration(4, 5) {
     }
 }
 
+/**
+ * 5 → 6 (v1.2.0, audit D8 + D15): the index bundle. No table is
+ * created, dropped or rewritten — only indices are added, matching
+ * the @Entity indices declarations exactly (Room validates the
+ * post-migration schema against them):
+ *  - books: (extensionId, remoteId) for the catalogue-tap lookup,
+ *    (mergedIntoId, lastOpenedAt) for the shelf filter/sort,
+ *    (title) for migration matching, (finished) for the EXP
+ *    engine's finished-book scans;
+ *  - chapters: (downloadState, bookId, index) for the
+ *    cross-library downloaded-chapters search;
+ *  - reading_progress: (updatedAt) for observeRecent's sort.
+ * (The remaining D15 candidates — reading_sessions, download_queue,
+ * vocab_words — live in entity files outside this change's scope;
+ * their indices are a follow-up, not silently half-done here:
+ * an index created by SQL but absent from the entity declaration
+ * would fail Room's schema validation.)
+ */
+val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_books_extensionId_remoteId` " +
+                "ON `books` (`extensionId`, `remoteId`)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_books_mergedIntoId_lastOpenedAt` " +
+                "ON `books` (`mergedIntoId`, `lastOpenedAt`)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_books_title` " +
+                "ON `books` (`title`)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_books_finished` " +
+                "ON `books` (`finished`)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_chapters_downloadState_bookId_index` " +
+                "ON `chapters` (`downloadState`, `bookId`, `index`)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_reading_progress_updatedAt` " +
+                "ON `reading_progress` (`updatedAt`)"
+        )
+    }
+}
+
 val MIGRATION_2_3: Migration = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE `books` ADD COLUMN `mergedIntoId` INTEGER")

@@ -8,11 +8,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * R09 launcher icon, pinned: the locked two-colour spec (AMOLED
- * black + one flat blue-violet), the open-book silhouette, and the
- * geometry rule from the review — the glyph's full bounding box,
- * control points included (a conservative superset of the curve),
- * fits inside the 66 dp safe circle of the 108 canvas.
+ * Launcher icon, pinned (v1.2.0, user pick "D" 2026-10-31,
+ * superseding the R09 open-book glyph): the two-colour spec
+ * (AMOLED black + one flat white), the bold-X silhouette traced
+ * from the approved art, and the geometry rule from the review —
+ * the glyph's full bounding box, control points included (a
+ * conservative superset of the curve), fits inside the 66 dp
+ * safe circle of the 108 canvas.
  */
 class IconGeometryTest {
 
@@ -41,10 +43,10 @@ class IconGeometryTest {
     }
 
     @Test
-    fun `glyph is one flat blue-violet on pure black`() {
+    fun `glyph is one flat white on pure black`() {
         val foreground = resText("drawable/ic_launcher_foreground.xml")
         val background = resText("drawable/ic_launcher_background.xml")
-        assertEquals("#8383E8", fillColor(foreground))
+        assertEquals("#FFFFFF", fillColor(foreground))
         assertEquals("#000000", fillColor(background))
         // No gradients or second colours anywhere in the layers.
         for (xml in listOf(foreground, background)) {

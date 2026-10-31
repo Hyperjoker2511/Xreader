@@ -20,6 +20,7 @@ import java.io.FileOutputStream
 import java.net.URI
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
@@ -106,18 +107,62 @@ class UrlChapterFetcher(
             element.absUrl("src").takeIf { it.isNotBlank() }
         }.distinct().take(MAX_CHAPTER_IMAGES)
         if (urls.isEmpty()) return emptyMap()
-        val usedNames = mutableSetOf<String>()
         val contentDir = store.contentDir(candidate.bookId)
-        val stored = mutableMapOf<String, String>()
-        for (url in urls) {
-            val uri = runCatching { URI(url) }.getOrNull() ?: continue
-            if (uri.scheme != "http" && uri.scheme != "https") continue
-            val bytes = fetchImageBytes(url) ?: continue
+        // v1.2.0 (mirrors the extension resolver's image fix):
+        // stored names are assigned FIRST, in page order, on this
+        // thread — assetFileName dedupes against usedNames, so
+        // every image's name is fixed before any fetch starts and
+        // cannot depend on the order parallel fetches finish in.
+        val usedNames = mutableSetOf<String>()
+        data class ImageJob(val url: String, val name: String, val target: File)
+        val jobs = urls.mapNotNull { url ->
+            val uri = runCatching { URI(url) }.getOrNull() ?: return@mapNotNull null
+            if (uri.scheme != "http" && uri.scheme != "https") return@mapNotNull null
             val name = app.xreader.data.parse.ZipPaths.assetFileName(
                 uri.path ?: url, usedNames
             )
-            val target = File(contentDir, "img-$name")
-            if (writeBytesAtomic(target, bytes)) stored[url] = name
+            ImageJob(url = url, name = name, target = File(contentDir, "img-$name"))
+        }
+        if (jobs.isEmpty()) return emptyMap()
+        // (a) An image already on disk (a re-read / resumed
+        // chapter) is kept and never re-fetched. (b) The rest
+        // fetch bounded-parallel — 4 in flight, the same shape as
+        // the extension path — not one sequential round-trip per
+        // image. (c) Every failure is per-image: skip that image,
+        // keep the others and the text. There is no lighter local
+        // fetch path in this class (the extension fetcher's
+        // session bytes have no equivalent here), so fetches keep
+        // going through the same transport as the chapter text.
+        val gate = Semaphore(MAX_PARALLEL_IMAGES)
+        val fetched: List<Pair<String, String>?> = coroutineScope {
+            jobs.map { job ->
+                async {
+                    if (job.target.isFile && job.target.length() > 0) {
+                        job.url to job.name
+                    } else {
+                        gate.withPermit {
+                            try {
+                                val bytes = fetchImageBytes(job.url)
+                                if (bytes != null && writeBytesAtomic(job.target, bytes)) {
+                                    job.url to job.name
+                                } else {
+                                    null
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
+                    }
+                }
+            }.awaitAll()
+        }
+        // (d) Results merge back in page order, not completion
+        // order, so the map the converter reads is deterministic.
+        val stored = LinkedHashMap<String, String>()
+        for (result in fetched) {
+            if (result != null) stored[result.first] = result.second
         }
         return stored
     }
@@ -165,6 +210,50 @@ class UrlChapterFetcher(
         /** A chapter page's images, capped — a gallery page must
          * not turn one chapter fetch into an unbounded download. */
         const val MAX_CHAPTER_IMAGES = 50
+
+        /** v1.2.0: image fetches in flight at once within one
+         * chapter (bounded-parallel, mirrors the extension path). */
+        const val MAX_PARALLEL_IMAGES = 4
+    }
+}
+
+/**
+ * v1.2.0 (audit finding 1 / D17): decides when a streaming
+ * download's progress is worth a queue-row touch. Raw read ticks
+ * arrive per buffer (tens of thousands per file); a queue-row
+ * write re-emits the whole-queue Flow into the Library and
+ * Downloads combines, so progress is persisted only on a
+ * whole-percent change or after ~500 ms, whichever comes first —
+ * and ALWAYS at 100%, so the terminal state the UI reads is
+ * exact. Pure and clock-injected: unit-tested without delays.
+ */
+class DownloadProgressCoalescer(
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val minIntervalMs: Long = 500L
+) {
+    private var lastPercent = -1
+    private var lastPersistAtMs: Long? = null
+
+    /** True (once) per persist-worthy progress point. */
+    fun shouldPersist(downloaded: Long, total: Long): Boolean {
+        val now = clock()
+        if (total > 0 && downloaded >= total) {
+            lastPercent = 100
+            lastPersistAtMs = now
+            return true
+        }
+        val percent = if (total > 0) {
+            ((downloaded.coerceAtLeast(0) * 100) / total).toInt()
+        } else {
+            -1
+        }
+        val percentChanged = percent >= 0 && percent != lastPercent
+        val lastAt = lastPersistAtMs
+        val intervalElapsed = lastAt == null || now - lastAt >= minIntervalMs
+        if (!percentChanged && !intervalElapsed) return false
+        if (percent >= 0) lastPercent = percent
+        lastPersistAtMs = now
+        return true
     }
 }
 
@@ -249,6 +338,26 @@ class DownloadEngine(
      * gated item must never spin the drain loop (it waits for the
      * next enqueue / network change instead). */
     suspend fun runQueue() {
+        // v1.2.0 (audit D5): prune DONE rows at drain START. The
+        // queue was append-only — one permanent DONE row per
+        // chapter ever downloaded, re-loaded whole on every
+        // emission. Start-of-drain is the safer point: rows this
+        // drain completes stay visible on the Downloads screen
+        // (its Finished grouping reads them) until the NEXT drain
+        // begins, and a drain that never runs again leaves at
+        // most one drain's worth of DONE rows behind. FAILED /
+        // PAUSED / CANCELLED rows are never pruned here — they
+        // carry the retry affordance and the error text.
+        try {
+            queueDao.observeAll().first()
+                .filter { it.state == QueueState.DONE }
+                .forEach { queueDao.delete(it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Pruning is housekeeping: a failure here must never
+            // stop the drain the user is waiting for.
+        }
         queueDao.resetRunningToQueued()
         val global = Semaphore(maxConcurrent)
         val deferred = java.util.Collections.synchronizedSet(mutableSetOf<Long>())
@@ -373,6 +482,38 @@ class DownloadEngine(
             return markFailed(item, AppError.BadFile("no source is recorded for this chapter"))
         }
 
+        // v1.2.0 (audit D14): chapter downloads DO fan out (the
+        // runQueue batch runs items concurrently under the global
+        // semaphore), so the per-host cap applies here too — the
+        // host comes from the first candidate's locator, the host
+        // the attempts below will actually hit first. A locator
+        // that isn't a URL (an extension source id) has no host to
+        // cap by; the global cap still applies to those.
+        val host = hostOf(urlPart(candidates.first().candidate.locator))
+        if (host != null) {
+            hostSemaphore(host).withPermit {
+                runChapterAttempts(item, chapterId, candidates)
+            }
+        } else {
+            runChapterAttempts(item, chapterId, candidates)
+        }
+    }
+
+    /** Alternate-source locators may carry a "Label|" prefix
+     * (see FailoverOrder); the URL is the part after it. A locator
+     * without a prefix passes through unchanged. */
+    private fun urlPart(locator: String): String =
+        if (locator.contains("://")) {
+            locator.substringAfterLast('|')
+        } else {
+            locator
+        }
+
+    private suspend fun runChapterAttempts(
+        item: DownloadQueueItem,
+        chapterId: Long,
+        candidates: List<ResolvedSource>
+    ) {
         var current = item
         var lastError: AppError = AppError.ProviderDown("server")
         var attempt = current.attempts
@@ -391,8 +532,16 @@ class DownloadEngine(
             for (source in candidates) {
                 if (attempt >= MAX_ATTEMPTS) break
                 attempt++
+                // v1.2.0 (audit finding 1 / D17): the attempt
+                // counter is NOT written per attempt any more —
+                // each write re-emits the whole-queue Flow into
+                // every Downloads/Library combine. The count is
+                // carried in memory and persisted at round
+                // boundaries (below, before the backoff delay)
+                // and in every terminal write (DONE / FAILED),
+                // so the final row is exact while a multi-
+                // candidate round costs one write, not N.
                 current = current.copy(attempts = attempt, updatedAt = clock())
-                queueDao.update(current)
                 when (val outcome = source.fetcher.fetch(source.candidate)) {
                     is FetchOutcome.Success -> {
                         // A pause landing mid-flight wins over this
@@ -444,7 +593,20 @@ class DownloadEngine(
                 }
             }
             if (roundFailedPermanently && candidates.size == 1) break
-            if (attempt < MAX_ATTEMPTS) delayer(backoffMillis(attempt, retryAfter))
+            if (attempt < MAX_ATTEMPTS) {
+                // Round-boundary persist (see above): a process
+                // death during the backoff loses at most the
+                // in-flight round's count, never the download.
+                // Guarded by a fresh row read: a pause/cancel that
+                // landed mid-round must NOT be overwritten by this
+                // stale RUNNING copy — when the row is no longer
+                // RUNNING we skip the write and the delay, and the
+                // loop-top check on the next pass handles it.
+                if (queueDao.getById(current.id)?.state == QueueState.RUNNING) {
+                    queueDao.update(current)
+                    delayer(backoffMillis(attempt, retryAfter))
+                }
+            }
         }
         chapterDao.setDownloadState(chapterId, DownloadState.FAILED)
         markFailed(current, lastError)
@@ -460,8 +622,10 @@ class DownloadEngine(
             }
             .take(PREFETCH_COUNT)
         val now = clock()
-        for (chapter in wanted) {
-            queueDao.insert(
+        // v1.2.0 (audit D5/D6): one batch insert, not a per-chapter
+        // loop — same shape as DownloadController.enqueueBook.
+        if (wanted.isNotEmpty()) {
+            queueDao.insertAll(wanted.map { chapter ->
                 DownloadQueueItem(
                     bookId = item.bookId,
                     chapterId = chapter.id,
@@ -469,7 +633,7 @@ class DownloadEngine(
                     enqueuedAt = now,
                     updatedAt = now
                 )
-            )
+            })
         }
         queueDao.update(item.copy(state = QueueState.DONE, updatedAt = clock()))
     }
@@ -486,11 +650,24 @@ class DownloadEngine(
         var current = item
         var attempt = current.attempts
         var lastError: AppError = AppError.ProviderDown("server")
+        // v1.2.0 (audit finding 1 / D17): same coalescing as the
+        // chapter path — the attempt counter is carried in memory
+        // and persisted ONCE at each backoff boundary (and in the
+        // terminal writes), not per attempt.
+        val persistAndBackoff: suspend (Long?) -> Unit = { retryAfter ->
+            // Same pause guard as the chapter path: only persist
+            // while the row is still RUNNING in the database, so
+            // a mid-flight pause/cancel is never overwritten by
+            // this stale copy; the loop-top check then exits.
+            if (queueDao.getById(current.id)?.state == QueueState.RUNNING) {
+                queueDao.update(current)
+                delayer(backoffMillis(attempt, retryAfter))
+            }
+        }
         while (attempt < MAX_ATTEMPTS) {
             if (queueDao.getById(current.id)?.state != QueueState.RUNNING) return
             attempt++
             current = current.copy(attempts = attempt, updatedAt = clock())
-            queueDao.update(current)
 
             val resumeFrom = if (dest.isFile) dest.length() else 0L
             val response = when (val result = transport.execute(
@@ -513,7 +690,7 @@ class DownloadEngine(
                 is AppResult.Ok -> result.value
             }
             if (response == null) {
-                if (attempt < MAX_ATTEMPTS) delayer(backoffMillis(attempt))
+                if (attempt < MAX_ATTEMPTS) persistAndBackoff(null)
                 continue
             }
             if (response.code !in 200..299) {
@@ -525,7 +702,7 @@ class DownloadEngine(
                 }
                 val retryAfter = response.retryAfterSeconds
                 response.body?.close()
-                if (attempt < MAX_ATTEMPTS) delayer(backoffMillis(attempt, retryAfter))
+                if (attempt < MAX_ATTEMPTS) persistAndBackoff(retryAfter)
                 continue
             }
             // Stream the body to disk, honouring pause between chunks.
@@ -546,14 +723,20 @@ class DownloadEngine(
                     } else {
                         body.use { input ->
                             val buffer = ByteArray(64 * 1024)
+                            // v1.2.0 (audit finding 1): the
+                            // pause-check queue-row poll is
+                            // progress-coalesced — whole-percent
+                            // steps or ~500 ms, and always at
+                            // 100% (a pause landing at the last
+                            // bytes still wins) — instead of a
+                            // fixed per-512 KB poll whose cadence
+                            // ignored both file size and time.
+                            val coalescer = DownloadProgressCoalescer(clock)
                             var n = input.read(buffer)
-                            var sinceCheck = 0L
                             while (n >= 0) {
                                 out.write(buffer, 0, n)
                                 downloaded += n
-                                sinceCheck += n
-                                if (sinceCheck >= 512 * 1024) {
-                                    sinceCheck = 0
+                                if (coalescer.shouldPersist(downloaded, total)) {
                                     if (queueDao.getById(current.id)?.state !=
                                         QueueState.RUNNING
                                     ) {
@@ -572,13 +755,13 @@ class DownloadEngine(
                 lastError = HttpTransport.ioError(e)
             }
             if (streamFailed) {
-                if (attempt < MAX_ATTEMPTS) delayer(backoffMillis(attempt))
+                if (attempt < MAX_ATTEMPTS) persistAndBackoff(null)
                 continue
             }
             if (total > 0 && downloaded < total) {
                 // Truncated body — retry keeps the part file (resume).
                 lastError = AppError.ProviderDown("server", detail = "download stopped partway")
-                if (attempt < MAX_ATTEMPTS) delayer(backoffMillis(attempt))
+                if (attempt < MAX_ATTEMPTS) persistAndBackoff(null)
                 continue
             }
             // Complete: hand the file to its owner (OPDS import).

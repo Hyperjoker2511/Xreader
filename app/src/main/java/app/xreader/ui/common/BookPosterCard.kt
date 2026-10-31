@@ -3,6 +3,7 @@ package app.xreader.ui.common
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,16 +17,19 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.xreader.ui.library.PlaceholderCover
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 
 /**
  * v1.0.6.2 (F6 + Revision 2 S1): THE book card — one design
@@ -66,7 +70,7 @@ fun BookPosterCard(
             .then(if (tilt) Modifier.pressTilt() else Modifier),
         verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)
     ) {
-        Box(
+        BoxWithConstraints(
             if (glowColor != null) {
                 Modifier.drawBehind {
                     drawCircle(
@@ -87,9 +91,19 @@ fun BookPosterCard(
                 .aspectRatio(2f / 3f)
                 .clip(shape)
         ) {
+            // v1.2.0 (WS6 add-on, following WS4's Library pattern):
+            // decode the cover near the size it is actually drawn
+            // at — this box's own measured width (the 2:3 poster
+            // makes the height width × 1.5) — instead of a full
+            // decode of the stored image. Falls back to the raw
+            // model when no finite size is known (see the helper).
+            val coverWidthDp = maxWidth
+            val coverRequest = rememberSizedPosterCover(
+                coverModel, coverWidthDp.value
+            )
             if (coverModel != null) {
                 AsyncImage(
-                    model = coverModel,
+                    model = coverRequest ?: coverModel,
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
@@ -177,6 +191,36 @@ fun BookPosterCard(
                     .height(3.dp)
                     .clip(CircleShape)
             )
+        }
+    }
+}
+
+/**
+ * v1.2.0 (WS6 add-on): a cover [ImageRequest] that asks Coil to
+ * decode near the size the poster is actually drawn at, following
+ * the `rememberSizedCover` pattern Worker D added in
+ * ui/library/LibraryScreen.kt (WS4) — display width in dp converted
+ * with the device density; the poster's fixed 2:3 aspect makes the
+ * height width × 1.5. Works for every model type this card receives
+ * (local File, remote URL string). Returns null — and the caller
+ * falls back to the raw model — when there is no model or no finite
+ * positive width is known; the null-model placeholder path is
+ * untouched.
+ */
+@Composable
+private fun rememberSizedPosterCover(model: Any?, widthDp: Float): ImageRequest? {
+    val context = LocalContext.current
+    return remember(model, widthDp) {
+        if (model == null || !widthDp.isFinite() || widthDp <= 0f) {
+            null
+        } else {
+            val density = context.resources.displayMetrics.density
+            val widthPx = (widthDp * density).toInt().coerceAtLeast(1)
+            val heightPx = (widthPx * 1.5f).toInt().coerceAtLeast(1)
+            ImageRequest.Builder(context)
+                .data(model)
+                .size(widthPx, heightPx)
+                .build()
         }
     }
 }

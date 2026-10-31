@@ -471,6 +471,21 @@ fun ReaderSettingsSheet(
                         onChange = { v -> onUpdate { it.copy(eInkMode = v) } }
                     )
                 }
+
+                // v1.2.0 (WS2, manga zoom Option A): Mihon's
+                // long-strip zoom settings, exact labels.
+                SheetSection("Zoom") {
+                    SheetSwitch(
+                        label = "Double-tap to zoom",
+                        checked = config.doubleTapToZoom,
+                        onChange = { v -> onUpdate { it.copy(doubleTapToZoom = v) } }
+                    )
+                    SheetSwitch(
+                        label = "Disable zoom out",
+                        checked = config.disableZoomOut,
+                        onChange = { v -> onUpdate { it.copy(disableZoomOut = v) } }
+                    )
+                }
             }
 
             "page" -> {

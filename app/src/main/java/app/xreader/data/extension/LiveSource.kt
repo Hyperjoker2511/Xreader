@@ -12,7 +12,6 @@ import kotlinx.serialization.json.Json
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.net.URI
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * What a Live Source install stores (v1.0.9) — deliberately
@@ -123,14 +122,44 @@ class LiveSource(
          * "book") must never be served again either.
          */
         const val SHAPE_VERSION = "shape.v3"
+
+        /** v1.2.0 (audit #4): the in-memory derived-config caps
+         * — a handful of books are a session's working set, and
+         * chapter configs are one small shape per chapter id. */
+        const val MAX_BOOK_CONFIGS = 8
+        const val MAX_CHAPTER_CONFIGS = 128
     }
 
-    /** Per-book ephemeral configs derived this process. */
-    private val bookConfigs = ConcurrentHashMap<String, DeclarativeConfig>()
+    /** An access-ordered, size-capped, synchronised config
+     * cache: eldest (least recently used) entries evict past
+     * [maxEntries]. */
+    private fun boundedConfigCache(
+        maxEntries: Int
+    ): MutableMap<String, DeclarativeConfig> =
+        java.util.Collections.synchronizedMap(
+            object : LinkedHashMap<String, DeclarativeConfig>(
+                16, 0.75f, true
+            ) {
+                override fun removeEldestEntry(
+                    eldest: MutableMap.MutableEntry<String, DeclarativeConfig>
+                ): Boolean = size > maxEntries
+            }
+        )
+
+    /** Per-book ephemeral configs derived this process.
+     * v1.2.0 (audit #4): BOUNDED access-ordered LRU — the old
+     * ConcurrentHashMaps grew for the process lifetime. An
+     * eviction is never a correctness event: a missing book
+     * config simply re-derives from the book page, and a
+     * missing chapter config re-derives from the chapter page
+     * (or falls back to any surviving book config first). */
+    private val bookConfigs: MutableMap<String, DeclarativeConfig> =
+        boundedConfigCache(MAX_BOOK_CONFIGS)
 
     /** Chapter id → the ephemeral config of the book it was
      * listed from, so a chapter read uses its own book's shape. */
-    private val chapterConfigs = ConcurrentHashMap<String, DeclarativeConfig>()
+    private val chapterConfigs: MutableMap<String, DeclarativeConfig> =
+        boundedConfigCache(MAX_CHAPTER_CONFIGS)
 
     // ── listings ────────────────────────────────────────────
 
@@ -246,8 +275,14 @@ class LiveSource(
     }
 
     fun detailsAndChapters(book: SourceBook): Pair<SourceBook, List<SourceChapter>> {
-        val delegate = bookDelegate(book)
-        val result = delegate.detailsAndChapters(book)
+        // v1.2.0 (A2): when the delegate derivation JUST fetched
+        // the book page, that same document feeds the delegate's
+        // read — the book page is fetched (rendered) ONCE for a
+        // cold open instead of twice. A cache-hit delegate
+        // fetched nothing, so it passes null and the delegate
+        // fetches as before.
+        val (delegate, prefetched) = bookDelegateWithPrefetch(book)
+        val result = delegate.detailsAndChapters(book, prefetched)
         val config = bookConfigs[book.id]
         if (config != null) {
             for (chapter in result.second) chapterConfigs[chapter.id] = config
@@ -264,8 +299,19 @@ class LiveSource(
      * book page's structural fingerprint still matches; any
      * failure evicts and re-derives once.
      */
-    private fun bookDelegate(book: SourceBook): DeclarativeSource {
-        bookConfigs[book.id]?.let { return DeclarativeSource(it, context) }
+    private fun bookDelegate(book: SourceBook): DeclarativeSource =
+        bookDelegateWithPrefetch(book).first
+
+    /** [bookDelegate] plus the book-page document it fetched
+     * along the way (null when the in-memory config cache hit
+     * and nothing was fetched) — v1.2.0 (A2) threading for
+     * [detailsAndChapters]. */
+    private fun bookDelegateWithPrefetch(
+        book: SourceBook
+    ): Pair<DeclarativeSource, Document?> {
+        bookConfigs[book.id]?.let {
+            return DeclarativeSource(it, context) to null
+        }
         val cacheKey = LiveShapeCache.bookKey(book.id)
         val doc = fetchDoc(book.id)
         val fingerprint = skeletonFingerprint(doc)
@@ -277,7 +323,7 @@ class LiveSource(
                 liveJson.decodeFromString(DeclarativeConfig.serializer(), cached)
             }.getOrNull()?.let { config ->
                 bookConfigs[book.id] = config
-                return DeclarativeSource(config, context)
+                return DeclarativeSource(config, context) to doc
             }
         }
         val config = deriveBookConfig(book, doc)
@@ -287,7 +333,7 @@ class LiveSource(
         )
         context.store.put("$cacheKey.fp", fingerprint)
         bookConfigs[book.id] = config
-        return DeclarativeSource(config, context)
+        return DeclarativeSource(config, context) to doc
     }
 
     /**
@@ -382,13 +428,29 @@ class LiveSource(
         // through a listing; otherwise a host-level chapter
         // shape derived from THIS chapter's own page (chapter
         // pages share one template per site).
-        val config = chapterConfigs[chapter.id]
-            ?: bookConfigs.values.firstOrNull()
-            ?: deriveChapterOnlyConfig(chapter)
-        return DeclarativeSource(config, context).chapterContent(chapter)
+        val cachedConfig = chapterConfigs[chapter.id]
+            ?: synchronized(bookConfigs) { bookConfigs.values.firstOrNull() }
+        if (cachedConfig != null) {
+            // No fetch happened to derive this config, so there
+            // is no document to thread — the delegate fetches
+            // the chapter page itself, exactly as before.
+            return DeclarativeSource(cachedConfig, context).chapterContent(chapter)
+        }
+        // v1.2.0 (A2): the chapter-only derivation FETCHES this
+        // chapter's page to learn its shape; that same document
+        // is the content read's first page, so a cold chapter
+        // open fetches (renders) the page ONCE, not twice.
+        val (config, prefetched) = deriveChapterOnlyConfig(chapter)
+        return DeclarativeSource(config, context)
+            .chapterContent(chapter, prefetched)
     }
 
-    private fun deriveChapterOnlyConfig(chapter: SourceChapter): DeclarativeConfig {
+    /** The derived chapter-only config PLUS the chapter page
+     * fetched to derive it (every path through here fetched
+     * it — the fingerprint is computed from that fetch). */
+    private fun deriveChapterOnlyConfig(
+        chapter: SourceChapter
+    ): Pair<DeclarativeConfig, Document> {
         val cacheKey = LiveShapeCache.chapterKey(host)
         val doc = fetchDoc(chapter.id)
         val fingerprint = skeletonFingerprint(doc)
@@ -397,7 +459,7 @@ class LiveSource(
             runCatching {
                 liveJson.decodeFromString(ChapterSpec.serializer(), cached)
             }.getOrNull()?.let { chapterSpec ->
-                return chapterOnlyConfig(chapterSpec)
+                return chapterOnlyConfig(chapterSpec) to doc
             }
         }
         val analysis = LinkInference.analyseChapterPage(doc, chapter.id)
@@ -414,7 +476,7 @@ class LiveSource(
             liveJson.encodeToString(ChapterSpec.serializer(), chapterSpec)
         )
         context.store.put("$cacheKey.fp", fingerprint)
-        return chapterOnlyConfig(chapterSpec)
+        return chapterOnlyConfig(chapterSpec) to doc
     }
 
     private fun chapterOnlyConfig(chapterSpec: ChapterSpec): DeclarativeConfig =

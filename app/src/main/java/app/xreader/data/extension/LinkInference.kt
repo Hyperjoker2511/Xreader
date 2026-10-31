@@ -58,7 +58,21 @@ object LinkInference {
         /** v1.0.5 (A7): the title came from the URL slug because
          * every on-page candidate was a date stamp — there is no
          * honest title spec, and callers must not store one. */
-        val titleFromSlug: Boolean = false
+        val titleFromSlug: Boolean = false,
+        /** WS3 (class D): pattern completion for a WINDOWED
+         * chapter list — the visible rows follow a strict
+         * numbered URL pattern under the book's own path and
+         * chapter-shaped anchors elsewhere on the page (the
+         * newest-chapter links) imply a larger total than the
+         * window renders. [chapterUrlPattern] is the
+         * `{bookUrl}`/`{n}` template and [chapterTotalCount]
+         * the implied total; both ride into the derived
+         * config's ChapterListSpec so the engine completes
+         * the list (the chikari lane's hand-built behaviour,
+         * generalised). Null when the visible list is not a
+         * strict-pattern window. */
+        val chapterUrlPattern: String? = null,
+        val chapterTotalCount: Int? = null
     )
 
     data class ChapterPageAnalysis(
@@ -85,12 +99,65 @@ object LinkInference {
 
     // ── login ───────────────────────────────────────────────────────
 
+    /**
+     * Login-wall detection (WS3, class A): a password field ALONE
+     * is not a wall — many sites embed a login modal in their page
+     * chrome while every book and chapter is public, and walling
+     * those off sent their readers into an assisted login the site
+     * never asked for (four batch sites). A page counts as walled
+     * only when it carries a login signal AND no usable public
+     * structure: no chapter cluster, no book-shaped anchor set, no
+     * substantial readable page. A true login page (a form and
+     * little else) still reads as a wall, exactly as before.
+     */
     fun needsLogin(doc: Document, pageUrl: String): Boolean {
-        if (doc.select("input[type=password]").isNotEmpty()) return true
+        val hasPassword = doc.select("input[type=password]").isNotEmpty()
         val path = runCatching { URI(pageUrl).path }.getOrNull()?.lowercase() ?: ""
         val loginPath = path.contains("/login") || path.contains("/signin") ||
             path.contains("/sign-in") || path.contains("account/login")
-        return loginPath && doc.select("form").isNotEmpty()
+        val loginSignal = hasPassword ||
+            (loginPath && doc.select("form").isNotEmpty())
+        if (!loginSignal) return false
+        return !hasUsablePublicStructure(doc, pageUrl)
+    }
+
+    /** Whether a page carries public structure a reader can use —
+     * the counter-evidence that demotes a login signal from a
+     * wall to page chrome (class A). Any one signal suffices:
+     * a clustered chapter list, a set of book-shaped anchors, or
+     * a substantial readable page with real navigation. */
+    private fun hasUsablePublicStructure(doc: Document, pageUrl: String): Boolean {
+        if (findAnchorCluster(doc, chapterAnchors(doc, pageUrl)) != null) {
+            return true
+        }
+        val anchors = doc.select("a[href]")
+        val bookShaped = anchors.count { anchor ->
+            val href = anchor.attr("abs:href")
+                .ifBlank { absolute(anchor.attr("href"), pageUrl) }
+            href.isNotBlank() && BookShape.isBookShapedHref(href)
+        }
+        if (bookShaped >= MIN_CLUSTER) return true
+        val bodyText = doc.body()?.text()?.length ?: 0
+        return bodyText >= 600 && anchors.size >= 5
+    }
+
+    /**
+     * Same-site host rule for cluster admission (WS3, class G):
+     * an href belongs to the page's site when its host is the
+     * page's host, its www/non-www twin, or a subdomain of it —
+     * the codebase's whitelist notion ([ExtensionPermissions]).
+     * Relative hrefs (no host) always belong. Foreign-host rows
+     * (ad networks smuggled into a chapter list) never do.
+     */
+    fun isSameSiteHost(pageUrl: String, href: String): Boolean {
+        val pageHost = runCatching { URI(pageUrl).host }.getOrNull()
+            ?.lowercase()?.trimEnd('.') ?: return true
+        val hrefHost = runCatching { URI(href).host }.getOrNull()
+            ?.lowercase()?.trimEnd('.') ?: return true
+        val pageBare = pageHost.removePrefix("www.")
+        val hrefBare = hrefHost.removePrefix("www.")
+        if (pageBare == hrefBare) return true
+        return hrefHost.endsWith(".$pageBare") || pageHost.endsWith(".$hrefBare")
     }
 
     /**
@@ -133,7 +200,7 @@ object LinkInference {
     // ── book page ───────────────────────────────────────────────────
 
     fun analyseBookPage(doc: Document, pageUrl: String): BookPageAnalysis? {
-        val cluster = findAnchorCluster(doc, chapterAnchors(doc)) ?: return null
+        val cluster = findAnchorCluster(doc, chapterAnchors(doc, pageUrl)) ?: return null
         val foundTitle = findTitle(doc)
         // v1.0.5 (A7): every on-page title candidate was a date
         // stamp — fall back to the URL slug rather than naming
@@ -160,6 +227,7 @@ object LinkInference {
             ?: firstAnchor?.let { absolute(it.attr("href"), pageUrl) }
             ?: return null
         val itemIsAnchor = cluster.itemsAreAnchors
+        val completion = detectPatternCompletion(doc, pageUrl, cluster)
         return BookPageAnalysis(
             title = title.first,
             titleSpec = title.second,
@@ -173,9 +241,81 @@ object LinkInference {
             chapterLinkSpec = if (itemIsAnchor) "@href" else "a@href",
             chapterCount = cluster.items.size,
             firstChapterUrl = firstUrl,
-            newestFirst = newestFirst
+            newestFirst = newestFirst,
+            chapterUrlPattern = completion?.first,
+            chapterTotalCount = completion?.second
         )
     }
+
+    /**
+     * WS3 (class D): window detection for pattern completion.
+     * Returns the `{bookUrl}`/`{n}` URL template and the implied
+     * total when (1) every clustered chapter href is the book
+     * path plus ONE further segment of a strict numbered shape
+     * (`chapter-<n>`, `chap-<n>`, `ch-<n>` or a bare `<n>`, the
+     * literal parts identical across rows), and (2) chapter-
+     * shaped anchors ANYWHERE under the book's path (the newest-
+     * chapter links a windowed page carries outside its list)
+     * reach a higher number than the cluster holds rows — the
+     * page itself proves the list continues past the window.
+     * Anything looser (per-chapter title slugs in the URL, mixed
+     * shapes) is not a pattern and completes nothing.
+     */
+    private fun detectPatternCompletion(
+        doc: Document,
+        pageUrl: String,
+        cluster: Cluster
+    ): Pair<String, Int>? {
+        val bookPath = BookShape.normalisedPath(pageUrl)
+        if (bookPath == "/") return null
+        val prefix = "$bookPath/"
+        fun remainderOf(href: String): String? {
+            val path = BookShape.normalisedPath(href)
+            if (!path.startsWith(prefix)) return null
+            val rest = path.removePrefix(prefix)
+            return rest.takeIf { it.isNotBlank() && !it.contains('/') }
+        }
+        val remainders = cluster.items.mapNotNull { item ->
+            val anchor = anchorOf(item) ?: return@mapNotNull null
+            val href = anchor.attr("abs:href")
+                .ifBlank { absolute(anchor.attr("href"), pageUrl) }
+            remainderOf(href)
+        }
+        if (remainders.size < MIN_CLUSTER ||
+            remainders.size != cluster.items.size
+        ) {
+            return null
+        }
+        var template: String? = null
+        val numbers = mutableListOf<Int>()
+        for (remainder in remainders) {
+            val match = CHAPTER_SEGMENT_SHAPE.find(remainder) ?: return null
+            val number = match.groupValues[2].toIntOrNull() ?: return null
+            val shape = remainder.replaceRange(
+                match.groups[2]!!.range, "{n}"
+            )
+            if (template == null) {
+                template = shape
+            } else if (template != shape) {
+                return null
+            }
+            numbers += number
+        }
+        if (numbers.distinct().size < 2) return null
+        val impliedMax = doc.select("a[href]").mapNotNull { anchor ->
+            val href = anchor.attr("abs:href")
+                .ifBlank { absolute(anchor.attr("href"), pageUrl) }
+            val rest = remainderOf(href) ?: return@mapNotNull null
+            CHAPTER_SEGMENT_SHAPE.find(rest)?.groupValues?.get(2)?.toIntOrNull()
+        }.maxOrNull() ?: return null
+        if (impliedMax <= cluster.items.size) return null
+        return "{bookUrl}/$template" to impliedMax
+    }
+
+    /** One strict chapter segment: a constant literal part, one
+     * number, and nothing else (`chapter-12`, `ch-3`, `42`). */
+    private val CHAPTER_SEGMENT_SHAPE =
+        Regex("(?i)^((?:chapter|chap|ch)[-_])?(\\d+)$")
 
     // ── chapter page ────────────────────────────────────────────────
 
@@ -192,10 +332,21 @@ object LinkInference {
         } ?: return null
         val text = best.text().trim()
         if (text.length < MIN_READABLE_CHARS) return null
+        // WS3 (class F): a "next" anchor whose target is the
+        // NEXT CHAPTER is not this chapter's next page — chaining
+        // it concatenated up to ten different chapters into one
+        // chapter's text (silent corruption on two batch sites).
+        // The first candidate that is NOT a chapter link wins;
+        // true page-2-of-the-same-chapter links (same path, or a
+        // sub-path of it) still qualify, exactly as before.
         val nextAnchor = doc.select("a").firstOrNull { anchor ->
             val rel = anchor.attr("rel")
-            rel.equals("next", ignoreCase = true) ||
+            val isNext = rel.equals("next", ignoreCase = true) ||
                 NEXT_TEXT.matches(anchor.text().trim())
+            if (!isNext) return@firstOrNull false
+            val href = anchor.attr("abs:href")
+                .ifBlank { absolute(anchor.attr("href"), pageUrl) }
+            !isNextChapterHref(pageUrl, href, anchor.text().trim())
         }
         val heading = doc.selectFirst("h1")
         return ChapterPageAnalysis(
@@ -370,6 +521,37 @@ object LinkInference {
         return href.ifBlank { null }
     }
 
+    /**
+     * WS3 (class F): is [href], offered as a "next" link on the
+     * chapter page at [pageUrl], actually the next CHAPTER?
+     * True when the anchor text says "chapter" outright, or the
+     * href's last segment is chapter-shaped (a `chapter-<n>`
+     * stem or a bare number, with no "page" marker) under the
+     * same book prefix as the current chapter, at a DIFFERENT
+     * path than the current chapter's own. Same-path targets
+     * (pagination rides in the query) and sub-paths of the
+     * current chapter (`…/chapter-1/2`) are this chapter's own
+     * pages and never count. Shared by the inference above and
+     * the declarative engine's chaining guard, so a stored
+     * config with a chapter link in its next-page slot stops
+     * at the chapter boundary too.
+     */
+    fun isNextChapterHref(pageUrl: String, href: String, anchorText: String): Boolean {
+        if (href.isBlank()) return false
+        val candidatePath = BookShape.normalisedPath(href)
+        val currentPath = BookShape.normalisedPath(pageUrl)
+        if (candidatePath == currentPath) return false
+        if (candidatePath.startsWith("$currentPath/")) return false
+        if (anchorText.contains("chapter", ignoreCase = true)) return true
+        val last = candidatePath.substringAfterLast('/').lowercase()
+        if (last.contains("page")) return false
+        val chapterShaped = CHAPTER_SEGMENT_SHAPE.matches(last) ||
+            Regex("(?i)^(chapter|chap|ch)[-_]?\\d+[-_].+").matches(last)
+        if (!chapterShaped) return false
+        val bookPrefix = currentPath.substringBeforeLast('/')
+        return candidatePath.startsWith("$bookPrefix/")
+    }
+
     /** One search form found on a page (v1.0.1): where it submits,
      * how (GET/POST), and the query field's name. */
     data class SearchFormCandidate(
@@ -512,8 +694,16 @@ object LinkInference {
         val itemsAreAnchors: Boolean
     )
 
-    private fun chapterAnchors(doc: Document): List<Element> =
-        doc.select("a[href]").filter { isChapterLink(it) }
+    private fun chapterAnchors(doc: Document, pageUrl: String): List<Element> =
+        doc.select("a[href]").filter { anchor ->
+            if (!isChapterLink(anchor)) return@filter false
+            // WS3 (class G): chapter clusters admit only the
+            // site's own host — a foreign-host ad row smuggled
+            // into the list must never become a "chapter".
+            val href = anchor.attr("abs:href")
+                .ifBlank { absolute(anchor.attr("href"), pageUrl) }
+            isSameSiteHost(pageUrl, href)
+        }
 
     private fun isChapterLink(anchor: Element): Boolean {
         val text = anchor.text().trim()
@@ -524,34 +714,49 @@ object LinkInference {
     }
 
     /**
-     * Cluster anchors by shape: sharing one parent (items = anchors),
-     * or wrapped one-per-item in same-tag siblings (items = wrappers).
-     * The biggest cluster of ≥ [MIN_CLUSTER] wins.
+     * Cluster anchors by shape (WS3, class B): the repeating
+     * item may be the anchor itself (direct siblings), its
+     * wrapper, its grandparent (a table row: RoyalRoad's `<tr>`
+     * sits two levels above its chapter anchor), or its
+     * great-grandparent (per-item containers under one shared
+     * list: a 7,000-row chapters page). Every ancestor depth
+     * 0–3 is grouped by (shared parent, item tag) and the
+     * LARGEST cluster of ≥ [MIN_CLUSTER] distinct items wins —
+     * the old first-qualifying-case order let a 4-item direct-
+     * sibling widget short-circuit a 17-item wrapper cluster.
+     * Ties keep the SHALLOWEST depth (the most precise item).
+     * Grouping is linear in the anchor count at each depth, so
+     * multi-megabyte list pages stay cheap.
      */
     private fun findAnchorCluster(doc: Document, anchors: List<Element>): Cluster? {
         if (anchors.size < MIN_CLUSTER) return null
-        // Case 1: anchors are direct siblings.
-        val byParent = anchors.groupBy { it.parent() }
-            .filterKeys { it != null }
-        val direct = byParent.maxByOrNull { it.value.size }
-        if (direct != null && direct.value.size >= MIN_CLUSTER) {
-            return Cluster(direct.value, itemsAreAnchors = true)
-        }
-        // Case 2: each anchor wrapped in a same-tag item element.
-        val wrappers = anchors.mapNotNull { anchor ->
-            val parent = anchor.parent() ?: return@mapNotNull null
-            if (parent.tagName() == "body") return@mapNotNull null
-            parent
-        }
-        if (wrappers.size >= MIN_CLUSTER) {
-            val byGrandparent = wrappers.groupBy { it.parent() to it.tagName() }
-                .filterKeys { it.first != null }
-            val best = byGrandparent.maxByOrNull { it.value.size }
-            if (best != null && best.value.size >= MIN_CLUSTER) {
-                return Cluster(best.value.distinct(), itemsAreAnchors = false)
+        var best: Cluster? = null
+        fun consider(items: List<Element>, itemsAreAnchors: Boolean) {
+            val distinct = items.distinct()
+            if (distinct.size >= MIN_CLUSTER &&
+                distinct.size > (best?.items?.size ?: 0)
+            ) {
+                best = Cluster(distinct, itemsAreAnchors)
             }
         }
-        return null
+        // Depth 0: anchors are direct siblings under one parent.
+        anchors.groupBy { it.parent() }
+            .filterKeys { it != null }
+            .values.forEach { consider(it, itemsAreAnchors = true) }
+        // Depths 1–3: the item is the ancestor that many levels
+        // up; items group by their own parent + tag.
+        var level: List<Element?> = anchors.map { it.parent() }
+        for (depth in 1..3) {
+            val items = level.filterNotNull().filter { el ->
+                el.tagName() != "body" && el.tagName() != "html"
+            }
+            if (items.size < MIN_CLUSTER) break
+            items.groupBy { it.parent() to it.tagName() }
+                .filterKeys { it.first != null }
+                .values.forEach { consider(it, itemsAreAnchors = false) }
+            level = level.map { it?.parent() }
+        }
+        return best
     }
 
     /**
@@ -569,13 +774,35 @@ object LinkInference {
                     return cleaned to "meta[property=og:title]@content"
                 }
             }
-        doc.selectFirst("h1")?.let { h1 ->
+        // WS3 (class E): an <h1> inside a breadcrumb is a
+        // navigation label (on one batch site, the book's genre),
+        // never the book's title — breadcrumb h1s are skipped and
+        // the next h1 gets its chance.
+        for (h1 in doc.select("h1")) {
+            if (isInBreadcrumb(h1)) continue
             val text = h1.text().trim()
             val cleaned = TitleCleaner.clean(text)
             if (text.isNotBlank() && cleaned.isNotBlank() &&
                 !TitleCleaner.isDateOnly(cleaned)
             ) {
                 return cleaned to SelectorSynthesizer.forElement(h1)
+            }
+        }
+        // WS3 (class E): the book's own title heading — many
+        // templates mark it with a title class on an h2/h3 when
+        // the h1 slot is spent on navigation (a ReadNovelFull
+        // book page's real title is its `h3.title`). A heading
+        // whose class names it a title, outside breadcrumbs and
+        // carousel chrome, beats the <title> tag's boilerplate.
+        val titled = doc.select("h1, h2, h3").firstOrNull { el ->
+            el.className().lowercase().split(Regex("[^a-z]+"))
+                .any { it == "title" } &&
+                !isInBreadcrumb(el) && !isInChromeContainer(el)
+        }
+        if (titled != null) {
+            val cleaned = TitleCleaner.clean(titled.text().trim())
+            if (cleaned.isNotBlank() && !TitleCleaner.isDateOnly(cleaned)) {
+                return cleaned to SelectorSynthesizer.forElement(titled)
             }
         }
         val titleTag = doc.title().trim()
@@ -586,6 +813,18 @@ object LinkInference {
             }
         }
         return null
+    }
+
+    /** True when [element] or any ancestor is a breadcrumb
+     * container — navigation chrome, never page content (WS3-E). */
+    private fun isInBreadcrumb(element: Element): Boolean {
+        var current: Element? = element
+        while (current != null) {
+            val marker = (current.className() + " " + current.id()).lowercase()
+            if (marker.contains("breadcrumb")) return true
+            current = current.parent()
+        }
+        return false
     }
 
     /** A found cover: its absolute URL plus the spec that

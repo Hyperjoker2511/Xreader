@@ -11,7 +11,21 @@ import androidx.room.PrimaryKey
  * 1,500-chapter book stays a small database.
  */
 
-@Entity(tableName = "books")
+@Entity(
+    tableName = "books",
+    indices = [
+        // v1.2.0 (DB v6, audit D8): the hot lookups were full scans.
+        // (extensionId, remoteId) is the catalogue-tap identity
+        // (BookDao.findByExtensionRemote); (mergedIntoId,
+        // lastOpenedAt) backs the shelf filter + recent sort
+        // (observeShelf); title backs findByTitleAndChapters;
+        // finished backs finishedBooks/finishedCount (ExpService).
+        Index(value = ["extensionId", "remoteId"]),
+        Index(value = ["mergedIntoId", "lastOpenedAt"]),
+        Index("title"),
+        Index("finished")
+    ]
+)
 data class Book(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
@@ -67,7 +81,14 @@ data class Book(
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("bookId"), Index(value = ["bookId", "index"], unique = true)]
+    indices = [
+        Index("bookId"),
+        Index(value = ["bookId", "index"], unique = true),
+        // v1.2.0 (DB v6, audit D15): getDownloadedChapters filters
+        // downloadState = 'READY' across ALL books — neither
+        // existing index leads with downloadState.
+        Index(value = ["downloadState", "bookId", "index"])
+    ]
 )
 data class Chapter(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -125,7 +146,10 @@ data class ChapterSourceMap(
             childColumns = ["bookId"],
             onDelete = ForeignKey.CASCADE
         )
-    ]
+    ],
+    // v1.2.0 (DB v6, audit D15): observeRecent sorts the whole
+    // table by updatedAt on every progress write.
+    indices = [Index("updatedAt")]
 )
 data class ReadingProgress(
     @PrimaryKey val bookId: Long,

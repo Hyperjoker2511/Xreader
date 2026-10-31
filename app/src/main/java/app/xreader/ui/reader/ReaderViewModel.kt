@@ -220,6 +220,40 @@ class ReaderViewModel(
     private var currentChapterMaxOffset = 0
     private var saveJob: Job? = null
     private var loadJob: Job? = null
+
+    // -- v1.2.0 (Wave 3): position-pipeline indexes & coalescing --
+    /** The chapter list indexed once per list change (id→index +
+     * word-count suffix aggregates), so a settled position costs
+     * O(1) of book-level work instead of a scan of every later
+     * chapter. Rebuilt ONLY through [chaptersUpdated]. */
+    private var chapterPositionIndex: ChapterPositionIndex =
+        ChapterPositionIndex.EMPTY
+
+    /** Every assignment of a new chapter list goes through here so
+     * the index can never drift from the state's list. */
+    private fun chaptersUpdated(chapters: List<Chapter>): List<Chapter> {
+        chapterPositionIndex = ChapterPositionIndex.build(chapters)
+        return chapters
+    }
+
+    /** When progress writes may land (settle + coarse cap). */
+    private val progressCoalescer = ProgressSaveCoalescer()
+
+    /** The comic near-end warm: the chapter id currently being
+     * warmed through the direct read path, if any. The in-flight
+     * guard [PrefetchPolicy] reads — one warm at a time, and the
+     * same chapter is never warmed twice at once. */
+    private var imagePrefetchJob: Job? = null
+    private var imagePrefetchChapterId: Long? = null
+
+    /** Which chapter the on-screen [ReaderUiState.chapterText]
+     * actually belongs to. With keep-previous-chapter, chapterIndex
+     * moves to the incoming chapter while the previous text is
+     * still visible; progress saves must only fire while the two
+     * agree, or a mid-load flush would write the old chapter's
+     * offset against the new chapter's row. Set wherever a text
+     * is put on screen (load success, stream anchor/crossing). */
+    private var visibleTextChapterIndex: Int = -1
     private var pendingAutoplayTts = false
     private val chapterCache = LinkedHashMap<Long, ChapterText>()
 
@@ -277,7 +311,7 @@ class ReaderViewModel(
             val sourceNotice = browserViewNoticeFor(book)
             _state.value = _state.value.copy(
                 bookTitle = book?.title ?: "",
-                chapters = chapters,
+                chapters = chaptersUpdated(chapters),
                 pageTurnTier = computeTier(_config.value),
                 browserViewNotice = sourceNotice ?: _state.value.browserViewNotice
             )
@@ -373,7 +407,7 @@ class ReaderViewModel(
             )
             val fresh = container.database.chapterDao().forBook(bookId)
             if (fresh.size > _state.value.chapters.size) {
-                _state.value = _state.value.copy(chapters = fresh)
+                _state.value = _state.value.copy(chapters = chaptersUpdated(fresh))
             }
         }
     }
@@ -384,6 +418,12 @@ class ReaderViewModel(
         restoreScrollFraction: Float,
         hint: PageHint = PageHint.OFFSET
     ) {
+        // v1.2.0 (Wave 3): the OUTGOING chapter's final position is
+        // persisted exactly, before anything moves — a guaranteed
+        // flush on chapter change that the progress coalescer can
+        // never delay (it reads the still-current state, and is a
+        // no-op on the very first load, when there is no chapter).
+        flushProgressNow()
         flushSession()
         val chapters = _state.value.chapters
         var chapter = chapters.getOrNull(index)
@@ -398,14 +438,27 @@ class ReaderViewModel(
         readAloudStopIfLoaded()
         if (overlayPlayerLazy.isInitialized()) overlayPlayer.release()
         overlaySync = null
+        // v1.2.0 (Wave 3): KEEP THE PREVIOUS CHAPTER VISIBLE. The
+        // old blanking (chapterText = null, loading = true) put a
+        // spinner over the whole fetch, so every network/render
+        // cost was fully visible with nothing to read. Now the
+        // previous text stays on screen until the replacement is
+        // set in the success copy below; `loading` is raised only
+        // when there is no previous content at all (first open),
+        // which is also the only case ReaderScreen shows the
+        // full-screen spinner for. positionOffset /
+        // currentPositionBookmarked are NOT touched here — they
+        // still describe the visible (previous) text until
+        // onPosition runs for the new chapter.
+        // Restore invariant: restoreGeneration is bumped ONLY in
+        // the success copy, in the same state emission that sets
+        // the new chapterText — a stale restore can therefore
+        // never anchor into the previous chapter's text.
         _state.value = _state.value.copy(
             chapterIndex = index,
-            chapterText = null,
-            loading = true,
+            loading = _state.value.chapterText == null,
             errorMessage = null,
-            chapterFetchFailed = false,
-            positionOffset = restoreOffset,
-            currentPositionBookmarked = false
+            chapterFetchFailed = false
         )
         if (chapter.contentPath == null) {
             // v1.0.6.2 (F3): read live — fetch the chapter
@@ -437,6 +490,7 @@ class ReaderViewModel(
         val content: ChapterContent = text.content
         tracker.begin()
         currentChapterMaxOffset = restoreOffset
+        visibleTextChapterIndex = index
         _state.value = _state.value.copy(
             loading = false,
             chapterText = text,
@@ -495,9 +549,11 @@ class ReaderViewModel(
                 // holds the same row downloads and progress use
                 // (one chapter identity — RD).
                 _state.value = _state.value.copy(
-                    chapters = _state.value.chapters.map {
-                        if (it.id == fresh.id) fresh else it
-                    }
+                    chapters = chaptersUpdated(
+                        _state.value.chapters.map {
+                            if (it.id == fresh.id) fresh else it
+                        }
+                    )
                 )
                 fresh
             }
@@ -575,7 +631,10 @@ class ReaderViewModel(
                     if (neighbour == index + 1 &&
                         chapter.downloadState ==
                         app.xreader.data.db.DownloadState.NONE &&
-                        !isMinimalTier()
+                        !isMinimalTier() &&
+                        // v1.2.0: never queue-warm a chapter the
+                        // direct near-end warm is already fetching.
+                        imagePrefetchChapterId != chapter.id
                     ) {
                         runCatching {
                             container.downloadController
@@ -587,6 +646,67 @@ class ReaderViewModel(
                 if (chapterCache.containsKey(chapter.id)) continue
                 val result = container.bookStorage.readChapterContent(bookId, chapter.id)
                 if (result is AppResult.Ok) cacheChapter(chapter.id, ChapterText(result.value))
+            }
+        }
+    }
+
+    /**
+     * v1.2.0 (Wave 3): the comic near-end warm (USER-SPECIFIED
+     * policy — see [PrefetchPolicy]). Called from [onPosition]
+     * with the settled in-chapter fraction: when an IMAGE chapter
+     * crosses ~0.7 read, the NEXT chapter is warmed through the
+     * DIRECT read path ([app.xreader.data.download.ChapterTextLoader.ensureStored]
+     * — the same path a manual open uses), NOT only via the
+     * download queue, whose item for a rendered source can sit
+     * browser-gated behind other work. One warm at a time, next
+     * chapter only; text chapters are untouched by this path.
+     * The policy applies on all performance tiers (the user
+     * stated it unconditionally; next-only bounds the cost) — the
+     * MINIMAL-tier gate on the queue prefetch above does NOT
+     * apply here.
+     */
+    private fun maybeWarmNextImageChapter(chapterFraction: Float) {
+        val stateNow = _state.value
+        val text = stateNow.chapterText ?: return
+        val next = stateNow.chapters.getOrNull(stateNow.chapterIndex + 1)
+        val shouldWarm = PrefetchPolicy.shouldWarmNext(
+            isImageChapter = ReaderCounters.isImageChapter(text.content),
+            fraction = chapterFraction,
+            hasNext = next != null,
+            nextStored = next?.contentPath != null,
+            inFlight = imagePrefetchJob?.isActive == true
+        )
+        if (!shouldWarm || next == null) return
+        imagePrefetchChapterId = next.id
+        imagePrefetchJob = viewModelScope.launch {
+            try {
+                val outcome = container.chapterTextLoader
+                    .ensureStored(bookId, next)
+                if (outcome is
+                    app.xreader.data.download.ChapterTextLoader.Outcome.Stored
+                ) {
+                    val fresh = outcome.chapter
+                    // The state's row becomes the stored one, so
+                    // the turn onto this chapter is a local read
+                    // and later triggers see nextStored = true.
+                    _state.value = _state.value.copy(
+                        chapters = chaptersUpdated(
+                            _state.value.chapters.map {
+                                if (it.id == fresh.id) fresh else it
+                            }
+                        )
+                    )
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (ignored: Exception) {
+                // Warming is best-effort: a failure leaves the
+                // chapter unstored and the manual open path will
+                // surface its own honest error if it also fails.
+            } finally {
+                if (imagePrefetchChapterId == next.id) {
+                    imagePrefetchChapterId = null
+                }
             }
         }
     }
@@ -644,6 +764,9 @@ class ReaderViewModel(
                     app.xreader.data.prefs.PerfTier.MINIMAL
             )
             val anchorEntry = entries.firstOrNull { it.chapterIndex == anchorIndex }
+            if (anchorEntry?.text != null) {
+                visibleTextChapterIndex = anchorIndex
+            }
             _state.value = _state.value.copy(
                 streamActive = true,
                 streamEntries = entries,
@@ -733,9 +856,11 @@ class ReaderViewModel(
                     val fresh = outcome.chapter
                     val text = loadStreamText(fresh)
                     _state.value = _state.value.copy(
-                        chapters = _state.value.chapters.map {
-                            if (it.id == fresh.id) fresh else it
-                        },
+                        chapters = chaptersUpdated(
+                            _state.value.chapters.map {
+                                if (it.id == fresh.id) fresh else it
+                            }
+                        ),
                         streamEntries = _state.value.streamEntries.map {
                             if (it.chapterIndex == index) {
                                 it.copy(
@@ -778,6 +903,7 @@ class ReaderViewModel(
             // ≥90% read counts as finished (same rule the paged
             // reader's turns apply, honestly labelled).
             val leftFraction = streamFractions[previousIndex] ?: 0f
+            visibleTextChapterIndex = chapterIndex
             _state.value = stateNow.copy(
                 chapterIndex = chapterIndex,
                 chapterText = text
@@ -804,9 +930,11 @@ class ReaderViewModel(
         viewModelScope.launch { container.database.chapterDao().setRead(chapter.id, true) }
         container.aiChapterHooks.onChapterRead(bookId, chapter.id)
         _state.value = _state.value.copy(
-            chapters = _state.value.chapters.map {
-                if (it.id == chapter.id) it.copy(read = true) else it
-            }
+            chapters = chaptersUpdated(
+                _state.value.chapters.map {
+                    if (it.id == chapter.id) it.copy(read = true) else it
+                }
+            )
         )
     }
 
@@ -888,8 +1016,20 @@ class ReaderViewModel(
         } else {
             PageLocator.chapterFraction(clamped, text.length)
         }
+        // v1.2.0 (Wave 3, audit #2): the current chapter is
+        // resolved through the id→index map built when the list
+        // changed — O(1) — instead of any per-settle scan of the
+        // list. (The audit's claimed linear `firstOrNull` lookup
+        // does not exist in this tree; the real per-settle linear
+        // cost was the drop+map+estimate over EVERY later chapter
+        // below, plus the remainder-of-chapter word count, which
+        // is bounded by the chapter, not the book.)
+        val stateBefore = _state.value
+        val chapterIndex = chapterPositionIndex
+            .indexOfChapter(stateBefore.chapter?.id)
+            ?: stateBefore.chapterIndex
         val bookFraction = PageLocator.bookFraction(
-            _state.value.chapterIndex, chapterFraction, _state.value.chapters.size
+            chapterIndex, chapterFraction, stateBefore.chapters.size
         )
         val estimator = container.wpmEstimator
         val wordsLeftChapter =
@@ -898,45 +1038,82 @@ class ReaderViewModel(
         // sum only the word counts already known, so a source
         // book showed "≈17 min in book" at chapter 87 of
         // 1,692 — the book page's old lie, still alive in the
-        // reader. Later chapters now go through the same
-        // estimator as the book page: chapters whose length
-        // isn't known count at this book's own average.
-        val laterMinutes = app.xreader.domain.reader.WpmEstimator
-            .estimateRemainingMinutes(
-                _state.value.chapters
-                    .drop(_state.value.chapterIndex + 1)
-                    .map {
-                        app.xreader.domain.reader.WpmEstimator
-                            .ChapterWords(it.read, it.wordCount)
-                    },
-                estimator.wpm()
-            ).first
-        _state.value = _state.value.copy(
-            positionOffset = clamped,
-            chapterFraction = chapterFraction,
-            bookFraction = bookFraction,
-            minutesLeftInChapter = estimator.minutesLeft(wordsLeftChapter),
-            minutesLeftInBook =
-                estimator.minutesLeft(wordsLeftChapter) + laterMinutes,
-            currentPositionBookmarked = _bookmarks.value.any {
-                it.chapterIndex == _state.value.chapterIndex &&
-                    kotlin.math.abs(it.charOffset - clamped) <= BOOKMARK_SNAP_CHARS
-            }
-        )
+        // reader. Later chapters go through the same estimator
+        // as the book page: chapters whose length isn't known
+        // count at this book's own average. v1.2.0: that estimate
+        // is now read from the index's precomputed suffix
+        // aggregates — O(1), same value (pinned against
+        // WpmEstimator.estimateRemainingMinutes by tests).
+        val laterMinutes = chapterPositionIndex
+            .remainingMinutesAfter(chapterIndex, estimator.wpm())
+        val minutesLeftChapter = estimator.minutesLeft(wordsLeftChapter)
+        val bookmarked = _bookmarks.value.any {
+            it.chapterIndex == chapterIndex &&
+                kotlin.math.abs(it.charOffset - clamped) <= BOOKMARK_SNAP_CHARS
+        }
+        // Narrowing (audit #2c): if nothing the UI reads actually
+        // changed, don't republish the whole reader state at all.
+        // The state itself stays a single StateFlow — ReaderScreen
+        // collects it whole and position fields are interwoven
+        // with it (chapterFraction drives the chrome slider,
+        // positionOffset keys the AI bind and the bookmark
+        // toggle), so a separate position flow would need dual
+        // collection at every consumer for no cheaper copy.
+        if (stateBefore.positionOffset != clamped ||
+            stateBefore.chapterFraction != chapterFraction ||
+            stateBefore.bookFraction != bookFraction ||
+            stateBefore.minutesLeftInChapter != minutesLeftChapter ||
+            stateBefore.minutesLeftInBook != minutesLeftChapter + laterMinutes ||
+            stateBefore.currentPositionBookmarked != bookmarked
+        ) {
+            _state.value = stateBefore.copy(
+                positionOffset = clamped,
+                chapterFraction = chapterFraction,
+                bookFraction = bookFraction,
+                minutesLeftInChapter = minutesLeftChapter,
+                minutesLeftInBook = minutesLeftChapter + laterMinutes,
+                currentPositionBookmarked = bookmarked
+            )
+        }
         scheduleProgressSave()
+        maybeWarmNextImageChapter(chapterFraction)
     }
 
+    /**
+     * v1.2.0 (Wave 3): progress writes are COALESCED through
+     * [ProgressSaveCoalescer] — a write lands on a settle, but
+     * never more often than the coarse interval during continuous
+     * scrolling, so a long read no longer invalidates the
+     * whole-library Flows every ~1.5 s. Each new position
+     * reschedules the single pending write at the coalescer's
+     * due time; forced flushes (chapter change, pause) bypass it.
+     */
     private fun scheduleProgressSave() {
+        val now = System.currentTimeMillis()
+        val dueMs = progressCoalescer.onPosition(now)
         saveJob?.cancel()
         saveJob = viewModelScope.launch {
-            delay(SAVE_DEBOUNCE_MS)
+            delay((dueMs - System.currentTimeMillis()).coerceAtLeast(0L))
             saveProgressNow()
         }
+    }
+
+    /** The guaranteed flush: cancel any coalesced write and
+     * persist the CURRENT position immediately and exactly. */
+    private suspend fun flushProgressNow() {
+        saveJob?.cancel()
+        saveProgressNow()
     }
 
     private suspend fun saveProgressNow() {
         val stateNow = _state.value
         val chapter = stateNow.chapter ?: return
+        // Keep-previous guard: while a chapter load is in flight
+        // the visible text (and the position describing it) still
+        // belongs to the outgoing chapter — never write it against
+        // the incoming chapter's row. The incoming chapter's own
+        // onPosition resumes saves the moment its text lands.
+        if (visibleTextChapterIndex != stateNow.chapterIndex) return
         val now = System.currentTimeMillis()
         container.database.readingProgressDao().upsert(
             ReadingProgress(
@@ -955,6 +1132,7 @@ class ReaderViewModel(
                     .update(book.copy(lastOpenedAt = now, updatedAt = now))
             }
         }
+        progressCoalescer.markPersisted(now)
     }
 
     /** Scroll-mode end-of-chapter detection + explicit paged turns. */
@@ -968,9 +1146,11 @@ class ReaderViewModel(
         // studies it (guarded + best-effort inside the hook).
         container.aiChapterHooks.onChapterRead(bookId, chapter.id)
         _state.value = _state.value.copy(
-            chapters = _state.value.chapters.map {
-                if (it.id == chapter.id) it.copy(read = true) else it
-            }
+            chapters = chaptersUpdated(
+                _state.value.chapters.map {
+                    if (it.id == chapter.id) it.copy(read = true) else it
+                }
+            )
         )
     }
 
@@ -1012,10 +1192,13 @@ class ReaderViewModel(
         currentChapterMaxOffset = 0
     }
 
-    /** Lifecycle hook from the screen: progress + session flush. */
+    /** Lifecycle hook from the screen: progress + session flush.
+     * v1.2.0: the progress write is a forced flush — leaving /
+     * backgrounding the reader always persists the exact final
+     * position, whatever the coalescer's schedule said. */
     fun onReaderPaused() {
         viewModelScope.launch {
-            saveProgressNow()
+            flushProgressNow()
             tracker.pause()
         }
     }
@@ -1028,11 +1211,38 @@ class ReaderViewModel(
     override fun onCleared() {
         // Best-effort final flush on a fire-and-forget scope: the
         // container outlives the VM, and Room writes are quick.
+        // v1.2.0: the reader's final position is part of that
+        // flush — captured synchronously from the state (the VM
+        // scope is already gone), written on the same IO scope, so
+        // leaving the reader can never lose the exact place.
+        val stateAtClear = _state.value
+        // Same keep-previous guard as saveProgressNow: a clear
+        // mid-load must not write the visible text's position
+        // against the incoming chapter's row.
+        val chapterAtClear = stateAtClear.chapter
+            ?.takeIf { visibleTextChapterIndex == stateAtClear.chapterIndex }
         val snapshot = if (tracker.isRunning) tracker.end() else null
-        if (snapshot != null) {
+        if (snapshot != null || chapterAtClear != null) {
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                container.sessionRecorder.record(sessionBookId, snapshot)
-                runCatching { container.expService.settle() }
+                if (chapterAtClear != null) {
+                    runCatching {
+                        container.database.readingProgressDao().upsert(
+                            ReadingProgress(
+                                bookId = bookId,
+                                chapterId = chapterAtClear.id,
+                                chapterIndex = stateAtClear.chapterIndex,
+                                charOffset = stateAtClear.positionOffset,
+                                fraction = stateAtClear.bookFraction,
+                                scrollFraction = stateAtClear.chapterFraction,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
+                }
+                if (snapshot != null) {
+                    container.sessionRecorder.record(sessionBookId, snapshot)
+                    runCatching { container.expService.settle() }
+                }
             }
         }
         if (readAloudLazy.isInitialized()) readAloud.shutdown()
@@ -1487,7 +1697,9 @@ class ReaderViewModel(
     }
 
     companion object {
-        const val SAVE_DEBOUNCE_MS = 1_500L
+        /** Kept for source compatibility; the settle window now
+         * lives in [ProgressSaveCoalescer.SETTLE_MS] (same value). */
+        const val SAVE_DEBOUNCE_MS = ProgressSaveCoalescer.SETTLE_MS
         const val BOOKMARK_SNAP_CHARS = 400
 
         /** v1.0.6.2 (F3): the live-fetch wait — polls × cadence

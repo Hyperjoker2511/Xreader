@@ -101,7 +101,14 @@ object SiteCheck {
         ) {
             return true
         }
-        val text = doc.body()?.text()?.lowercase().orEmpty()
+        // WS3 (class M): the phrase may live ONLY in the
+        // document title — one batch site's custom challenge
+        // page carries "Just a moment" in its <title> and no
+        // Cloudflare selectors anywhere, so a body-only scan
+        // reported a plain HTTP error and never routed the
+        // page to the site-check flow built for it.
+        val text = (doc.title() + " " + (doc.body()?.text().orEmpty()))
+            .lowercase()
         return CHALLENGE_PHRASES.any { it in text }
     }
 }

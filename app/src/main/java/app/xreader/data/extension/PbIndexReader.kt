@@ -1,5 +1,8 @@
 package app.xreader.data.extension
 
+import java.io.ByteArrayOutputStream
+import java.util.zip.GZIPInputStream
+
 /**
  * A minimal reader for the tachiyomix repository index
  * (v1.0.9) — the protobuf format Mihon's current extension
@@ -35,6 +38,24 @@ package app.xreader.data.extension
  * here is a varint or a length-delimited string/message, and
  * unknown fields are skipped by wire type. Malformed input
  * yields null — this reader never throws.
+ *
+ * Two wire realities the reader absorbs itself (site-batch
+ * Phase A, verified against the real Keiyoushi capture):
+ *
+ * - GZIP: the published `index.pb` arrives gzip-wrapped.
+ *   OkHttp's default client decompresses a `Content-Encoding:
+ *   gzip` response transparently, but a repo serving the file
+ *   AS gzip data (no such header), or any non-OkHttp path,
+ *   hands this reader the raw gzip bytes — so the reader
+ *   sniffs the gzip magic and unwraps, exactly as the
+ *   `.tachibk` reader does. "May be gzip-wrapped" is a
+ *   property of the format, not of one HTTP client.
+ * - FIELD 101 SHAPES: field 101 is a singular message field,
+ *   so proto3 merge semantics apply — several 101 payloads
+ *   are read as ONE merged ExtensionList, not just the
+ *   first; and a payload that is itself a bare Extension
+ *   (a publisher writing extensions as repeated 101 entries,
+ *   no list wrapper) is accepted as a one-extension list.
  */
 data class PbSource(
     val id: Long,
@@ -66,14 +87,14 @@ data class PbIndex(
 object PbIndexReader {
 
     fun read(bytes: ByteArray): PbIndex? {
-        val index = parseMessage(bytes) ?: return null
-        val listBytes = index.bytes(101).firstOrNull()
-        val extensions = if (listBytes != null) {
-            val list = parseMessage(listBytes) ?: return null
-            list.bytes(1).mapNotNull { parseExtension(it) }
-        } else {
-            emptyList()
-        }
+        val plain = unwrapGzip(bytes) ?: return null
+        val index = parseMessage(plain) ?: return null
+        // Every field-101 payload contributes its extensions
+        // (proto3 merge semantics for a singular message
+        // field); a payload may be an ExtensionList wrapper
+        // or, in the unwrapped shape, a bare Extension.
+        val extensions = index.bytes(101)
+            .flatMap { extensionsFromPayload(it) }
         return PbIndex(
             name = index.string(1) ?: "",
             signingKey = index.string(3),
@@ -81,6 +102,60 @@ object PbIndexReader {
             extensionListUrl = index.string(102)
         )
     }
+
+    /** One field-101 payload → its extensions. A genuine
+     * ExtensionList parses to extensions that carry package
+     * names; anything else is tried as a bare Extension
+     * message before falling back to whatever the list read
+     * produced (possibly empty). */
+    private fun extensionsFromPayload(payload: ByteArray): List<PbExtension> {
+        val list = parseMessage(payload) ?: return emptyList()
+        val fromList = list.bytes(1).mapNotNull { parseExtension(it) }
+        if (fromList.isNotEmpty() &&
+            fromList.all { it.packageName.isNotBlank() }
+        ) {
+            return fromList
+        }
+        val direct = parseExtension(payload)
+        if (direct != null && direct.name.isNotBlank() &&
+            direct.packageName.isNotBlank()
+        ) {
+            return listOf(direct)
+        }
+        return fromList
+    }
+
+    /** The bytes as a plain protobuf message: gzip-wrapped
+     * input (magic `1f 8b`) is decompressed, anything else is
+     * passed through untouched. Null on a corrupt or absurdly
+     * large gzip stream — the reader never throws. */
+    private fun unwrapGzip(bytes: ByteArray): ByteArray? {
+        if (bytes.size < 2 ||
+            bytes[0] != 0x1f.toByte() || bytes[1] != 0x8b.toByte()
+        ) {
+            return bytes
+        }
+        return try {
+            GZIPInputStream(bytes.inputStream()).use { gzip ->
+                val out = ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = gzip.read(buffer)
+                    if (read < 0) break
+                    out.write(buffer, 0, read)
+                    if (out.size() > MAX_DECOMPRESSED_BYTES) return null
+                }
+                out.toByteArray()
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** A decompressed index is a catalogue, not a payload:
+     * 64 MB is far beyond any published repo index (the real
+     * Keiyoushi one is 0.7 MB) and bounds a gzip bomb. */
+    private const val MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024
 
     private fun parseExtension(bytes: ByteArray): PbExtension? {
         val ext = parseMessage(bytes) ?: return null

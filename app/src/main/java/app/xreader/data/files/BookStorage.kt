@@ -56,6 +56,46 @@ class BookStorage(val filesDir: File) {
     fun coverRelative(bookId: Long, extension: String): String =
         "covers/$bookId.${extension.lowercase()}"
 
+    // -- v1.2.0 (audit finding 1 / D2): per-book disk-usage cache --
+    // The Downloads projection used to run a recursive walk of a
+    // book's whole file tree on EVERY queue emission (and a queue
+    // row changes per chapter during a bulk download). Callers
+    // that only need the number use the cached variant; the cache
+    // is invalidated by every write/delete in this class that can
+    // change a book's bytes (chapter content below, translated
+    // content, copied assets, and the delete paths), and callers
+    // can invalidate explicitly after out-of-band changes (a
+    // download completing through another path, a cache clear).
+    private val bookSizeCache =
+        java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    @Volatile private var coversSizeCache: Long? = null
+
+    /** Cached twin of [bookFilesSizeBytes]: walks the disk only
+     * on a cache miss for this book. */
+    fun bookFilesSizeBytesCached(book: app.xreader.data.db.Book): Long =
+        bookSizeCache.getOrPut(book.id) { bookFilesSizeBytes(book) }
+
+    fun invalidateBookFilesSize(bookId: Long) {
+        bookSizeCache.remove(bookId)
+    }
+
+    fun invalidateAllBookFileSizes() {
+        bookSizeCache.clear()
+        coversSizeCache = null
+    }
+
+    /** Total bytes of the covers directory (a walk). */
+    fun coversDirSizeBytes(): Long = runCatching {
+        coversDir().walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    }.getOrDefault(0L)
+
+    /** Cached twin of [coversDirSizeBytes]. Cover writes in this
+     * codebase land via direct file copies in import/sync code,
+     * so callers clear caches explicitly (Downloads' Clean Cache
+     * path calls [invalidateAllBookFileSizes]). */
+    fun coversDirSizeBytesCached(): Long =
+        coversSizeCache ?: coversDirSizeBytes().also { coversSizeCache = it }
+
     /** Atomic write of one chapter's normalised content. */
     suspend fun writeChapterContent(
         bookId: Long,
@@ -65,6 +105,7 @@ class BookStorage(val filesDir: File) {
         val relative = chapterContentRelative(bookId, chapterId)
         val target = resolve(relative)
         writeAtomic(target, json.encodeToString(ChapterContent.serializer(), content))
+        invalidateBookFilesSize(bookId)
         relative
     }.mapStorageError("saving the chapter")
 
@@ -79,6 +120,7 @@ class BookStorage(val filesDir: File) {
     fun copyIntoContentDir(bookId: Long, staged: File, fileName: String): String {
         val dest = File(contentDir(bookId), "img-$fileName")
         staged.copyTo(dest, overwrite = true)
+        invalidateBookFilesSize(bookId)
         return "content/$bookId/img-$fileName"
     }
 
@@ -99,6 +141,7 @@ class BookStorage(val filesDir: File) {
     ): AppResult<String> = runCatchingAppSuspend {
         val relative = translatedContentRelative(bookId, chapterId)
         writeAtomic(resolve(relative), json.encodeToString(ChapterContent.serializer(), content))
+        invalidateBookFilesSize(bookId)
         relative
     }.mapStorageError("saving the translation")
 
@@ -111,6 +154,7 @@ class BookStorage(val filesDir: File) {
 
     fun deleteTranslatedContent(bookId: Long, chapterId: Long) {
         resolve(translatedContentRelative(bookId, chapterId)).delete()
+        invalidateBookFilesSize(bookId)
     }
 
     /** Lore art directory for one book: `lore-art/<bookId>/`. */
@@ -137,6 +181,7 @@ class BookStorage(val filesDir: File) {
      * book (v1.0.1 cleanup): the book's own file and cover stay. */
     fun deleteDownloadedContent(book: app.xreader.data.db.Book) {
         File(filesDir, "content/${book.id}").deleteRecursively()
+        invalidateBookFilesSize(book.id)
     }
 
     /** Deletes every file belonging to a book (Remove book, §4). */
@@ -144,6 +189,8 @@ class BookStorage(val filesDir: File) {
         book.filePath?.let { resolve(it).parentFile?.deleteRecursively() }
         File(filesDir, "content/${book.id}").deleteRecursively()
         book.coverPath?.let { resolve(it).delete() }
+        invalidateBookFilesSize(book.id)
+        coversSizeCache = null
     }
 
     /** Writes [text] to [target] via a temp sibling + rename. */

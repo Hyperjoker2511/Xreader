@@ -133,7 +133,14 @@ data class ChapterListSpec(
      * allowed). Both null (every spec written before) = the
      * rendered rows are the whole list, exactly as before. */
     val urlPattern: String? = null,
-    val totalCountPattern: String? = null
+    val totalCountPattern: String? = null,
+    /** WS3 (class D): the chapter total as a NUMBER, for lists
+     * the learner completed from the page's own evidence (the
+     * strict-pattern window whose newest-chapter links imply
+     * the total) rather than from a stated-total text pattern.
+     * The engine's pattern completion accepts either source;
+     * null (every spec written before) = no numeric total. */
+    val totalCount: Int? = null
 ) {
 
     /** The chapter total the book page's visible text states,

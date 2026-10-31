@@ -37,7 +37,6 @@ import app.xreader.domain.reader.ChapterText
 import app.xreader.domain.reader.ReaderConfig
 import app.xreader.ui.theme.EmberAmber
 import app.xreader.ui.theme.ReaderPalette
-import coil.compose.AsyncImage
 import java.io.File
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.SharedFlow
@@ -92,6 +91,13 @@ fun ScrollReader(
     val listState = rememberLazyListState()
     val blocks = chapterText.content.blocks
     var lastReportedOffset by remember(chapterText) { mutableStateOf(-1) }
+    // v1.2.0 (WS2): scroll lock for image zoom — the block indices
+    // whose ZoomableImage currently reports a pinch/pan in
+    // progress or a zoomed-in state. While any is active the
+    // column must not scroll: drags belong to the image. The zoom
+    // STATE itself stays per-item inside ZoomableImage; this set
+    // carries only the lock signal.
+    var zoomLockedBlocks by remember { mutableStateOf<Set<Int>>(emptySet()) }
 
     // Restore: land on the saved block, nudged by the saved fraction.
     LaunchedEffect(restoreGeneration) {
@@ -195,6 +201,7 @@ fun ScrollReader(
         SelectionContainer {
             LazyColumn(
                 state = listState,
+                userScrollEnabled = zoomLockedBlocks.isEmpty(),
                 contentPadding = PaddingValues(
                     start = config.marginHorizontalDp.dp,
                     end = config.marginHorizontalDp.dp,
@@ -219,7 +226,14 @@ fun ScrollReader(
                         overlayActive = overlayBlockId != null &&
                             chapterText.rangeOf(index)?.blockId == overlayBlockId,
                         assetFile = assetFile,
-                        onParagraphAction = onParagraphAction
+                        onParagraphAction = onParagraphAction,
+                        onZoomActiveChanged = { active ->
+                            zoomLockedBlocks = if (active) {
+                                zoomLockedBlocks + index
+                            } else {
+                                zoomLockedBlocks - index
+                            }
+                        }
                     )
                 }
                 item(key = "end-pad") {
@@ -246,14 +260,23 @@ private fun ScrollBlock(
     spokenRange: IntRange?,
     overlayActive: Boolean,
     assetFile: (String) -> File,
-    onParagraphAction: (blockIndex: Int, action: ParagraphAction) -> Unit
+    onParagraphAction: (blockIndex: Int, action: ParagraphAction) -> Unit,
+    onZoomActiveChanged: (Boolean) -> Unit = {}
 ) {
     val range = chapterText.rangeOf(blockIndex) ?: return
     when (block) {
-        is ChapterBlock.Image -> AsyncImage(
+        // v1.2.0 (WS2): image blocks zoom (pinch / pan /
+        // double-tap) via the shared ZoomableImage — comic pages
+        // and novel illustrations alike. Text blocks are
+        // untouched. The transform is graphicsLayer-only, so
+        // position reporting above is unaffected.
+        is ChapterBlock.Image -> ZoomableImage(
             model = assetFile(block.fileName),
             contentDescription = block.alt,
             contentScale = ContentScale.FillWidth,
+            doubleTapToZoom = config.doubleTapToZoom,
+            disableZoomOut = config.disableZoomOut,
+            onZoomActiveChanged = onZoomActiveChanged,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 8.dp)
@@ -268,23 +291,40 @@ private fun ScrollBlock(
         )
         else -> {
             var menuOpen by remember(blockIndex) { mutableStateOf(false) }
-            val backgrounds = blockBackgrounds(
-                blockStart = range.start,
-                blockEnd = range.end,
-                highlightRanges = highlights.map { it.startOffset to it.endOffset },
-                spokenRange = spokenRange,
-                overlayActive = overlayActive,
-                highlightColor = palette.accent.copy(alpha = 0.38f),
-                spokenColor = palette.accent.copy(alpha = 0.30f),
-                overlayColor = palette.accent.copy(alpha = 0.20f)
-            )
+            // v1.2.0 (Wave 3, audit #2): the washes + the
+            // AnnotatedString are remembered per block, keyed by
+            // everything that can change them — the block itself,
+            // its range, the highlights, the spoken/overlay state,
+            // the palette and bionic reading — instead of being
+            // rebuilt on every recomposition of the item.
+            val highlightColor = palette.accent.copy(alpha = 0.38f)
+            val spokenColor = palette.accent.copy(alpha = 0.30f)
+            val overlayColor = palette.accent.copy(alpha = 0.20f)
+            val backgrounds = remember(
+                block, range.start, range.end, highlights, spokenRange,
+                overlayActive, highlightColor, spokenColor, overlayColor
+            ) {
+                blockBackgrounds(
+                    blockStart = range.start,
+                    blockEnd = range.end,
+                    highlightRanges = highlights.map { it.startOffset to it.endOffset },
+                    spokenRange = spokenRange,
+                    overlayActive = overlayActive,
+                    highlightColor = highlightColor,
+                    spokenColor = spokenColor,
+                    overlayColor = overlayColor
+                )
+            }
+            val annotated = remember(block, config.bionicReading, backgrounds) {
+                annotatedForBlock(
+                    block = block,
+                    bionic = config.bionicReading,
+                    backgrounds = backgrounds
+                )
+            }
             Box {
                 Text(
-                    annotatedForBlock(
-                        block = block,
-                        bionic = config.bionicReading,
-                        backgrounds = backgrounds
-                    ),
+                    annotated,
                     style = blockTextStyle(block, config, fontFamily),
                     color = palette.text,
                     modifier = Modifier

@@ -37,8 +37,6 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
@@ -230,8 +228,9 @@ fun ReaderScreen(
     }
 
     var activeSheet by remember { mutableStateOf<ActiveSheet?>(null) }
-    // Nocturne §5.11: the chrome's Theme tile opens the Settings
-    // sheet straight on its Page & text sub-page.
+    // The settings sheet always opens on its index now (v1.2.0:
+    // the old Theme tile that deep-linked to the "page" sub-page
+    // folded into the sheet — see ReaderChrome's bottom bar).
     var settingsInitialPage by remember { mutableStateOf("index") }
 
     // v1.0.1 reading comfort: the chrome fades away on its own after
@@ -439,7 +438,12 @@ fun ReaderScreen(
         }
 
         when {
-            state.loading -> Column(
+            // v1.2.0 (Wave 3): the full-screen spinner shows ONLY
+            // when there is no previous chapter to keep on screen
+            // (first open). While a chapter turn fetches, the
+            // ViewModel keeps the previous chapterText and the
+            // reader branch below keeps rendering it.
+            state.loading && state.chapterText == null -> Column(
                 Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -609,21 +613,6 @@ fun ReaderScreen(
             onOpenSettings = {
                 settingsInitialPage = "index"
                 activeSheet = ActiveSheet.SETTINGS
-            },
-            onOpenTheme = {
-                settingsInitialPage = "page"
-                activeSheet = ActiveSheet.SETTINGS
-            },
-            autoScrollActive = config.autoScrollEnabled,
-            onToggleAutoScroll = {
-                viewModel.updateConfig {
-                    it.copy(autoScrollEnabled = !it.autoScrollEnabled)
-                }
-                notice = if (config.autoScrollEnabled) {
-                    "Auto-scroll off"
-                } else {
-                    "Auto-scroll on"
-                }
             },
             onOpenAi = { onOpenAiPage() },
             onTopBarHeight = { px -> if (px > 0) topChromePx = px },
@@ -932,9 +921,6 @@ private fun ReaderChrome(
     onOpenListen: () -> Unit,
     onOpenFocus: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenTheme: () -> Unit = {},
-    autoScrollActive: Boolean = false,
-    onToggleAutoScroll: () -> Unit = {},
     onOpenAi: () -> Unit,
     /** v1.0.6.2 (F7): the bars' measured heights (px), so the
      * text insets match the real chrome, never a guess. */
@@ -1014,25 +1000,34 @@ private fun ReaderChrome(
             enter = sharedAxisYEnter(reduceMotion = reduceMotion),
             exit = sharedAxisYExit(reduceMotion = reduceMotion)
         ) {
-            // Nocturne §5.11: the controls dock is a FROSTED
-            // CAPSULE (24dp corners, Q12) floating above the nav
-            // inset + the shared dead-strip lift. The measured
-            // height still includes the lift, so the reader's
-            // text insets (F7) stay exact.
+            // v1.2.0 (Wave 3): the bottom bar is ONE neat frosted
+            // CAPSULE in the main dock's language (ui/shell's
+            // floating pill: full-pill radius, hairline border,
+            // raised shadow, 16dp side margins, floating above the
+            // nav inset + the shared dead-strip lift). The reader
+            // is palette-local, so the glass tint comes from the
+            // PALETTE rather than the app scheme (the GlassChipButton
+            // rule) — geometry and spacing are the dock's. Two
+            // blocks only: a slim progress block (compact merged
+            // chapter/position label over the slider, prev/next at
+            // its sides — the old separate telemetry pill is folded
+            // into it) and ONE row of action tiles. The measured
+            // height still includes the lift, so the reader's text
+            // insets (F7) stay exact.
             Box(
                 Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
                     .padding(bottom = app.xreader.ui.theme.FloatingChromeLift)
-                    .padding(horizontal = 12.dp)
+                    .padding(horizontal = 16.dp)
                     .onSizeChanged { onBottomBarHeight(it.height) }
             ) {
             Surface(
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(50),
                 color = chromeColor,
                 contentColor = palette.text,
                 border = BorderStroke(1.dp, palette.text.copy(alpha = 0.12f)),
-                shadowElevation = 8.dp,
+                shadowElevation = 6.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -1045,6 +1040,11 @@ private fun ReaderChrome(
                     LaunchedEffect(bookFraction) {
                         if (!sliderDragging) sliderFraction = bookFraction
                     }
+                    // Progress block: the merged label line (REAL
+                    // fields only — chapter position, book %, and
+                    // the existing time-left labels; no battery or
+                    // clock) sits directly over the slim slider,
+                    // with the chapter-turn buttons at its sides.
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -1052,63 +1052,62 @@ private fun ReaderChrome(
                         IconButton(onClick = onPreviousChapter, enabled = hasPrevious) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Previous chapter")
                         }
-                        Slider(
-                            value = sliderFraction,
-                            onValueChange = {
-                                sliderDragging = true
-                                sliderFraction = it
-                            },
-                            onValueChangeFinished = {
-                                sliderDragging = false
-                                onSeekFraction(sliderFraction)
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
+                        Column(Modifier.weight(1f)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    ReaderCounters.footerLine(
+                                        chapterIndex, chapterCount
+                                    ) + " · ${(bookFraction * 100).toInt()}%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = palette.muted,
+                                    maxLines = 1
+                                )
+                                if (showTimeEstimates) {
+                                    Text(
+                                        "${WpmEstimator.formatMinutes(minutesLeftInChapter)} in chapter · " +
+                                            "${WpmEstimator.formatMinutes(minutesLeftInBook)} in book",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = palette.muted,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                            Slider(
+                                value = sliderFraction,
+                                onValueChange = {
+                                    sliderDragging = true
+                                    sliderFraction = it
+                                },
+                                onValueChangeFinished = {
+                                    sliderDragging = false
+                                    onSeekFraction(sliderFraction)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                         IconButton(onClick = onNextChapter, enabled = hasNext) {
                             Icon(Icons.AutoMirrored.Filled.ArrowForward, "Next chapter")
                         }
                     }
-                    // Telemetry pill (Nocturne §5.11): REAL fields
-                    // only — chapter, book %, and the app's existing
-                    // time-left labels. No battery/clock is added.
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = palette.text.copy(alpha = 0.07f),
-                        contentColor = palette.text,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                ReaderCounters.footerLine(chapterIndex, chapterCount),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = palette.muted
-                            )
-                            Text(
-                                "${(bookFraction * 100).toInt()}%",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = palette.accent
-                            )
-                            if (showTimeEstimates) {
-                                Text(
-                                    "${WpmEstimator.formatMinutes(minutesLeftInChapter)} in chapter · " +
-                                        "${WpmEstimator.formatMinutes(minutesLeftInBook)} in book",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = palette.muted
-                                )
-                            }
-                        }
-                    }
-                    // Quick actions (Nocturne §5.11): tile doors
-                    // that OPEN the real sheets — Contents → TOC,
-                    // Type → Settings, Theme → the page-theme
-                    // sub-page, Auto → the auto-scroll toggle. The
-                    // existing Listen / Ask AI / Focus doors stay.
+                    // ONE row of action tiles. Contents / Listen /
+                    // Ask AI / Focus keep their doors. Type, Theme
+                    // and Auto folded into the settings sheet —
+                    // verified present there by symbol before
+                    // folding (ReaderSheets.kt): typography on the
+                    // "Page & text" sub-page (SheetSection "Font",
+                    // the fontSizeSp SheetSlider, line height /
+                    // margins / alignment), theme in SheetSection
+                    // "Page theme" on the same sub-page, and
+                    // auto-scroll in SheetSection "Auto-scroll"
+                    // (SheetSwitch "Auto-scroll / auto page-turn")
+                    // on the "Reading" sub-page. The Settings tile
+                    // opens that sheet's index, so each folded
+                    // control is at most one extra tap away and
+                    // nothing was removed.
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1133,18 +1132,7 @@ private fun ReaderChrome(
                             modifier = Modifier.weight(1f)
                         )
                         ChromeAction(
-                            Icons.Filled.Settings, "Type", palette, onOpenSettings,
-                            modifier = Modifier.weight(1f)
-                        )
-                        ChromeAction(
-                            Icons.Filled.Palette, "Theme", palette, onOpenTheme,
-                            modifier = Modifier.weight(1f)
-                        )
-                        ChromeAction(
-                            Icons.Filled.PlayArrow, "Auto",
-                            palette,
-                            onToggleAutoScroll,
-                            active = autoScrollActive,
+                            Icons.Filled.Settings, "Settings", palette, onOpenSettings,
                             modifier = Modifier.weight(1f)
                         )
                     }

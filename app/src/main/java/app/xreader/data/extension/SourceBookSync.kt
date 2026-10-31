@@ -37,6 +37,21 @@ class SourceBookSync(
     private val service: ExtensionService,
     private val storage: BookStorage,
     private val transport: HttpTransport,
+    /** v1.2.0 (audit D10): runs a block of DAO writes as ONE
+     * database transaction, so a chapter-list refresh lands
+     * whole or not at all instead of committing (and
+     * re-emitting every observer) per row. AppContainer wires
+     * Room's withTransaction in the DownloadController pattern;
+     * tests and other embeddings default to running the block
+     * directly, exactly as before. Declared BEFORE [nowMs] on
+     * purpose: a trailing lambda binds to the LAST function-type
+     * parameter, and existing callers may pass the clock that
+     * way. NOTE for the coordinator: AppContainer's
+     * SourceBookSync construction still needs its
+     * `inTransaction = { block -> database.withTransaction(block) }`
+     * line — without it this defaults to the direct run. */
+    private val inTransaction: suspend (suspend () -> Unit) -> Unit =
+        { block -> block() },
     private val nowMs: () -> Long = { System.currentTimeMillis() }
 ) {
 
@@ -160,9 +175,21 @@ class SourceBookSync(
             description = book.description.ifBlank { null }
         )
         val pair = withContext(Dispatchers.IO) {
-            if (resolved.source is DeclarativeSource) {
-                service.guarded(resolved) {
-                    (it as DeclarativeSource).detailsAndChapters(ref)
+            if (resolved.source is DeclarativeSource ||
+                resolved.source is LiveSource
+            ) {
+                // v1.2.0 (A2): Live sources take the ONE-fetch
+                // combined read too — they have had a
+                // detailsAndChapters all along; falling back to
+                // separate details() + chapters() calls fetched
+                // the book page once per call on top of the
+                // derivation fetch.
+                service.guarded(resolved) { source ->
+                    when (source) {
+                        is DeclarativeSource -> source.detailsAndChapters(ref)
+                        is LiveSource -> source.detailsAndChapters(ref)
+                        else -> error("unreachable: guarded source kind changed")
+                    }
                 }
             } else {
                 val details = service.guarded(resolved) { it.details(ref) }
@@ -238,40 +265,48 @@ class SourceBookSync(
         plan: ChapterReconciler.Plan,
         now: Long
     ) {
-        plan.dropped.forEach { chapterDao.delete(it) }
-        val moves = (plan.updates + plan.keptStale)
-            .filter { it.row.index != it.newIndex }
-        moves.forEachIndexed { i, update ->
-            chapterDao.update(update.row.copy(index = -1_000_000 - i))
-        }
-        (plan.updates + plan.keptStale).forEach { update ->
-            val changed = update.row.index != update.newIndex ||
-                update.row.title != update.newTitle ||
-                update.row.remoteId != update.newRemoteId ||
-                update.row.dateText != update.newDateText
-            if (changed) {
-                chapterDao.update(
-                    update.row.copy(
-                        index = update.newIndex,
-                        title = update.newTitle,
-                        remoteId = update.newRemoteId,
+        // v1.2.0 (audit D10): the whole plan — drops, the
+        // two-phase index park + rewrite, and the inserts —
+        // commits as ONE transaction. Observers see the list
+        // before or after the refresh, never half-moved, and a
+        // multi-thousand-chapter refresh stops paying a commit
+        // (plus a whole-list Flow emission) per row.
+        inTransaction {
+            plan.dropped.forEach { chapterDao.delete(it) }
+            val moves = (plan.updates + plan.keptStale)
+                .filter { it.row.index != it.newIndex }
+            moves.forEachIndexed { i, update ->
+                chapterDao.update(update.row.copy(index = -1_000_000 - i))
+            }
+            (plan.updates + plan.keptStale).forEach { update ->
+                val changed = update.row.index != update.newIndex ||
+                    update.row.title != update.newTitle ||
+                    update.row.remoteId != update.newRemoteId ||
+                    update.row.dateText != update.newDateText
+                if (changed) {
+                    chapterDao.update(
+                        update.row.copy(
+                            index = update.newIndex,
+                            title = update.newTitle,
+                            remoteId = update.newRemoteId,
+                            updatedAt = now,
+                            dateText = update.newDateText
+                        )
+                    )
+                }
+            }
+            plan.inserts.forEach { insert ->
+                chapterDao.insert(
+                    Chapter(
+                        bookId = bookId,
+                        index = insert.index,
+                        title = insert.fetched.name,
+                        remoteId = insert.fetched.id,
                         updatedAt = now,
-                        dateText = update.newDateText
+                        dateText = insert.fetched.dateText
                     )
                 )
             }
-        }
-        plan.inserts.forEach { insert ->
-            chapterDao.insert(
-                Chapter(
-                    bookId = bookId,
-                    index = insert.index,
-                    title = insert.fetched.name,
-                    remoteId = insert.fetched.id,
-                    updatedAt = now,
-                    dateText = insert.fetched.dateText
-                )
-            )
         }
     }
 

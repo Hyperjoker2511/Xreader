@@ -163,7 +163,15 @@ class HostContextFactory(
     val renderRuntime: RenderRuntime? = null,
     /** TR4 sink: an unmarked source served a JS shell at runtime.
      * The container records it in prefs; nothing is flipped here. */
-    private val onRuntimeShell: (extensionRowId: Long) -> Unit = {}
+    private val onRuntimeShell: (extensionRowId: Long) -> Unit = {},
+    /** v1.2.0 (B1): the per-extension BYTE limiters, alongside
+     * the page limiters above — one shared instance per
+     * extension, drawn on by both [contextFor] and
+     * [sourceClientFor] so image fetches pace together at
+     * [ExtensionHttpClient.BYTE_MIN_INTERVAL_MS], never at the
+     * 350 ms page interval. Declared LAST so no existing
+     * positional construction can shift. */
+    private val byteRateLimiters: MutableMap<Long, RateLimiter> = mutableMapOf()
 ) {
     fun contextFor(
         extensionRowId: Long,
@@ -193,7 +201,8 @@ class HostContextFactory(
             sessionKey = ExtensionHttpClient.sessionKeyFor(extensionRowId),
             label = label,
             whitelist = permissions,
-            rateLimiter = limiter
+            rateLimiter = limiter,
+            byteRateLimiter = byteLimiterFor(extensionRowId)
         )
         val fetcher: PageFetcher = escalatingFetcherOrNull(
             client = client,
@@ -248,19 +257,32 @@ class HostContextFactory(
         )
     }
 
+    /** The shared byte limiter for one extension (see the
+     * [byteRateLimiters] doc). */
+    private fun byteLimiterFor(extensionRowId: Long): RateLimiter =
+        synchronized(byteRateLimiters) {
+            byteRateLimiters.getOrPut(extensionRowId) {
+                RateLimiter(
+                    minIntervalMs = ExtensionHttpClient.BYTE_MIN_INTERVAL_MS
+                )
+            }
+        }
+
     /** A raw (context-free) client for probes and cover fetches. */
     fun clientFor(
         sessionKey: String,
         label: String,
         permissions: ExtensionPermissions,
-        rateLimiter: RateLimiter = RateLimiter(minIntervalMs = 0)
+        rateLimiter: RateLimiter = RateLimiter(minIntervalMs = 0),
+        byteRateLimiter: RateLimiter? = null
     ): ExtensionHttpClient = ExtensionHttpClient(
         transport = transport,
         sessionStore = sessionStore,
         sessionKey = sessionKey,
         label = label,
         whitelist = { permissions },
-        rateLimiter = rateLimiter
+        rateLimiter = rateLimiter,
+        byteRateLimiter = byteRateLimiter
     )
 
     /**
@@ -286,7 +308,8 @@ class HostContextFactory(
             sessionKey = ExtensionHttpClient.sessionKeyFor(extensionRowId),
             label = label,
             permissions = permissions,
-            rateLimiter = limiter
+            rateLimiter = limiter,
+            byteRateLimiter = byteLimiterFor(extensionRowId)
         )
     }
 }

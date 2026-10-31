@@ -45,7 +45,15 @@ class LinkInferenceTest {
         analysis!!
         assertTrue(analysis.textLength >= 200)
         assertTrue(analysis.preview.contains("The star fell"))
-        assertNotNull(analysis.nextPageSelector)
+        // WS3 (class F) — DELIBERATE PIN CHANGE: this fixture's
+        // only "next" anchor is a Next CHAPTER link, and it used
+        // to be pinned as the chapter's next PAGE. That reading
+        // is the silent-corruption bug (the engine chained the
+        // next chapter's text into this one), so the pin now
+        // asserts the opposite: no next-page selector is inferred
+        // from a chapter link. Same-chapter page-2 links still
+        // infer one — see Ws3LearnerFixTest's F tests.
+        assertNull(analysis.nextPageSelector)
         // The inferred selector must actually select the content.
         val selected = doc.select(analysis.contentSelector)
         assertTrue(selected.isNotEmpty())

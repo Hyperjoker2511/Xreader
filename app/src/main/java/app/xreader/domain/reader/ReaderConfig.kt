@@ -59,6 +59,18 @@ data class ReaderConfig(
     val tapZoneLayout: TapZoneLayout = TapZoneLayout.STANDARD,
     /** v1.0.1: paged-mode reading direction (manga-style RTL). */
     val pagedDirection: PagedDirection = PagedDirection.LTR,
+    /** v1.2.0 (WS2, manga zoom Option A): Mihon's long-strip
+     * "Double-tap to zoom" — a double-tap on an image block
+     * toggles 1× ↔ 2× zoom at the tapped point. On by default;
+     * off leaves pinch only. Applies to image blocks in the
+     * scroll/stream readers (and paged mode via the same
+     * ZoomableImage component). */
+    val doubleTapToZoom: Boolean = true,
+    /** v1.2.0 (WS2, manga zoom Option A): Mihon's long-strip
+     * "Disable zoom out" — when on, a pinch can never shrink an
+     * image below its fit size (scale floor 1× instead of 0.5×).
+     * Off by default, matching Mihon/Legado. */
+    val disableZoomOut: Boolean = false,
     /** v1.0.1 (QuickNovel lesson): how chapters follow each other. */
     val chapterTransition: ChapterTransition = ChapterTransition.CHAPTER_BY_CHAPTER,
     /** v1.0.1: muted clock/battery overlay on the page while reading. */
@@ -102,6 +114,9 @@ object ReaderValidation {
     private fun clamp(value: Float, range: ClosedFloatingPointRange<Float>, fallback: Float): Float =
         if (value.isNaN()) fallback else value.coerceIn(range.start, range.endInclusive)
 
+    // v1.2.0 (WS2): the zoom flags (doubleTapToZoom /
+    // disableZoomOut) are plain booleans — every value is valid,
+    // so validate() passes them through untouched by design.
     fun validate(config: ReaderConfig): ReaderConfig = config.copy(
         fontSizeSp = clamp(config.fontSizeSp, FONT_SIZE_RANGE, 19f),
         lineHeightMultiplier = clamp(config.lineHeightMultiplier, LINE_HEIGHT_RANGE, 1.55f),
