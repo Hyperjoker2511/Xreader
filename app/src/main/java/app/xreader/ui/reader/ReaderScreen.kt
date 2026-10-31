@@ -563,12 +563,23 @@ fun ReaderScreen(
             visible = chromeVisible,
             palette = palette,
             bookTitle = state.bookTitle,
-            chapterTitle = state.chapter?.title ?: "",
+            // v1.1.2: the header's chapter line and the footer's
+            // both derive from the chapter's POSITION through
+            // ReaderCounters — the source-given name is shown
+            // only when it does not contradict that position.
+            chapterTitle = ReaderCounters.headerLine(
+                chapterTitle = state.chapter?.title ?: "",
+                chapterIndex = state.chapterIndex,
+                chapterCount = state.chapters.size
+            ),
             chapterIndex = state.chapterIndex,
             chapterCount = state.chapters.size,
             bookFraction = state.bookFraction,
             minutesLeftInChapter = state.minutesLeftInChapter,
             minutesLeftInBook = state.minutesLeftInBook,
+            showTimeEstimates = ReaderCounters.showTimeEstimates(
+                state.chapterText?.content
+            ),
             reduceMotion = reduceMotion,
             bookmarked = state.currentPositionBookmarked,
             hasPrevious = state.hasPrevious,
@@ -903,6 +914,10 @@ private fun ReaderChrome(
     bookFraction: Float,
     minutesLeftInChapter: Int,
     minutesLeftInBook: Int,
+    /** v1.1.2: false when the chapter has no timed words (an
+     * image chapter) — the WPM estimates are then omitted
+     * rather than fabricated from fallback word counts. */
+    showTimeEstimates: Boolean = true,
     bookmarked: Boolean,
     hasPrevious: Boolean,
     hasNext: Boolean,
@@ -1068,11 +1083,7 @@ private fun ReaderChrome(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                if (chapterCount > 0) {
-                                    "Chapter ${chapterIndex + 1} of $chapterCount"
-                                } else {
-                                    ""
-                                },
+                                ReaderCounters.footerLine(chapterIndex, chapterCount),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = palette.muted
                             )
@@ -1081,12 +1092,14 @@ private fun ReaderChrome(
                                 style = MaterialTheme.typography.labelMedium,
                                 color = palette.accent
                             )
-                            Text(
-                                "${WpmEstimator.formatMinutes(minutesLeftInChapter)} in chapter · " +
-                                    "${WpmEstimator.formatMinutes(minutesLeftInBook)} in book",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = palette.muted
-                            )
+                            if (showTimeEstimates) {
+                                Text(
+                                    "${WpmEstimator.formatMinutes(minutesLeftInChapter)} in chapter · " +
+                                        "${WpmEstimator.formatMinutes(minutesLeftInBook)} in book",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = palette.muted
+                                )
+                            }
                         }
                     }
                     // Quick actions (Nocturne §5.11): tile doors

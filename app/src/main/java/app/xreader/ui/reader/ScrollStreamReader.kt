@@ -204,7 +204,18 @@ fun ScrollStreamReader(
                     when (flatItem.kind) {
                         FlatKind.HEADER -> item(key = flatItem.key) {
                             StreamChapterHeader(
-                                title = flatItem.title,
+                                // v1.1.2: the same reconciliation
+                                // as the chrome header — a chapter
+                                // name whose own number contradicts
+                                // its position yields to the
+                                // position line, so the eyebrow
+                                // ("Chapter N") and the title under
+                                // it can never disagree.
+                                title = ReaderCounters.headerLine(
+                                    chapterTitle = flatItem.title,
+                                    chapterIndex = flatItem.chapterIndex,
+                                    chapterCount = totalChapters
+                                ),
                                 chapterNumber = flatItem.chapterIndex + 1,
                                 palette = palette
                             )
