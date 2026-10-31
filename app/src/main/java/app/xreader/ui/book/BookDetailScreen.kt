@@ -295,10 +295,11 @@ fun BookDetailScreen(
         val bookPercent = if (state.chapters.isEmpty()) {
             0
         } else {
-            val inChapter = if (state.progress != null &&
+            val progressNow = state.progress
+            val inChapter = if (progressNow != null &&
                 continueChapter?.read == false
             ) {
-                state.progress.fraction
+                progressNow.fraction
             } else {
                 0f
             }
