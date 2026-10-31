@@ -80,6 +80,30 @@ class RepoManager(
      * answer only when nothing better exists.
      */
     suspend fun addRepoOrDetect(name: String, indexUrl: String): AddRepoOutcome {
+        // v1.2.2 crash net: the walk's parsers guard their own
+        // work, but the caller launches uncaught — any escape
+        // (a transport throwing past its contract, an Error
+        // from a pathological index body) must land as an
+        // honest failure, never as an app crash. (First
+        // external crash report, 2026-10-31.)
+        return try {
+            addRepoOrDetectWalk(name, indexUrl)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            AddRepoOutcome.Failed(
+                AppError.ParseFailed(
+                    "repository",
+                    "something went wrong while reading that link — nothing was added"
+                )
+            )
+        }
+    }
+
+    private suspend fun addRepoOrDetectWalk(
+        name: String,
+        indexUrl: String
+    ): AddRepoOutcome {
         val candidates = RepoLinkNormaliser.candidates(indexUrl)
             .ifEmpty { listOf(indexUrl) }
         var stub: RepoFormat.ForeignRepo? = null

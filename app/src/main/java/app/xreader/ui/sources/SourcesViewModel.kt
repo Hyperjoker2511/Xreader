@@ -185,6 +185,16 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                                 "(${ErrorText.displayText(result.error)})"
                         )
                 }
+            } catch (t: Throwable) {
+                // v1.2.2 crash net: this launch is uncaught —
+                // an escape here crashed the app on the Add tap
+                // (first external crash report, 2026-10-31).
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                say(
+                    "Something went wrong while adding that repository, so " +
+                        "Xreader stopped instead of crashing. Nothing was " +
+                        "added — please try again."
+                )
             } finally {
                 _busy.value = false
             }
@@ -220,6 +230,14 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                     is LinkProber.Outcome.Failed ->
                         say("Xreader couldn't read “${site.name}” on its own. ${outcome.message}")
                 }
+            } catch (t: Throwable) {
+                // v1.2.2 crash net (see addRepo).
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                say(
+                    "Something went wrong while creating that source, so " +
+                        "Xreader stopped instead of crashing. Nothing was " +
+                        "saved — please try again."
+                )
             } finally {
                 _busy.value = false
             }
@@ -267,6 +285,14 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                     is AppResult.Err ->
                         say("The source couldn't be saved: ${saved.error.detail ?: "a storage problem"}")
                 }
+            } catch (t: Throwable) {
+                // v1.2.2 crash net (see addRepo).
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                say(
+                    "Something went wrong while installing that source, so " +
+                        "Xreader stopped instead of crashing. Nothing was " +
+                        "saved — please try again."
+                )
             } finally {
                 _busy.value = false
             }
@@ -335,6 +361,13 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                     }
                 }
                 _legadoRows.value = rows
+            } catch (t: Throwable) {
+                // v1.2.2 crash net (see addRepo).
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                say(
+                    "Something went wrong while importing that file, so " +
+                        "Xreader stopped instead of crashing. Please try again."
+                )
             } finally {
                 _busy.value = false
             }

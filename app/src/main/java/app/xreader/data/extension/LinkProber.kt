@@ -248,7 +248,31 @@ class LinkProber(
         // with any rendered probe (TR1/Q5).
         forceRender: Boolean = false
     ): Outcome = withContext(Dispatchers.Default) {
-        probeImpl(rawUrl, aiAvailable, tryAllProposers, semanticVerifier, forceRender = forceRender)
+        // v1.2.2 crash net: the probe's stages guard their own
+        // work, but a collaborator can still throw past them —
+        // the AI verify lambda is invoked with no catch at its
+        // call site, and an Error (a stack overflow or OOM from
+        // a deep DOM walk) bypasses every catch (Exception)
+        // island. Callers launch uncaught, so whatever escapes
+        // would crash the app; here it becomes an honest
+        // failure instead. (First external crash report,
+        // 2026-10-31: both add flows died on tap.)
+        try {
+            probeImpl(rawUrl, aiAvailable, tryAllProposers, semanticVerifier, forceRender = forceRender)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            DiagnosticLog.record(
+                "add from link",
+                "the check stopped on an unexpected error",
+                "${t.javaClass.simpleName}: ${t.message?.take(120) ?: "no detail"}"
+            )
+            Outcome.Failed(
+                message = "Something went wrong while Xreader was looking at " +
+                    "that site, so it stopped the check instead of crashing. " +
+                    "Nothing was saved — please try again."
+            )
+        }
     }
 
     /** The probe itself; see [probe] for the contract. Always

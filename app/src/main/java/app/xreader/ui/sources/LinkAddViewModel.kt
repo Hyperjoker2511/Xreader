@@ -99,10 +99,32 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
      * (the raw text of a bare domain has no host to read). */
     val lastProbedRawUrl: String get() = lastUrl
 
+    /** v1.2.2 crash net: this screen's submit handlers launch
+     * UNCAUGHT — any escape (the probe's AI verify, the
+     * browser-view retry, a storage write) would crash the
+     * app. Guarded launches land as the honest Failed state
+     * instead. (First external crash report, 2026-10-31:
+     * tapping Add died on the spot.) */
+    private val stoppedMessage =
+        "Something went wrong, so Xreader stopped instead of crashing. " +
+            "Please try again."
+
+    private fun launchGuarded(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            try {
+                block()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                _state.value = LinkAddUiState.Failed(stoppedMessage)
+            }
+        }
+    }
+
     fun probe(rawUrl: String) {
         lastUrl = rawUrl
         _state.value = LinkAddUiState.Probing
-        viewModelScope.launch {
+        launchGuarded {
             // v1.0.5 (A10): the failure copy may only mention
             // the AI detector when its button will render.
             var outcome = container.linkProber.probe(
@@ -165,7 +187,7 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
     fun probeWithAi() {
         if (lastUrl.isBlank()) return
         _state.value = LinkAddUiState.AiProbing
-        viewModelScope.launch {
+        launchGuarded {
             _state.value = when (
                 val outcome = container.selectorAi.buildFromLink(lastUrl)
             ) {
@@ -215,7 +237,7 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
     fun save() {
         val current = _state.value as? LinkAddUiState.Ready ?: return
         _state.value = LinkAddUiState.Saving
-        viewModelScope.launch {
+        launchGuarded {
             val config = current.draft.config.copy(
                 name = current.sourceName.ifBlank { current.draft.config.name }
             )
@@ -265,7 +287,7 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
         val url = rawUrl.trim()
         if (url.isBlank()) return
         _state.value = LinkAddUiState.InstallingLive
-        viewModelScope.launch {
+        launchGuarded {
             when (val installed = container.repoManager.installLiveSource(url)) {
                 is AppResult.Err -> {
                     _state.value = LinkAddUiState.Failed(
