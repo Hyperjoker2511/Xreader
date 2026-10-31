@@ -1012,5 +1012,39 @@ class AppContainer(context: Context) {
             runCatching { appearancePrefs.migrateToNocturneV2() }
             runCatching { appearancePrefs.primeDefaultScheme() }
         }
+        // v1.2.1 (Defect 3): the orphan sweep — files owned by
+        // book ids that no longer have a row (a cleared library,
+        // rows removed with "keep files" and never re-added)
+        // are reaped once per process start, before any writer
+        // is active. A book whose row exists is never touched,
+        // whatever state its files are in.
+        appScope.launch(ioDispatcher) {
+            runCatching {
+                val validIds = database.bookDao().allBooks()
+                    .map { it.id }.toSet()
+                bookStorage.sweepOrphanedBookFiles(validIds)
+            }
+        }
+    }
+
+    /** v1.2.1 (Defect 3): the real image cache's size on disk —
+     * Coil's disk cache under cacheDir, where browsed catalogue
+     * and library covers actually accumulate (capped at
+     * [AppImageLoader.DISK_CACHE_MAX_BYTES]). The Downloads
+     * screen's old "Cached covers" line measured only the
+     * covers/ directory (library-book cover files), so it read
+     * "0 B" while this cache held the actual megabytes. */
+    fun imageCacheSizeBytes(): Long =
+        app.xreader.data.files.StorageMeter.dirSize(
+            File(appContext.cacheDir, AppImageLoader.DISK_CACHE_DIR)
+        )
+
+    /** Clears Coil's disk cache through Coil itself (its
+     * journal stays consistent); the covers/ files are the
+     * Downloads screen's own Clean Cache path, not this one. */
+    suspend fun clearImageCache() {
+        runCatching {
+            coil.Coil.imageLoader(appContext).diskCache?.clear()
+        }
     }
 }

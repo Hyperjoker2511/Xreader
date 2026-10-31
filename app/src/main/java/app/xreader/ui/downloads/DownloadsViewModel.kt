@@ -61,6 +61,14 @@ data class DownloadsUiState(
     val storageBytes: Long = 0L,
     /** v1.1.0 (§5.12): real bytes of the cover cache on disk. */
     val coverCacheBytes: Long = 0L,
+    /** v1.2.1 (Defect 3): real bytes of Coil's disk image
+     * cache (cacheDir) — where covers browsed in catalogues
+     * and the library actually accumulate. The old card never
+     * showed it, so "Cached covers · 0 B" read as "no image
+     * storage at all" while this cache held megabytes the
+     * user could see in the system's app info but nowhere in
+     * the app. */
+    val imageCacheBytes: Long = 0L,
     /** v1.1.0 (§5.12): real total storage of the device volume
      * the app's files live on (StatFs); 0 when unreadable. */
     val deviceTotalBytes: Long = 0L,
@@ -175,6 +183,8 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
             )
         }
         val coverCacheBytes = container.bookStorage.coversDirSizeBytesCached()
+        val imageCacheBytes = runCatching { container.imageCacheSizeBytes() }
+            .getOrDefault(0L)
         val deviceTotalBytes = runCatching {
             android.os.StatFs(container.bookStorage.filesDir.path).totalBytes
         }.getOrDefault(0L)
@@ -187,6 +197,7 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
             loading = false,
             storageBytes = grouped.sumOf { it.bytesOnDisk },
             coverCacheBytes = coverCacheBytes,
+            imageCacheBytes = imageCacheBytes,
             deviceTotalBytes = deviceTotalBytes,
             onMeteredNetwork = runCatching {
                 !container.networkGate.onUnmeteredNetwork()
@@ -196,9 +207,14 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
 
     /** v1.1.0 (§5.12): Clean Cache — the same rebuildable caches
      * Customise → Storage clears (covers + temp + import staging).
-     * Downloaded chapters and book files are never touched here. */
+     * Downloaded chapters and book files are never touched here.
+     * v1.2.1 (Defect 3): Coil's disk image cache is cleared too —
+     * it is the largest rebuildable cache the app owns and the
+     * button used to leave it untouched while claiming the
+     * caches were clean. */
     fun clearCaches() {
         viewModelScope.launch(container.ioDispatcher) {
+            runCatching { container.clearImageCache() }
             runCatching {
                 container.bookStorage.coversDir().listFiles()
                     ?.forEach { it.deleteRecursively() }

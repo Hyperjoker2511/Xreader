@@ -163,7 +163,11 @@ class BookStorage(val filesDir: File) {
     fun loreArtRelative(bookId: Long, fileName: String): String = "lore-art/$bookId/$fileName"
 
     /** Total size of a book's app-side files (v1.0.1: the number
-     * the remove/cleanup confirmations show before deleting). */
+     * the remove/cleanup confirmations show before deleting).
+     * v1.2.1 (Defect 3): lore art belongs to the book too — it
+     * was written under lore-art/<id> but counted nowhere, so
+     * the quoted size (and every total built on it) understated
+     * a book that carries generated art. */
     fun bookFilesSizeBytes(book: app.xreader.data.db.Book): Long {
         var total = 0L
         fun add(file: File?) {
@@ -172,6 +176,7 @@ class BookStorage(val filesDir: File) {
             else if (file.isDirectory) file.walkTopDown().forEach { if (it.isFile) total += it.length() }
         }
         add(File(filesDir, "content/${book.id}"))
+        add(File(filesDir, "lore-art/${book.id}"))
         book.filePath?.let { add(resolve(it)) }
         book.coverPath?.let { add(resolve(it)) }
         return total
@@ -184,13 +189,87 @@ class BookStorage(val filesDir: File) {
         invalidateBookFilesSize(book.id)
     }
 
-    /** Deletes every file belonging to a book (Remove book, §4). */
+    /** Deletes every file belonging to a book (Remove book, §4).
+     * v1.2.1 (Defect 3): lore art is deleted with the rest —
+     * it used to survive removal as an invisible orphan. */
     fun deleteBookFiles(book: app.xreader.data.db.Book) {
         book.filePath?.let { resolve(it).parentFile?.deleteRecursively() }
         File(filesDir, "content/${book.id}").deleteRecursively()
+        File(filesDir, "lore-art/${book.id}").deleteRecursively()
         book.coverPath?.let { resolve(it).delete() }
         invalidateBookFilesSize(book.id)
         coversSizeCache = null
+    }
+
+    // -- v1.2.1 (Defect 3): the orphan sweep ------------------
+    // Removing a book offers "Remove book only" (files kept on
+    // purpose, so a re-add restores its downloads) — but nothing
+    // ever reaped the files of books whose rows are GONE for
+    // good (a cleared library, junk rows deleted in an earlier
+    // version, a row removed while its files were kept and the
+    // book never re-added). Those bytes sat under content/,
+    // books/, lore-art/ and covers/ forever, counted by every
+    // storage total but owned by no book — the "extra storage"
+    // the user could see but no screen could explain. The
+    // sweep below is the reap: book-id-shaped storage whose id
+    // has no row is deleted. It runs at app start (AppContainer)
+    // when no writer is active yet.
+
+    /** Every book id that owns a directory under the per-book
+     * roots (content/, books/, lore-art/). */
+    fun bookIdsOnDisk(): Set<Long> {
+        val ids = mutableSetOf<Long>()
+        for (root in listOf("content", "books", "lore-art")) {
+            File(filesDir, root).listFiles()?.forEach { child ->
+                if (child.isDirectory) {
+                    child.name.toLongOrNull()?.let { ids += it }
+                }
+            }
+        }
+        return ids
+    }
+
+    /** Every book id that owns a cover file (covers/<id>.<ext>). */
+    fun coverBookIdsOnDisk(): Set<Long> {
+        val ids = mutableSetOf<Long>()
+        coversDir().listFiles()?.forEach { child ->
+            if (child.isFile) {
+                child.name.substringBefore('.').toLongOrNull()
+                    ?.let { ids += it }
+            }
+        }
+        return ids
+    }
+
+    /** Deletes every file owned by the given book ids — the
+     * same set [deleteBookFiles] removes for a known book,
+     * addressed by id alone (an orphan has no row left to
+     * read file/cover paths from; the per-id layout makes the
+     * paths derivable). */
+    fun deleteFilesForBookIds(ids: Collection<Long>) {
+        for (id in ids) {
+            File(filesDir, "content/$id").deleteRecursively()
+            File(filesDir, "books/$id").deleteRecursively()
+            File(filesDir, "lore-art/$id").deleteRecursively()
+            coversDir().listFiles()?.forEach { child ->
+                if (child.isFile &&
+                    child.name.substringBefore('.').toLongOrNull() == id
+                ) {
+                    child.delete()
+                }
+            }
+            invalidateBookFilesSize(id)
+        }
+        if (ids.isNotEmpty()) coversSizeCache = null
+    }
+
+    /** Reaps the files of books that no longer exist: every
+     * on-disk book id outside [validBookIds] is deleted.
+     * Returns the reaped ids. */
+    fun sweepOrphanedBookFiles(validBookIds: Set<Long>): Set<Long> {
+        val orphans = (bookIdsOnDisk() + coverBookIdsOnDisk()) - validBookIds
+        if (orphans.isNotEmpty()) deleteFilesForBookIds(orphans)
+        return orphans
     }
 
     /** Writes [text] to [target] via a temp sibling + rename. */

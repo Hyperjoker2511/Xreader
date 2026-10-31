@@ -166,6 +166,12 @@ object HeuristicProposer {
             if (href.isBlank()) return@filter false
             val linkHost = runCatching { URI(href).host }.getOrNull()
                 ?: return@filter false
+            // v1.2.1 (Defect 2): the shared sibling-book rule —
+            // a link to another book under the same collection
+            // is never this book's chapter, on this path either.
+            if (LinkInference.isSiblingBookLink(anchor, pageUrl)) {
+                return@filter false
+            }
             linkHost == pageHost && isChapterLike(anchor.text())
         }
         if (links.size < MIN_CLUSTER) return null

@@ -125,9 +125,21 @@ class ExtensionService(
             permissions = { permissions },
             // v1.0.9: a Live Source always may escalate to the
             // hidden browser — app-shell sites are its home turf.
+            // v1.2.1 (Defect 4): MAY escalate — not MUST render.
+            // The kind check used to hard-wire every Live row to
+            // render-first, so a server-rendered site installed
+            // as a Live Source paid a full browser render (plus
+            // settle waits) for EVERY page, when a plain fetch
+            // parses it instantly — the exact gap to the
+            // QuickNovel model the user benchmarked. The marker
+            // now means only what it means for declarative rows
+            // (a config that PROVED it needs rendering); a Live
+            // row starts on the plain road, escalates per fetch
+            // when a shell is actually served, and the fetch
+            // layer's road memory (ShellHostMemory) makes later
+            // fetches to a proven shell host render first.
             needsRendering = {
-                row.kind == app.xreader.data.db.ExtensionKind.LIVE ||
-                    declarativeConfigs.any { it.needsRendering }
+                declarativeConfigs.any { it.needsRendering }
             },
             // v1.0.8.2: the same up-front decode supplies the
             // wait-for-content hint, so a saved app-shell

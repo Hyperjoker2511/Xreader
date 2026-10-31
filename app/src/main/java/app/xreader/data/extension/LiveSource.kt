@@ -230,13 +230,18 @@ class LiveSource(
         pageUrl: String,
         analysis: LinkInference.ListingAnalysis
     ): SourceBookPage {
+        // The fetched document's own URL (post-redirect) is
+        // the listing's address — it is also the identity the
+        // prefetched-document check in the delegate compares
+        // against, so the two can never drift apart.
+        val effectiveUrl = doc.location().ifBlank { pageUrl }
         val ephemeral = DeclarativeConfig(
             id = spec.id,
             name = spec.name,
             lang = spec.lang,
             baseUrl = spec.baseUrl,
             popular = ListSpec(
-                url = pageUrl,
+                url = effectiveUrl,
                 results = analysis.resultsSelector,
                 title = analysis.titleSpec,
                 link = analysis.linkSpec,
@@ -253,10 +258,14 @@ class LiveSource(
             ),
             chapter = ChapterSpec(content = "article")
         )
-        // The delegate would refetch the listing URL; that is
-        // acceptable (one extra request) and keeps every read
-        // honest against the live page.
-        return DeclarativeSource(ephemeral, context).popular(1)
+        // v1.2.1 (Defect 4): the document that was JUST
+        // fetched (and, on an app-shell site, expensively
+        // RENDERED) to derive this analysis feeds the read —
+        // the listing URL is not fetched a second time for
+        // one catalogue open. The delegate still re-reads
+        // the live page on every LATER open; only the
+        // derivation fetch and the read stop doubling up.
+        return DeclarativeSource(ephemeral, context).popular(1, doc)
     }
 
     // ── details + chapters ──────────────────────────────────
@@ -338,19 +347,22 @@ class LiveSource(
 
     /**
      * v1.1.1: the book-entry coherence gate — the details
-     * half of the catalogue fix. A BOOK-SHAPED url
-     * (`/novels/<slug>`) is trusted to [LinkInference]'s
-     * book-page analysis as before. Any OTHER url reaching
-     * book derivation (a chat link, a comment target, any
-     * non-book-shaped address a catalogue or a paste can
-     * carry) must PROVE it is a book page: the majority of
-     * its chapter cluster's links must extend the page's
-     * own path — a book's chapters live below the book.
-     * A chat page fails this by construction (its links
-     * point at comments and books elsewhere, never below
-     * `/chat/`), so it can never be dressed up as a book —
-     * with the site name or a chat heading for a title and
-     * junk for chapters — at any entry point.
+     * half of the catalogue fix. Any url reaching book
+     * derivation must PROVE it is a book page. For a
+     * NON-book-shaped url (a chat link, a comment target,
+     * any address a catalogue or a paste can carry) the
+     * proof is path extension: the majority of its chapter
+     * cluster's links must extend the page's own path — a
+     * book's chapters live below the book. A chat page fails
+     * this by construction (its links point at comments and
+     * books elsewhere, never below `/chat/`), so it can
+     * never be dressed up as a book — with the site name or
+     * a chat heading for a title and junk for chapters — at
+     * any entry point.
+     *
+     * v1.2.1 (Defect 2): a book-shaped url is no longer
+     * trusted outright — the sibling-book check below runs
+     * for every url shape (see the check's own comment).
      *
      * Returns a failure reason, or null when coherent.
      */
@@ -359,12 +371,38 @@ class LiveSource(
         pageUrl: String,
         analysis: LinkInference.BookPageAnalysis
     ): String? {
-        if (BookShape.isBookShapedHref(pageUrl)) return null
-        val bookPath = BookShape.normalisedPath(pageUrl)
-        if (bookPath == "/") return "the page address is not a book address"
         val items = runCatching { doc.select(analysis.chapterListSelector) }
             .getOrDefault(emptyList())
         if (items.isEmpty()) return "no chapter list could be checked"
+        // v1.2.1 (Defect 2): the sibling-book check binds EVERY
+        // url shape, book-shaped ones included. The v1.1.1 gate
+        // trusted a book-shaped address outright — but on
+        // app-shell sites the book address IS book-shaped
+        // (/mobile/book/<id>) while the derived "chapter list"
+        // was a recommendation rail of other books under the
+        // same collection. When most of the list's rows are
+        // sibling book links, the list is a list of books, not
+        // chapters, whatever the page's own address looks like:
+        // fail honestly instead of storing books as chapters.
+        // (Inference already refuses such rows as chapters;
+        // this gate is the second belt for any analysis that
+        // reaches derivation by another road.)
+        var anchors = 0
+        var siblings = 0
+        for (item in items) {
+            val anchor = if (item.tagName() == "a") item
+                else item.selectFirst("a[href]") ?: continue
+            anchors++
+            if (LinkInference.isSiblingBookLink(anchor, pageUrl)) {
+                siblings++
+            }
+        }
+        if (anchors > 0 && siblings * 2 >= anchors) {
+            return "its chapter list is a list of other books"
+        }
+        if (BookShape.isBookShapedHref(pageUrl)) return null
+        val bookPath = BookShape.normalisedPath(pageUrl)
+        if (bookPath == "/") return "the page address is not a book address"
         var inside = 0
         for (item in items) {
             val anchor = if (item.tagName() == "a") item

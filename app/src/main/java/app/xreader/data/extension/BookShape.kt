@@ -63,10 +63,37 @@ object BookShape {
         val segments = path.split('/').filter { it.isNotBlank() }
         if (segments.isEmpty()) return false
         val last = segments.last().lowercase()
-        if (last.all { it.isDigit() }) return true
+        if (last.all { it.isDigit() }) {
+            // v1.2.1 (Defects 1+2): a bare number under a
+            // BOOK-named collection is a book ID, not a chapter
+            // number — app-shell and id-catalogue sites address
+            // books as /book/<id>, /novel/<id>, /series/<id>,
+            // with chapters under a DIFFERENT collection
+            // (/chapter/<id>). The v1.1.1 reading ("a book href
+            // never ends at a number") misread every such book
+            // link as a chapter tail: the site's books became
+            // invisible to booksOnly derivation while its
+            // recommendation cards passed the chapter tests.
+            // The collection segment carries the meaning, so
+            // the tail is only chapter-shaped when its parent
+            // segment does not name a book collection. A real
+            // chapter tail keeps a SLUG parent (/novels/<slug>/12)
+            // or a chapter-named one, so it is unaffected.
+            val parent = segments.getOrNull(segments.size - 2)
+                ?.lowercase()
+            return parent !in BOOK_COLLECTION_SEGMENTS
+        }
         if (CHAPTER_SEGMENT.containsMatchIn(last)) return true
         return false
     }
+
+    /** Path segments that name a BOOK collection — a numeric
+     * tail beneath one is the book's id (v1.2.1). */
+    private val BOOK_COLLECTION_SEGMENTS = setOf(
+        "book", "books", "novel", "novels", "series", "title",
+        "titles", "story", "stories", "work", "works", "comic",
+        "comics", "manga", "manhwa", "fiction", "fictions"
+    )
 
     private val CHAPTER_SEGMENT =
         Regex("(?i)^(chapter|chap|ch)[-_]?\\d+(\\.\\d+)?(\\.html?)?$")

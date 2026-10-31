@@ -92,10 +92,21 @@ class DeclarativeSource(
         return fetchListing(spec, query, page)
     }
 
-    override fun popular(page: Int): SourceBookPage {
+    override fun popular(page: Int): SourceBookPage =
+        popular(page, prefetched = null)
+
+    /** v1.2.1 (Defect 4): the popular read, handed a document
+     * the CALLER just fetched for the listing URL (a Live
+     * Source's derivation fetch) — the A2 threading pattern
+     * applied to listings: on a rendered site the page is not
+     * RENDERED twice for one catalogue open. The document is
+     * used only when its own URL is the listing's URL;
+     * anything else is ignored and the page is fetched
+     * normally. */
+    fun popular(page: Int, prefetched: Document?): SourceBookPage {
         val spec = config.popular ?: config.latest ?: config.search
             ?: throw SourceException("“$name” has no catalogue page")
-        return fetchListing(spec, "", page)
+        return fetchListing(spec, "", page, prefetched)
     }
 
     override fun latest(page: Int): SourceBookPage {
@@ -113,7 +124,12 @@ class DeclarativeSource(
         return fetchListing(spec, "", page)
     }
 
-    private fun fetchListing(spec: ListSpec, query: String, page: Int): SourceBookPage {
+    private fun fetchListing(
+        spec: ListSpec,
+        query: String,
+        page: Int,
+        prefetched: Document? = null
+    ): SourceBookPage {
         val url = resolveUrl(
             spec.url
                 .replace("{query}", URLEncoder.encode(query, "UTF-8"))
@@ -131,6 +147,11 @@ class DeclarativeSource(
                 )
             }
             Jsoup.parse(response.body, response.finalUrl.ifBlank { url })
+        } else if (prefetched != null && documentUrl(prefetched) == url) {
+            // v1.2.1 (Defect 4): the caller's just-fetched
+            // document for this exact listing URL — no second
+            // fetch (see popular(page, prefetched)).
+            prefetched
         } else {
             fetchDoc(url)
         }

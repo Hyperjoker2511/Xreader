@@ -164,6 +164,12 @@ class HostContextFactory(
     /** TR4 sink: an unmarked source served a JS shell at runtime.
      * The container records it in prefs; nothing is flipped here. */
     private val onRuntimeShell: (extensionRowId: Long) -> Unit = {},
+    /** v1.2.1 (Defect 4): the fetch layer's road memory, shared
+     * by every escalating fetcher this factory builds (source
+     * contexts and probe drives alike), so a host that proved
+     * it serves shells is re-probed statically at most once
+     * per process — see [ShellHostMemory]. */
+    val shellHostMemory: ShellHostMemory = ShellHostMemory(),
     /** v1.2.0 (B1): the per-extension BYTE limiters, alongside
      * the page limiters above — one shared instance per
      * extension, drawn on by both [contextFor] and
@@ -253,7 +259,8 @@ class HostContextFactory(
             gate = runtime.gate(),
             onRuntimeShell = onRuntimeShell,
             forceRender = forceRender,
-            waitForSelector = waitForSelector
+            waitForSelector = waitForSelector,
+            shellHosts = shellHostMemory
         )
     }
 

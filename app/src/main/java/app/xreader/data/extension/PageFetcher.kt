@@ -31,6 +31,42 @@ interface PageFetcher {
 }
 
 /**
+ * v1.2.1 (Defect 4): the fetch layer's ROAD MEMORY — the set of
+ * hosts that have actually SERVED a JavaScript shell to this
+ * process. The standing order is plain road first, hidden
+ * render only as fallback; but once a host has proven it
+ * serves shells, re-proving it with a static fetch on every
+ * later page is pure latency (the shell is a few KB that can
+ * never parse), so later fetches to a proven host render
+ * first. One instance is shared by every fetcher the host
+ * context factory builds, so the memory survives the
+ * per-operation fetcher instances. Process-lifetime only by
+ * design: after a process restart a shell host pays ONE
+ * static probe again — cheap, and it keeps the memory honest
+ * if a site stops being a shell.
+ */
+class ShellHostMemory {
+
+    private val hosts =
+        java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** True when [url]'s host has served a shell before. */
+    fun isProvenShell(url: String): Boolean {
+        val host = hostOf(url) ?: return false
+        return host in hosts
+    }
+
+    /** Record that [url]'s host served a shell. */
+    fun record(url: String) {
+        hostOf(url)?.let { hosts += it }
+    }
+
+    private fun hostOf(url: String): String? =
+        runCatching { java.net.URI(url).host }
+            .getOrNull()?.lowercase()?.removePrefix("www.")
+}
+
+/**
  * v1.0.6 (W1.1/W2): static fetch first; when [RenderPolicy] allows
  * and the static body parses as a JavaScript shell
  * ([LinkInference.isJsShell]), the SAME url is fetched once through
@@ -70,7 +106,13 @@ class EscalatingPageFetcher(
      * render through this fetcher — a live read, like
      * [needsRendering]; the probe's lane drive supplies the
      * lane's declared selector. Null = no hint. */
-    private val waitForSelector: () -> String? = { null }
+    private val waitForSelector: () -> String? = { null },
+    /** v1.2.1 (Defect 4): the shared road memory — hosts that
+     * have proven they serve shells render first under the
+     * escalate-on-shell mode, without a static re-probe. A
+     * private default keeps standalone constructions (tests,
+     * one-off probes) behaving exactly as before. */
+    private val shellHosts: ShellHostMemory = ShellHostMemory()
 ) : PageFetcher {
 
     private val rendered = AtomicBoolean(false)
@@ -98,6 +140,31 @@ class EscalatingPageFetcher(
         if (RenderPolicy.rendersFirst(mode)) {
             return render(url)
         }
+        // v1.2.1 (Defect 4): the road memory. Under the
+        // escalate-on-shell mode, a host that has ALREADY
+        // served a shell in this process renders first — the
+        // plain road was tried, it provably cannot parse
+        // there, and paying it again on every page of the
+        // session is the latency the user feels. The policy
+        // leashes still bind: this branch is only reachable
+        // in RENDER_ON_SHELL mode (master off, background
+        // work, and the MINIMAL tier's tap-only rule have
+        // already answered STATIC_ONLY above).
+        //
+        // Runtime reads only (purpose SOURCE): a PROBE keeps
+        // its v1.0.7 render economy — the plain pass may
+        // render the pasted page, but a book page's render
+        // stays the rendered retry's to spend, so a shell
+        // home page must not let the memory walk the whole
+        // drive rendered in one unforced pass. (Probes still
+        // RECORD proven hosts below, so the sources they
+        // install open at full speed.)
+        if (mode == RenderMode.RENDER_ON_SHELL &&
+            purpose == RenderPurpose.SOURCE &&
+            shellHosts.isProvenShell(url)
+        ) {
+            return render(url)
+        }
         val staticResult = staticFetcher.get(url, headers)
         if (staticResult !is AppResult.Ok) return staticResult
         val isShell = withContext(Dispatchers.Default) {
@@ -116,6 +183,10 @@ class EscalatingPageFetcher(
         if (!RenderPolicy.shouldEscalate(mode, isShell, alreadyRendered = false)) {
             return staticResult
         }
+        // v1.2.1 (Defect 4): this host has now PROVEN it
+        // serves shells — remember the road so the session's
+        // later fetches skip the static probe.
+        shellHosts.record(url)
         if (purpose == RenderPurpose.SOURCE && !needsRendering()) {
             onRuntimeShell?.invoke()
         }

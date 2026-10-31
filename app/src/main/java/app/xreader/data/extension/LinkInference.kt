@@ -412,10 +412,21 @@ object LinkInference {
         // sibling group, which on a real home page can be a
         // chat rail.) Ties break toward the book-named
         // collection, then toward first appearance.
-        var linkPattern: String? = null
-        val anchors = if (booksOnly) {
-            val groups = candidates.groupBy { BookShape.collectionPrefixOf(it.second) }
-            val dominant = groups.entries
+        // Groups in rank order (dominant collection first under
+        // booksOnly; a single implicit group otherwise). Within
+        // each group, clusters are walked in rank order and the
+        // first NON-CHROME one wins (v1.2.1, Defect 1): the
+        // site's navigation cluster must never become the
+        // catalogue — on app-shell sites the menu is a tidy
+        // ≥3-item sibling cluster whose links share the sample
+        // book's first path segment (an app mount like /mobile),
+        // so raw cluster size alone crowned it over book rails
+        // split across sections. If a whole group is chrome,
+        // the next group gets its chance; if every group is
+        // chrome, there is no catalogue here — an honest null.
+        val groups: List<Pair<String?, List<Element>>> = if (booksOnly) {
+            candidates.groupBy { BookShape.collectionPrefixOf(it.second) }
+                .entries
                 .sortedWith(
                     compareByDescending<Map.Entry<String, List<Pair<Element, String>>>> {
                         it.value.size
@@ -424,43 +435,46 @@ object LinkInference {
                         BOOKISH_SEGMENTS.any { segment.contains(it) }
                     }
                 )
-                .firstOrNull()
-                ?: return null
-            linkPattern = BookShape.linkPatternForPrefix(dominant.key)
-            dominant.value.map { it.first }
+                .map { entry -> entry.key to entry.value.map { it.first } }
         } else {
-            candidates.map { it.first }
+            listOf(null to candidates.map { it.first })
         }
-        val cluster = findAnchorCluster(doc, anchors) ?: return null
-        val itemHasImage = cluster.items.any { it.select("img").isNotEmpty() } ||
-            (cluster.itemsAreAnchors && cluster.items.any {
-                it.select("img").isNotEmpty()
-            })
-        // v1.1.0 (Fix 4): listing titles come from the cover
-        // image's alt inside the anchor when one exists —
-        // never from anchor body text, which is where comment
-        // snippets and card chrome live.
-        val itemHasCoverAlt = cluster.items.any { item ->
-            val img = if (item.tagName() == "img") item
-            else item.selectFirst("img")
-            !img?.attr("alt").isNullOrBlank()
+        for ((prefix, groupAnchors) in groups) {
+            val cluster = findAnchorClusters(doc, groupAnchors)
+                .firstOrNull { !isChromeCluster(it) }
+                ?: continue
+            val linkPattern = prefix?.let { BookShape.linkPatternForPrefix(it) }
+            val itemHasImage = cluster.items.any { it.select("img").isNotEmpty() } ||
+                (cluster.itemsAreAnchors && cluster.items.any {
+                    it.select("img").isNotEmpty()
+                })
+            // v1.1.0 (Fix 4): listing titles come from the cover
+            // image's alt inside the anchor when one exists —
+            // never from anchor body text, which is where comment
+            // snippets and card chrome live.
+            val itemHasCoverAlt = cluster.items.any { item ->
+                val img = if (item.tagName() == "img") item
+                else item.selectFirst("img")
+                !img?.attr("alt").isNullOrBlank()
+            }
+            return ListingAnalysis(
+                resultsSelector = SelectorSynthesizer.forList(cluster.items.first()),
+                titleSpec = when {
+                    itemHasCoverAlt -> "img@alt"
+                    cluster.itemsAreAnchors -> "@text"
+                    else -> "a@text"
+                },
+                linkSpec = if (cluster.itemsAreAnchors) "@href" else "a@href",
+                coverSpec = when {
+                    cluster.itemsAreAnchors && itemHasImage -> "img@src"
+                    !cluster.itemsAreAnchors && itemHasImage -> "img@src"
+                    else -> null
+                },
+                count = cluster.items.size,
+                linkPattern = linkPattern
+            )
         }
-        return ListingAnalysis(
-            resultsSelector = SelectorSynthesizer.forList(cluster.items.first()),
-            titleSpec = when {
-                itemHasCoverAlt -> "img@alt"
-                cluster.itemsAreAnchors -> "@text"
-                else -> "a@text"
-            },
-            linkSpec = if (cluster.itemsAreAnchors) "@href" else "a@href",
-            coverSpec = when {
-                cluster.itemsAreAnchors && itemHasImage -> "img@src"
-                !cluster.itemsAreAnchors && itemHasImage -> "img@src"
-                else -> null
-            },
-            count = cluster.items.size,
-            linkPattern = linkPattern
-        )
+        return null
     }
 
     /**
@@ -485,6 +499,10 @@ object LinkInference {
             val href = candidate.attr("abs:href")
                 .ifBlank { absolute(candidate.attr("href"), pageUrl) }
             if (href.isBlank() || href == bookUrlHint) return@firstOrNull false
+            // v1.2.1 (Defect 1): the single-item fallback obeys
+            // the chrome veto too — a lone navigation link is
+            // not a small honest result set.
+            if (isChromeLink(candidate, href)) return@firstOrNull false
             // v1.1.0 (Fix 4) / v1.1.1: the FULL Book-Shape
             // Rule binds the single-item search fallback too —
             // a lone "result" must still be a book-shaped link.
@@ -697,6 +715,18 @@ object LinkInference {
     private fun chapterAnchors(doc: Document, pageUrl: String): List<Element> =
         doc.select("a[href]").filter { anchor ->
             if (!isChapterLink(anchor)) return@filter false
+            // v1.2.1 (Defect 2): a sibling BOOK link is not a
+            // chapter of this book, however chapter-like its
+            // card text reads — recommendation/ranking rails
+            // carry rating + count prefixes ("8.5 779 …") that
+            // the number parser happily reads as a chapter
+            // number, and a numeric book id satisfies the
+            // chapter-href shape, so on app-shell sites whose
+            // books and chapters live under sibling collections
+            // (/mobile/book/<id> vs /mobile/chapter/<id>) the
+            // rail out-clustered the real chapter list and was
+            // stored as the book's chapters.
+            if (isSiblingBookLink(anchor, pageUrl)) return@filter false
             // WS3 (class G): chapter clusters admit only the
             // site's own host — a foreign-host ad row smuggled
             // into the list must never become a "chapter".
@@ -704,6 +734,48 @@ object LinkInference {
                 .ifBlank { absolute(anchor.attr("href"), pageUrl) }
             isSameSiteHost(pageUrl, href)
         }
+
+    /**
+     * v1.2.1 (Defect 2): is this anchor a link to a SIBLING
+     * book — a book-shaped href under the SAME collection
+     * prefix as the page's own URL, but not under the page's
+     * own path? A book's chapters either live below the book
+     * (`/novels/<slug>/<n>`, protected by the under-path rule)
+     * or under a DIFFERENT collection (`/chapter/<id>`,
+     * protected by the prefix rule), so neither can trip this.
+     * A last segment carrying an embedded chapter marker
+     * (`<slug>-chapter-3`) is a chapter slug, not a book slug,
+     * and is protected too. Shared by the chapter-cluster
+     * filter, the heuristic proposer and the Live coherence
+     * gate, so every derivation path applies the same rule.
+     */
+    fun isSiblingBookLink(anchor: Element, pageUrl: String): Boolean {
+        val href = anchor.attr("abs:href")
+            .ifBlank { absolute(anchor.attr("href"), pageUrl) }
+        return isSiblingBookHref(href, pageUrl)
+    }
+
+    /** The href-only half of [isSiblingBookLink]. */
+    fun isSiblingBookHref(href: String, pageUrl: String): Boolean {
+        if (href.isBlank()) return false
+        if (!BookShape.isBookShapedHref(href)) return false
+        val bookPath = BookShape.normalisedPath(pageUrl)
+        if (bookPath == "/") return false
+        val path = BookShape.normalisedPath(href)
+        if (path.startsWith("$bookPath/")) return false
+        if (BookShape.collectionPrefixOf(href) !=
+            BookShape.collectionPrefixOf(pageUrl)
+        ) {
+            return false
+        }
+        val last = path.substringAfterLast('/').lowercase()
+        return !EMBEDDED_CHAPTER_SEGMENT.containsMatchIn(last)
+    }
+
+    /** A chapter slug wearing its number inside a longer
+     * segment (`<book-slug>-chapter-3`) — never a book slug. */
+    private val EMBEDDED_CHAPTER_SEGMENT =
+        Regex("(?i)(chapter|chap)[-_]?\\d|[-_]ch[-_]?\\d")
 
     private fun isChapterLink(anchor: Element): Boolean {
         val text = anchor.text().trim()
@@ -728,21 +800,34 @@ object LinkInference {
      * Grouping is linear in the anchor count at each depth, so
      * multi-megabyte list pages stay cheap.
      */
-    private fun findAnchorCluster(doc: Document, anchors: List<Element>): Cluster? {
-        if (anchors.size < MIN_CLUSTER) return null
-        var best: Cluster? = null
-        fun consider(items: List<Element>, itemsAreAnchors: Boolean) {
+    private fun findAnchorCluster(doc: Document, anchors: List<Element>): Cluster? =
+        findAnchorClusters(doc, anchors).firstOrNull()
+
+    /**
+     * Every qualifying cluster of [anchors], ranked the way
+     * [findAnchorCluster] picks its winner — largest first,
+     * ties toward the shallowest depth, then first
+     * appearance — with duplicate item sets collapsed.
+     * Callers that must be able to REFUSE the winner (the
+     * chrome veto in listing analysis, v1.2.1) walk this
+     * list and take the first cluster they can accept.
+     */
+    private fun findAnchorClusters(
+        doc: Document,
+        anchors: List<Element>
+    ): List<Cluster> {
+        if (anchors.size < MIN_CLUSTER) return emptyList()
+        val found = mutableListOf<Pair<Int, Cluster>>()
+        fun consider(items: List<Element>, itemsAreAnchors: Boolean, depth: Int) {
             val distinct = items.distinct()
-            if (distinct.size >= MIN_CLUSTER &&
-                distinct.size > (best?.items?.size ?: 0)
-            ) {
-                best = Cluster(distinct, itemsAreAnchors)
+            if (distinct.size >= MIN_CLUSTER) {
+                found += depth to Cluster(distinct, itemsAreAnchors)
             }
         }
         // Depth 0: anchors are direct siblings under one parent.
         anchors.groupBy { it.parent() }
             .filterKeys { it != null }
-            .values.forEach { consider(it, itemsAreAnchors = true) }
+            .values.forEach { consider(it, itemsAreAnchors = true, depth = 0) }
         // Depths 1–3: the item is the ancestor that many levels
         // up; items group by their own parent + tag.
         var level: List<Element?> = anchors.map { it.parent() }
@@ -753,11 +838,107 @@ object LinkInference {
             if (items.size < MIN_CLUSTER) break
             items.groupBy { it.parent() to it.tagName() }
                 .filterKeys { it.first != null }
-                .values.forEach { consider(it, itemsAreAnchors = false) }
+                .values.forEach { consider(it, itemsAreAnchors = false, depth = depth) }
             level = level.map { it?.parent() }
         }
-        return best
+        // Ranked the way the winner was always picked:
+        // LARGEST cluster first (WS3: a small direct-sibling
+        // group never beats a larger wrapper cluster), ties
+        // toward the SHALLOWEST depth, then first appearance —
+        // with duplicate item sets collapsed. A vetoing
+        // caller (the chrome veto, v1.2.1) walks this list
+        // and takes the first cluster it can accept.
+        val ranked = found.sortedWith(
+            compareByDescending<Pair<Int, Cluster>> { it.second.items.size }
+                .thenBy { it.first }
+        )
+        val seen = mutableSetOf<List<Element>>()
+        return ranked.map { it.second }.filter { seen.add(it.items) }
     }
+
+    // ── chrome / navigation veto (v1.2.1, Defect 1) ─────────
+
+    /**
+     * Is [text] (an anchor's visible text, or a listing item's
+     * title) a site-chrome label — the words a site's own
+     * navigation uses for itself? Public because the probe's
+     * list-shape judge applies the same vocabulary to titles
+     * read back through a saved spec.
+     */
+    fun isChromeNavLabel(text: String): Boolean =
+        text.trim().lowercase().replace(Regex("\\s+"), " ") in CHROME_LABELS
+
+    /** One anchor that is site chrome, not content: its text
+     * is a nav label, its href's last segment names a top-level
+     * site page, or it lives inside navigation furniture (a
+     * <nav>, or a menu/navigation-classed container — app-shell
+     * sites build their menu as `<li class="menu-item">` under
+     * a `.menu-container`, chrome by its own naming). */
+    private fun isChromeLink(anchor: Element, href: String): Boolean {
+        if (isChromeNavLabel(anchor.text())) return true
+        if (href.isNotBlank()) {
+            val last = BookShape.normalisedPath(href)
+                .substringAfterLast('/').lowercase()
+            if (last in CHROME_SEGMENTS) return true
+        }
+        var el: Element? = anchor
+        while (el != null) {
+            if (el.tagName() == "nav") return true
+            val marker = (el.className() + " " + el.id()).lowercase()
+            if (CHROME_CONTAINER_MARKERS.any { marker.contains(it) }) {
+                return true
+            }
+            el = el.parent()
+        }
+        return false
+    }
+
+    /** A cluster that is predominantly site chrome: at least
+     * [MIN_CLUSTER] chrome items AND more than half the
+     * cluster. A real catalogue can contain a book honestly
+     * titled "Home" — one title never vetoes a list; a cluster
+     * that is MAJORITY navigation is the site's menu wearing
+     * the catalogue's clothes (the botitranslation failure:
+     * Home / Explore / Rank / My Favorites / Profile served as
+     * "books" because the menu cluster out-sized each split
+     * book rail). */
+    private fun isChromeCluster(cluster: Cluster): Boolean {
+        if (cluster.items.size < MIN_CLUSTER) return false
+        var chrome = 0
+        for (item in cluster.items) {
+            val anchor = anchorOf(item) ?: continue
+            val href = anchor.attr("abs:href").ifBlank { anchor.attr("href") }
+            if (isChromeLink(anchor, href)) chrome++
+        }
+        return chrome >= MIN_CLUSTER && chrome * 2 > cluster.items.size
+    }
+
+    /** Anchor texts that name site furniture, never a book. */
+    private val CHROME_LABELS = setOf(
+        "home", "explore", "browse", "rank", "ranks", "ranking", "rankings",
+        "profile", "account", "my account", "favorites", "favourites",
+        "my favorites", "my favourites", "bookshelf", "book shelf",
+        "library", "my library", "login", "log in", "sign in", "sign up",
+        "register", "search", "latest", "newest", "popular", "trending",
+        "genre", "genres", "categories", "category", "history",
+        "settings", "dashboard", "bookmarks", "reading list",
+        "notifications", "messages", "menu", "more", "view all"
+    )
+
+    /** Last path segments that name a top-level site page. */
+    private val CHROME_SEGMENTS = setOf(
+        "home", "explore", "browse", "rank", "ranks", "ranking", "rankings",
+        "profile", "account", "favorites", "favourites", "bookshelf",
+        "shelf", "login", "signin", "sign-in", "signup", "sign-up",
+        "register", "search", "genre", "genres", "categories", "category",
+        "tags", "tag", "library", "history", "settings", "dashboard",
+        "user", "users", "me", "index"
+    )
+
+    /** Class/id fragments that mark navigation furniture. */
+    private val CHROME_CONTAINER_MARKERS = listOf(
+        "menu", "navigation", "navbar", "topnav", "sidenav", "drawer"
+    )
 
     /**
      * Title candidates in order (og:title → h1 → <title>), each

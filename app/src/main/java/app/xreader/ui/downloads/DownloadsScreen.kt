@@ -122,7 +122,12 @@ fun DownloadsScreen(
             Spacer(Modifier.height(8.dp))
             val novelsBytes = stateNow.storageBytes
             val coversBytes = stateNow.coverCacheBytes
-            val usedBytes = novelsBytes + coversBytes
+            val imageCacheBytes = stateNow.imageCacheBytes
+            // v1.2.1 (Defect 3): the bar's numerator counts the
+            // image cache too — it used to understate the app's
+            // real footprint by exactly the cache the card
+            // didn't show.
+            val usedBytes = novelsBytes + coversBytes + imageCacheBytes
             if (stateNow.deviceTotalBytes > 0L) {
                 ProgressPillBar(
                     fraction = (usedBytes.toFloat() / stateNow.deviceTotalBytes.toFloat())
@@ -143,6 +148,11 @@ fun DownloadsScreen(
             )
             Text(
                 "Cached covers · ${formatBytes(coversBytes)}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "Image cache · ${formatBytes(imageCacheBytes)}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

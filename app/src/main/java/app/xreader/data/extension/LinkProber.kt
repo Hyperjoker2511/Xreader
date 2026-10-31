@@ -1582,6 +1582,16 @@ class LinkProber(
         if (taxonomy * 2 >= books.size) {
             return SemanticShape(ListShapeVerdict.FEED, titles)
         }
+        // v1.2.1 (Defect 1): the navigation verdict — a list
+        // whose titles are predominantly the site's own chrome
+        // labels (Home / Explore / Rank / My Favorites /
+        // Profile) is the site's menu saved as a catalogue.
+        // Inference vetoes chrome clusters before a spec is
+        // ever derived; this judge is the second belt for a
+        // spec that reaches the drive by any other road.
+        if (titlesAreChromeNav(titles)) {
+            return SemanticShape(ListShapeVerdict.FEED, titles)
+        }
         if (hits == 0) {
             return SemanticShape(ListShapeVerdict.CLEAN, titles)
         }
@@ -2509,6 +2519,20 @@ class LinkProber(
                     segs.none { it.lowercase() in identity }
             }
             return bookShaped * 2 >= rows.size
+        }
+
+        /** v1.2.1 (Defect 1): are these listing titles
+         * predominantly site-chrome labels — the site's own
+         * navigation (Home / Explore / Rank / My Favorites /
+         * Profile) read back as a "catalogue"? At least two
+         * sampled titles and at least half must be chrome: a
+         * real catalogue can hold a book honestly titled
+         * "Home", but a menu is chrome through and through.
+         * Pure: unit-tested. */
+        fun titlesAreChromeNav(titles: List<String>): Boolean {
+            if (titles.size < 2) return false
+            val hits = titles.count { LinkInference.isChromeNavLabel(it) }
+            return hits >= 2 && hits * 2 >= titles.size
         }
 
         /** v1.0.6: the plain-words failure when the CONNECTION
