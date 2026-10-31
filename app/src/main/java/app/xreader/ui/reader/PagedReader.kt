@@ -100,7 +100,7 @@ fun PagedReader(
     restoreGeneration: Int,
     externalTurns: SharedFlow<Int>,
     assetFile: (String) -> File,
-    onPosition: (Int) -> Unit,
+    onPosition: (Int, Float) -> Unit,
     onNextChapter: () -> Unit,
     onPreviousChapter: () -> Unit,
     onCenterTap: () -> Unit,
@@ -222,9 +222,19 @@ fun PagedReader(
         var lastDragEndMs by remember { mutableStateOf(0L) }
 
         // Every settled page change reports its char offset upward.
+        // v1.1.2: the page fraction rides along — for image
+        // chapters every page's startChar is ~the same (image
+        // blocks are zero-width in the chapter text), so the
+        // char offset alone can never say how far into the
+        // chapter the reader is; the page's own position can.
         LaunchedEffect(currentPage, pages, targetPage) {
             if (targetPage == null) {
-                onPosition(PageLocator.offsetForPage(pages, currentPage))
+                val pageFraction = if (pages.isEmpty()) {
+                    0f
+                } else {
+                    ((currentPage + 1).toFloat() / pages.size).coerceIn(0f, 1f)
+                }
+                onPosition(PageLocator.offsetForPage(pages, currentPage), pageFraction)
             }
         }
 

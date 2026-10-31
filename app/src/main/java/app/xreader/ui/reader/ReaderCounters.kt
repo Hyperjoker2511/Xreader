@@ -1,6 +1,7 @@
 package app.xreader.ui.reader
 
 import app.xreader.data.extension.ChapterNumbers
+import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import kotlin.math.abs
 
@@ -73,4 +74,21 @@ object ReaderCounters {
      */
     fun showTimeEstimates(content: ChapterContent?): Boolean =
         content != null && content.wordCount > MIN_TIMED_WORDS
+
+    /**
+     * Whether this content is an image chapter for PROGRESS
+     * purposes: it carries image blocks and no more timed
+     * words than a credit line. Char offsets cannot measure
+     * progress through such a chapter — image blocks occupy
+     * zero-width ranges in the chapter text (ChapterText), so
+     * an offset-derived fraction sits at ~0 no matter how much
+     * of the strip has been read. For these chapters the
+     * renderer's own progress (scroll fraction, page fraction)
+     * is the only honest in-chapter fraction, and position
+     * code must prefer it.
+     */
+    fun isImageChapter(content: ChapterContent?): Boolean =
+        content != null &&
+            content.wordCount <= MIN_TIMED_WORDS &&
+            content.blocks.any { it is ChapterBlock.Image }
 }

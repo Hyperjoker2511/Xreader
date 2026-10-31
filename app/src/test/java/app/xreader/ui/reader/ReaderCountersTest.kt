@@ -125,4 +125,42 @@ class ReaderCountersTest {
     fun missingContentShowsNoTimeEstimates() {
         assertFalse(ReaderCounters.showTimeEstimates(null))
     }
+
+    // ── image chapters measure progress by page/scroll ─────
+
+    @Test
+    fun imageChapterIsDetectedForProgressPurposes() {
+        val content = ChapterContent(
+            blocks = listOf(
+                ChapterBlock.Image("p1.jpg"),
+                ChapterBlock.Paragraph.plain("Vortex Scans"),
+                ChapterBlock.Image("p2.jpg")
+            )
+        )
+        assertTrue(ReaderCounters.isImageChapter(content))
+    }
+
+    @Test
+    fun illustratedTextChapterIsNotAnImageChapter() {
+        // A novel chapter that merely CONTAINS an illustration
+        // keeps char-offset progress: its words are real.
+        val prose = (1..200).joinToString(" ") { "word" }
+        val content = ChapterContent(
+            blocks = listOf(
+                ChapterBlock.Paragraph.plain(prose),
+                ChapterBlock.Image("map.jpg")
+            )
+        )
+        assertFalse(ReaderCounters.isImageChapter(content))
+    }
+
+    @Test
+    fun textChapterIsNotAnImageChapter() {
+        val prose = (1..200).joinToString(" ") { "word" }
+        val content = ChapterContent(
+            blocks = listOf(ChapterBlock.Paragraph.plain(prose))
+        )
+        assertFalse(ReaderCounters.isImageChapter(content))
+        assertFalse(ReaderCounters.isImageChapter(null))
+    }
 }

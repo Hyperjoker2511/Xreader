@@ -507,7 +507,9 @@ fun ReaderScreen(
                         restoreGeneration = state.restoreGeneration,
                         externalTurns = viewModel.externalTurns,
                         assetFile = { assetFile(bookId, it) },
-                        onPosition = { offset -> viewModel.onPosition(offset, 0f) },
+                        onPosition = { offset, fraction ->
+                            viewModel.onPosition(offset, fraction)
+                        },
                         onNextChapter = { viewModel.nextChapter() },
                         onPreviousChapter = { viewModel.previousChapter() },
                         onCenterTap = { chromeVisible = !chromeVisible },

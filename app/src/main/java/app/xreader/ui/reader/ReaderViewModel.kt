@@ -875,7 +875,19 @@ class ReaderViewModel(
         val clamped = charOffset.coerceIn(0, text.length)
         if (clamped > currentChapterMaxOffset) currentChapterMaxOffset = clamped
         tracker.onActivity()
-        val chapterFraction = PageLocator.chapterFraction(clamped, text.length)
+        // v1.1.2: an image chapter's progress cannot be read
+        // off char offsets — its blocks are zero-width in the
+        // chapter text, so the offset fraction sits at ~0
+        // however much of the strip has been read, and the
+        // saved progress would claim the chapter was barely
+        // entered. The renderer's own fraction (scroll or
+        // page) is the honest one there; text chapters keep
+        // the char-derived fraction exactly as before.
+        val chapterFraction = if (ReaderCounters.isImageChapter(text.content)) {
+            scrollFraction.coerceIn(0f, 1f)
+        } else {
+            PageLocator.chapterFraction(clamped, text.length)
+        }
         val bookFraction = PageLocator.bookFraction(
             _state.value.chapterIndex, chapterFraction, _state.value.chapters.size
         )

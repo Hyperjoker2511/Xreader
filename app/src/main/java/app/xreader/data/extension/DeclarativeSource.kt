@@ -679,7 +679,25 @@ class DeclarativeSource(
         // overlap twice. One entry per chapter URL, first
         // occurrence wins, order preserved — the COMPLETE list.
         val unique = rows.distinctBy { it.id }
-        return if (spec.reverse) unique.asReversed() else unique
+        val ordered = if (spec.reverse) unique.asReversed() else unique
+        // v1.1.2: the reading-order invariant. Everything
+        // downstream — the stored Chapter.index the reconciler
+        // assigns from list position, saved progress, the
+        // Library hero, the Continue pill — treats position as
+        // reading order. A list that is still strongly
+        // descending in its chapter numbers after the config's
+        // own reverse handling is a list whose order was
+        // misread (a derived config whose newest-first
+        // detection missed, a lane whose flag is wrong): flip
+        // it here, at the one choke point every declarative
+        // list passes through, so no stored book can be upside
+        // down. ChapterOrder's bar is deliberately high (see
+        // its doc) — an ordinary list is never touched.
+        return if (ChapterOrder.isStronglyDescending(ordered)) {
+            ordered.asReversed()
+        } else {
+            ordered
+        }
     }
 
     /**
@@ -1144,5 +1162,52 @@ object ChapterNumbers {
             pattern.find(name)?.let { return it.groupValues[1].toFloatOrNull() }
         }
         return null
+    }
+}
+
+/**
+ * v1.1.2: the reading-order trend test. A finished chapter
+ * list is STRONGLY DESCENDING when its chapter numbers —
+ * read from the chapter names, or from the chapter URLs'
+ * tails when a name carries none — fall overall: the first
+ * number exceeds the last AND at least four fifths of the
+ * adjacent steps go down. The bar is set so real reading
+ * orders can never trip it: ascending lists have almost no
+ * descending steps; per-volume numbering restarts produce
+ * one descending step per volume; specials (10.5) sit
+ * between their neighbours. Only a list that was captured
+ * newest-first and never flipped looks like this — and such
+ * a list stored as-is turns the whole book upside down
+ * (chapter 1 at the last index, progress reading ~97% for a
+ * book just opened). Too few numbered rows to judge (under
+ * three, or under a quarter of the list) is not a verdict.
+ */
+object ChapterOrder {
+
+    fun isStronglyDescending(rows: List<SourceChapter>): Boolean {
+        val numbers = rows.mapNotNull { row ->
+            row.number ?: hrefTailNumber(row.id)
+        }
+        if (numbers.size < 3) return false
+        if (numbers.size < (rows.size + 3) / 4) return false
+        if (numbers.first() <= numbers.last()) return false
+        var descending = 0
+        var steps = 0
+        for (i in 0 until numbers.lastIndex) {
+            steps++
+            if (numbers[i] > numbers[i + 1]) descending++
+        }
+        return steps > 0 && descending * 5 >= steps * 4
+    }
+
+    /** The chapter number a chapter URL's tail carries, when
+     * it carries one ("…/series/x/214", "…/chapter-214") —
+     * the shape chapter links take on sites whose row text
+     * shows only a date. A slug tail yields null. */
+    private fun hrefTailNumber(id: String): Float? {
+        val tail = id.substringBefore('?').substringBefore('#')
+            .trimEnd('/').substringAfterLast('/')
+        if (tail.isEmpty()) return null
+        return ChapterNumbers.parse(tail) ?: tail.toFloatOrNull()
     }
 }
