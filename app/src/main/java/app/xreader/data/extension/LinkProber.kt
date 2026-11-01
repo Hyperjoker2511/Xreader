@@ -125,7 +125,15 @@ class LinkProber(
          * by design). The pass is recorded, like the all-locked
          * pass-with-limits, so the verdict stays honest about
          * what was actually proven. */
-        val imageChapter: Boolean = false
+        val imageChapter: Boolean = false,
+        /** v1.3.0 (E4): a MAINTAINER-VERIFIED lane whose
+         * on-device drive could not complete (a slow connection
+         * turned its rendered book page into a timeout), saved
+         * on the light proof — its catalogue answered — with
+         * the full proof still pending its first real read.
+         * The counts/preview are then the light proof's, not a
+         * drive's, and the Health wording says so plainly. */
+        val proofPending: Boolean = false
     )
 
     /** v1.0.6.2 (F5): what a test-drive's semantic gate made of
@@ -509,6 +517,13 @@ class LinkProber(
                         }
                     } else {
                     stageLines += when {
+                        result.value.proofPending -> StageLine(
+                            proposer, "book list",
+                            "saved on Xreader's verified rules for " +
+                                "this site — the full check couldn't " +
+                                "finish on this connection, so the " +
+                                "first read confirms them"
+                        )
                         result.value.imageChapter -> StageLine(
                             proposer, "chapter text",
                             "the sampled chapter is pictures, not prose — " +
@@ -553,6 +568,10 @@ class LinkProber(
                     // (1), which beats an all-locked pass (0).
                     val rank = listOf(
                         when {
+                            // v1.3.0 (E4): a proof-pending draft
+                            // ranks below every proven pass — it
+                            // saves only when nothing proved more.
+                            result.value.proofPending -> -1
                             result.value.allChaptersLocked -> 0
                             result.value.lockStateUnknown -> 1
                             else -> 2
@@ -610,8 +629,39 @@ class LinkProber(
         // mode): prefer the passing draft. And when an earlier
         // candidate failed DEEP into its drive (the text step),
         // its precise reason beats a vaguer local one.
-        fun failOrDraft(message: String): Outcome =
-            bestDraft?.let { Outcome.Ready(it, outcomeLines()) }
+        fun failOrDraft(message: String): Outcome {
+            // v1.3.0 (E3): the API-discovery seed — a probe that
+            // ends without a draft still reports whether the
+            // pages it read point at a JSON API (endpoints in
+            // the markup/scripts, or a listing-shaped array in
+            // the embedded payloads). Four "hard" sites of the
+            // last round were exactly this shape; a failure
+            // report that names the API road turns the next
+            // fix from archaeology into a lookup.
+            if (bestDraft == null) {
+                val hints = runCatching {
+                    EmbeddedJson.apiEndpointHints(bookDoc, bookUrl)
+                }.getOrDefault(emptyList())
+                val listing = runCatching {
+                    EmbeddedJson.embeddedListing(bookDoc)
+                }.getOrNull()
+                if (hints.isNotEmpty() || listing != null) {
+                    val parts = mutableListOf<String>()
+                    if (hints.isNotEmpty()) {
+                        parts += "the pages point at API endpoints: " +
+                            hints.take(4).joinToString(", ")
+                    }
+                    if (listing != null) {
+                        parts += "a book list of ${listing.size} sits in " +
+                            "the page data at " +
+                            (listing.path.ifEmpty { "(the payload itself)" })
+                    }
+                    stageLines += StageLine(
+                        "API discovery", "endpoints", parts.joinToString("; ")
+                    )
+                }
+            }
+            return bestDraft?.let { Outcome.Ready(it, outcomeLines()) }
                 ?: Outcome.Failed(
                     // v1.2.3: the catalogue gate's failure
                     // outranks step failures — a candidate's
@@ -640,6 +690,7 @@ class LinkProber(
                         escalating != null &&
                         escalating.renderAvailable()
                 )
+        }
 
         // ── v1.0.5 (A11): the known-sites fast lane ─────────────
         // A recognised domain's known-good shape is driven FIRST,
@@ -679,6 +730,52 @@ class LinkProber(
                             .popular(1).books.firstOrNull()?.id
                     }.getOrNull()
                 }
+                // v1.3.0 (E4) light proof, shared by both of
+                // its doors: no sample could be fetched at
+                // all, or the full drive below FAILED (a 500,
+                // a render timeout on a slow connection). A
+                // maintainer-verified lane installs on the
+                // strength of its verified rules; the draft
+                // ranks below every proven one (rank -1 in
+                // consider), so it saves only when no
+                // candidate proved more, and the first real
+                // read re-confirms.
+                val considerLightProof: suspend (String) -> Unit = { sampleUrl ->
+                    tried("fast lane")
+                    stageLines += StageLine(
+                        "fast lane", "book page",
+                        "the full test-drive couldn't finish on " +
+                            "this connection — these are Xreader's " +
+                            "own verified rules for this site, so " +
+                            "they were kept on the strength of the " +
+                            "book list answering; the first read " +
+                            "confirms them"
+                    )
+                    val pendingConfig = laneConfig.copy(
+                        id = sourceIdFor(host, sampleUrl),
+                        sampleBookUrl = sampleUrl
+                    )
+                    consider(
+                        "fast lane",
+                        pendingConfig,
+                        sampleUrl,
+                        ScoredDrive(
+                            steps = 0,
+                            result = AppResult.Ok(
+                                TestDriveResult(
+                                    bookTitle = LinkInference.siteName(bookDoc)
+                                        ?: host,
+                                    chapterCount = 0,
+                                    firstChapterTitle = "",
+                                    chapterTextPreview = "",
+                                    chapterTextLength = 0,
+                                    proofPending = true
+                                )
+                            ),
+                            healedConfig = null
+                        )
+                    )
+                }
                 if (sample != null) {
                     val laneFull = laneConfig.copy(
                         id = sourceIdFor(host, sample),
@@ -704,13 +801,32 @@ class LinkProber(
                             )
                         } ?: context
                     tried("fast lane")
-                    consider(
-                        "fast lane", laneFull, sample,
-                        // v1.0.6.1 (P4): the fast lane is
-                        // hand-verified — exempt from the
-                        // prose gate.
-                        testDriveScored(laneFull, sample, laneContext, laneVerified = true)
+                    // v1.0.6.1 (P4): the fast lane is
+                    // hand-verified — exempt from the prose gate.
+                    val drive = testDriveScored(
+                        laneFull, sample, laneContext, laneVerified = true
                     )
+                    consider("fast lane", laneFull, sample, drive)
+                    // v1.3.0 (E4): a maintainer-verified lane
+                    // whose drive FAILED (the site answered
+                    // 500, the render timed out) still installs
+                    // proof-pending — the policy's whole point;
+                    // before this, the light proof only ran
+                    // when no sample could be fetched at all.
+                    if (entry.maintainerVerified &&
+                        drive.result is AppResult.Err
+                    ) {
+                        considerLightProof(sample)
+                    }
+                } else if (entry.maintainerVerified) {
+                    val lightSample = if (
+                        KnownSites.looksLikeBookPage(entry, bookUrl)
+                    ) {
+                        bookUrl
+                    } else {
+                        null
+                    }
+                    considerLightProof(lightSample ?: bookUrl)
                 }
             }
         }
@@ -777,6 +893,63 @@ class LinkProber(
             }
         }
 
+        // v1.2.4: a LISTING page can analyse as a book — its
+        // book grid reads as a "chapter list" whose rows are
+        // themselves book links (novelbuddy's /home: title
+        // "Home", 23 "chapters" that are books). The analysis
+        // is self-refuting when the rows are book candidates
+        // and not chapters of this page (the v1.2.1
+        // sibling-book principle, applied at classification
+        // time) — and the pasted URL is not book-shaped
+        // either. Clear the analysis and
+        // let the walk-in below treat the page as the listing
+        // it is; listingProven also passes the chapter gate
+        // there, because a proven listing is neither a book
+        // nor a chapter (its biggest text block can trip the
+        // chapter analysis exactly as a home page's can).
+        var listingProven = false
+        val entryAnalysis = analysis
+        if (entryAnalysis != null && !walkedIn &&
+            !BookShape.isBookShapedHref(bookUrl)
+        ) {
+            val rows = runCatching {
+                bookDoc.select(entryAnalysis.chapterListSelector)
+            }.getOrDefault(emptyList())
+            val hrefs = rows.mapNotNull { row ->
+                val anchor = if (row.tagName() == "a") {
+                    row
+                } else {
+                    row.select("a[href]").firstOrNull()
+                } ?: return@mapNotNull null
+                anchor.absUrl("href").ifBlank { null }
+                    ?: anchor.attr("href").takeIf { it.isNotBlank() }
+                        ?.let {
+                            runCatching {
+                                URI(bookUrl).resolve(it).toString()
+                            }.getOrNull()
+                        }
+            }
+            // A row counts against the book reading when it is
+            // a book candidate AND not a chapter of this page:
+            // wordy chapter tails pass as "book-shaped", so the
+            // chapter relation (under the book's path, or a
+            // chapter-named tail) is judged separately —
+            // BookShape.isChapterRowOf. Self-links are not rows.
+            val bookPath = BookShape.normalisedPath(bookUrl)
+            val rowHrefs = hrefs.filter {
+                BookShape.normalisedPath(it) != bookPath
+            }
+            if (rowHrefs.size >= 3 &&
+                rowHrefs.count {
+                    BookShape.isBookCandidateHref(it) &&
+                        !BookShape.isChapterRowOf(bookUrl, it)
+                } * 2 > rowHrefs.size
+            ) {
+                analysis = null
+                listingProven = true
+            }
+        }
+
         // The pasted link may be a CHAPTER page: find its book page.
         if (analysis == null) {
             val chapterAnalysis = LinkInference.analyseChapterPage(bookDoc, bookUrl)
@@ -793,49 +966,78 @@ class LinkProber(
                 LinkInference.analyseListingPage(bookDoc, bookUrl, null)
             }.getOrNull()
             val siteRoot = isSiteRoot(bookUrl)
-            if (!walkedIn && listing != null &&
-                (chapterAnalysis == null || siteRoot)
+            if (!walkedIn && (chapterAnalysis == null || siteRoot ||
+                    listingProven)
             ) {
-                val walked = walkInFromListing(
-                    listing, bookDoc, host, aiAvailable,
-                    tryAllProposers, semanticVerifier,
-                    forceRender = forceRender
-                )
-                if (walked != null) return walked
-                // v1.0.6.3 (P6): ONE more hop — a home page may
-                // link to a catalogue page instead of to books
-                // directly. Follow the first catalogue-smelling
-                // link and walk in from THERE: same fetcher, same
-                // same-host rule, and never a second hop (the
-                // inner walk-in probes with walkedIn = true, so
-                // this block cannot re-enter itself).
-                if (siteRoot) {
-                    val catalogueUrl = pickCatalogueLink(bookDoc, host)
-                    if (catalogueUrl != null && catalogueUrl != bookUrl) {
-                        val catFetch = fetcher.get(catalogueUrl)
-                        if (catFetch is AppResult.Ok &&
-                            catFetch.value.status in 200..299
+                // v1.2.4: the descent no longer requires the
+                // pasted page itself to yield a listing. A
+                // marketing landing page carries NO book anchors
+                // at all (novelbuddy's root: 17 text links, zero
+                // books), so the old gate (listing != null) made
+                // the walk-in — and the catalogue hop behind it —
+                // unreachable for exactly the pages that need
+                // them most, and the probe refused a root paste
+                // it could have served by walking one hop.
+                if (listing != null) {
+                    val walked = walkInFromListing(
+                        listing, bookDoc, host, aiAvailable,
+                        tryAllProposers, semanticVerifier,
+                        forceRender = forceRender
+                    )
+                    if (walked != null) return walked
+                }
+                // v1.0.6.3 (P6) + v1.2.4: the catalogue hop — a
+                // home page may link to a catalogue page instead
+                // of to books directly. EVERY catalogue-smelling
+                // link gets its chance in page order, then the
+                // conventional listing paths: a first signpost
+                // that 404s or lists nothing no longer ends the
+                // descent (novelbuddy's landing points at a dead
+                // /browse — the site's 404 template — before the
+                // real /home). Same fetcher, same same-host rule
+                // (pickCatalogueLinks filters; the paths are the
+                // site's own), never a second hop (the inner
+                // walk-in probes with walkedIn = true, so this
+                // block cannot re-enter itself), and the whole
+                // descent is fetch-capped. v1.2.4: the descent
+                // runs for any page the walk-in gate admitted
+                // that produced no listing of its own — a root,
+                // a proven listing, or a listingless page like a
+                // locale home (/en) whose catalogue lives one
+                // signpost away.
+                if (siteRoot || listingProven || listing == null) {
+                    val hopCandidates = LinkedHashSet<String>()
+                    hopCandidates += pickCatalogueLinks(bookDoc, host)
+                    for (path in LISTING_PATHS) {
+                        hopCandidates += baseOf(bookUrl) + path
+                    }
+                    var hops = 0
+                    for (candidate in hopCandidates) {
+                        if (hops >= MAX_CATALOGUE_HOPS) break
+                        if (candidate == bookUrl) continue
+                        hops++
+                        val catFetch = fetcher.get(candidate)
+                        if (catFetch !is AppResult.Ok ||
+                            catFetch.value.status !in 200..299
                         ) {
-                            val catUrl = catFetch.value.finalUrl
-                                .ifBlank { catalogueUrl }
-                            val catDoc = Jsoup.parse(
-                                catFetch.value.body, catUrl
+                            continue
+                        }
+                        val catUrl = catFetch.value.finalUrl
+                            .ifBlank { candidate }
+                        if (catUrl == bookUrl) continue
+                        val catDoc = Jsoup.parse(catFetch.value.body, catUrl)
+                        val catListing = runCatching {
+                            LinkInference.analyseListingPage(
+                                catDoc, catUrl, null
                             )
-                            val catListing = runCatching {
-                                LinkInference.analyseListingPage(
-                                    catDoc, catUrl, null
-                                )
-                            }.getOrNull()
-                            if (catListing != null) {
-                                val walkedCatalogue = walkInFromListing(
-                                    catListing, catDoc, host, aiAvailable,
-                                    tryAllProposers, semanticVerifier,
-                                    forceRender = forceRender
-                                )
-                                if (walkedCatalogue != null) {
-                                    return walkedCatalogue
-                                }
-                            }
+                        }.getOrNull() ?: continue
+                        val walkedCatalogue = walkInFromListing(
+                            catListing, catDoc, host, aiAvailable,
+                            tryAllProposers, semanticVerifier,
+                            forceRender = forceRender
+                        )
+                        if (walkedCatalogue != null) {
+                            return walkedCatalogue
                         }
                     }
                 }
@@ -2644,7 +2846,17 @@ class LinkProber(
          * path segment from the catalogue family, or link text
          * naming novels/books/a catalogue. Null when nothing
          * qualifies. Pure over the parsed page: unit-tested. */
-        fun pickCatalogueLink(doc: Document, host: String): String? {
+        fun pickCatalogueLink(doc: Document, host: String): String? =
+            pickCatalogueLinks(doc, host).firstOrNull()
+
+        /** v1.2.4: EVERY catalogue-smelling same-host link on
+         * the page, in page order, deduplicated — the hop
+         * tries them in turn, because a site's first signpost
+         * can be a dead end (a renamed or removed listing
+         * page) while a later one is the real catalogue.
+         * Pure over the parsed page. */
+        fun pickCatalogueLinks(doc: Document, host: String): List<String> {
+            val found = LinkedHashSet<String>()
             for (anchor in doc.select("a[href]")) {
                 val href = anchor.absUrl("href")
                     .ifBlank { anchor.attr("href") }
@@ -2657,12 +2869,24 @@ class LinkProber(
                     ?.firstOrNull()
                     ?.lowercase()
                     .orEmpty()
-                if (firstSegment in CATALOGUE_SEGMENTS) return href
+                if (firstSegment in CATALOGUE_SEGMENTS) {
+                    found += href
+                    continue
+                }
                 val text = anchor.text().trim().lowercase()
-                if (CATALOGUE_WORDS.any { text.contains(it) }) return href
+                if (CATALOGUE_WORDS.any { text.contains(it) }) {
+                    found += href
+                }
             }
-            return null
+            return found.toList()
         }
+
+        /** v1.2.4: the root-paste catalogue descent's fetch
+         * budget — every signpost on the page plus the
+         * conventional listing paths would be up to ~17
+         * fetches on a dead-end site; the descent stops after
+         * this many and the probe gives its honest refusal. */
+        const val MAX_CATALOGUE_HOPS = 8
 
         /** v1.0.7: are these "chapter rows" actually links to
          * other BOOK pages? True when at least 3 rows remain

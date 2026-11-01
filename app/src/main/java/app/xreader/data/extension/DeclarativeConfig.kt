@@ -61,6 +61,26 @@ data class DeclarativeConfig(
      * Null = this source doesn't know its bookshelf (the import UI
      * says so plainly instead of pretending). */
     val bookshelf: ListSpec? = null,
+    /** v1.3.0: this config SHIPS WITH THE APP as a built-in
+     * default, proven against the live site at build time by
+     * the maintainer (the defaults programme). Two effects,
+     * both honest bookkeeping rather than trust shortcuts: the
+     * startup sync installs/refreshes it under the "Built-in
+     * sources" repo, and the probe's lane-proof policy (E4)
+     * may install it from a LIGHT proof when a full device
+     * test-drive cannot run — verification then happens on
+     * first real read, exactly as the policy states in Health.
+     * Defaulted false so every older config decodes unchanged. */
+    val maintainerVerified: Boolean = false,
+    /** v1.3.0: extra hosts this source may open beyond its base
+     * host — an API host (novelbuddy's api. subdomain, royal
+     * road's api.), or a host chapter pages redirect to
+     * (libread's chapter text lands on freewebnovel.com;
+     * syosetu's books live on ncode. while its catalogue sits
+     * on yomou.). Install paths add these to the extension's
+     * domain whitelist. Defaulted empty so every older config
+     * decodes unchanged. */
+    val extraDomains: List<String> = emptyList(),
     /** Source-shipped cleaner rules (origin "source", not editable). */
     val cleaners: List<CleanerRuleData> = emptyList()
 )
@@ -103,7 +123,15 @@ data class ListSpec(
      * spec whose payload is missing or misshapen fails the
      * read honestly — it never falls back to scraping a DOM
      * that was never the data. */
-    val jsonPath: String? = null
+    val jsonPath: String? = null,
+    /** v1.3.0: JSON mode — builds a row's link from a record
+     * field when the field value is not itself a usable URL: a
+     * slug ("https://host/book/{value}") or a path on another
+     * host of the same site ("https://novelbuddy.me{value}" —
+     * the records ride the api. host but the books live on the
+     * apex). Null = the field value IS the link, resolved
+     * against the listing URL like any href. */
+    val jsonLinkTemplate: String? = null
 )
 
 /** The book page: fills details and carries the chapter list. When the
@@ -166,8 +194,32 @@ data class ChapterListSpec(
      * JSON). Null (every spec written before) = DOM rows only,
      * exactly as before. */
     val jsonPath: String? = null,
+    /** v1.3.0 delta (V120-CHECK 53): the chapter record's
+     * release-timestamp field for JSON chapter endpoints
+     * (chikari's `created_at`, NovelBuddy's `updated_at`).
+     * Stored raw on the row's dateText; the display layer
+     * renders it relatively. Null = the endpoint states no
+     * dates, and rows show none — never a guessed date. */
+    val jsonDateField: String? = null,
     val jsonNameField: String = "name",
-    val jsonLinkField: String = "url"
+    val jsonLinkField: String = "url",
+    /** v1.3.0 (E1): a DIRECT JSON chapter endpoint on the book
+     * page itself — the page's whole payload is the response
+     * of an API whose chapter array sits at this dot path
+     * (fenrirrealm-style book payloads carry the array beside
+     * the metadata). Same record fields as [jsonPath]; unlike
+     * [jsonPath] this source REPLACES the DOM rows when it
+     * yields any (the page is an API answer, its DOM is a
+     * shell of the payload). Null = no direct endpoint. */
+    val jsonEndpointPath: String? = null,
+    /** v1.3.0 (E1): how a DIRECT JSON chapter endpoint builds
+     * each row's chapter URL when the record's link field is
+     * a bare id or slug rather than a URL: `{value}` is the
+     * record's link-field value, `{bookSlug}` the book page
+     * URL's last segment, `{bookId}` the pagination book id.
+     * Null = the field value IS the link (resolved against
+     * the page like any href). */
+    val jsonLinkTemplate: String? = null
 ) {
 
     /** The chapter total the book page's visible text states,
@@ -229,6 +281,29 @@ data class ChapterListSpec(
  * shorter than the first paginated page (a short page is the
  * last), or a hard page cap — a failed page mid-walk keeps the
  * rows gathered so far instead of losing the list.
+ *
+ * v1.3.0 (E1) generalisation — the same block now declares the
+ * API chapter endpoints the defaults programme uses:
+ *
+ * - The URL template (and the POST body) may use `{bookId}`
+ *   (from [bookIdPattern] over the book page), `{bookSlug}` /
+ *   `{bookTail}` (the book page URL's last path segment) and
+ *   `{page}`. A spec whose endpoint needs NO id from the page
+ *   (slug-addressed APIs) leaves [bookIdPattern] empty and
+ *   uses the slug placeholders instead.
+ * - [method] "POST" sends [body] as a form body with the same
+ *   placeholder expansion (FreeWebNovel's chapterlist.php,
+ *   NovelFire's listChapterDataAjax, ScribbleHub's admin-ajax).
+ * - [jsonArrayPath]: when set, each response is a JSON
+ *   document and the chapter array sits at this dot path
+ *   inside it (records read with the chapter spec's
+ *   jsonNameField / jsonLinkField / jsonLinkTemplate). The
+ *   walk then runs over API pages: [pageSize] declares the
+ *   page size for the ranged placeholders `{start}` / `{end}`
+ *   (WTR-LAB: 1-based inclusive chapter ranges) and offset
+ *   maths, and [jsonTotalPath] — a dot path to the response's
+ *   stated chapter total — ends the walk the moment the
+ *   gathered rows reach it, exactly (chikari's `total`).
  */
 @Serializable
 data class ChapterListPagination(
@@ -238,6 +313,22 @@ data class ChapterListPagination(
     val headers: Map<String, String> = mapOf(
         "X-Requested-With" to "XMLHttpRequest"
     ),
+    /** v1.3.0 (E1): "GET" (default) or "POST" — POST-form
+     * chapter endpoints exist (form body in [body]). */
+    val method: String = "GET",
+    /** v1.3.0 (E1): for POST endpoints, the form body template
+     * (same placeholders as the URL template). */
+    val body: String? = null,
+    /** v1.3.0 (E1): when set, responses are JSON documents and
+     * the chapter array lives at this dot path inside them. */
+    val jsonArrayPath: String? = null,
+    /** v1.3.0 (E1): a dot path inside a JSON response to the
+     * endpoint's stated chapter total; the walk stops as soon
+     * as the gathered rows reach it. */
+    val jsonTotalPath: String? = null,
+    /** v1.3.0 (E1): rows per endpoint page for the ranged
+     * placeholders (`{start}`/`{end}`) and offset maths. */
+    val pageSize: Int = 50,
     /** v1.0.8: a CSS selector for a <select> on the book page
      * whose option values run 1..N — the site's own page
      * count for this book's chapter list (novelight renders
@@ -265,19 +356,82 @@ data class ChapterListPagination(
         val count = select.select("option").size
         return count.takeIf { it > 0 }
     }
-    /** The endpoint URL for one page of the walk. */
-    fun endpointFor(bookId: String, page: Int): String =
-        urlTemplate
+    /** The endpoint URL for one page of the walk. [bookSlug]
+     * is the book page URL's last path segment (v1.3.0: slug-
+     * addressed APIs need no id from the page); `{start}` /
+     * `{end}` expand to the page's 1-based inclusive row range
+     * at [pageSize] rows a page. */
+    fun endpointFor(
+        bookId: String,
+        page: Int,
+        bookSlug: String = "",
+        bookUrl: String = ""
+    ): String = expand(urlTemplate, bookId, page, bookSlug, bookUrl)
+
+    /** v1.3.0 delta: true when the endpoint's URL cannot
+     * vary by page (no page-varying placeholder) — one
+     * request always returns the endpoint's whole answer
+     * (NovelBuddy's chapter list, NovelFull's option list,
+     * MtlNovel's fragment). {limit} is page-size, not a
+     * page-varying placeholder: it expands identically on
+     * every page. */
+    fun isSingleShot(): Boolean {
+        val t = urlTemplate
+        return !t.contains("{page}") && !t.contains("{page0}") &&
+            !t.contains("{offset}") && !t.contains("{start}") &&
+            !t.contains("{end}")
+    }
+
+    /** The POST form body for one page of the walk, or null
+     * for GET endpoints (v1.3.0). */
+    fun bodyFor(
+        bookId: String,
+        page: Int,
+        bookSlug: String = "",
+        bookUrl: String = ""
+    ): String? = body?.let { expand(it, bookId, page, bookSlug, bookUrl) }
+
+    private fun expand(
+        template: String,
+        bookId: String,
+        page: Int,
+        bookSlug: String,
+        bookUrl: String = ""
+    ): String {
+        val start = (page - 1) * pageSize + 1
+        return template
+            .replace("{bookUrl}", bookUrl.trimEnd('/'))
             .replace("{bookId}", bookId)
+            .replace("{bookSlug}", bookSlug)
+            .replace("{bookTail}", bookSlug)
+            .replace("{start}", start.toString())
+            .replace("{end}", (start + pageSize - 1).toString())
             .replace("{page}", page.toString())
+            .replace("{page0}", (page - 1).coerceAtLeast(0).toString())
+            .replace("{offset}", ((page - 1) * pageSize).toString())
+            .replace("{limit}", pageSize.toString())
+    }
 
     /** The book id [pageHtml] carries, or null when the pattern
      * doesn't match (or doesn't compile — a broken pattern must
-     * never take the whole chapter list down with it). */
-    fun bookIdIn(pageHtml: String): String? =
-        runCatching { Regex(bookIdPattern).find(pageHtml) }
+     * never take the whole chapter list down with it). A BLANK
+     * pattern declares a slug-addressed endpoint: the walk
+     * needs no id and this returns "" as its go-ahead (v1.3.0). */
+    fun bookIdIn(pageHtml: String): String? {
+        if (bookIdPattern.isBlank()) return ""
+        return runCatching { Regex(bookIdPattern).find(pageHtml) }
             .getOrNull()?.groupValues?.getOrNull(1)
             ?.takeIf { it.isNotBlank() }
+    }
+
+    companion object {
+        /** A book page URL's last path segment (query/fragment
+         * stripped, one trailing slash removed) — the slug the
+         * slug-addressed API shapes address books by. */
+        fun bookSlugOf(bookPageUrl: String): String =
+            bookPageUrl.substringBefore('?').substringBefore('#')
+                .trimEnd('/').substringAfterLast('/')
+    }
 }
 
 /** One chapter page. [content] selects the readable element; [nextPage]
@@ -328,7 +482,40 @@ data class ChapterTextAjax(
     val headers: Map<String, String> = mapOf(
         "X-Requested-With" to "XMLHttpRequest"
     ),
-    val jsonContentField: String = "content"
+    val jsonContentField: String = "content",
+    /** v1.3.0 (E1): "GET" (default) or "POST" — reader APIs that
+     * take the chapter address in a request body exist
+     * (WTR-LAB's reader endpoint). [body] is the body template,
+     * expanded with the same placeholders as the URL. */
+    val method: String = "GET",
+    val body: String? = null,
+    /** v1.3.0 (E1): the JSON field's value is PLAIN TEXT, not
+     * HTML (chikari's read endpoint: `body` is newline-
+     * separated prose). The engine wraps each paragraph in
+     * <p>…</p> instead of running the content selector over
+     * markup that isn't there. */
+    val plainTextField: Boolean = false,
+    /** v1.3.0 (E1): a boolean JSON field that marks the
+     * chapter locked when true (chikari: `locked`). A locked
+     * answer is the typed locked failure, never an empty
+     * chapter. Null = no lock field. */
+    val jsonLockField: String? = null,
+    /** v1.3.0: a dot path to the content value when it is
+     * nested inside the answer (noveli: `chapter.paragraphs`);
+     * supersedes the flat [jsonContentField] lookup when set. */
+    val jsonContentPath: String? = null,
+    /** v1.3.0: for ARRAY content whose items are objects, the
+     * per-item text field (noveli's paragraphs carry `text`).
+     * String items contribute themselves. Ignored for scalar
+     * content. */
+    val jsonItemTextField: String = "text",
+    /** v1.3.0: in array content, items whose `id` value matches
+     * this regex are skipped — noveli interleaves anti-scraping
+     * watermark entries (`p-trap-…`, `p-wm-…`) among its prose
+     * paragraphs (`p-<n>`), and the reader's settings chrome is
+     * removed by the config's source cleaners instead. Null =
+     * keep every item. */
+    val jsonSkipIdPattern: String? = null
 ) {
     /** The chapter id this mode would use for [chapterUrl]: the
      * URL's trailing path segment when it is entirely numeric,
@@ -338,11 +525,44 @@ data class ChapterTextAjax(
         return tail.takeIf { it.isNotEmpty() && it.all { c -> c.isDigit() } }
     }
 
-    /** The endpoint URL for [chapterUrl], or null when the mode
-     * doesn't apply (no numeric chapter id). */
-    fun endpointFor(chapterUrl: String): String? {
-        val id = chapterId(chapterUrl) ?: return null
-        return urlTemplate.replace("{id}", id)
+    /**
+     * The endpoint URL for [chapterUrl], built from the URL's
+     * own path segments: `{id}` is the trailing numeric
+     * segment (the original mode — null when the tail isn't
+     * numeric, the mode then doesn't apply); `{seg-1}`,
+     * `{seg-2}`, … are the last path segments counting back
+     * from the end, whatever they contain (v1.3.0: slug-shaped
+     * chapter addresses — a book slug two segments up, a
+     * chapter number at the tail). A template that uses only
+     * `{seg-N}` placeholders applies to any chapter URL with
+     * at least that many segments.
+     */
+    fun endpointFor(chapterUrl: String): String? =
+        expand(urlTemplate, chapterUrl)
+
+    /** The request body for [chapterUrl] under POST, else null. */
+    fun bodyFor(chapterUrl: String): String? =
+        body?.let { expand(it, chapterUrl) }
+
+    private fun expand(template: String, chapterUrl: String): String? {
+        var out = template
+        if (out.contains("{id}")) {
+            val id = chapterId(chapterUrl) ?: return null
+            out = out.replace("{id}", id)
+        }
+        if (out.contains("{seg-")) {
+            val segments = chapterUrl.substringBefore('?')
+                .substringBefore('#').trimEnd('/')
+                .split('/').filter { it.isNotEmpty() }
+            val wanted = Regex("\\{seg-(\\d+)\\}").findAll(out)
+                .map { it.groupValues[1].toInt() }.toList()
+            for (n in wanted) {
+                val segment = segments.getOrNull(segments.size - n)
+                    ?: return null
+                out = out.replace("{seg-$n}", segment)
+            }
+        }
+        return out
     }
 }
 

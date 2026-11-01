@@ -11,6 +11,7 @@ import app.xreader.extensionapi.SourceException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -254,7 +255,7 @@ class DeclarativeSource(
         val path = spec.jsonPath ?: return SourceBookPage(emptyList(), false)
         var array: kotlinx.serialization.json.JsonArray? = null
         var parent: kotlinx.serialization.json.JsonObject? = null
-        for (root in EmbeddedJson.roots(doc)) {
+        for (root in EmbeddedJson.rootsForRead(doc)) {
             val found = EmbeddedJson.resolve(root, path)
                 as? kotlinx.serialization.json.JsonArray
             if (found != null) {
@@ -275,9 +276,13 @@ class DeclarativeSource(
                 ?: return@mapNotNull null
             val rawTitle = EmbeddedJson.stringAt(record, spec.title)
                 ?.trim().orEmpty()
-            val link = EmbeddedJson.stringAt(record, spec.link)
+            val rawLink = EmbeddedJson.stringAt(record, spec.link)
                 ?.trim().orEmpty()
-            if (rawTitle.isEmpty() || link.isEmpty()) return@mapNotNull null
+            if (rawTitle.isEmpty() || rawLink.isEmpty()) {
+                return@mapNotNull null
+            }
+            val link = spec.jsonLinkTemplate
+                ?.replace("{value}", rawLink) ?: rawLink
             if (!linkShapeAllows(spec, absolute(link, pageUrl))) {
                 return@mapNotNull null
             }
@@ -477,8 +482,21 @@ class DeclarativeSource(
     fun supportsProgressiveChapters(): Boolean {
         val spec = config.details.chapters
         val pagination = spec.pagination ?: return false
+        // v1.3.0 delta (V120-CHECK 49): a single-shot endpoint
+        // (its URL never varies by page — NovelBuddy's whole
+        // chapter list in one answer) is progressive too: the
+        // payload may arrive whole, but only the first slice
+        // is persisted on the open path; the rest lands on
+        // the first demand past the slice.
+        if (pagination.isSingleShot()) return true
         return !spec.reverse || pagination.totalPagesSelector != null
     }
+
+    /** The first slice a single-shot list opens with. The
+     * spec (item 49): a book opens after its first chunk —
+     * never gated on ingesting the whole list. */
+    private fun singleShotSlice(minCount: Int): Int =
+        maxOf(minCount, config.details.chapters.pagination?.pageSize?.takeIf { it > 0 } ?: 500)
 
     /** The first chunk of a book: details + at least
      * [minCount] chapters (one site page is the natural
@@ -488,6 +506,24 @@ class DeclarativeSource(
         val url = bookPageUrl(book)
         val doc = fetchDoc(url)
         val filled = readDetails(book, doc, url)
+        if (config.details.chapters.pagination?.isSingleShot() == true) {
+            // One fetch carries the whole list; persist only
+            // the first slice now (item 49) and let the first
+            // chaptersMore complete it from a re-fetch.
+            val all = parseAllChapters(doc, url)
+            val slice = singleShotSlice(minCount)
+            val complete = all.size <= slice
+            return ChapterChunk(
+                filled,
+                if (complete) all else all.take(slice),
+                ChapterWalk(
+                    nextPage = if (complete) 0 else 2,
+                    totalPages = 1,
+                    pageSize = all.size
+                ),
+                complete
+            )
+        }
         val session = WalkSession(doc, url)
         session.startFresh()
         session.growTo(minCount)
@@ -506,6 +542,19 @@ class DeclarativeSource(
         walk: ChapterWalk
     ): ChapterChunk {
         val url = bookPageUrl(book)
+        if (config.details.chapters.pagination?.isSingleShot() == true &&
+            walk.pageSize > 0
+        ) {
+            // The completing re-fetch: the endpoint returns
+            // the whole list again; the caller's reconcile
+            // keeps the stored prefix and appends the rest.
+            val all = parseAllChapters(fetchDoc(url), url)
+            return ChapterChunk(
+                null, all,
+                ChapterWalk(nextPage = 0, totalPages = 1, pageSize = all.size),
+                complete = true
+            )
+        }
         val doc = fetchDoc(url)
         val session = WalkSession(doc, url)
         session.resume(haveReading, walk)
@@ -538,6 +587,9 @@ class DeclarativeSource(
         private var totalPages = 0
         private var firstPageSize = -1
         private var fetchedPages = 0
+        /** v1.3.0 (E1): the chapter total a JSON endpoint
+         * states; 0 = not stated. Ends the walk exactly. */
+        private var knownTotal = 0
         private var failed = false
         var complete = false
             private set
@@ -566,7 +618,23 @@ class DeclarativeSource(
                     return
                 }
                 nextPage = totalPages
+            } else if (p.jsonArrayPath != null) {
+                // v1.3.0 delta (V120-CHECK 46): a JSON-RECORDS
+                // endpoint (chikari's limit/offset API and its
+                // kin) owns page 1 — the "book page" is an API
+                // document carrying none of the list's rows.
+                // Seeding from it and starting at page 2
+                // silently DROPPED the first page: chikari
+                // lost chapters 1–500 (of 1,923), so position
+                // 1 wore chapter 501's text under a "Chapter 1"
+                // label. No seeding; the walk starts at page 1
+                // like the full walk does.
+                nextPage = 1
             } else {
+                // DOM/fragment pagination (the novelight
+                // contract): the book page carries page 1's
+                // slice itself and the endpoint serves pages
+                // 2..N — seed from the page, fetch from page 2.
                 rows += bookPageRows
                 seen += bookPageRows.map { it.id }
                 nextPage = 2
@@ -660,11 +728,13 @@ class DeclarativeSource(
                 complete = true
                 return false
             }
-            val fragmentRows = fetchListPage(p, id, nextPage)
-            if (fragmentRows == null) {
+            val fetchedPage = fetchListPage(p, id, nextPage)
+            if (fetchedPage == null) {
                 failed = true
                 return false
             }
+            fetchedPage.total?.let { if (it > 0) knownTotal = it }
+            val fragmentRows = fetchedPage.rows
             fetchedPages++
             if (fragmentRows.isEmpty()) {
                 complete = true
@@ -677,6 +747,14 @@ class DeclarativeSource(
             }
             rows += fresh
             seen += fresh.map { it.id }
+            // v1.3.0 (E1): an endpoint that states its total
+            // ends the walk the moment the rows reach it —
+            // exact, no short-page guessing.
+            if (knownTotal > 0 && seen.size >= knownTotal) {
+                nextPage = 0
+                complete = true
+                return true
+            }
             if (firstPageSize < 0) {
                 firstPageSize = fragmentRows.size
             } else if (fragmentRows.size < firstPageSize) {
@@ -704,11 +782,13 @@ class DeclarativeSource(
                 complete = true
                 return true
             }
-            val fragmentRows = fetchListPage(p, id, nextPage)
-            if (fragmentRows == null) {
+            val fetchedPage = fetchListPage(p, id, nextPage)
+            if (fetchedPage == null) {
                 failed = true
                 return false
             }
+            fetchedPage.total?.let { if (it > 0) knownTotal = it }
+            val fragmentRows = fetchedPage.rows
             if (fragmentRows.isEmpty()) {
                 // The declared total overshot the real list
                 // (the site shrank): settle with the book
@@ -738,15 +818,42 @@ class DeclarativeSource(
             p: ChapterListPagination,
             id: String,
             page: Int
-        ): List<SourceChapter>? {
-            val url = resolveUrl(p.endpointFor(id, page))
+        ): PageFetch? {
+            val slug = ChapterListPagination.bookSlugOf(pageUrl)
+            val url = resolveUrl(p.endpointFor(id, page, slug, pageUrl))
             return runCatching {
-                val response = context.http.get(url, p.headers)
+                val response = if (
+                    p.method.equals("POST", ignoreCase = true) &&
+                    p.body != null
+                ) {
+                    context.http.post(
+                        url, p.bodyFor(id, page, slug, pageUrl) ?: "",
+                        headers = p.headers
+                    )
+                } else {
+                    context.http.get(url, p.headers)
+                }
                 if (response.status !in 200..299) return@runCatching null
-                val html = paginationFragmentHtml(response.body, p)
-                    ?: return@runCatching null
-                val fragment = Jsoup.parseBodyFragment(html, pageUrl)
-                rowsFromElements(selectFragmentRows(fragment), pageUrl)
+                if (p.jsonArrayPath != null) {
+                    val root = runCatching {
+                        ajaxJson.parseToJsonElement(response.body)
+                    }.getOrNull() ?: return@runCatching null
+                    val rows = jsonEndpointRows(root, pageUrl, id)
+                    val total = p.jsonTotalPath?.let { path ->
+                        (EmbeddedJson.resolve(root, path)
+                            as? kotlinx.serialization.json.JsonPrimitive)
+                            ?.contentOrNull?.toIntOrNull()
+                    }
+                    PageFetch(rows, total)
+                } else {
+                    val html = paginationFragmentHtml(response.body, p)
+                        ?: return@runCatching null
+                    val fragment = Jsoup.parseBodyFragment(html, pageUrl)
+                    PageFetch(
+                        rowsFromElements(selectFragmentRows(fragment), pageUrl),
+                        null
+                    )
+                }
             }.getOrElse { error ->
                 if (error is kotlinx.coroutines.CancellationException) {
                     throw error
@@ -754,6 +861,123 @@ class DeclarativeSource(
                 null
             }
         }
+    }
+
+    /** One endpoint page of a chapter-list walk: its rows, and
+     * the response's stated chapter total when the endpoint
+     * declares one (v1.3.0, E1 — API chapter lists). */
+    private data class PageFetch(
+        val rows: List<SourceChapter>,
+        val total: Int?
+    )
+
+    /**
+     * v1.3.0 (E1): chapter rows from a JSON endpoint response —
+     * the chapter array at the pagination spec's
+     * [ChapterListPagination.jsonArrayPath], read with the
+     * chapter spec's JSON record fields. A record's link may be
+     * a full URL, a site path, or a bare id/slug the spec's
+     * link template expands into the chapter URL. Same
+     * admission rule as every other row source: the chapter
+     * must live on the site's own host.
+     */
+    private fun jsonEndpointRows(
+        root: kotlinx.serialization.json.JsonElement,
+        pageUrl: String,
+        bookId: String
+    ): List<SourceChapter> {
+        val spec = config.details.chapters
+        val pagination = spec.pagination ?: return emptyList()
+        val path = pagination.jsonArrayPath ?: return emptyList()
+        val array = EmbeddedJson.resolve(root, path)
+            as? kotlinx.serialization.json.JsonArray
+            ?: return emptyList()
+        return array.mapIndexedNotNull { index, element ->
+            val record = element as? kotlinx.serialization.json.JsonObject
+                ?: return@mapIndexedNotNull null
+            val rawLink = EmbeddedJson.stringAt(record, spec.jsonLinkField)
+                ?.trim().orEmpty()
+            if (rawLink.isEmpty()) return@mapIndexedNotNull null
+            val link = spec.jsonLinkTemplate?.let { template ->
+                template
+                    .replace("{value}", rawLink)
+                    .replace(
+                        "{bookSlug}",
+                        ChapterListPagination.bookSlugOf(pageUrl)
+                    )
+                    .replace("{bookId}", bookId)
+            } ?: rawLink
+            val absoluteLink = absolute(link, pageUrl)
+            if (!LinkInference.isSameSiteHost(pageUrl, absoluteLink)) {
+                return@mapIndexedNotNull null
+            }
+            val name = jsonRecordName(record, spec, index)
+            SourceChapter(
+                id = absoluteLink,
+                name = name,
+                number = ChapterNumbers.parse(name)
+                    ?: recordNumber(record, spec),
+                dateText = spec.jsonDateField?.let { field ->
+                    EmbeddedJson.stringAt(record, field)
+                        ?.trim()?.ifEmpty { null }
+                }
+            )
+        }
+    }
+
+    /**
+     * A JSON chapter record's display name: its name field,
+     * prefixed with its own stated number when the name is a
+     * bare title (chikari's records: number 1 + title
+     * "Nightmare Begins" — the site shows "Chapter 1:
+     * Nightmare Begins"). A name that already carries its
+     * number (novelbuddy's "Chapter 3229 …") stands as-is;
+     * a record with neither falls back to its position.
+     */
+    private fun jsonRecordName(
+        record: kotlinx.serialization.json.JsonObject,
+        spec: ChapterListSpec,
+        index: Int
+    ): String {
+        val raw = EmbeddedJson.stringAt(record, spec.jsonNameField)
+            ?.trim()?.ifEmpty { null }
+        val number = recordNumber(record, spec)
+        if (raw == null) {
+            return recordNumberName(record, spec) ?: "Chapter ${index + 1}"
+        }
+        if (number != null && ChapterNumbers.parse(raw) == null) {
+            val label = recordNumberName(record, spec) ?: return raw
+            return "$label: $raw"
+        }
+        return raw
+    }
+
+    /** A JSON chapter record's own number, when it carries one
+     * in a recognised number field — API lists state it even
+     * when the row's name is a bare title (chikari). */
+    private fun recordNumber(
+        record: kotlinx.serialization.json.JsonObject,
+        spec: ChapterListSpec
+    ): Float? {
+        for (field in listOf("number", "chapterNumber", "chapter_number")) {
+            val value = (EmbeddedJson.resolve(record, field)
+                as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toFloatOrNull()
+            if (value != null) return value
+        }
+        return null
+    }
+
+    /** "Chapter n" from a record's number field, for records
+     * whose name field holds a bare chapter title — the list
+     * shows the number AND the title, as the sites do. */
+    private fun recordNumberName(
+        record: kotlinx.serialization.json.JsonObject,
+        spec: ChapterListSpec
+    ): String? {
+        val number = recordNumber(record, spec) ?: return null
+        val asInt = number.toInt()
+        return if (number == asInt.toFloat()) "Chapter $asInt" else "Chapter $number"
     }
 
     /** The COMPLETE chapter list (v1.0.6.2, F1): the book page's
@@ -774,9 +998,27 @@ class DeclarativeSource(
         if (spec.jsonPath != null) {
             rows += jsonChapterRows(doc, pageUrl)
         }
+        // v1.3.0 (E1): a DIRECT JSON endpoint page — the book
+        // page's whole payload is an API answer whose chapter
+        // array the spec names; when it yields rows they ARE
+        // the list (the DOM of such a page is a shell of the
+        // payload, never a second source of rows).
+        val endpointPath = spec.jsonEndpointPath
+        var seededFromEndpoint = false
+        if (endpointPath != null) {
+            val endpointRows = directJsonChapterRows(doc, pageUrl, endpointPath)
+            if (endpointRows.isNotEmpty()) {
+                rows.clear()
+                rows += endpointRows
+                seededFromEndpoint = true
+            }
+        }
         val pagination = spec.pagination
         if (pagination != null) {
-            walkChapterPages(doc, pageUrl, pagination, rows)
+            walkChapterPages(
+                doc, pageUrl, pagination, rows,
+                seededFromEndpoint = seededFromEndpoint
+            )
         }
         // v1.0.8.1: a pattern-completed list is already in
         // reading order — it must NOT pass through the reverse
@@ -838,6 +1080,92 @@ class DeclarativeSource(
         return generated + extras
     }
 
+    /**
+     * v1.3.0 (E1): chapter rows from a DIRECT JSON payload —
+     * the array at [ChapterListSpec.jsonEndpointPath] in the
+     * page's own JSON (bare body or embedded), read with the
+     * spec's JSON record fields and link template.
+     */
+    private fun directJsonChapterRows(
+        doc: Document,
+        pageUrl: String,
+        path: String
+    ): List<SourceChapter> {
+        val spec = config.details.chapters
+        for (root in EmbeddedJson.rootsForRead(doc)) {
+            val array = EmbeddedJson.resolve(root, path)
+                as? kotlinx.serialization.json.JsonArray ?: continue
+            val bookId = spec.pagination
+                ?.bookIdIn(bookIdHaystack(doc)) ?: ""
+            return array.mapIndexedNotNull { index, element ->
+                // v1.3.0: a NAME-LIST endpoint (novelarchive: the
+                // book payload's chapter_names) — the array's
+                // items are bare strings, each the chapter's
+                // name; its link is built from the row's 1-based
+                // position via the template's {index}.
+                if (element is kotlinx.serialization.json.JsonPrimitive) {
+                    val stringName = element.contentOrNull
+                        ?.trim().orEmpty()
+                    val template = spec.jsonLinkTemplate
+                    if (stringName.isEmpty() || template == null) {
+                        return@mapIndexedNotNull null
+                    }
+                    val link = template
+                        .replace("{index}", (index + 1).toString())
+                        .replace("{value}", stringName)
+                        .replace(
+                            "{bookSlug}",
+                            ChapterListPagination.bookSlugOf(pageUrl)
+                        )
+                        .replace("{bookId}", bookId)
+                    val absoluteLink = absolute(link, pageUrl)
+                    if (!LinkInference.isSameSiteHost(
+                            pageUrl, absoluteLink
+                        )
+                    ) {
+                        return@mapIndexedNotNull null
+                    }
+                    return@mapIndexedNotNull SourceChapter(
+                        id = absoluteLink,
+                        name = stringName,
+                        number = (index + 1).toFloat()
+                    )
+                }
+                val record = element as? kotlinx.serialization.json.JsonObject
+                    ?: return@mapIndexedNotNull null
+                val rawLink = EmbeddedJson.stringAt(record, spec.jsonLinkField)
+                    ?.trim().orEmpty()
+                if (rawLink.isEmpty()) return@mapIndexedNotNull null
+                val link = spec.jsonLinkTemplate?.let { template ->
+                    template
+                        .replace("{value}", rawLink)
+                        .replace("{index}", (index + 1).toString())
+                        .replace(
+                            "{bookSlug}",
+                            ChapterListPagination.bookSlugOf(pageUrl)
+                        )
+                        .replace("{bookId}", bookId)
+                } ?: rawLink
+                val absoluteLink = absolute(link, pageUrl)
+                if (!LinkInference.isSameSiteHost(pageUrl, absoluteLink)) {
+                    return@mapIndexedNotNull null
+                }
+                val name = jsonRecordName(record, spec, index)
+                SourceChapter(
+                    id = absoluteLink,
+                    name = name,
+                    number = ChapterNumbers.parse(name)
+                        ?: recordNumber(record, spec),
+                    dateText = spec.jsonDateField?.let { field ->
+                        EmbeddedJson.stringAt(record, field)
+                            ?.trim()?.ifEmpty { null }
+                    }
+                )
+            }
+        }
+        return emptyList()
+    }
+
     private fun parseChapterRows(doc: Document, pageUrl: String): List<SourceChapter> =
         rowsFromElements(selectChained(doc, config.details.chapters.list), pageUrl)
 
@@ -855,7 +1183,7 @@ class DeclarativeSource(
         val spec = config.details.chapters
         val path = spec.jsonPath ?: return emptyList()
         var array: kotlinx.serialization.json.JsonArray? = null
-        for (root in EmbeddedJson.roots(doc)) {
+        for (root in EmbeddedJson.rootsForRead(doc)) {
             val found = EmbeddedJson.resolve(root, path)
                 as? kotlinx.serialization.json.JsonArray
             if (found != null) {
@@ -913,14 +1241,45 @@ class DeclarativeSource(
         }
     }
 
+    /** The chapter-shape gate (item 50): can this row be a
+     * chapter at all? Call-to-action labels ("Start Reading"
+     * and kin) carry no chapter number; tag/genre/category
+     * links point at book collections. Either shape in a
+     * chapter list is page furniture, not a chapter. */
+    private fun isChapterShaped(row: SourceChapter): Boolean {
+        if (row.number == null &&
+            row.name.trim().lowercase() in CHAPTER_CTA_LABELS
+        ) {
+            return false
+        }
+        val path = runCatching { java.net.URI(row.id).path }
+            .getOrNull() ?: return true
+        val segments = path.split('/').filter { it.isNotBlank() }
+        return segments.none { it.lowercase() in LISTING_PATH_SEGMENTS }
+    }
+
     private fun finishChapterRows(rows: List<SourceChapter>): List<SourceChapter> {
         val spec = config.details.chapters
+        // v1.3.0 delta (V120-CHECK 50): the chapter-shape gate.
+        // A book page's furniture — the "Start Reading" call to
+        // action, the book's own tag chips (Magic, Action,
+        // Transmigration…) — matches loose chapter selectors
+        // on DOM roads and renders as chapter rows (with
+        // download buttons) ahead of the real list. Two
+        // road-independent shapes can never be chapters: a
+        // call-to-action label carrying no chapter number, and
+        // a link into a listing path (tag / genre / category
+        // collections list BOOKS, never chapters). API roads
+        // never produce either shape, so the gate is free for
+        // them; DOM roads stop leaking furniture here, at the
+        // one choke point every declarative list passes.
+        val shaped = rows.filter { isChapterShaped(it) }
         // v1.0.5 (E3): sites that show a "latest chapters" block
         // AND the full list on the same page (Novelight: 10 + 51
         // rows under one selector) would otherwise hand back the
         // overlap twice. One entry per chapter URL, first
         // occurrence wins, order preserved — the COMPLETE list.
-        val unique = rows.distinctBy { it.id }
+        val unique = shaped.distinctBy { it.id }
         val ordered = if (spec.reverse) unique.asReversed() else unique
         // v1.1.2: the reading-order invariant. Everything
         // downstream — the stored Chapter.index the reconciler
@@ -957,22 +1316,80 @@ class DeclarativeSource(
         bookDoc: Document,
         pageUrl: String,
         pagination: ChapterListPagination,
-        rows: MutableList<SourceChapter>
+        rows: MutableList<SourceChapter>,
+        seededFromEndpoint: Boolean = false
     ) {
         val bookId = pagination.bookIdIn(bookIdHaystack(bookDoc)) ?: return
         val seen = rows.mapTo(HashSet()) { it.id }
         var firstPageSize = -1
         var page = 2
         var fetched = 0
+        // v1.3.0 (E1): page 1 of a slug/id-addressed endpoint is
+        // NOT the book page — API chapter lists start at page 1
+        // (chikari's paged list, novelping's JSON chapters).
+        // The book page's rows are already in [rows]/[seen], so
+        // a page-1 fetch simply dedupes against them. EXCEPT
+        // when the book page IS the endpoint's first page —
+        // [seededFromEndpoint]: the spec's jsonEndpointPath
+        // seeded page 1's payload as the book rows — where
+        // the walk starts at page 2 as it always did.
+        if (pagination.jsonArrayPath != null && !seededFromEndpoint) {
+            page = 1
+        }
+        val startPage = page
+        // v1.3.0 (E1): the chapter total a JSON endpoint states.
+        var knownTotal = 0
+        val slug = ChapterListPagination.bookSlugOf(pageUrl)
+        // v1.3.0 delta: a single-shot endpoint (NovelBuddy)
+        // answers EVERY page with the same payload — fetching
+        // page 2 only to watch it dedupe to nothing doubles a
+        // ~800 KB download on slow networks. When the next
+        // page's request is byte-identical to the previous
+        // one, the list is already whole: stop before fetching.
+        var prevRequest: Pair<String, String?>? = null
         while (fetched < MAX_LIST_PAGES) {
-            val url = resolveUrl(pagination.endpointFor(bookId, page))
-            val fragmentRows = runCatching {
-                val response = context.http.get(url, pagination.headers)
+            val url = resolveUrl(
+                pagination.endpointFor(bookId, page, slug, pageUrl)
+            )
+            val requestKey = url to pagination.bodyFor(
+                bookId, page, slug, pageUrl
+            )
+            if (requestKey == prevRequest) break
+            prevRequest = requestKey
+            val fetchedPage = runCatching {
+                val response = if (
+                    pagination.method.equals("POST", ignoreCase = true) &&
+                    pagination.body != null
+                ) {
+                    context.http.post(
+                        url,
+                        pagination.bodyFor(bookId, page, slug, pageUrl)
+                            ?: "",
+                        headers = pagination.headers
+                    )
+                } else {
+                    context.http.get(url, pagination.headers)
+                }
                 if (response.status !in 200..299) return@runCatching null
-                val html = paginationFragmentHtml(response.body, pagination)
-                    ?: return@runCatching null
-                val fragment = Jsoup.parseBodyFragment(html, pageUrl)
-                rowsFromElements(selectFragmentRows(fragment), pageUrl)
+                if (pagination.jsonArrayPath != null) {
+                    val root = runCatching {
+                        ajaxJson.parseToJsonElement(response.body)
+                    }.getOrNull() ?: return@runCatching null
+                    val total = pagination.jsonTotalPath?.let { path ->
+                        (EmbeddedJson.resolve(root, path)
+                            as? kotlinx.serialization.json.JsonPrimitive)
+                            ?.contentOrNull?.toIntOrNull()
+                    }
+                    PageFetch(jsonEndpointRows(root, pageUrl, bookId), total)
+                } else {
+                    val html = paginationFragmentHtml(response.body, pagination)
+                        ?: return@runCatching null
+                    val fragment = Jsoup.parseBodyFragment(html, pageUrl)
+                    PageFetch(
+                        rowsFromElements(selectFragmentRows(fragment), pageUrl),
+                        null
+                    )
+                }
             }.getOrElse { error ->
                 // Cancellation is the caller's business, never
                 // a "page failed" signal.
@@ -981,16 +1398,30 @@ class DeclarativeSource(
                 }
                 null
             } ?: return
+            fetchedPage.total?.let { if (it > 0) knownTotal = it }
+            val fragmentRows = fetchedPage.rows
             fetched++
             if (fragmentRows.isEmpty()) return
             val fresh = fragmentRows.filter { it.id !in seen }
-            if (fresh.isEmpty()) return
-            rows += fresh
-            seen += fresh.map { it.id }
-            if (firstPageSize < 0) {
-                firstPageSize = fragmentRows.size
-            } else if (fragmentRows.size < firstPageSize) {
-                return
+            if (fresh.isEmpty()) {
+                // A page that adds nothing: when the walk
+                // STARTED at page 1 of a JSON endpoint, its
+                // first page can be the seeds served again
+                // (they were parsed from the same payload) —
+                // keep walking. Any other repeat — a DOM walk
+                // whose next page duplicates the book slice,
+                // or a later page cycling — means the list is
+                // over: stop.
+                if (fetched > 1 || startPage != 1) return
+            } else {
+                rows += fresh
+                seen += fresh.map { it.id }
+                if (knownTotal > 0 && seen.size >= knownTotal) return
+                if (firstPageSize < 0) {
+                    firstPageSize = fragmentRows.size
+                } else if (fragmentRows.size < firstPageSize) {
+                    return
+                }
             }
             page++
         }
@@ -1227,16 +1658,95 @@ class DeclarativeSource(
         endpoint: String
     ): SourceChapterContent {
         val spec = config.chapter
-        val response = context.http.get(endpoint, ajax.headers)
+        // v1.3.0 (E1): reader APIs that take the chapter
+        // address in a POST body (WTR-LAB) ride the same seam —
+        // headers, session, whitelist, rate limit unchanged.
+        val response = if (ajax.method.equals("POST", ignoreCase = true)) {
+            context.http.post(
+                resolveUrl(endpoint),
+                ajax.bodyFor(chapter.id) ?: "",
+                headers = ajax.headers
+            )
+        } else {
+            context.http.get(resolveUrl(endpoint), ajax.headers)
+        }
         if (response.status !in 200..299) {
             throw SourceException("the site answered HTTP ${response.status}")
         }
-        val root = runCatching {
+        val rootElement = runCatching {
             ajaxJson.parseToJsonElement(response.body)
-        }.getOrNull() as? JsonObject
-        val payload = (root?.get(ajax.jsonContentField) as? JsonPrimitive)
-            ?.content?.takeIf { it.isNotBlank() }
-            ?: throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
+        }.getOrNull()
+        val root = rootElement as? JsonObject
+        // v1.3.0 (E1): an endpoint that MARKS the chapter
+        // locked in its own JSON (chikari: "locked": true)
+        // says so in as many words — the typed locked failure,
+        // never an empty chapter.
+        val lockField = ajax.jsonLockField
+        if (lockField != null &&
+            (root?.get(lockField) as? JsonPrimitive)?.booleanOrNull == true
+        ) {
+            throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
+        }
+        // v1.3.0: the content value may sit at a dot path
+        // (noveli's chapter.paragraphs) and may be an ARRAY —
+        // of strings, or of paragraph objects whose text field
+        // carries the prose, with anti-scraping watermark items
+        // (recognisable by their ids) skipped.
+        val contentNode = if (rootElement == null) {
+            null
+        } else if (ajax.jsonContentPath != null) {
+            EmbeddedJson.resolve(rootElement, ajax.jsonContentPath!!)
+        } else {
+            root?.get(ajax.jsonContentField)
+        }
+        val skipId = ajax.jsonSkipIdPattern?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { Regex(it) }.getOrNull() }
+        val rawPayload = when (contentNode) {
+            is JsonPrimitive -> contentNode.content
+                .takeIf { it.isNotBlank() }
+            is kotlinx.serialization.json.JsonArray ->
+                contentNode.mapNotNull { item ->
+                    when (item) {
+                        is JsonPrimitive -> item.contentOrNull
+                        is JsonObject -> {
+                            val itemId = (item["id"] as? JsonPrimitive)
+                                ?.contentOrNull
+                            if (skipId != null && itemId != null &&
+                                skipId.containsMatchIn(itemId)
+                            ) {
+                                null
+                            } else {
+                                (item[ajax.jsonItemTextField]
+                                    as? JsonPrimitive)?.contentOrNull
+                            }
+                        }
+                        else -> null
+                    }
+                }.filter { it.isNotBlank() }
+                    .joinToString("\n")
+                    .takeIf { it.isNotBlank() }
+            else -> null
+        } ?: throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
+        // v1.3.0 (E1): a plain-text field (chikari's `body`:
+        // newline-separated prose, a small set of inline tags)
+        // becomes paragraph HTML — each non-empty line a <p> —
+        // instead of being fed to the content selector as if
+        // it were markup.
+        val payload = if (ajax.plainTextField) {
+            rawPayload.replace(Regex("<[^>]+>"), "")
+                .lines().map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .joinToString("\n") { line ->
+                    val escaped = line
+                        .replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                    "<p>$escaped</p>"
+                }
+                .ifBlank { throw SourceException(AJAX_TEXT_EMPTY_MESSAGE) }
+        } else {
+            rawPayload
+        }
         val fragment = Jsoup.parseBodyFragment(payload, chapter.id)
         val title = spec.title?.let { readDocSpec(fragment, it) }?.ifBlank { null }
         val element = firstChainedMatch(fragment, spec.content)?.first
@@ -1419,7 +1929,7 @@ class DeclarativeSource(
         /** v1.0.6.2 (F1): chapter-LIST pagination walk cap — at
          * novelight's 50 rows a page this still covers 2,000
          * chapters past the book page's own slice. */
-        const val MAX_LIST_PAGES = 40
+        const val MAX_LIST_PAGES = 100
 
         /** v1.0.8.1: pattern-completion sanity cap — a stated
          * total above this is a misread page, not a book. */
@@ -1436,6 +1946,22 @@ class DeclarativeSource(
         /** The AJAX mode's JSON reader: the tree's existing
          * kotlinx.serialization (no new dependency). */
         private val ajaxJson = Json { ignoreUnknownKeys = true; isLenient = true }
+
+        /** v1.3.0 delta (item 50): call-to-action labels that
+         * book pages render inside chapter-list regions. A row
+         * with one of these names and NO chapter number is a
+         * button, never a chapter. */
+        private val CHAPTER_CTA_LABELS = setOf(
+            "start reading", "read now", "continue reading",
+            "begin reading", "read from start", "start reading now"
+        )
+
+        /** v1.3.0 delta (item 50): URL path segments that name
+         * book COLLECTIONS (tag/genre/category listings). A
+         * chapter link never routes through one. */
+        private val LISTING_PATH_SEGMENTS = setOf(
+            "tag", "tags", "genre", "genres", "category", "categories"
+        )
     }
 }
 

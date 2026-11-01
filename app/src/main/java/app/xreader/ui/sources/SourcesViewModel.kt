@@ -3,6 +3,7 @@ package app.xreader.ui.sources
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import app.xreader.core.error.AppError
 import app.xreader.core.error.AppResult
 import app.xreader.core.error.ErrorText
 import app.xreader.data.db.ExtensionRepo
@@ -15,6 +16,7 @@ import app.xreader.data.extension.LegadoConverter
 import app.xreader.data.extension.LinkProber
 import app.xreader.data.extension.PendingUpdate
 import app.xreader.data.extension.RepoManager
+import app.xreader.data.extension.normaliseHost
 import app.xreader.data.extension.SessionData
 import app.xreader.data.extension.TrustEngine
 import app.xreader.di.AppContainer
@@ -59,11 +61,26 @@ data class SourcesUiState(
     val legadoRows: List<LegadoImportRow> = emptyList(),
     val repos: List<ExtensionRepo> = emptyList(),
     val extensions: List<InstalledExtension> = emptyList(),
+    /** v1.3.0 (device spot-check fix): ids of the user's own
+     * rows that share a domain with a built-in default — the
+     * bundled row is reordered ahead of them as the primary
+     * for the domain and these carry an "Added by you" tag,
+     * so same-name twins are never confusable. Nothing is
+     * deleted or merged. See SourceTwinArrangement. */
+    val addedByYouIds: Set<Long> = emptySet(),
     val catalogues: Map<Long, List<IndexPackage>> = emptyMap(),
     val updates: Map<String, RepoManager.UpdateCandidate> = emptyMap(),
     val pendings: Map<String, PendingUpdate> = emptyMap(),
     val changedRepos: Set<Long> = emptySet(),
     val busy: Boolean = false,
+    /** v1.3.1 (item 59): the repo-add flow's current stage in
+     * plain words ("Fetching the list…" / "Reading the
+     * sources…") while it runs, and its definite outcome line
+     * once it lands — the Add screen renders both IN the card,
+     * so a slow add is never a silent form again. */
+    val repoStage: String? = null,
+    val repoOutcome: String? = null,
+    val repoOutcomeIsError: Boolean = false,
     // ── v1.0.2 (R13/R14) ─────────────────────────────────────────
     /** Last test-drive verdict per source ("extId:sourceId"). */
     val health: Map<String, app.xreader.data.extension.SourceHealthRecord> =
@@ -90,6 +107,8 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
     private val _foreignRepo =
         MutableStateFlow<app.xreader.data.extension.RepoFormat.ForeignRepo?>(null)
     private val _legadoRows = MutableStateFlow<List<LegadoImportRow>>(emptyList())
+    private val _repoStage = MutableStateFlow<String?>(null)
+    private val _repoOutcome = MutableStateFlow<Pair<String, Boolean>?>(null)
 
     val state: StateFlow<SourcesUiState> = combine(
         container.database.extensionRepoDao().observeAll(),
@@ -98,12 +117,16 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         _foreignRepo, _legadoRows,
         container.sourcePrefs.sourceHealth,
         container.sourcePrefs.pinnedRepoIds,
-        container.sourcePrefs.recentRepoIds
+        container.sourcePrefs.recentRepoIds,
+        _repoStage, _repoOutcome
     ) { values ->
         @Suppress("UNCHECKED_CAST")
+        val rawExtensions = values[1] as List<InstalledExtension>
+        val (orderedExtensions, twinIds) = arrangeSourceTwins(rawExtensions)
         SourcesUiState(
             repos = values[0] as List<ExtensionRepo>,
-            extensions = values[1] as List<InstalledExtension>,
+            extensions = orderedExtensions,
+            addedByYouIds = twinIds,
             catalogues = values[2] as Map<Long, List<IndexPackage>>,
             updates = values[3] as Map<String, RepoManager.UpdateCandidate>,
             pendings = readPendings(values[1] as List<InstalledExtension>),
@@ -113,7 +136,11 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
             legadoRows = values[7] as List<LegadoImportRow>,
             health = values[8] as Map<String, app.xreader.data.extension.SourceHealthRecord>,
             pinnedRepoIds = values[9] as Set<Long>,
-            recentRepoIds = values[10] as List<Long>
+            recentRepoIds = values[10] as List<Long>,
+            repoStage = values[11] as String?,
+            repoOutcome = (values[12] as Pair<String, Boolean>?)?.first,
+            repoOutcomeIsError =
+                (values[12] as Pair<String, Boolean>?)?.second ?: false
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SourcesUiState())
 
@@ -149,6 +176,40 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
             ?.let { ext.packageId to it }
     }.toMap()
 
+    /**
+     * v1.3.0 (device spot-check fix): same-domain twins in the
+     * sources list — see [SourceTwinArrangement]. A row's host
+     * comes from its stored declarative definition (the first
+     * config's base URL); non-declarative rows have no host
+     * here and are never twins. Bundled rows are recognised by
+     * their `bundled.` package prefix (RepoManager's bundled
+     * install path).
+     */
+    private fun arrangeSourceTwins(
+        extensions: List<InstalledExtension>
+    ): Pair<List<InstalledExtension>, Set<Long>> {
+        val hosts = HashMap<String, String?>()
+        fun hostOf(ext: InstalledExtension): String? {
+            if (ext.kind != app.xreader.data.db.ExtensionKind.DECLARATIVE) {
+                return null
+            }
+            return hosts.getOrPut(ext.packageId) {
+                val raw = container.extensionStore.readText(
+                    container.extensionStore.definitionFile(ext.packageId)
+                ) ?: return@getOrPut null
+                app.xreader.data.extension.DeclarativeFingerprints
+                    .decode(raw).firstOrNull()?.baseUrl
+                    ?.normaliseHost()
+            }
+        }
+        return SourceTwinArrangement.arrange(
+            rows = extensions,
+            idOf = { it.id },
+            hostOf = { hostOf(it) },
+            isBundled = { it.packageId.startsWith("bundled.") }
+        )
+    }
+
     private fun say(message: String) {
         _messages.tryEmit(message)
     }
@@ -158,18 +219,33 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
     fun addRepo(name: String, indexUrl: String) {
         viewModelScope.launch {
             _busy.value = true
+            // v1.3.1 (item 59): staged, persistent feedback IN
+            // the form — the stage shows while work runs and the
+            // outcome line stays until dismissed. The screen no
+            // longer clears the address up front, so a failure
+            // leaves it in place for correction.
+            _repoOutcome.value = null
+            _repoStage.value = "Fetching the list…"
             try {
                 // v1.0.1: detect the format FIRST. A Mihon / LNReader /
                 // Legado / generic site list is not an error — it's a
                 // different app's list, and it gets an explanation card
                 // with a "Create Xreader source" action per site.
-                when (val result = manager.addRepoOrDetect(name.trim(), indexUrl.trim())) {
+                when (
+                    val result = manager.addRepoOrDetect(
+                        name.trim(), indexUrl.trim()
+                    ) { stage -> _repoStage.value = stage }
+                ) {
                     is RepoManager.AddRepoOutcome.Added -> {
-                        say("Repository added — “${result.repo.name}”")
+                        _repoOutcome.value =
+                            "“${result.repo.name}” added · " +
+                                "${result.sourceCount} sources" to false
                         refreshRepo(result.repo)
                     }
                     is RepoManager.AddRepoOutcome.Foreign -> {
                         _foreignRepo.value = result.format
+                        _repoOutcome.value =
+                            foreignOutcomeLine(result.format) to false
                         if (result.format.ecosystemName == "Legado") {
                             importLegadoText(
                                 manager.fetchText(indexUrl.trim()).let {
@@ -179,25 +255,63 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                         }
                     }
                     is RepoManager.AddRepoOutcome.Failed ->
-                        say(
-                            "That link isn't a repository Xreader recognises. " +
-                                "Check the link, or use Add from link to add the site itself. " +
-                                "(${ErrorText.displayText(result.error)})"
-                        )
+                        _repoOutcome.value =
+                            repoFailureLine(result.error) to true
                 }
             } catch (t: Throwable) {
                 // v1.2.2 crash net: this launch is uncaught —
                 // an escape here crashed the app on the Add tap
                 // (first external crash report, 2026-10-31).
                 if (t is kotlinx.coroutines.CancellationException) throw t
-                say(
-                    "Something went wrong while adding that repository, so " +
-                        "Xreader stopped instead of crashing. Nothing was " +
-                        "added — please try again."
-                )
+                _repoOutcome.value =
+                    "Something went wrong while adding that repository. " +
+                        "Nothing was added — the address is still " +
+                        "filled in, please try again." to true
             } finally {
                 _busy.value = false
+                _repoStage.value = null
             }
+        }
+    }
+
+    fun dismissRepoOutcome() {
+        _repoOutcome.value = null
+    }
+
+    /** v1.3.1 (item 59): the definite outcome line for a foreign
+     * index — real counts from the parse, plain words. */
+    private fun foreignOutcomeLine(
+        format: app.xreader.data.extension.RepoFormat.ForeignRepo
+    ): String = when {
+        format.pluginIndex ->
+            "That list's sources live inside a single plugin file — " +
+                "the note below explains the options."
+        format.stubIndex ->
+            "That address now holds only an update note for older " +
+                "apps — the note below explains."
+        format.sites.isEmpty() ->
+            "That list was read, but it names no sites Xreader can " +
+                "use — the note below explains."
+        else ->
+            "${format.sites.size} sources found in that list. " +
+                "They're made for ${format.ecosystemName} — pick a " +
+                "site below and Xreader builds its own source for it."
+    }
+
+    /** v1.3.1 (item 59): the plain failure line — a stalled
+     * connection says so, in those words. */
+    private fun repoFailureLine(error: AppError): String {
+        val detail = ErrorText.displayText(error)
+        return if (
+            detail.contains("too long", ignoreCase = true) ||
+            detail.contains("timed out", ignoreCase = true) ||
+            detail.contains("timeout", ignoreCase = true)
+        ) {
+            "Couldn't fetch the list — the connection stalled. " +
+                "Check the address or try again."
+        } else {
+            "Couldn't add that repository — $detail " +
+                "The address is still filled in; check it and try again."
         }
     }
 

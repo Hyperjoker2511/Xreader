@@ -106,7 +106,9 @@ class V1063FixTest {
         assertEquals("Yesterday", ChapterDateText.relative("29.10.2026", today))
         assertEquals("3 days ago", ChapterDateText.relative("27.10.2026", today))
         assertEquals("3 weeks ago", ChapterDateText.relative("09.10.2026", today))
-        assertEquals("10 Sep 2026", ChapterDateText.relative("10.09.2026", today))
+        // v1.3.1 (item 53): 50 days now reads in the user's own
+        // wording — "a month ago" — not the old absolute date.
+        assertEquals("a month ago", ChapterDateText.relative("10.09.2026", today))
         // A future date is an absolute date, never "-1 days ago".
         assertEquals("31 Oct 2026", ChapterDateText.relative("31.10.2026", today))
         assertNull(ChapterDateText.relative("not a date", today))

@@ -1127,9 +1127,22 @@ class ReaderViewModel(
             )
         )
         container.database.bookDao().getById(bookId)?.let { book ->
-            if (book.lastOpenedAt == null || now - (book.lastOpenedAt ?: 0) > 30_000L) {
+            // v1.3.1 (item 45): actually READING a chapter is
+            // one of the three acts that make a preview row a
+            // Library member — it flips here, unthrottled,
+            // alongside the (throttled) lastOpenedAt stamp.
+            val flip = !book.inLibrary
+            if (flip || book.lastOpenedAt == null ||
+                now - (book.lastOpenedAt ?: 0) > 30_000L
+            ) {
                 container.database.bookDao()
-                    .update(book.copy(lastOpenedAt = now, updatedAt = now))
+                    .update(
+                        book.copy(
+                            lastOpenedAt = now,
+                            updatedAt = now,
+                            inLibrary = true
+                        )
+                    )
             }
         }
         progressCoalescer.markPersisted(now)

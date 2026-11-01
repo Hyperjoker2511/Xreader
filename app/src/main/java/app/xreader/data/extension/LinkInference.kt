@@ -458,7 +458,15 @@ object LinkInference {
             // query (`/chat?comment=…`), user/chat rails and
             // every other non-book shape: they are excluded
             // by construction, not by recognising each one.
-            if (booksOnly && !BookShape.isBookShapedHref(href)) {
+            // v1.2.4: the admission rule is
+            // [BookShape.isBookCandidateHref] — root-level
+            // books (`/<slug>`, no collection segment) are
+            // admitted, and people-collection hrefs
+            // (`/users/<id>-<name>`) are refused: the
+            // two-segment-only reading made root books
+            // invisible while a community rail's profiles
+            // passed as the only "collection" on the page.
+            if (booksOnly && !BookShape.isBookCandidateHref(href)) {
                 return@mapNotNull null
             }
             val wrapsImage = anchor.select("img").isNotEmpty()
@@ -572,7 +580,9 @@ object LinkInference {
             // v1.1.0 (Fix 4) / v1.1.1: the FULL Book-Shape
             // Rule binds the single-item search fallback too —
             // a lone "result" must still be a book-shaped link.
-            if (booksOnly && !BookShape.isBookShapedHref(href)) {
+            // v1.2.4: same widened admission as the listing
+            // filter (root books in, people collections out).
+            if (booksOnly && !BookShape.isBookCandidateHref(href)) {
                 return@firstOrNull false
             }
             val wrapsImage = candidate.select("img").isNotEmpty()

@@ -75,6 +75,11 @@ interface HttpTransport {
             is UnknownHostException -> AppError.NoNetwork
             is SocketTimeoutException ->
                 AppError.ProviderDown("server", detail = TIMEOUT_DETAIL)
+            // v1.3.1 (item 44): the total-call timeout (and a
+            // cancelled call) surfaces as an interrupted IO —
+            // same plain-words timeout family, never "unknown".
+            is java.io.InterruptedIOException ->
+                AppError.ProviderDown("server", detail = TIMEOUT_DETAIL)
             else -> AppError.Unknown(e)
         }
 
@@ -94,7 +99,11 @@ class OkHttpTransport(
 
     override suspend fun execute(request: HttpTransport.Request): AppResult<HttpTransport.Response> {
         return withContext(Dispatchers.IO) {
-            try {
+            // v1.3.1 (item 44): build the call BEFORE the try so
+            // coroutine cancellation can cancel it — a blocking
+            // execute() otherwise ignores cancellation until a
+            // socket timeout happens to fire.
+            val call = try {
                 val builder = Request.Builder().url(request.url)
                 request.headers.forEach { (name, value) -> builder.header(name, value) }
                 request.basicAuth?.let { (user, password) ->
@@ -103,9 +112,6 @@ class OkHttpTransport(
                 if (request.rangeStart > 0) {
                     builder.header("Range", "bytes=${request.rangeStart}-")
                 }
-                // GET stays the builder default; every other verb
-                // (POST forms, Phase 5's WebDAV PUT/PROPFIND) goes
-                // through the generic method path.
                 val verb = request.method.uppercase()
                 if (verb != "GET") {
                     val contentType = request.headers.entries
@@ -122,7 +128,21 @@ class OkHttpTransport(
                     }
                     builder.method(verb, requestBody)
                 }
-                val response: Response = client.newCall(builder.build()).execute()
+                client.newCall(builder.build())
+            } catch (e: IllegalArgumentException) {
+                return@withContext AppResult.Err(
+                    AppError.BadFile("that address doesn't look right")
+                )
+            }
+            // Cancellation note: the blocking execute() below
+            // cannot be interrupted mid-read by coroutine
+            // cancellation — the CALL timeout above is the
+            // bound that ends a stalled call (300 s worst case
+            // on a dead connection, on an IO thread, never the
+            // main thread), and a cancelled caller's result is
+            // discarded by the withContext contract.
+            try {
+                val response: Response = call.execute()
                 AppResult.Ok(
                     HttpTransport.Response(
                         code = response.code,
@@ -144,9 +164,20 @@ class OkHttpTransport(
     }
 
     companion object {
+        /** v1.3.1 (item 44): the TOTAL budget for one call.
+         * The per-read timeout alone cannot catch a connection
+         * that trickles forever (each tiny read succeeds); a
+         * call timeout can. Five minutes is far beyond any
+         * legitimate page on the user's slowest network, and
+         * it converts an eternal stall into the plain timeout
+         * error. Downloads resume by Range, so a capped call
+         * costs them nothing. */
+        const val CALL_TIMEOUT_SECONDS = 300L
+
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
+            .callTimeout(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .followRedirects(true)
             .build()
 
@@ -158,6 +189,7 @@ class OkHttpTransport(
         fun extensionClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
+            .callTimeout(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .followRedirects(false)
             .followSslRedirects(false)
             .build()

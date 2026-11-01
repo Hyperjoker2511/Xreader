@@ -52,6 +52,15 @@ class SourceBookSync(
      * line — without it this defaults to the direct run. */
     private val inTransaction: suspend (suspend () -> Unit) -> Unit =
         { block -> block() },
+    /** v1.3.0 delta (V120-CHECK 44/49): failover-map building
+     * searches EVERY other installed source — on a slow
+     * network that storm of calls must never sit on the
+     * book-open path. The container wires a background
+     * runner; the sync only ASKS for the maps to be built.
+     * Default (tests, older embeddings): build nothing here;
+     * the reader's resolver works primary-only until maps
+     * exist. */
+    private val failoverScheduler: (Book) -> Unit = {},
     private val nowMs: () -> Long = { System.currentTimeMillis() }
 ) {
 
@@ -62,13 +71,30 @@ class SourceBookSync(
      * mutex is the honest cost. */
     private val walkMutex = Mutex()
 
-    /** Open (or create) the library book for a catalogue [ref]. */
+    /** Open (or create) the book row for a catalogue [ref].
+     *
+     * v1.3.0 delta (V120-CHECK 44/45/47/49 — the delta open
+     * contract): a tap NEVER writes a Library entry and NEVER
+     * waits on a chapter list. The row is created as a PREVIEW
+     * (inLibrary = false — invisible on the shelf); only the
+     * book's DETAILS are fetched here (one small request), so
+     * first paint is metadata-fast even on a near-dead network.
+     * The chapter list is the book screen's own job: its
+     * auto-load pulls the first chunk for progressive sources
+     * (ensureChapters bootstraps via chaptersFirst) or the
+     * full refresh for the rest, behind an already-painted
+     * screen. An open interrupted at any point leaves at most
+     * this invisible preview — the shelf stays clean, and the
+     * next tap reuses the row. Membership (inLibrary = true)
+     * begins only at an explicit act: Add to library, the
+     * first chapter read, or a download (see markInLibrary).
+     */
     suspend fun openBook(handle: SourceHandle, ref: SourceBook): AppResult<Book> {
         val encoded = SourceBookIds.encode(handle.source.id, ref.id)
         var book = bookDao.findByExtensionRemote(handle.extension.id, encoded)
-        val created = book == null
         if (book == null) {
             val now = nowMs()
+            val declarative = handle.source as? DeclarativeSource
             val id = bookDao.insert(
                 Book(
                     title = ref.title,
@@ -78,7 +104,15 @@ class SourceBookSync(
                     extensionId = handle.extension.id,
                     remoteId = encoded,
                     addedAt = now,
-                    updatedAt = now
+                    updatedAt = now,
+                    inLibrary = false,
+                    // Progressive sources load by chunks from
+                    // the book screen; the flag must say so or
+                    // the screen would run a FULL refresh. Every
+                    // other source keeps the complete-on-open
+                    // contract its auto-load expects.
+                    chapterListComplete =
+                        declarative?.supportsProgressiveChapters() != true
                 )
             )
             book = bookDao.getById(id)
@@ -86,44 +120,73 @@ class SourceBookSync(
                     AppError.StorageFailed("saving the book")
                 )
         }
-        // v1.0.1 source-book identity fix: the row EXISTS, so the
-        // tap that opened it has succeeded — a failed chapter refresh
-        // must not turn into "book not available". The detail page
-        // sees the book, auto-loads its chapters, and shows a plain
-        // error + Retry in the chapters section if the site is down.
         val stored = bookDao.getById(book.id) ?: book
-        // v1.0.8: a book that is already in the library WITH its
-        // chapters opens from the device — no network at all.
-        // (The full re-walk on every Browse re-tap was most of
-        // the "tap a novel, wait forever" complaint for big
-        // books; the detail page's Refresh stays the explicit
-        // re-check, exactly as the v1.0.1 design intended.)
-        if (!created && chapterDao.forBook(stored.id).isNotEmpty()) {
+        // A book that already has chapters opens from the
+        // device — no network at all (the v1.0.8 rule, kept).
+        if (chapterDao.forBook(stored.id).isNotEmpty()) {
             return AppResult.Ok(stored)
         }
-        // v1.0.8: a progressive source opens after its FIRST
-        // chunk (details + the first chapters — one site page),
-        // and the list grows afterwards only as far as the user
-        // reads (ensureChapters). Everything else keeps the
-        // complete-on-open refresh below.
-        val declarative = handle.source as? DeclarativeSource
-        if (declarative != null && declarative.supportsProgressiveChapters()) {
-            val chunk = withContext(Dispatchers.IO) {
-                service.guarded(handle) {
-                    (it as DeclarativeSource).chaptersFirst(ref, FIRST_CHUNK_MIN)
-                }
-            }
-            return when (chunk) {
-                is AppResult.Err ->
-                    AppResult.Ok(bookDao.getById(book.id) ?: stored)
-                is AppResult.Ok ->
-                    AppResult.Ok(applyChunk(stored, chunk.value))
-            }
+        // Details-only: ONE fetch, merged like a refresh's
+        // details half (blank fields never erase stored ones).
+        // A failed fetch still opens the book — the screen
+        // shows its own chapter error + Retry (the v1.0.1
+        // resilience rule, kept); the preview simply keeps
+        // the catalogue row's title/cover until then.
+        val details = withContext(Dispatchers.IO) {
+            service.guarded(handle) { it.details(ref) }
         }
-        return when (val refreshed = refresh(book, handle)) {
-            is AppResult.Err -> AppResult.Ok(bookDao.getById(book.id) ?: book)
-            is AppResult.Ok -> AppResult.Ok(bookDao.getById(book.id) ?: refreshed.value)
+        if (details is AppResult.Ok) {
+            applyDetails(stored, details.value)
         }
+        return AppResult.Ok(bookDao.getById(stored.id) ?: stored)
+    }
+
+    /** The explicit Add (item 45): the catalogue's "Add to
+     * library" — find-or-create the row (no network) and make
+     * it a Library member in one step. */
+    suspend fun addToLibrary(
+        handle: SourceHandle,
+        ref: SourceBook
+    ): AppResult<Book> {
+        val opened = openBook(handle, ref)
+        val book = when (opened) {
+            is AppResult.Err -> return opened
+            is AppResult.Ok -> opened.value
+        }
+        markInLibrary(book.id)
+        return AppResult.Ok(bookDao.getById(book.id) ?: book)
+    }
+
+    /** Flip a row to Library membership (idempotent). Called
+     * by the explicit Add, the reader's first progress save,
+     * and the download actions — the three acts that mean
+     * "this book is mine". */
+    suspend fun markInLibrary(bookId: Long) {
+        val book = bookDao.getById(bookId) ?: return
+        if (!book.inLibrary) {
+            bookDao.update(book.copy(inLibrary = true))
+        }
+    }
+
+    /** Ask for this book's failover maps to be built in the
+     * background (the container's runner does the work off
+     * every user path). */
+    fun scheduleFailoverMaps(book: Book) {
+        failoverScheduler(book)
+    }
+
+    /** Build failover maps NOW (the background runner's entry
+     * point; also the pre-delta behaviour for direct callers). */
+    suspend fun buildFailoverMapsNow(book: Book) {
+        val chapters = chapterDao.forBook(book.id).map { row ->
+            SourceChapter(
+                id = row.remoteId ?: "",
+                name = row.title,
+                number = ChapterNumbers.parse(row.title)
+            )
+        }
+        if (chapters.isEmpty()) return
+        runCatching { buildFailoverMaps(book, chapters) }
     }
 
     /** Provider enrichment (v1.0.1): reviews / comments / related
@@ -205,22 +268,45 @@ class SourceBookSync(
             is AppResult.Ok -> pair.value
         }
         val now = nowMs()
-        // v1.0.1 synopsis-vanish fix: merge onto the CURRENT row,
-        // re-read at write time (the passed-in snapshot may predate
-        // another writer — the BookFileSync lesson), and never let a
-        // blank fetched field erase a stored one. A source page that
-        // momentarily renders without its synopsis block must not
-        // wipe the synopsis the library already has.
-        val current = bookDao.getById(book.id) ?: book
-        var updated = BookInfoMerge.apply(current, details).copy(
+        val withDetails = applyDetails(book, details)
+        // v1.0.8: a full refresh IS the complete list — the
+        // progressive walk state resets.
+        val updated = withDetails.copy(
             totalChapters = chapters.size,
-            updatedAt = now,
-            // v1.0.8: a full refresh IS the complete list — the
-            // progressive walk state resets.
             chapterListComplete = true,
             chapterWalkNextPage = 0,
             chapterWalkTotalPages = 0,
             chapterWalkPageSize = 0
+        )
+        bookDao.update(updated)
+
+        // v1.0.2 (R03): chapter identity goes through the single
+        // reconciler — multi-key matching (remoteId → canonical id →
+        // position+title → number → title), so a source changing its
+        // chapter URLs aliases the EXISTING rows instead of inserting
+        // a colliding second list (the "chapter isn't in the book
+        // anymore" defect). Stale rows with user content survive.
+        val existing = chapterDao.forBook(book.id)
+        val plan = ChapterReconciler.reconcile(existing, chapters)
+        applyPlan(book.id, plan, now)
+        // v1.3.0 delta: failover maps build in the BACKGROUND —
+        // never on the path that opened or refreshed the book.
+        failoverScheduler(updated)
+        return AppResult.Ok(updated)
+    }
+
+    /** Merge fetched DETAILS onto the stored row and persist:
+     * the details half of a refresh, shared with the decoupled
+     * openBook (item 49). Blank fetched fields never erase
+     * stored ones (the v1.0.1 synopsis-vanish rule), and the
+     * cover heals/fetches exactly as a refresh's did. */
+    private suspend fun applyDetails(
+        book: Book,
+        details: SourceBook
+    ): Book {
+        val current = bookDao.getById(book.id) ?: book
+        var updated = BookInfoMerge.apply(current, details).copy(
+            updatedAt = nowMs()
         )
         // Cover: fetch once (or when the book has none yet).
         // v1.0.6.3 (P4 heal): a coverPath whose FILE is gone from
@@ -240,18 +326,7 @@ class SourceBookSync(
             }
         }
         bookDao.update(updated)
-
-        // v1.0.2 (R03): chapter identity goes through the single
-        // reconciler — multi-key matching (remoteId → canonical id →
-        // position+title → number → title), so a source changing its
-        // chapter URLs aliases the EXISTING rows instead of inserting
-        // a colliding second list (the "chapter isn't in the book
-        // anymore" defect). Stale rows with user content survive.
-        val existing = chapterDao.forBook(book.id)
-        val plan = ChapterReconciler.reconcile(existing, chapters)
-        applyPlan(book.id, plan, now)
-        runCatching { buildFailoverMaps(updated, chapters) }
-        return AppResult.Ok(updated)
+        return bookDao.getById(book.id) ?: updated
     }
 
     /** Apply a reconciler plan to the chapter table. Two-phase
@@ -375,6 +450,26 @@ class SourceBookSync(
             totalPages = fresh.chapterWalkTotalPages,
             pageSize = fresh.chapterWalkPageSize
         )
+        // v1.3.0 delta: an UNSTARTED walk (a preview row whose
+        // first chunk never landed — the decoupled openBook no
+        // longer fetches it) bootstraps through chaptersFirst;
+        // chaptersMore with a zeroed cursor would report the
+        // empty list "complete" without fetching a page.
+        val unstarted = walk.nextPage == 0 && walk.totalPages == 0 &&
+            walk.pageSize == 0
+        if (unstarted) {
+            val first = withContext(Dispatchers.IO) {
+                service.guarded(resolved) {
+                    (it as DeclarativeSource)
+                        .chaptersFirst(ref, atLeast)
+                }
+            }
+            return when (first) {
+                is AppResult.Err -> first
+                is AppResult.Ok ->
+                    AppResult.Ok(applyChunk(fresh, first.value))
+            }
+        }
         val chunk = withContext(Dispatchers.IO) {
             service.guarded(resolved) {
                 (it as DeclarativeSource)
@@ -430,7 +525,8 @@ class SourceBookSync(
         val plan = ChapterReconciler.reconcilePartial(existing, chunk.chapters)
         applyPlan(book.id, plan, now)
         if (chunk.complete) {
-            runCatching { buildFailoverMaps(updated, chunk.chapters) }
+            // v1.3.0 delta: background, never on this path.
+            failoverScheduler(updated)
         }
         return bookDao.getById(book.id) ?: updated
     }
@@ -495,7 +591,13 @@ class SourceBookSync(
             response.body?.close()
             return null
         }
-        val bytes = response.body?.use { it.readBytes() } ?: return null
+        // v1.3.0 delta (item 44): the body read runs on IO —
+        // never on the caller's thread. On a trickling
+        // connection this read is exactly where a main-thread
+        // caller used to park until the system killed the app.
+        val bytes = withContext(Dispatchers.IO) {
+            response.body?.use { it.readBytes() }
+        } ?: return null
         if (bytes.isEmpty() || bytes.size > 4 * 1024 * 1024) return null
         val extension = when {
             coverUrl.lowercase().contains(".png") -> "png"

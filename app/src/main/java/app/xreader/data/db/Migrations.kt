@@ -131,6 +131,19 @@ val MIGRATION_5_6: Migration = object : Migration(5, 6) {
     }
 }
 
+/** v1.3.0 delta (V120-CHECK 45): Library membership. Existing
+ * rows default to members — everything the user already has
+ * stays exactly where it was; only rows created by opening a
+ * catalogue book from now on start as previews. */
+val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `books` ADD COLUMN `inLibrary` " +
+                "INTEGER NOT NULL DEFAULT 1"
+        )
+    }
+}
+
 val MIGRATION_2_3: Migration = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE `books` ADD COLUMN `mergedIntoId` INTEGER")

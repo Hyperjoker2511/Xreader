@@ -29,6 +29,13 @@ data class CatalogUiState(
     val page: Int = 1,
     val hasNext: Boolean = false,
     val loading: Boolean = false,
+    /** v1.3.0 (device spot-check fix): a load for the CURRENT
+     * mode/query has completed at least once. The end-of-list
+     * label may only render when this is true — on a slow
+     * connection the first screenshot of v1.3.0 showed
+     * "That's everything here" over a catalogue that was
+     * still loading, falsely declaring the list finished. */
+    val loadCompleted: Boolean = false,
     val errorMessage: String? = null,
     val openingBookId: String? = null
 )
@@ -73,7 +80,10 @@ class SourceCatalogViewModel(
 
     fun setMode(mode: CatalogMode) {
         if (_state.value.mode == mode) return
-        _state.value = _state.value.copy(mode = mode, books = emptyList(), page = 1)
+        _state.value = _state.value.copy(
+            mode = mode, books = emptyList(), page = 1,
+            loadCompleted = false
+        )
         if (mode != CatalogMode.SEARCH || _state.value.query.isNotBlank()) load(reset = true)
     }
 
@@ -82,7 +92,9 @@ class SourceCatalogViewModel(
     }
 
     fun submitSearch() {
-        _state.value = _state.value.copy(books = emptyList(), page = 1)
+        _state.value = _state.value.copy(
+            books = emptyList(), page = 1, loadCompleted = false
+        )
         load(reset = true)
     }
 
@@ -130,6 +142,7 @@ class SourceCatalogViewModel(
                         .filter { it.id !in knownIds }
                     _state.value.copy(
                         loading = false,
+                        loadCompleted = true,
                         books = existing + newBooks,
                         page = page,
                         hasNext = (result.value.hasNextPage || newBooks.isNotEmpty()) &&
@@ -156,6 +169,24 @@ class SourceCatalogViewModel(
                     _state.value = _state.value.copy(openingBookId = null)
                     _openedBook.tryEmit(result.value.id)
                 }
+            }
+        }
+    }
+
+    /** v1.3.1 (item 45): the catalogue's explicit Add — the
+     * ONLY catalogue gesture that makes a book a Library
+     * member (a plain tap opens a preview; reading or
+     * downloading also joins — see SourceBookSync). */
+    fun addToLibrary(ref: SourceBook) {
+        val current = handle ?: return
+        viewModelScope.launch {
+            when (
+                val result = container.sourceBookSync.addToLibrary(current, ref)
+            ) {
+                is AppResult.Err ->
+                    _messages.tryEmit(ErrorText.displayText(result.error))
+                is AppResult.Ok ->
+                    _messages.tryEmit("Added to library")
             }
         }
     }

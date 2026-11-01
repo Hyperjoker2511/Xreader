@@ -72,6 +72,9 @@ data class DownloadsUiState(
     /** v1.1.0 (§5.12): real total storage of the device volume
      * the app's files live on (StatFs); 0 when unreadable. */
     val deviceTotalBytes: Long = 0L,
+    /** v1.3.1 (item 58): the auto-clean cap in MB (0 = Off),
+     * shown plainly on the storage card. */
+    val autoCleanCapMb: Int = 500,
     /** v1.1.0 (§5.12): true when the current network is metered —
      * the snapshot the "Waiting for Wi-Fi" chip reads, taken when
      * this state was built (the same NetworkGate the download
@@ -199,6 +202,7 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
             coverCacheBytes = coverCacheBytes,
             imageCacheBytes = imageCacheBytes,
             deviceTotalBytes = deviceTotalBytes,
+            autoCleanCapMb = settings.autoCleanCapMb,
             onMeteredNetwork = runCatching {
                 !container.networkGate.onUnmeteredNetwork()
             }.getOrDefault(false)
@@ -216,12 +220,19 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch(container.ioDispatcher) {
             runCatching { container.clearImageCache() }
             runCatching {
-                container.bookStorage.coversDir().listFiles()
-                    ?.forEach { it.deleteRecursively() }
-                container.bookStorage.downloadsTempDir().listFiles()
-                    ?.forEach { it.deleteRecursively() }
-                container.bookStorage.importStagingRoot().listFiles()
-                    ?.forEach { it.deleteRecursively() }
+                // v1.3.1 (item 57): one helper for every cache
+                // dir — the same StorageMeter.dirSize that
+                // measures them is the measure that must read
+                // ~0 after this runs.
+                app.xreader.data.files.StorageMeter.clearContents(
+                    container.bookStorage.coversDir()
+                )
+                app.xreader.data.files.StorageMeter.clearContents(
+                    container.bookStorage.downloadsTempDir()
+                )
+                app.xreader.data.files.StorageMeter.clearContents(
+                    container.bookStorage.importStagingRoot()
+                )
             }
             // The deletions above bypass BookStorage's own write
             // paths, so its size caches would serve the pre-clear

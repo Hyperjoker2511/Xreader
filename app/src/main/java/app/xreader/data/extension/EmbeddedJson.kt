@@ -62,6 +62,147 @@ object EmbeddedJson {
     }
 
     /**
+     * v1.3.0 (E1): when the document's body IS a JSON payload —
+     * the page was a bare API response (jsoup parks the payload
+     * text in the body, verbatim inside a `<pre>` or as plain
+     * body text) — that payload parsed as a root, else null.
+     * This is what lets the very same dot-path reads serve
+     * direct JSON endpoints (an API catalogue, an API chapter
+     * list) and embedded page payloads with one code path.
+     */
+    fun bodyJson(doc: Document): JsonElement? {
+        val text = runCatching {
+            doc.selectFirst("body > pre")?.wholeText()
+                ?: doc.body()?.wholeText()
+        }.getOrNull()?.trim()?.takeIf {
+            it.startsWith("{") || it.startsWith("[")
+        } ?: return null
+        return runCatching { json.parseToJsonElement(text) }.getOrNull()
+    }
+
+    /**
+     * Every JSON root a spec may read, in preference order: a
+     * bare-JSON body FIRST (a page that is pure JSON is an API
+     * answer — its payload is the data, not a container for
+     * it), then the embedded roots ([roots]).
+     */
+    fun rootsForRead(doc: Document): List<JsonElement> {
+        val body = bodyJson(doc)
+        return if (body != null) listOf(body) + roots(doc) else roots(doc)
+    }
+
+    // ── v1.3.0 (E3): API discovery seed ─────────────────────
+    //
+    // Four of the "hard" sites of the v1.2.3 round (novelbuddy,
+    // chikari, noveli, lncrawler) all turned out to run plain
+    // same-origin JSON APIs the probe never looked for — the
+    // probe judged their HTML shells and stopped. These hints
+    // are the seed of the API-discovery road: cheap, pure, and
+    // reported on the probe's stage lines whenever a probe
+    // fails, so a failing site's report now SAYS whether an
+    // API road exists (the lesson of novelarchive, whose whole
+    // site is /api/novels/<hash> + /chapters/<n> and whose
+    // probe had no API step at all).
+
+    /** Same-origin `/api/…` endpoint paths a page references —
+     * in its script sources, its links, or its inline script
+     * text (fetch/axios calls live there). Query strings are
+     * dropped; duplicates collapse; order is first-seen. */
+    fun apiEndpointHints(doc: Document, pageUrl: String): List<String> {
+        val found = LinkedHashSet<String>()
+        fun offer(raw: String?) {
+            val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return
+            val path = value.substringBefore('?').substringBefore('#')
+            if (path.contains("/api/") && path.length <= 200) {
+                found += path
+            }
+        }
+        for (element in doc.select("script[src], link[href], a[href]")) {
+            offer(
+                element.absUrl("src").ifBlank { null }
+                    ?: element.absUrl("href").ifBlank { null }
+                    ?: element.attr("src").ifBlank { element.attr("href") }
+            )
+        }
+        val inlineApi = Regex("""["'(/][\w./{}-]*?/api/[\w./{}-]*""")
+        for (script in doc.select("script:not([src])")) {
+            for (match in inlineApi.findAll(script.data())) {
+                offer(match.value.trim('"', '\'', '(', ')'))
+                if (found.size >= 12) break
+            }
+            if (found.size >= 12) break
+        }
+        return found.take(12)
+    }
+
+    /** One listing-shaped array found in a page's payloads:
+     * the root it lives in, its dot path within that root
+     * ("" = the root IS the array), and its record count. */
+    data class EmbeddedListing(
+        val root: JsonElement,
+        val path: String,
+        val size: Int
+    )
+
+    /**
+     * The largest book-like record array in the page's
+     * embedded payloads (records carrying a title-ish and a
+     * link/id-ish field), or null when the payloads hold no
+     * listing-shaped array — the "this page's data is JSON"
+     * signal for the discovery seed.
+     */
+    fun embeddedListing(doc: Document): EmbeddedListing? {
+        var best: EmbeddedListing? = null
+        for (root in roots(doc)) {
+            scanForListing(root, root, "", 0) { candidate ->
+                if (best == null || candidate.size > best!!.size) {
+                    best = candidate
+                }
+            }
+        }
+        return best
+    }
+
+    private fun scanForListing(
+        root: JsonElement,
+        element: JsonElement,
+        path: String,
+        depth: Int,
+        offer: (EmbeddedListing) -> Unit
+    ) {
+        if (depth > 5) return
+        when (element) {
+            is JsonArray -> {
+                val records = element.filterIsInstance<JsonObject>()
+                if (records.size >= 3 &&
+                    records.count { record ->
+                        record.keys.any {
+                            it.equals("title", true) ||
+                                it.equals("name", true)
+                        } && record.keys.any {
+                            it.equals("url", true) ||
+                                it.equals("slug", true) ||
+                                it.equals("id", true) ||
+                                it.equals("link", true) ||
+                                it.equals("href", true)
+                        }
+                    } * 2 > records.size
+                ) {
+                    offer(EmbeddedListing(root, path, records.size))
+                }
+            }
+            is JsonObject -> element.entries.forEach { (key, value) ->
+                scanForListing(
+                    root, value,
+                    if (path.isEmpty()) key else "$path.$key",
+                    depth + 1, offer
+                )
+            }
+            else -> Unit
+        }
+    }
+
+    /**
      * The React Server Components stream, reassembled: every
      * `self.__next_f.push([n,"…"])` string payload is unescaped
      * and concatenated (the stream is chunked mid-line by
@@ -252,6 +393,16 @@ object EmbeddedJson {
                 // A listing whose links are mostly chapters is
                 // a chapter list wearing a catalogue's shape.
                 if (chapterish * 2 > records.size) return@walk
+                // v1.2.4: a listing whose links mostly point
+                // into a people collection (/users/<id>-<name>)
+                // is a member rail wearing a catalogue's shape —
+                // the payload twin of the DOM people rail a Live
+                // catalogue swallowed on device (novelbuddy).
+                val peopleish = records.count { record ->
+                    val link = stringAt(record, linkField) ?: ""
+                    BookShape.isPeopleCollectionHref(link)
+                }
+                if (peopleish * 2 > records.size) return@walk
                 val coverField = fieldOf(records, COVER_FIELDS) { value ->
                     value.startsWith("/") || value.startsWith("http")
                 }

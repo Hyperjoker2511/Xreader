@@ -46,14 +46,19 @@ fun SourceCatalogScreen(
     viewModel: SourceCatalogViewModel,
     extensionId: Long,
     onBack: () -> Unit,
-    onOpenBook: (Long) -> Unit,
-    onLogin: () -> Unit
+    onOpenBook: (Long) -> Unit
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     // v1.0.6.2 (F8a): search opens from an icon, like the Library —
     // the field itself only takes room while searching.
     var searchOpen by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(false)
+    }
+    // v1.3.1 (item 45): the long-press Add confirmation target.
+    var pendingAdd by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<
+            app.xreader.extensionapi.SourceBook?
+        >(null)
     }
 
     LaunchedEffect(viewModel) {
@@ -86,8 +91,13 @@ fun SourceCatalogScreen(
                 // labelled beats icon-only), so search keeps
                 // exactly one visible door.
             }
-            TextButton(onClick = onLogin) { Text("Log in") }
-        }
+                // v1.3.0 (device spot-check fix): the header's
+                // stray "Log in" link is gone — sign-in lives on
+                // the source's Details page, where it is
+                // session-aware; a bare auth link in the
+                // catalogue header read as site furniture
+                // leaking into the app's own chrome.
+            }
         Spacer(Modifier.height(8.dp))
         // §5.4 SegmentedPills: a Row of NocturneChips, the active
         // mode selected — replaces the private ModeChip copy.
@@ -183,6 +193,10 @@ fun SourceCatalogScreen(
                             metaLine = null,
                             busy = state.openingBookId == book.id,
                             onClick = { viewModel.openBook(book) },
+                            // v1.3.1 (item 45): long-press is the
+                            // catalogue's explicit Add to library
+                            // (a plain tap only opens a preview).
+                            onLongClick = { pendingAdd = book },
                             modifier = Modifier.animateItem(
                                 placementSpec = listPlacementSpec()
                             )
@@ -205,7 +219,9 @@ fun SourceCatalogScreen(
                             )
                         }
                     }
-                    if (!state.hasNext && state.page > 1 && state.books.isNotEmpty()) {
+                    if (!state.hasNext && state.page > 1 && state.books.isNotEmpty() &&
+                        state.loadCompleted && !state.loading
+                    ) {
                         // v1.0.6.2 (F2): the honest end of the
                         // catalogue — shown once paging actually
                         // walked past page 1 and a page added
@@ -230,5 +246,33 @@ fun SourceCatalogScreen(
                 }
             }
         }
+    }
+
+    // v1.3.1 (item 45): long-press on a cover asks plainly —
+    // adding is explicit, never a side effect of browsing.
+    pendingAdd?.let { book ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingAdd = null },
+            title = { Text("Add to library") },
+            text = {
+                Text(
+                    "Add “${book.title}” to your library? " +
+                        "You can remove it any time from the Library."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingAdd = null
+                        viewModel.addToLibrary(book)
+                    }
+                ) { Text("Add") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingAdd = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

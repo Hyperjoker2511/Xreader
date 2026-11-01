@@ -68,7 +68,17 @@ data class Book(
     /** v1.0.8: the row count of a full chapter-list endpoint
      * page, learned on the walk's first fetch — a resumed
      * ascending walk needs it to recognise its last page. */
-    val chapterWalkPageSize: Int = 0
+    val chapterWalkPageSize: Int = 0,
+    /** v1.3.0 delta (V120-CHECK 45/52): Library membership.
+     * Opening a catalogue book creates its row as a PREVIEW
+     * (false): the row backs the book screen, the reader and
+     * downloads, but it is NOT in the Library — the shelf
+     * (observeShelf) shows members only. Membership begins at
+     * an explicit act: Add to library, the first chapter
+     * actually read, or a download. Rows that existed before
+     * the v7 migration default to members (true) — nothing
+     * the user already has ever disappears. */
+    val inLibrary: Boolean = true
 )
 
 @Entity(

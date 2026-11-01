@@ -210,6 +210,19 @@ fun MainScaffold(
     // a home-screen widget tap that asked for a specific book.
     androidx.compose.runtime.LaunchedEffect(Unit) {
         scope.launch {
+            // v1.3.0: the built-in default sources install (or
+            // safely refresh) before anything else looks at the
+            // source list — offline, idempotent, and it never
+            // touches a row the user has changed (RepoManager).
+            runCatching { container.repoManager.installBundledDefaults() }
+            // v1.3.1 (item 52): one source per canonical domain
+            // — the built-in survives, older duplicates are
+            // removed and their books rebound (SourceDedupe).
+            // Removals are audit-logged, never silent.
+            runCatching { container.sourceDedupe.runOnce() }
+                .getOrNull()?.forEach { removed ->
+                    android.util.Log.i("XreaderDedupe", removed.logLine())
+                }
             runCatching { container.expService.settle() }
             // Phase 6: keep the home-screen widget honest.
             runCatching {
@@ -825,18 +838,7 @@ private fun XreaderNavHost(
                 viewModel = viewModel,
                 extensionId = extId,
                 onBack = { navController.popBackStack() },
-                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
-                onLogin = {
-                    val baseUrl = viewModel.state.value.baseUrl
-                    if (baseUrl.isNotBlank()) {
-                        sourcesViewModel.startLogin(
-                            sessionKey = sourcesViewModel.sessionKeyFor(extId),
-                            url = baseUrl,
-                            title = viewModel.state.value.sourceName
-                        )
-                        navController.navigate("login")
-                    }
-                }
+                onOpenBook = { bookId -> navController.navigate("book/$bookId") }
             )
         }
         composable(

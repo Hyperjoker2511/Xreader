@@ -156,6 +156,17 @@ fun DownloadsScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            // v1.3.1 (item 58): the auto-clean state, in plain
+            // words, on the same card that counts the cache.
+            Text(
+                if (stateNow.autoCleanCapMb > 0) {
+                    "Auto-clean on · trims over ${stateNow.autoCleanCapMb} MB"
+                } else {
+                    "Auto-clean off"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(Modifier.height(8.dp))
             // v1.2.0 (WS4): the "N books saved" chip repeated the
             // tab counts a third time on this screen — gone. The
@@ -168,7 +179,12 @@ fun DownloadsScreen(
                 GhostPill(
                     text = "Clean cache",
                     modifier = Modifier,
-                    enabled = coversBytes > 0L,
+                    // v1.3.1 (item 57): the button clears BOTH
+                    // stores the card counts — it used to enable
+                    // on covers alone, so with 0 B of covers and
+                    // megabytes of image cache it sat disabled
+                    // and "Clean cache doesn't clean".
+                    enabled = (coversBytes + imageCacheBytes) > 0L,
                     onClick = { viewModel.clearCaches() }
                 )
             }

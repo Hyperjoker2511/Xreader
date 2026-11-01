@@ -65,7 +65,8 @@ class AppContainer(context: Context) {
         app.xreader.data.db.MIGRATION_2_3,
         app.xreader.data.db.MIGRATION_3_4,
         app.xreader.data.db.MIGRATION_4_5,
-        app.xreader.data.db.MIGRATION_5_6
+        app.xreader.data.db.MIGRATION_5_6,
+        app.xreader.data.db.MIGRATION_6_7
     ).build()
 
     val appearancePrefs: AppearancePrefs = AppearancePrefs(
@@ -375,6 +376,19 @@ class AppContainer(context: Context) {
         )
     }
 
+    /** v1.3.1 (item 52): the install-time source dedupe —
+     * runs once per launch after the bundled defaults. */
+    val sourceDedupe: app.xreader.data.extension.SourceDedupe by lazy {
+        app.xreader.data.extension.SourceDedupe(
+            extensionDao = database.installedExtensionDao(),
+            repoDao = database.extensionRepoDao(),
+            bookDao = database.bookDao(),
+            sourceMapDao = database.chapterSourceMapDao(),
+            store = extensionStore,
+            service = extensionService
+        )
+    }
+
     val sourceBookSync: app.xreader.data.extension.SourceBookSync by lazy {
         app.xreader.data.extension.SourceBookSync(
             bookDao = database.bookDao(),
@@ -386,7 +400,14 @@ class AppContainer(context: Context) {
             transport = httpTransport,
             // v1.2.0 (audit D10, Wave-1 seam): a chapter-list
             // refresh's row writes land in ONE Room transaction.
-            inTransaction = { block -> database.withTransaction(block) }
+            inTransaction = { block -> database.withTransaction(block) },
+            // v1.3.0 delta (items 44/49): failover maps build
+            // on the app scope, off every user path.
+            failoverScheduler = { book ->
+                appScope.launch {
+                    runCatching { sourceBookSync.buildFailoverMapsNow(book) }
+                }
+            }
         )
     }
 

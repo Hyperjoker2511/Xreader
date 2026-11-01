@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -53,6 +54,17 @@ fun AddSourceScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     var repoName by remember { mutableStateOf("") }
     var repoUrl by remember { mutableStateOf("") }
+    // v1.3.1 (item 59): the form clears ONLY once the add has
+    // actually succeeded — a failure leaves the address in
+    // place for correction.
+    androidx.compose.runtime.LaunchedEffect(
+        state.repoOutcome, state.repoOutcomeIsError
+    ) {
+        if (state.repoOutcome != null && !state.repoOutcomeIsError) {
+            repoName = ""
+            repoUrl = ""
+        }
+    }
     val context = androidx.compose.ui.platform.LocalContext.current
     val legadoFileLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
@@ -127,15 +139,62 @@ fun AddSourceScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                     PrimaryPill(
-                        text = "Add repository",
-                        onClick = {
-                            viewModel.addRepo(repoName, repoUrl)
-                            repoName = ""
-                            repoUrl = ""
+                        // v1.3.1 (item 59): while the add runs,
+                        // the button carries the stage and stays
+                        // put — never a silent, cleared form.
+                        text = if (state.busy) {
+                            state.repoStage ?: "Working…"
+                        } else {
+                            "Add repository"
                         },
-                        enabled = repoUrl.isNotBlank(),
+                        onClick = { viewModel.addRepo(repoName, repoUrl) },
+                        enabled = repoUrl.isNotBlank() && !state.busy,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    if (state.busy && state.repoStage != null) {
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement =
+                                Arrangement.spacedBy(10.dp)
+                        ) {
+                            androidx.compose.material3
+                                .CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            Text(
+                                state.repoStage!!,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            "A big list on a slow connection can take " +
+                                "a few minutes — this line keeps you " +
+                                "posted while it works.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                    state.repoOutcome?.let { outcome ->
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            outcome,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (state.repoOutcomeIsError) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            }
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        GhostPill(
+                            text = "Dismiss",
+                            onClick = { viewModel.dismissRepoOutcome() }
+                        )
+                    }
                 }
             }
 

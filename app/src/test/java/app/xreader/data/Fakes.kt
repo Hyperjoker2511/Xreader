@@ -177,6 +177,12 @@ class FakeChapterSourceMapDao : ChapterSourceMapDao {
         maps.value = maps.value.filterNot { it.id == map.id }
     }
 
+    override suspend fun deleteByAltExtension(altExtensionId: Long) {
+        maps.value = maps.value.filterNot {
+            it.altExtensionId == altExtensionId
+        }
+    }
+
     override suspend fun forChapter(chapterId: Long): List<ChapterSourceMap> =
         maps.value.filter { it.chapterId == chapterId }
 

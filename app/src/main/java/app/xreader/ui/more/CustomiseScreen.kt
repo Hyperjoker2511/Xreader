@@ -212,6 +212,11 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { container.downloadPrefs.setWifiOnlyPrefetch(value) }
     }
 
+    /** v1.3.1 (item 58): the auto-clean cap preset (MB; 0 = Off). */
+    fun setAutoCleanCapMb(value: Int) {
+        viewModelScope.launch { container.downloadPrefs.setAutoCleanCapMb(value) }
+    }
+
     /** Reset customisation (R07): look-and-feel back to defaults.
      * Books, sources, repos, keys, shelves, tags, custom schemes and
      * progress are untouched — the screen says so before it runs. */
@@ -1442,6 +1447,40 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 checked = state.downloads.wifiOnlyPrefetch,
                 onChange = viewModel::setWifiOnlyPrefetch
             )
+            // v1.3.1 (item 58): Auto-clean cache — the image/
+            // cover cache trims itself oldest-first past the
+            // cap (Coil's disk-cache bound), so recent covers
+            // survive and downloads are never touched. Applies
+            // from the next app start.
+            Text(
+                "Auto-clean cache",
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Text(
+                "When the image cache grows past the limit, the " +
+                    "oldest covers are removed first. Downloaded " +
+                    "chapters are never touched. Applies from the " +
+                    "next app start.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                listOf(
+                    200 to "200 MB",
+                    500 to "500 MB",
+                    1024 to "1 GB",
+                    0 to "Off"
+                ).forEach { (capMb, label) ->
+                    FilterChip(
+                        selected = state.downloads.autoCleanCapMb == capMb,
+                        onClick = { viewModel.setAutoCleanCapMb(capMb) },
+                        label = { Text(label) }
+                    )
+                }
+            }
         }
 
         // ── Storage (R07/G16) ────────────────────────────────────

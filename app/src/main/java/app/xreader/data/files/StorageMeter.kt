@@ -45,6 +45,21 @@ object StorageMeter {
         )
     }
 
+    /**
+     * v1.3.1 (item 57): delete every child of [dir] (files and
+     * sub-trees) while keeping [dir] itself — the exact
+     * counterpart of [dirSize] for the cache directories:
+     * measure with dirSize, clean with clearContents, and the
+     * same measure must read ~0 afterwards. Missing dirs are a
+     * no-op. Pure file IO — unit-tested on a seeded temp tree.
+     */
+    fun clearContents(dir: File) {
+        if (!dir.exists()) return
+        dir.listFiles()?.forEach { child ->
+            runCatching { child.deleteRecursively() }
+        }
+    }
+
     fun dirSize(file: File): Long {
         if (!file.exists()) return 0
         if (file.isFile) return file.length()

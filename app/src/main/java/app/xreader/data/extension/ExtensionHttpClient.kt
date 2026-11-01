@@ -247,7 +247,13 @@ class ExtensionHttpClient(
                         }
                         continue
                     }
-                    val parsed = readBody(resp)
+                    // v1.3.1 (item 44): body reads run on IO,
+                    // never on the caller's thread — on a
+                    // trickling connection this loop is where a
+                    // main-thread caller used to park.
+                    val parsed = kotlinx.coroutines.withContext(
+                        kotlinx.coroutines.Dispatchers.IO
+                    ) { readBody(resp) }
                         ?: return AppResult.Err(
                             AppError.ExtensionFailed(label, tooLargeMessage)
                         )

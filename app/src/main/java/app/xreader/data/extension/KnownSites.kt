@@ -30,7 +30,24 @@ object KnownSites {
          * search. The test-drive still has to prove it. */
         val canSearch: Boolean = true,
         /** Hint only: the family usually offers account login. */
-        val canLogin: Boolean = false
+        val canLogin: Boolean = false,
+        /**
+         * v1.3.0 (E4): the lane's maintainer verification. When
+         * true, the lane was verified END-TO-END by the app
+         * maintainers at bundle time, so the probe's on-device
+         * test-drive may not VETO it: a slow connection turning
+         * the drive's rendered book page into a timeout was
+         * rejecting the repair of a lane we know works (boti,
+         * V120-CHECK item 19 — the phone's Repair failed while
+         * its connection crawled at 7 kB/s, on a lane that is
+         * sound). The drive still runs; if it cannot complete,
+         * the lane installs on the light proof (its catalogue
+         * answered) with a proof-pending drive result, and the
+         * first real read re-confirms. False (the default)
+         * keeps the v1.0.8.1 bar for every other lane: the
+         * drive decides.
+         */
+        val maintainerVerified: Boolean = false
     )
 
     private val ENTRIES: List<Entry> = listOf(
@@ -76,7 +93,12 @@ object KnownSites {
         Entry(
             domains = listOf("botitranslation.com", "www.botitranslation.com"),
             family = Family.BOTI,
-            canSearch = false
+            canSearch = false,
+            // v1.3.0 (E4): verified end-to-end by the
+            // maintainers (catalogue + book + chapters + text
+            // on the rendered /mobile/ road); the on-device
+            // drive may not veto it on a slow connection.
+            maintainerVerified = true
         )
         // MADARA is claimed by page markers, not by domain —
         // see LinkInference.isMadaraPage; it needs no entries.
@@ -136,11 +158,21 @@ object KnownSites {
         id: String,
         name: String,
         baseUrl: String
-    ): DeclarativeConfig? = when (entry.family) {
-        Family.NOVELIGHT -> novelightConfig(id, name, baseUrl)
-        Family.CHIKARI -> chikariConfig(id, name, baseUrl)
-        Family.BOTI -> botiConfig(id, name, baseUrl)
-        Family.NOVELFULL, Family.MADARA -> null
+    ): DeclarativeConfig? {
+        val built = when (entry.family) {
+            Family.NOVELIGHT -> novelightConfig(id, name, baseUrl)
+            Family.CHIKARI -> chikariConfig(id, name, baseUrl)
+            Family.BOTI -> botiConfig(id, name, baseUrl)
+            Family.NOVELFULL, Family.MADARA -> null
+        } ?: return null
+        // v1.3.0 (E4): the lane's verification travels with the
+        // config it produced, so the installed source and the
+        // bundled-sync both know it is maintainer-verified.
+        return if (entry.maintainerVerified && !built.maintainerVerified) {
+            built.copy(maintainerVerified = true)
+        } else {
+            built
+        }
     }
 
     /**

@@ -170,10 +170,43 @@ class BookDetailViewModel(
         storyLocal,
         container.bookMetaPrefs.all
     ) { book, chapters, progress, story, metas ->
+        // v1.3.1 (V120-CHECK 55): progress keys on chapter
+        // IDENTITY. A stored pointer whose chapterId no longer
+        // resolves in the current list (the list changed shape
+        // — junk rows removed, a re-walk) must never render as
+        // a position: that is how a book that was never read
+        // acquired a "Chapter 3241" Continue pill. Resolved
+        // pointers are re-anchored to the row's CURRENT index;
+        // dangling pointers show as no progress at all.
+        val resolvedProgress = progress?.let { p ->
+            val anchor = chapters.firstOrNull { it.id == p.chapterId }
+            when {
+                anchor != null -> p.copy(chapterIndex = anchor.index)
+                chapters.isNotEmpty() -> null
+                else -> p
+            }
+        }
         BookDetailUiState(
-            book = book,
+            // v1.3.1 (item 55): a source book's content arrives
+            // as web pages — presenting its format as the raw
+            // enum name "UNKNOWN" told the user nothing in the
+            // loudest place. Display copy only; the stored row
+            // (and every format-keyed reader) is untouched.
+            book = book?.let {
+                if (it.sourceType ==
+                    app.xreader.data.db.SourceType.EXTENSION &&
+                    it.localFormat ==
+                    app.xreader.data.db.BookFormat.UNKNOWN
+                ) {
+                    it.copy(
+                        localFormat = app.xreader.data.db.BookFormat.HTML
+                    )
+                } else {
+                    it
+                }
+            },
             chapters = chapters,
-            progress = progress,
+            progress = resolvedProgress,
             loading = false,
             wpm = container.wpmEstimator.wpm(),
             storyBullets = story.storyBullets,
@@ -310,6 +343,7 @@ class BookDetailViewModel(
             // queue every chapter it found.
             val book = container.database.bookDao().getById(bookId)
                 ?: return@launch
+            container.sourceBookSync.markInLibrary(bookId)
             if (!book.chapterListComplete) {
                 container.sourceBookSync.completeChapters(book)
             }
@@ -428,7 +462,13 @@ class BookDetailViewModel(
     }
 
     fun downloadChapter(chapter: Chapter) {
-        viewModelScope.launch { container.downloadController.enqueueChapter(bookId, chapter.id) }
+        viewModelScope.launch {
+            // v1.3.1 (item 45): downloading is an explicit
+            // "this book is mine" act — a preview row becomes
+            // a Library member.
+            container.sourceBookSync.markInLibrary(bookId)
+            container.downloadController.enqueueChapter(bookId, chapter.id)
+        }
     }
 
     private var enrichmentTried = false
@@ -1203,13 +1243,21 @@ class BookDetailViewModel(
                 oldChapters.map {
                     app.xreader.extensionapi.SourceChapter(
                         id = it.remoteId ?: it.id.toString(), name = it.title,
-                        number = (it.index + 1).toFloat()
+                        // v1.3.1 (item 55): a chapter's number
+                        // comes from its own data (its title),
+                        // never from its list position — a list
+                        // with junk rows or gaps would otherwise
+                        // match phantom numbers. Position is the
+                        // last-resort fallback only.
+                        number = app.xreader.data.extension.ChapterNumbers
+                            .parse(it.title) ?: (it.index + 1).toFloat()
                     )
                 },
                 newChapters.map {
                     app.xreader.extensionapi.SourceChapter(
                         id = it.remoteId ?: it.id.toString(), name = it.title,
-                        number = (it.index + 1).toFloat()
+                        number = app.xreader.data.extension.ChapterNumbers
+                            .parse(it.title) ?: (it.index + 1).toFloat()
                     )
                 }
             )

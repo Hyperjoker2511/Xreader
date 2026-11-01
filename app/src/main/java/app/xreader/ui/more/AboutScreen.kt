@@ -372,6 +372,9 @@ private val LICENCES = listOf(
     "LNReader multisrc family templates (madara / lightnovelwp / readnovelfull, " +
         "ported reading logic)" to
         "MIT Licence — Copyright (c) 2021 Rajarshee Chatterjee (LNReader)",
+    "Mangayomi source index (site-reading recipes for Wordrain69 and " +
+        "Web Novel Translations, re-implemented natively and verified live)" to
+        "Apache Licence 2.0 — Copyright the Mangayomi contributors",
     "Plus Jakarta Sans" to "SIL Open Font Licence 1.1",
     "Inter" to "SIL Open Font Licence 1.1",
     "Literata (TypeTogether)" to "SIL Open Font Licence 1.1"

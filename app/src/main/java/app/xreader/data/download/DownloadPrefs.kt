@@ -45,7 +45,14 @@ data class DownloadSettings(
      * user taps explicitly is never blocked by this. */
     val wifiOnlyPrefetch: Boolean = true,
     /** Prefetch the next chapters of a book being read. */
-    val autoPrefetch: Boolean = true
+    val autoPrefetch: Boolean = true,
+    /** v1.3.1 (item 58): the auto-clean cap for the image/cover
+     * cache, in MB; 0 = Off. Default ON at 500 MB. The cap IS
+     * Coil's disk-cache max size, so the cache trims itself
+     * oldest-first (LRU) as it grows — no wipe, no job, no
+     * popup; recently used covers survive. Downloaded chapters
+     * and book files are never part of this cache. */
+    val autoCleanCapMb: Int = 500
 )
 
 class DownloadPrefs(private val store: DataStore<Preferences>) {
@@ -55,12 +62,17 @@ class DownloadPrefs(private val store: DataStore<Preferences>) {
     val settings: Flow<DownloadSettings> = store.data.map { prefs ->
         DownloadSettings(
             wifiOnlyPrefetch = prefs[WIFI_ONLY] ?: true,
-            autoPrefetch = prefs[AUTO_PREFETCH] ?: true
+            autoPrefetch = prefs[AUTO_PREFETCH] ?: true,
+            autoCleanCapMb = prefs[AUTO_CLEAN_CAP] ?: 500
         )
     }
 
     suspend fun setWifiOnlyPrefetch(value: Boolean) {
         store.edit { it[WIFI_ONLY] = value }
+    }
+
+    suspend fun setAutoCleanCapMb(value: Int) {
+        store.edit { it[AUTO_CLEAN_CAP] = value }
     }
 
     suspend fun setAutoPrefetch(value: Boolean) {
@@ -70,5 +82,9 @@ class DownloadPrefs(private val store: DataStore<Preferences>) {
     companion object {
         private val WIFI_ONLY = booleanPreferencesKey("wifi_only_prefetch")
         private val AUTO_PREFETCH = booleanPreferencesKey("auto_prefetch")
+        private val AUTO_CLEAN_CAP =
+            androidx.datastore.preferences.core.intPreferencesKey(
+                "auto_clean_cap_mb"
+            )
     }
 }

@@ -310,11 +310,25 @@ class ContractTester(private val service: ExtensionService) {
                 var sampledPlain: String? = null
                 var sampledError: String? = null
                 var paywalled = false
+                // v1.3.0 (E5): the prose-density floor — a
+                // sample that is page furniture (navigation,
+                // ads, a protected site's chrome) must not pass
+                // the text step on character count alone. The
+                // sampler now keeps looking for a sample that
+                // reads as STORY PROSE; furniture is remembered
+                // (it proves the chapter opened) but can only
+                // pass if nothing better exists AND it clears
+                // the floor — which furniture by construction
+                // doesn't.
+                var proseName = ""
+                var prosePlain: String? = null
+                var furnitureVerdict: ProseDensity.Verdict? = null
                 for (candidate in unlockedChapters.take(3)) {
                     val textResult = service.guarded(handle) {
                         it.chapterContent(candidate)
                     }
-                    val plain = (textResult as? AppResult.Ok)?.value?.html
+                    val html = (textResult as? AppResult.Ok)?.value?.html
+                    val plain = html
                         ?.replace(Regex("<[^>]+>"), " ")
                         ?.replace(Regex("\\s+"), " ")
                         ?.trim()
@@ -324,21 +338,38 @@ class ContractTester(private val service: ExtensionService) {
                         sampledPlain = plain
                         sampledName = candidate.name
                     }
+                    if (plain != null && plain.isNotBlank() &&
+                        prosePlain == null
+                    ) {
+                        val verdict = proseVerdictOf(html, plain)
+                        if (verdict.isProse) {
+                            prosePlain = plain
+                            proseName = candidate.name
+                        } else if (furnitureVerdict == null) {
+                            furnitureVerdict = verdict
+                        }
+                    }
                     if (textResult is AppResult.Err && sampledError == null) {
                         sampledError = textResult.error.detail
                     }
                     if (ChapterLocks.pageSuggestsLocked(plain ?: "")) paywalled = true
-                    if (!plain.isNullOrBlank()) break
+                    if (prosePlain != null) break
+                    if (!plain.isNullOrBlank() && furnitureVerdict == null) break
                 }
-                proofChapter = sampledName
-                proofFirstLine = sampledPlain?.take(120) ?: ""
+                val chosenPlain = prosePlain ?: sampledPlain
+                val chosenName = if (prosePlain != null) proseName else sampledName
+                proofChapter = chosenName
+                proofFirstLine = chosenPlain?.take(120) ?: ""
                 results += CapabilityResult(
                     capability = SourceCapability.TEXT,
-                    ok = !sampledPlain.isNullOrBlank(),
+                    ok = prosePlain != null,
                     detail = when {
-                        !sampledPlain.isNullOrBlank() ->
-                            "${sampledPlain.length} characters read from " +
-                                "'${sampledName.take(40)}'"
+                        prosePlain != null ->
+                            "${prosePlain.length} characters of story text " +
+                                "read from '${proseName.take(40)}'"
+                        furnitureVerdict != null ->
+                            "the chapter opened, but what came back " +
+                                "isn't story text — ${furnitureVerdict.reason}"
                         paywalled ->
                             "the chapters sampled ask for payment or sign-in " +
                                 "instead of showing text"
@@ -370,6 +401,39 @@ class ContractTester(private val service: ExtensionService) {
             }
         }
 
+        // v1.3.0 (E4): a MAINTAINER-VERIFIED source whose drive
+        // died on the CONNECTION (a timeout or network failure
+        // on any reading-core step — the boti case, where the
+        // phone's slow connection vetoed a lane the maintainers
+        // verified end-to-end) is not "needs setup": the check
+        // itself couldn't finish. Its failed core steps become
+        // pass-with-limit steps carrying the pending wording —
+        // the verdict lands on Working-with-limits and the
+        // first real read (or the next check on a better
+        // connection) confirms for real. A step that failed on
+        // CONTENT (empty list, no prose) is NOT converted:
+        // maintainer verification never papers over a site
+        // that actually stopped answering properly.
+        val declarative = handle.source as? DeclarativeSource
+        if (declarative?.config?.maintainerVerified == true) {
+            for (index in results.indices) {
+                val step = results[index]
+                if (!step.ok && !step.notApplicable && !step.limitOnly &&
+                    step.capability in ContractVerdict.READING_CORE &&
+                    isTransportFailure(step.detail)
+                ) {
+                    results[index] = step.copy(
+                        ok = true,
+                        limitOnly = true,
+                        detail = "couldn't be confirmed on this " +
+                            "connection (${step.detail}) — these are " +
+                            "Xreader's verified rules for this site; " +
+                            "the first read confirms them"
+                    )
+                }
+            }
+        }
+
         // Optional extras: not offered ≠ failure. The enrichment
         // calls run through the guarded path like everything else.
         results += optionalViaGuard(handle, SourceCapability.REVIEWS) {
@@ -391,6 +455,32 @@ class ContractTester(private val service: ExtensionService) {
             proofFirstLine = proofFirstLine,
             checkedAtMillis = now
         )
+    }
+
+    /** v1.3.0 (E4): did this failed step die on the
+     * connection rather than on content? The guarded calls
+     * surface transport failures with these wordings (typed
+     * network/unreachable errors and timeouts). */
+    private fun isTransportFailure(detail: String): Boolean {
+        val text = detail.lowercase()
+        return "timed out" in text || "timeout" in text ||
+            "couldn't reach" in text || "could not reach" in text ||
+            "network" in text || "connection" in text ||
+            "unreachable" in text || "didn't answer" in text ||
+            "did not answer" in text
+    }
+
+    /** v1.3.0 (E5): one sampled chapter's density verdict —
+     * its plain text judged with its link text measured from
+     * the content HTML (furniture is mostly links). */
+    private fun proseVerdictOf(html: String?, plain: String): ProseDensity.Verdict {
+        val linkText = html?.let { markup ->
+            runCatching {
+                org.jsoup.Jsoup.parseBodyFragment(markup).select("a")
+                    .joinToString(" ") { it.text() }
+            }.getOrDefault("")
+        } ?: ""
+        return ProseDensity.judge(plain, linkText)
     }
 
     private suspend fun optionalViaGuard(

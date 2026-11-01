@@ -123,6 +123,151 @@ object BookShape {
         return !isChapterShapedHref(href)
     }
 
+    /** Path segments that name a PEOPLE collection — profiles
+     * and member lists (`/users/<id>-<name>`, `/profile/<x>`,
+     * `/members/<x>`). A row under one of these is a PERSON,
+     * never a book, whatever its tail looks like: the tail is
+     * slug-shaped and passes [isBookShapedHref], which is how
+     * a community rail (an XP leaderboard, a discussion
+     * rail's authors) became a Live source's whole catalogue
+     * on device (novelbuddy, 2026-10-31). Author collections
+     * are deliberately NOT here: an author page's rows are
+     * judged by where the ROWS point, and books under an
+     * author prefix are books. */
+    private val PEOPLE_COLLECTION_SEGMENTS = setOf(
+        "users", "user", "profiles", "profile",
+        "members", "member", "people"
+    )
+
+    /** Whether [href] points into a people collection: its
+     * parent segment (the segment before the slug) names one.
+     * Root-level hrefs have no parent and never qualify. */
+    fun isPeopleCollectionHref(href: String): Boolean {
+        val segments = normalisedPath(href)
+            .split('/').filter { it.isNotBlank() }
+        if (segments.size < 2) return false
+        return segments[segments.size - 2].lowercase() in
+            PEOPLE_COLLECTION_SEGMENTS
+    }
+
+    /** Single-segment paths that name a site SECTION, never a
+     * book: the chrome vocabulary of the web (nav, indexes,
+     * account, community). A book slug that happens to equal
+     * one of these words is the accepted cost — its book-page
+     * paste still works through every non-catalogue path. */
+    private val ROOT_SECTION_SEGMENTS = setOf(
+        "home", "index", "latest", "newest", "popular",
+        "ranking", "rankings", "browse", "search", "explore",
+        "discover", "library", "catalog", "catalogue",
+        "book", "books", "novel", "novels", "series",
+        "manga", "manhwa", "comic", "comics",
+        "genre", "genres", "tag", "tags",
+        "category", "categories", "list", "lists",
+        "status", "completed", "ongoing",
+        "about", "contact", "terms", "privacy", "dmca",
+        "blog", "news", "forum", "forums", "community",
+        "discussion", "discussions", "review", "reviews",
+        "user", "users", "profile", "profiles",
+        "member", "members", "people", "author", "authors",
+        "chat", "message", "messages",
+        "notification", "notifications",
+        "setting", "settings", "account", "dashboard", "admin",
+        "login", "log-in", "register", "signup", "sign-up",
+        "logout", "feed", "rss", "sitemap", "api",
+        "help", "support", "faq", "filters", "random",
+        "history", "bookmark", "bookmarks",
+        "favorite", "favorites", "favourite", "favourites",
+        "reading", "shelf", "shelves"
+    )
+
+    /** Static-file tails a root path can carry — assets, never
+     * book slugs. (`.html` is deliberately absent: whole
+     * families address books as `/<slug>.html`.) */
+    private val ROOT_FILE_TAILS = listOf(
+        ".ico", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+        ".webp", ".css", ".js", ".xml", ".json", ".txt",
+        ".pdf", ".zip"
+    )
+
+    /**
+     * v1.2.4: the ROOT-collection book shape. Whole families
+     * address books at the site root — `/<slug>` with NO
+     * collection segment at all (novelbuddy, xnovel). The
+     * ≥2-segment rule in [isBookShapedHref] made every such
+     * book invisible to booksOnly derivation (the Live
+     * catalogue), leaving any slug-tailed rail — people
+     * included — as the only admissible "collection". A root
+     * href is a book candidate when its single segment is
+     * slug-like (≥3 chars, carries a letter, not a bare
+     * number, not chapter-named, not a static file) and is
+     * not a section word. This shape is admitted ONLY by the
+     * catalogue candidate filters that ask for it — the
+     * two-segment rule above is unchanged for every other
+     * caller.
+     */
+    fun isRootBookHref(href: String): Boolean {
+        val segments = normalisedPath(href)
+            .split('/').filter { it.isNotBlank() }
+        if (segments.size != 1) return false
+        val segment = segments.single().lowercase()
+        if (segment.length < 3) return false
+        if (segment.all { it.isDigit() }) return false
+        if (segment.none { it.isLetter() }) return false
+        if (ROOT_FILE_TAILS.any { segment.endsWith(it) }) return false
+        if (CHAPTER_SEGMENT.containsMatchIn(segment)) return false
+        return segment !in ROOT_SECTION_SEGMENTS
+    }
+
+    /** The booksOnly catalogue admission rule, in one place:
+     * a book-shaped href under a collection, or a root-level
+     * book href — and never a people-collection href. Used by
+     * the listing/search candidate filters (the probe's own
+     * list-shape verdicts run unfiltered, as before). */
+    fun isBookCandidateHref(href: String): Boolean {
+        if (isPeopleCollectionHref(href)) return false
+        return isBookShapedHref(href) || isRootBookHref(href)
+    }
+
+    /** Chapter-row tails: a chapter NAME in the tail itself
+     * (`chapter-2217-…`, `ep-12-…`) — a prefix match, unlike
+     * [CHAPTER_SEGMENT]'s whole-segment match, because real
+     * chapter tails carry the chapter's title after the
+     * number. */
+    private val CHAPTER_ROW_TAIL =
+        Regex("(?i)^(chapter|chap|ch|episode|ep)[-_]?\\d")
+
+    /**
+     * v1.2.4: whether [rowHref] reads as a CHAPTER of the book
+     * at [bookUrl], for telling a book page's own chapter rows
+     * from a listing page's book rows. A row is the book's
+     * chapter when it lives UNDER the book's path (unless the
+     * book path itself ends in a collection word — a page
+     * under /novels is an index, and the rows under it are
+     * its books), or when its own tail names a chapter or is
+     * a bare number. Needed because [isBookShapedHref] alone
+     * cannot make this call: a wordy chapter tail
+     * (`/<slug>/chapter-2217-<title>`) is not chapter-shaped
+     * under [CHAPTER_SEGMENT]'s whole-segment match, so it
+     * passes as "book-shaped" — the distinction is the row's
+     * relation to the page, not the row's shape alone.
+     */
+    fun isChapterRowOf(bookUrl: String, rowHref: String): Boolean {
+        val bookPath = normalisedPath(bookUrl)
+        val rowPath = normalisedPath(rowHref)
+        if (rowPath == bookPath) return false
+        val bookSegments = bookPath.split('/')
+            .filter { it.isNotBlank() }
+        val lastBookSegment = bookSegments.lastOrNull()?.lowercase()
+        if (rowPath.startsWith("$bookPath/") &&
+            lastBookSegment !in BOOK_COLLECTION_SEGMENTS
+        ) {
+            return true
+        }
+        val tail = rowPath.substringAfterLast('/').lowercase()
+        if (tail.isNotEmpty() && tail.all { it.isDigit() }) return true
+        return CHAPTER_ROW_TAIL.containsMatchIn(tail)
+    }
+
     /** The collection prefix of a book href: its normalised
      * path minus the slug (`/novels/<slug>` → `/novels`,
      * `/en/novels/<slug>` → `/en/novels`). Anchors that share

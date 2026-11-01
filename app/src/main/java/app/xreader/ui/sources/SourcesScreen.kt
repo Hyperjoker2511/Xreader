@@ -194,6 +194,7 @@ fun SourcesScreen(
                     healthRecord = record,
                     hasUpdate = state.updates[ext.packageId] != null,
                     hasPending = state.pendings.containsKey(ext.packageId),
+                    addedByYou = ext.id in state.addedByYouIds,
                     onOpen = {
                         if (firstSource == null || ext.sourceIds.contains(",")) {
                             onOpenExtension(ext.id)
@@ -256,6 +257,7 @@ private fun SourceRow(
     healthRecord: SourceHealthRecord?,
     hasUpdate: Boolean,
     hasPending: Boolean,
+    addedByYou: Boolean = false,
     onOpen: () -> Unit,
     onDetails: () -> Unit,
     onUpdate: () -> Unit,
@@ -305,7 +307,16 @@ private fun SourceRow(
                 // one exists (below). Nothing is dropped, just
                 // demoted to the weight it deserves.
                 Text(
-                    listOfNotNull(languageLabel, healthWord, typeLabel)
+                    listOfNotNull(
+                        // v1.3.0 (device spot-check fix): a
+                        // user-added twin of a built-in default
+                        // says so in plain words at the head of
+                        // the meta line — the two same-name rows
+                        // are never confusable, and nothing was
+                        // deleted to achieve it.
+                        if (addedByYou) "Added by you" else null,
+                        languageLabel, healthWord, typeLabel
+                    )
                         .joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

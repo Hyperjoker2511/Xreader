@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -172,6 +173,34 @@ fun BookDetailScreen(
     }
     val displayChapters = remember(visibleChapters, newestFirst) {
         if (newestFirst) visibleChapters.asReversed() else visibleChapters
+    }
+    // v1.3.1 (V120-CHECK 54): windowed chapter display — the
+    // list renders 100 rows at a time, never the whole book
+    // (a 3,229-row list never exists in full; the 2 GB tier
+    // thanks this too). Display-only: stored order and the
+    // full data set are untouched, and the window follows
+    // the current display order in both sort directions.
+    // The window resets when the book, the search or the
+    // sort changes; the Show more control grows it by 100
+    // and doubles as the fetch gesture (it calls the same
+    // near-edge growth the scroll path uses, so reaching
+    // past the fetched range pulls the next chunk — never a
+    // background full load).
+    var chapterWindow by remember(
+        state.book?.id, chapterQuery, chapterStateFilter,
+        chapterPartFilter, newestFirst
+    ) { mutableStateOf(100) }
+    val displayedChapters = remember(displayChapters, chapterWindow) {
+        displayChapters.take(chapterWindow)
+    }
+    // A jump target (the Continue chapter) beyond the window
+    // expands the window to reach it — search and Continue
+    // must never be fenced off by the window.
+    LaunchedEffect(displayChapters, state.continueChapterIndex) {
+        val pos = displayChapters.indexOfFirst {
+            it.index == state.continueChapterIndex
+        }
+        if (pos >= chapterWindow) chapterWindow = pos + 1
     }
     val chapterFilterActive = chapterQuery.isNotBlank() ||
         chapterStateFilter !=
@@ -1469,7 +1498,7 @@ fun BookDetailScreen(
                 }
             }
             if (section.kind == ChaptersSectionKind.LIST) {
-                items(displayChapters, key = { "chapter-${it.id}" }) { chapter ->
+                items(displayedChapters, key = { "chapter-${it.id}" }) { chapter ->
                     // v1.0.8: composing a row near the loaded edge
                     // of a partially loaded book grows the list —
                     // scrolling IS the demand signal.
@@ -1502,6 +1531,45 @@ fun BookDetailScreen(
                             placementSpec = listPlacementSpec()
                         )
                     )
+                }
+                if (chapterWindow < displayChapters.size) {
+                    // v1.3.1 (item 54): the window's end — a
+                    // plain counter and one big, plainly
+                    // labelled control. The LazyColumn's own
+                    // bottom padding keeps it clear of the
+                    // phone's dead bottom strip.
+                    item(key = "chapters-window-more") {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "Showing ${displayedChapters.size} of " +
+                                    "${displayChapters.size} chapters",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                            Button(
+                                onClick = {
+                                    chapterWindow += 100
+                                    // Compose with progressive
+                                    // fetching: if the new window
+                                    // reaches past the fetched
+                                    // rows, this tap pulls the
+                                    // next chunk.
+                                    viewModel.onChapterNearEdge(
+                                        chapterWindow
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp)
+                            ) {
+                                Text("Show more")
+                            }
+                        }
+                    }
                 }
                 if (!book.chapterListComplete) {
                     // Tweak 3: the not-yet-loaded remainder, in

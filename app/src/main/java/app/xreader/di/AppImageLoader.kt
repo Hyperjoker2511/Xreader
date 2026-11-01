@@ -41,7 +41,17 @@ object AppImageLoader {
             STANDARD_MEMORY_FRACTION
         }
 
-    fun build(context: Context, totalRamMb: Long): ImageLoader =
+    /** v1.3.1 (item 58): the disk-cache ceiling for an
+     * auto-clean cap in MB — the cap itself when on, a large
+     * ceiling when Off (0). Pure — unit-tested. */
+    fun capBytesFor(capMb: Int): Long =
+        if (capMb > 0) capMb * 1024L * 1024L else OFF_CEILING_BYTES
+
+    fun build(
+        context: Context,
+        totalRamMb: Long,
+        capBytes: Long = DISK_CACHE_MAX_BYTES
+    ): ImageLoader =
         ImageLoader.Builder(context)
             .memoryCache {
                 MemoryCache.Builder(context)
@@ -51,7 +61,11 @@ object AppImageLoader {
             .diskCache {
                 DiskCache.Builder()
                     .directory(File(context.cacheDir, DISK_CACHE_DIR))
-                    .maxSizeBytes(DISK_CACHE_MAX_BYTES)
+                    // v1.3.1 (item 58): the max size IS the
+                    // auto-clean mechanism — Coil's DiskLruCache
+                    // trims oldest-first down to this bound on
+                    // writes, continuously and quietly.
+                    .maxSizeBytes(capBytes)
                     .build()
             }
             .crossfade(false)
@@ -64,5 +78,9 @@ object AppImageLoader {
     const val MINIMAL_MEMORY_FRACTION = 0.12
     const val STANDARD_MEMORY_FRACTION = 0.18
     const val DISK_CACHE_MAX_BYTES = 128L * 1024 * 1024
+
+    /** Ceiling used when auto-clean is Off — effectively
+     * unbounded for a cover cache, still finite. */
+    const val OFF_CEILING_BYTES = 2L * 1024 * 1024 * 1024
     const val DISK_CACHE_DIR = "image_cache"
 }

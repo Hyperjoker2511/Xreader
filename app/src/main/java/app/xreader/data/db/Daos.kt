@@ -26,6 +26,7 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE id = :id") fun observeById(id: Long): Flow<Book?>
     @Query(
         "SELECT * FROM books WHERE mergedIntoId IS NULL " +
+            "AND inLibrary = 1 " +
             "ORDER BY COALESCE(lastOpenedAt, addedAt) DESC"
     )
     fun observeShelf(): Flow<List<Book>>
@@ -114,6 +115,11 @@ interface ChapterSourceMapDao {
     suspend fun alternatesFor(chapterId: Long): List<ChapterSourceMap>
     @Query("UPDATE chapter_source_map SET verified = 1 WHERE id = :id")
     suspend fun markVerified(id: Long)
+    /** v1.3.1 (item 52): dedupe drops a removed source's
+     * failover maps — they rebuild lazily against the
+     * surviving row's source. */
+    @Query("DELETE FROM chapter_source_map WHERE altExtensionId = :altExtensionId")
+    suspend fun deleteByAltExtension(altExtensionId: Long)
 }
 
 @Dao

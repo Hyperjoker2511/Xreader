@@ -59,7 +59,13 @@ class RepoManager(
 
     /** What adding a repository URL turned out to be (v1.0.1). */
     sealed interface AddRepoOutcome {
-        data class Added(val repo: ExtensionRepo) : AddRepoOutcome
+        /** v1.3.1 (item 59): [sourceCount] is the REAL number of
+         * sources the parsed index carried — the add screen's
+         * outcome line quotes it, never a guess. */
+        data class Added(
+            val repo: ExtensionRepo,
+            val sourceCount: Int = 0
+        ) : AddRepoOutcome
         /** The URL is another reader app's repository — Xreader
          * can't install those packages, but it can build its own
          * sources for the same sites (the UI lists them). */
@@ -79,15 +85,23 @@ class RepoManager(
      * index (upgrade nags only) never ends the walk; it is the
      * answer only when nothing better exists.
      */
-    suspend fun addRepoOrDetect(name: String, indexUrl: String): AddRepoOutcome {
+    suspend fun addRepoOrDetect(
+        name: String,
+        indexUrl: String,
+        onStage: (String) -> Unit = {}
+    ): AddRepoOutcome {
         // v1.2.2 crash net: the walk's parsers guard their own
         // work, but the caller launches uncaught — any escape
         // (a transport throwing past its contract, an Error
         // from a pathological index body) must land as an
         // honest failure, never as an app crash. (First
         // external crash report, 2026-10-31.)
+        // v1.3.1 (item 59): [onStage] reports plain-words stages
+        // ("Fetching the list…" / "Reading the sources…") so a
+        // minutes-long fetch on a slow connection is never a
+        // silent form again.
         return try {
-            addRepoOrDetectWalk(name, indexUrl)
+            addRepoOrDetectWalk(name, indexUrl, onStage)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -102,14 +116,15 @@ class RepoManager(
 
     private suspend fun addRepoOrDetectWalk(
         name: String,
-        indexUrl: String
+        indexUrl: String,
+        onStage: (String) -> Unit = {}
     ): AddRepoOutcome {
         val candidates = RepoLinkNormaliser.candidates(indexUrl)
             .ifEmpty { listOf(indexUrl) }
         var stub: RepoFormat.ForeignRepo? = null
         var firstFailure: AddRepoOutcome.Failed? = null
         for (candidate in candidates) {
-            val outcome = detectCandidate(name, candidate, hops = 0)
+            val outcome = detectCandidate(name, candidate, hops = 0, onStage = onStage)
             when (outcome) {
                 is AddRepoOutcome.Added -> return outcome
                 is AddRepoOutcome.Foreign -> {
@@ -135,13 +150,16 @@ class RepoManager(
     private suspend fun detectCandidate(
         name: String,
         url: String,
-        hops: Int
+        hops: Int,
+        onStage: (String) -> Unit = {}
     ): AddRepoOutcome {
+        onStage("Fetching the list…")
         if (url.endsWith(".pb")) {
             val bytes = when (val raw = downloadBytes(url)) {
                 is AppResult.Err -> return AddRepoOutcome.Failed(raw.error)
                 is AppResult.Ok -> raw.value
             }
+            onStage("Reading the sources…")
             if (bytes.size > MAX_INDEX_BYTES) {
                 return AddRepoOutcome.Failed(
                     AppError.ProviderDown("repository", detail = "the list was too large")
@@ -152,7 +170,7 @@ class RepoManager(
             if (index != null && index.extensions.isEmpty() &&
                 !pointer.isNullOrBlank() && hops < 2
             ) {
-                return detectCandidate(name, pointer, hops + 1)
+                return detectCandidate(name, pointer, hops + 1, onStage)
             }
             return when (val format = RepoFormatDetector.detectPb(bytes)) {
                 null -> AddRepoOutcome.Failed(
@@ -168,12 +186,13 @@ class RepoManager(
             is AppResult.Err -> return AddRepoOutcome.Failed(raw.error)
             is AppResult.Ok -> raw.value
         }
+        onStage("Reading the sources…")
         // Pointer files: repo.json names the real (v2) index; a
         // tachiyomix JSON index may likewise point at a separate
         // extension-list file. Follow either, once or twice.
         if (hops < 2) {
             pointerTarget(body)?.let { target ->
-                return detectCandidate(name, target, hops + 1)
+                return detectCandidate(name, target, hops + 1, onStage)
             }
         }
         return when (val format = RepoFormatDetector.detect(body)) {
@@ -182,7 +201,19 @@ class RepoManager(
                 AddRepoOutcome.Failed(AppError.ParseFailed("repository", format.reason))
             RepoFormat.XreaderIndex ->
                 when (val added = addRepo(name, url)) {
-                    is AppResult.Ok -> AddRepoOutcome.Added(added.value)
+                    is AppResult.Ok -> {
+                        // v1.3.1 (item 59): count from the index
+                        // addRepo just stored — a local re-parse,
+                        // no second fetch on a slow link.
+                        val count = runCatching {
+                            store.readText(store.repoIndexFile(added.value.id))
+                                ?.let { stored ->
+                                    (parseRepoIndex(stored) as? AppResult.Ok)
+                                        ?.value?.packages?.size
+                                }
+                        }.getOrNull() ?: 0
+                        AddRepoOutcome.Added(added.value, count)
+                    }
                     is AppResult.Err -> AddRepoOutcome.Failed(added.error)
                 }
         }
@@ -579,7 +610,8 @@ class RepoManager(
         val existing = extensionDao.getByPackageId(packageId)
         val fingerprint = DeclarativeFingerprints.of(listOf(config))
         val permissions = ExtensionPermissions(
-            domains = listOf(config.baseUrl.normaliseHost())
+            domains = listOf(config.baseUrl.normaliseHost()) +
+                config.extraDomains
         )
         store.writeText(
             store.definitionFile(packageId),
@@ -796,6 +828,109 @@ class RepoManager(
         return repo.copy(id = repoDao.insert(repo))
     }
 
+    private suspend fun bundledRepo(): ExtensionRepo {
+        val repos = repoDaoSnapshot()
+        repos.firstOrNull { it.indexUrl == BUNDLED_REPO_URL }?.let { return it }
+        val repo = ExtensionRepo(
+            name = "Built-in sources",
+            indexUrl = BUNDLED_REPO_URL,
+            indexSha256 = null,
+            lastFetchedAt = null,
+            enabled = true
+        )
+        return repo.copy(id = repoDao.insert(repo))
+    }
+
+    /**
+     * v1.3.0: install (or safely refresh) the app's BUILT-IN
+     * default sources ([BundledDefaults]) — layer 1 of the
+     * three-layer source model. Runs once per process at
+     * startup; idempotent and offline (nothing is fetched).
+     *
+     * - A bundled source that isn't installed is installed
+     *   under the "Built-in sources" repo, exactly like a
+     *   link source's row (declarative kind, trusted, enabled).
+     * - An installed bundled row refreshes to the newly
+     *   shipped rules ONLY while its stored fingerprint is
+     *   still one the app itself shipped for that source
+     *   ([BundledDefaults.SHIPPED_FINGERPRINTS]): the moment a
+     *   user Repairs or edits the source, its definition's
+     *   fingerprint leaves the shipped set and the row is
+     *   never touched again. Rows are NEVER deleted here, and
+     *   a row the user disabled stays disabled (a refresh
+     *   keeps its enabled state; only the rules move).
+     *
+     * Returns how many rows were installed or refreshed.
+     */
+    suspend fun installBundledDefaults(): Int {
+        val configs = BundledDefaults.configs()
+        if (configs.isEmpty()) return 0
+        val repo = bundledRepo()
+        val now = nowMs()
+        var changed = 0
+        for (config in configs) {
+            val packageId = "bundled.${config.id}"
+            val fingerprint = DeclarativeFingerprints.of(listOf(config))
+            val existing = extensionDao.getByPackageId(packageId)
+            if (existing == null) {
+                store.writeText(
+                    store.definitionFile(packageId),
+                    DeclarativeFingerprints.encode(listOf(config))
+                )
+                val permissions = ExtensionPermissions(
+                    domains = listOf(config.baseUrl.normaliseHost()) +
+                        config.extraDomains
+                )
+                val row = InstalledExtension(
+                    repoId = repo.id,
+                    displayName = config.name,
+                    packageId = packageId,
+                    versionName = "1.0",
+                    versionCode = 1,
+                    kind = app.xreader.data.db.ExtensionKind.DECLARATIVE,
+                    artifactPath = null,
+                    sha256 = fingerprint,
+                    apiLevel = app.xreader.extensionapi.ExtensionApi.API_LEVEL,
+                    languages = config.lang,
+                    sourceIds = config.id,
+                    enabled = true,
+                    trustState = TrustState.TRUSTED,
+                    permissionsJson = permissions.encode(),
+                    installedAt = now,
+                    updatedAt = now
+                )
+                extensionDao.insert(row)
+                changed++
+            } else if (existing.sha256 != fingerprint &&
+                existing.sha256 in
+                (BundledDefaults.SHIPPED_FINGERPRINTS[config.id]
+                    ?: emptySet())
+            ) {
+                // An untouched bundled row from an older app
+                // version: move its rules to the shipped ones.
+                store.writeText(
+                    store.definitionFile(packageId),
+                    DeclarativeFingerprints.encode(listOf(config))
+                )
+                extensionDao.update(
+                    existing.copy(
+                        displayName = config.name,
+                        versionCode = existing.versionCode + 1,
+                        sha256 = fingerprint,
+                        sourceIds = config.id,
+                        updatedAt = now
+                    )
+                )
+                service.invalidate(existing.id)
+                changed++
+            }
+            // Otherwise the row is current, or the user's own
+            // version of it — either way it is left exactly as
+            // it is.
+        }
+        return changed
+    }
+
     // ── internals ───────────────────────────────────────────────────
 
     /** Downloaded/derived content of one package, ready to write. */
@@ -965,6 +1100,9 @@ class RepoManager(
 
     companion object {
         const val LINK_REPO_URL = "xreader://link-sources"
+        /** v1.3.0: the synthetic repo the built-in default
+         * sources live under (see [installBundledDefaults]). */
+        const val BUNDLED_REPO_URL = "xreader://bundled-sources"
         const val MAX_INDEX_BYTES = 4 * 1024 * 1024
         const val MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 
