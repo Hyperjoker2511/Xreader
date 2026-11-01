@@ -23,7 +23,16 @@ Get the latest APK from the [**Releases**](https://github.com/Hyperjoker2511/Xre
 
 ## Screenshots
 
-<!-- Gallery lands here as the captures are added. -->
+<p align="center">
+  <img src="Library.jpg" width="250" alt="Library — Continue Reading hero and your books" />
+  <img src="Explore.jpg" width="250" alt="Explore — sources, repositories and add-a-source" />
+  <img src="Reader.jpg" width="250" alt="The reader — clean prose on pure black" />
+</p>
+<p align="center">
+  <img src="History.jpg" width="250" alt="History — Reading pulse with your real numbers" />
+  <img src="Downloads.jpg" width="250" alt="Downloads — offline storage at a glance" />
+  <img src="Profile.jpg" width="250" alt="Profile — levels, streaks and avatar colours" />
+</p>
 
 ## Design
 
