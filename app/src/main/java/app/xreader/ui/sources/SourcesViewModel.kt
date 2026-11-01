@@ -110,7 +110,49 @@ data class SourcesUiState(
      * "Working" / "Check needed" / "Sign in needed" / "Signed in". */
     val sessionWords: Map<String, String> = emptyMap(),
     /** Item 84: the one-time restore card has been answered. */
-    val restoreCardDone: Boolean = true
+    val restoreCardDone: Boolean = true,
+    /** Manga programme (M1): the reader's ONE content
+     * preference — which source ratings are listed. */
+    val contentVisibility:
+        app.xreader.data.extension.ContentVisibility =
+        app.xreader.data.extension.ContentVisibility.DEFAULT,
+    /** Manga programme (M1): each installed source's content
+     * rating, keyed "extId:sourceId" like [sessionWords] —
+     * the Explore list hides an extension only when EVERY
+     * source it carries is hidden, and badges the strongest
+     * rating still visible. Sources with no declarative
+     * config carry no entry and read as Safe. */
+    val sourceRatings:
+        Map<String, app.xreader.data.extension.ContentRating> =
+        emptyMap(),
+    /** Manga programme (M3): each installed source's media
+     * kind, keyed "extId:sourceId" like [sourceRatings] —
+     * Explore's Novels | Manga switch filters on it. Sources
+     * with no declarative config carry no entry and read as
+     * Novels (TEXT). */
+    val sourceKinds:
+        Map<String, app.xreader.data.extension.MediaKind> =
+        emptyMap(),
+    /** M3: the split's active side — the SAME remembered
+     * switch the Library carries (LibraryPrefs), so the two
+     * screens always agree. */
+    val librarySide: app.xreader.data.extension.MediaKind =
+        app.xreader.data.extension.MediaKind.TEXT,
+    /** M3: the Keiyoushi catalogue's display rows, built by
+     * [app.xreader.data.extension.KeiyoushiIndex.rows] from
+     * the repo's loaded site list — preference-filtered, each
+     * with its true conversion state and rating badge. Empty
+     * until the repo's list has loaded. */
+    val keiyoushiRows:
+        List<app.xreader.data.extension.KeiyoushiIndex.Row> =
+        emptyList(),
+    /** K3: a staged Keiyoushi install waiting for the user's
+     * consent — the sheet's data (honest DEX wording,
+     * fingerprint, signer). Non-null only between a verified
+     * download and the user's answer. */
+    val keiyoushiConsent:
+        app.xreader.data.extension.player.KeiyoushiConsentPrompt? =
+        null
 )
 
 /**
@@ -139,6 +181,18 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
     private val _lastForeignRepoId = MutableStateFlow<Long?>(null)
     private val _lastAddedRepoId = MutableStateFlow<Long?>(null)
     private val _sessionWords = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val _sourceRatings = MutableStateFlow<
+        Map<String, app.xreader.data.extension.ContentRating>
+    >(emptyMap())
+    private val _sourceKinds = MutableStateFlow<
+        Map<String, app.xreader.data.extension.MediaKind>
+    >(emptyMap())
+    private val _keiyoushiRows = MutableStateFlow<
+        List<app.xreader.data.extension.KeiyoushiIndex.Row>
+    >(emptyList())
+    private val _keiyoushiConsent = MutableStateFlow<
+        app.xreader.data.extension.player.KeiyoushiConsentPrompt?
+    >(null)
 
     val state: StateFlow<SourcesUiState> = combine(
         container.database.extensionRepoDao().observeAll(),
@@ -151,7 +205,11 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         _repoStage, _repoOutcome,
         _foreignRepos, _lastForeignRepoId, _sessionWords,
         container.sourcePrefs.sourceRestoreCardDone,
-        _lastAddedRepoId
+        _lastAddedRepoId,
+        container.sourcePrefs.contentVisibility,
+        _sourceRatings,
+        container.libraryPrefs.librarySide,
+        _sourceKinds, _keiyoushiRows, _keiyoushiConsent
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val rawExtensions = values[1] as List<InstalledExtension>
@@ -179,7 +237,20 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
             lastForeignRepoId = values[14] as Long?,
             sessionWords = values[15] as Map<String, String>,
             restoreCardDone = values[16] as Boolean,
-            lastAddedRepoId = values[17] as Long?
+            lastAddedRepoId = values[17] as Long?,
+            contentVisibility =
+                values[18] as app.xreader.data.extension.ContentVisibility,
+            sourceRatings =
+                values[19] as Map<String, app.xreader.data.extension.ContentRating>,
+            librarySide =
+                values[20] as app.xreader.data.extension.MediaKind,
+            sourceKinds =
+                values[21] as Map<String, app.xreader.data.extension.MediaKind>,
+            keiyoushiRows =
+                values[22] as List<app.xreader.data.extension.KeiyoushiIndex.Row>,
+            keiyoushiConsent =
+                values[23] as
+                    app.xreader.data.extension.player.KeiyoushiConsentPrompt?
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SourcesUiState())
 
@@ -252,6 +323,172 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                     _sessionWords.value = computeSessionWords(exts, health)
                 }
         }
+        // Manga programme (M1): each installed source's
+        // content rating, recomputed when the installed set
+        // changes — the Explore list's hide/badge input.
+        viewModelScope.launch {
+            container.database.installedExtensionDao().observeAll()
+                .collect { exts ->
+                    _sourceRatings.value = computeSourceRatings(exts)
+                }
+        }
+        // Manga programme (M3): each installed source's media
+        // kind — Explore's split input, same recompute rhythm.
+        viewModelScope.launch {
+            container.database.installedExtensionDao().observeAll()
+                .collect { exts ->
+                    _sourceKinds.value = computeSourceKinds(exts)
+                }
+        }
+        // M3: the Keiyoushi catalogue rows — rebuilt when the
+        // repo list, the loaded site lists, the installed set
+        // (a conversion landing changes READY states), the
+        // content preference or the player's per-package
+        // states (K3: an install landing flips its rows to
+        // Ready) change. KeiyoushiIndex.rows() does the
+        // filtering/stating; this only feeds it.
+        viewModelScope.launch {
+            combine(
+                container.database.extensionRepoDao().observeAll(),
+                container.database.installedExtensionDao().observeAll(),
+                _foreignRepos,
+                container.sourcePrefs.contentVisibility,
+                container.keiyoushiPlayerManager.packageStates
+            ) { repos, exts, foreign, visibility, playerStates ->
+                KeiyoushiInputs(
+                    repos, exts, foreign, visibility, playerStates
+                )
+            }.collect { inputs ->
+                _keiyoushiRows.value = computeKeiyoushiRows(inputs)
+            }
+        }
+    }
+
+    /** M3: flip the shared Novels | Manga switch (the Library
+     * reads the same preference). */
+    fun setLibrarySide(side: app.xreader.data.extension.MediaKind) {
+        viewModelScope.launch { container.libraryPrefs.setLibrarySide(side) }
+    }
+
+    /** M3: "extId:sourceId" → media kind for every installed
+     * source (absence reads as Novels). The kind read is the
+     * service's one accessor (K4): a Keiyoushi player source
+     * is MANGA, a declarative source carries its config's
+     * kind, the rest are Novels. A player handle is ALSO
+     * keyed by the bare Mihon id its row declares — the
+     * Explore list looks sources up by the row's own ids. */
+    private suspend fun computeSourceKinds(
+        extensions: List<InstalledExtension>
+    ): Map<String, app.xreader.data.extension.MediaKind> {
+        val kinds =
+            HashMap<String, app.xreader.data.extension.MediaKind>()
+        for (ext in extensions) {
+            val handles = container.extensionService
+                .sourcesOf(ext.id).getOrNull() ?: continue
+            for (handle in handles) {
+                val kind = container.extensionService
+                    .mediaKindOf(handle)
+                kinds[
+                    app.xreader.data.extension.SourceHealthRecord
+                        .key(ext.id, handle.source.id)
+                ] = kind
+                container.extensionService.mihonAdapterOf(handle)
+                    ?.let { adapter ->
+                        kinds[
+                            app.xreader.data.extension
+                                .SourceHealthRecord.key(
+                                    ext.id, adapter.mihonId.toString()
+                                )
+                        ] = kind
+                    }
+            }
+        }
+        return kinds
+    }
+
+    private data class KeiyoushiInputs(
+        val repos: List<app.xreader.data.db.ExtensionRepo>,
+        val extensions: List<InstalledExtension>,
+        val foreignRepos:
+            Map<Long, app.xreader.data.extension.RepoFormat.ForeignRepo>,
+        val visibility: app.xreader.data.extension.ContentVisibility,
+        /** K3: the player's per-package states — an installed
+         * and loaded package makes its rows Ready. */
+        val playerStates:
+            Map<String, app.xreader.data.extension.KeiyoushiIndex.PlayerPackageState> =
+            emptyMap()
+    )
+
+    /** M3: the Keiyoushi rows for the repo screen — the
+     * repo's loaded sites become index entries, the installed
+     * MANGA configs decide which hosts are converted, and
+     * KeiyoushiIndex.rows() applies the content preference
+     * and stamps each row's true state. No sites loaded yet
+     * (or no Keiyoushi row) = no rows; the screen keeps its
+     * "check for updates" empty state. */
+    private suspend fun computeKeiyoushiRows(
+        inputs: KeiyoushiInputs
+    ): List<app.xreader.data.extension.KeiyoushiIndex.Row> {
+        val repo = inputs.repos.firstOrNull {
+            it.indexUrl ==
+                app.xreader.data.extension.KeiyoushiIndex.INDEX_URL
+        } ?: return emptyList()
+        val sites = inputs.foreignRepos[repo.id]?.sites
+            ?: return emptyList()
+        val configs = mutableListOf<
+            app.xreader.data.extension.DeclarativeConfig>()
+        for (ext in inputs.extensions) {
+            val handles = container.extensionService
+                .sourcesOf(ext.id).getOrNull() ?: continue
+            for (handle in handles) {
+                container.extensionService
+                    .declarativeConfigOf(handle)?.let { configs += it }
+            }
+        }
+        return app.xreader.data.extension.KeiyoushiIndex.rows(
+            entries = keiyoushiEntries(sites),
+            convertedHosts = app.xreader.data.extension
+                .KeiyoushiIndex.convertedHosts(configs),
+            visibility = inputs.visibility,
+            playerStates = inputs.playerStates
+        )
+    }
+
+    /** M1: "extId:sourceId" → content rating for every
+     * installed source. The rating read is the service's
+     * one accessor (K4): a Keiyoushi player source carries
+     * its extension's index rating, a declarative source its
+     * config's, an unrated kind (JS/Dex) is Safe. A player
+     * handle is ALSO keyed by the bare Mihon id its row
+     * declares — the Explore list looks sources up by the
+     * row's own ids. */
+    private suspend fun computeSourceRatings(
+        extensions: List<InstalledExtension>
+    ): Map<String, app.xreader.data.extension.ContentRating> {
+        val ratings =
+            HashMap<String, app.xreader.data.extension.ContentRating>()
+        for (ext in extensions) {
+            val handles = container.extensionService
+                .sourcesOf(ext.id).getOrNull() ?: continue
+            for (handle in handles) {
+                val rating = container.extensionService
+                    .contentRatingOf(handle)
+                ratings[
+                    app.xreader.data.extension.SourceHealthRecord
+                        .key(ext.id, handle.source.id)
+                ] = rating
+                container.extensionService.mihonAdapterOf(handle)
+                    ?.let { adapter ->
+                        ratings[
+                            app.xreader.data.extension
+                                .SourceHealthRecord.key(
+                                    ext.id, adapter.mihonId.toString()
+                                )
+                        ] = rating
+                    }
+            }
+        }
+        return ratings
     }
 
     /** R1: "Signed in" / "Sign in needed" for sign-in sources;
@@ -694,6 +931,18 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                                 "“${repo.name}” checked — " +
                                     "${result.value.sites.size} sites."
                             )
+                            // K3: a Keiyoushi refresh also
+                            // re-checks installed packages
+                            // against the fresh catalogue —
+                            // newer versions flag their rows
+                            // "Update available".
+                            if (repo.indexUrl ==
+                                app.xreader.data.extension
+                                    .KeiyoushiIndex.INDEX_URL
+                            ) {
+                                container.keiyoushiPlayerManager
+                                    .checkForUpdates()
+                            }
                         }
                     }
                     return@launch
@@ -795,11 +1044,133 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     /** R14: the storefront's one Uninstall action (same manager
-     * path as the detail page's uninstall). */
+     * path as the detail page's uninstall). Keiyoushi player
+     * rows route to the player's own cascade (K3) — the
+     * generic path would leave the player record, the APK
+     * and the live sources behind. */
     fun uninstallExtension(ext: InstalledExtension) {
+        if (ext.kind ==
+            app.xreader.data.db.ExtensionKind.KEIYOUSHI
+        ) {
+            uninstallKeiyoushi(ext.packageId)
+            return
+        }
         viewModelScope.launch {
             manager.uninstall(ext)
             say("“${ext.displayName}” uninstalled")
+        }
+    }
+
+    // ── Keiyoushi player (K3) ───────────────────────────────
+
+    /** A row's Install/Update tap: download + verify, then
+     * the consent sheet (state.keiyoushiConsent) when the
+     * file checks out. A failure lands on the row itself as
+     * its Failed/Incompatible state. */
+    fun installKeiyoushi(packageName: String) {
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                when (
+                    val result = container.keiyoushiPlayerManager
+                        .beginInstall(packageName)
+                ) {
+                    is AppResult.Err ->
+                        say(ErrorText.displayText(result.error))
+                    is AppResult.Ok -> {
+                        val prompt = container.keiyoushiPlayerManager
+                            .consentPrompt(packageName)
+                        if (prompt != null) {
+                            _keiyoushiConsent.value = prompt
+                        } else if (
+                            result.value.status ==
+                            app.xreader.data.extension.player
+                                .KeiyoushiExtStatus.FAILED ||
+                            result.value.status ==
+                            app.xreader.data.extension.player
+                                .KeiyoushiExtStatus.INCOMPATIBLE
+                        ) {
+                            say(
+                                "“${result.value.displayName}”: " +
+                                    (result.value.failureReason
+                                        ?: "couldn't be installed")
+                            )
+                        }
+                    }
+                }
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
+    /** A row's Review tap (an install staged in an earlier
+     * visit to this screen): re-show the consent sheet for
+     * the already-verified file — no new download. */
+    fun reviewKeiyoushiConsent(packageName: String) {
+        _keiyoushiConsent.value =
+            container.keiyoushiPlayerManager.consentPrompt(packageName)
+    }
+
+    /** The consent sheet's Install tap: the fingerprint the
+     * sheet displayed is the consent — the manager loads
+     * only if the staged bytes still hash to exactly it. */
+    fun confirmKeiyoushiConsent() {
+        val prompt = _keiyoushiConsent.value ?: return
+        _keiyoushiConsent.value = null
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                when (
+                    val result = container.keiyoushiPlayerManager
+                        .confirmInstall(
+                            prompt.packageName, prompt.fingerprint
+                        )
+                ) {
+                    is AppResult.Err ->
+                        say(ErrorText.displayText(result.error))
+                    is AppResult.Ok -> {
+                        val record = result.value
+                        if (
+                            record.status ==
+                            app.xreader.data.extension.player
+                                .KeiyoushiExtStatus.READY
+                        ) {
+                            say("“${record.displayName}” installed")
+                        } else {
+                            say(
+                                "“${record.displayName}”: " +
+                                    (record.failureReason
+                                        ?: "couldn't be started")
+                            )
+                        }
+                    }
+                }
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
+    /** The consent sheet dismissed: the staged file is
+     * dropped, nothing was installed or loaded. */
+    fun dismissKeiyoushiConsent() {
+        val prompt = _keiyoushiConsent.value ?: return
+        _keiyoushiConsent.value = null
+        viewModelScope.launch {
+            container.keiyoushiPlayerManager
+                .cancelInstall(prompt.packageName)
+        }
+    }
+
+    /** A Ready row's Remove: the player's full uninstall
+     * cascade (sources, file, prefs, cookies, row, record). */
+    fun uninstallKeiyoushi(packageName: String) {
+        viewModelScope.launch {
+            val name = container.keiyoushiPlayerManager
+                .record(packageName)?.displayName ?: packageName
+            container.keiyoushiPlayerManager.uninstall(packageName)
+            say("“$name” uninstalled")
         }
     }
 
@@ -877,12 +1248,29 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
     /** Persist a captured login (WebView cookies + UA) into the vault. */
     fun saveLoginSession(
         sessionKey: String,
-        host: String,
-        cookies: Map<String, String>,
+        cookiesByHost: Map<String, Map<String, String>>,
+        fallbackHost: String,
         userAgent: String?
     ) {
         viewModelScope.launch {
-            container.sessionStore.mergeCookies(sessionKey, host, cookies, userAgent)
+            // v1.3.5 (P0): the captured cookies are stored PER
+            // ORIGIN — the jar read for one host lands under that
+            // host's key only, never merged into another origin's
+            // record (SessionData's map is host → cookies).
+            if (cookiesByHost.isEmpty()) {
+                // Nothing captured (a check screen, usually):
+                // the user agent is still recorded against the
+                // page's host, as before.
+                container.sessionStore.mergeCookies(
+                    sessionKey, fallbackHost, emptyMap(), userAgent
+                )
+            } else {
+                for ((host, cookies) in cookiesByHost) {
+                    container.sessionStore.mergeCookies(
+                        sessionKey, host, cookies, userAgent
+                    )
+                }
+            }
             _sessionSaved.tryEmit(sessionKey)
             // v1.3.3 (scope S4): the waiting surfaces (the
             // catalogue, book page or reader that sent the
@@ -908,3 +1296,27 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
             }
     }
 }
+
+/**
+ * Manga programme (M3): the Keiyoushi repo's loaded site list
+ * (the foreign-repo sidecar's shape) as Keiyoushi index
+ * entries — the input [app.xreader.data.extension.KeiyoushiIndex.rows]
+ * consumes. The sidecar's per-site rating (stamped from the
+ * index's contentWarning when the list was built) and its
+ * carrying package name (K3) ride across unchanged; mirror
+ * fields the sidecar doesn't keep stay at their defaults.
+ */
+fun keiyoushiEntries(
+    sites: List<app.xreader.data.extension.ForeignSite>
+): List<app.xreader.data.extension.KeiyoushiIndex.Entry> =
+    sites.map { site ->
+        app.xreader.data.extension.KeiyoushiIndex.Entry(
+            name = site.name,
+            lang = site.lang,
+            baseUrl = site.baseUrl,
+            rating = site.contentRating,
+            // K3: the carrying package — the player's install
+            // unit and row-state join key.
+            packageName = site.packageName
+        )
+    }

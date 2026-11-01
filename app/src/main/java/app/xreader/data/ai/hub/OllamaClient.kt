@@ -5,6 +5,7 @@ import app.xreader.core.error.AppResult
 import app.xreader.data.ai.AiClient
 import app.xreader.data.ai.GeminiClient
 import app.xreader.data.net.HttpTransport
+import app.xreader.data.net.LocalHttpPolicy
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import kotlinx.coroutines.Dispatchers
@@ -48,8 +49,11 @@ class OllamaClient(
     ): AppResult<GeminiClient.TextResult> {
         val model = modelProvider()?.takeIf { it.isNotBlank() }
             ?: return AppResult.Err(AiHttp.noModelError(SERVICE_ID))
+        val url = chatUrl(baseUrlProvider())
+        // v1.3.5 (P0): plain http only to the user's own network.
+        LocalHttpPolicy.refusalFor(url)?.let { return AppResult.Err(it) }
         val request = HttpTransport.Request(
-            url = chatUrl(baseUrlProvider()),
+            url = url,
             method = "POST",
             headers = mapOf("Content-Type" to "application/json"),
             body = requestBody(
@@ -92,8 +96,14 @@ class OllamaClient(
             emit(GeminiClient.StreamEvent.Failed(AiHttp.noModelError(SERVICE_ID)))
             return@flow
         }
+        val url = chatUrl(baseUrlProvider())
+        // v1.3.5 (P0): plain http only to the user's own network.
+        LocalHttpPolicy.refusalFor(url)?.let {
+            emit(GeminiClient.StreamEvent.Failed(it))
+            return@flow
+        }
         val request = HttpTransport.Request(
-            url = chatUrl(baseUrlProvider()),
+            url = url,
             method = "POST",
             headers = mapOf("Content-Type" to "application/json"),
             body = requestBody(
@@ -153,8 +163,11 @@ class OllamaClient(
     /** Models the Ollama server itself reports (`GET /api/tags`) —
      * the Providers screen's "Test" for the address + model fields. */
     suspend fun listModels(): AppResult<List<String>> {
+        val url = "${baseUrlProvider().trimEnd('/')}/api/tags"
+        // v1.3.5 (P0): plain http only to the user's own network.
+        LocalHttpPolicy.refusalFor(url)?.let { return AppResult.Err(it) }
         val request = HttpTransport.Request(
-            url = "${baseUrlProvider().trimEnd('/')}/api/tags",
+            url = url,
             method = "GET"
         )
         val response = when (val result = transport.execute(request)) {

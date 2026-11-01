@@ -5,6 +5,7 @@ import app.xreader.core.error.AppResult
 import app.xreader.data.ai.AiClient
 import app.xreader.data.ai.GeminiClient
 import app.xreader.data.net.HttpTransport
+import app.xreader.data.net.LocalHttpPolicy
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +53,10 @@ class AnthropicClient(
             ?: return AppResult.Err(AiHttp.noKeyError(serviceId))
         val model = modelProvider()?.takeIf { it.isNotBlank() }
             ?: return AppResult.Err(AiHttp.noModelError(serviceId))
+        // v1.3.5 (P0): a key must never cross public plain http.
+        LocalHttpPolicy.refusalFor(
+            ProviderUrls.anthropicMessagesUrl(baseUrl)
+        )?.let { return AppResult.Err(it) }
         val request = HttpTransport.Request(
             url = ProviderUrls.anthropicMessagesUrl(baseUrl),
             method = "POST",
@@ -99,6 +104,13 @@ class AnthropicClient(
         val model = modelProvider()?.takeIf { it.isNotBlank() }
         if (model == null) {
             emit(GeminiClient.StreamEvent.Failed(AiHttp.noModelError(serviceId)))
+            return@flow
+        }
+        // v1.3.5 (P0): a key must never cross public plain http.
+        LocalHttpPolicy.refusalFor(
+            ProviderUrls.anthropicMessagesUrl(baseUrl)
+        )?.let {
+            emit(GeminiClient.StreamEvent.Failed(it))
             return@flow
         }
         val request = HttpTransport.Request(
@@ -162,6 +174,10 @@ class AnthropicClient(
     /** The provider's own model list (used by "Test & save" and the
      * add-a-provider test-drive). */
     suspend fun listModels(key: String?): AppResult<List<ProviderDiscovery.ModelInfo>> {
+        // v1.3.5 (P0): a key must never cross public plain http.
+        LocalHttpPolicy.refusalFor(
+            ProviderUrls.anthropicModelsUrl(baseUrl)
+        )?.let { return AppResult.Err(it) }
         val effectiveKey = key ?: keyProvider()
         val request = HttpTransport.Request(
             url = ProviderUrls.anthropicModelsUrl(baseUrl),

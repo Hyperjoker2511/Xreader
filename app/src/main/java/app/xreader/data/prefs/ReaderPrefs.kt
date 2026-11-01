@@ -37,6 +37,7 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
         store.edit { prefs ->
             val next = ReaderValidation.validate(transform(prefs.toConfig()))
             prefs[KEY_MODE] = next.mode.name
+            prefs[KEY_IMAGE_MODE] = next.imageMode.name
             prefs[KEY_PALETTE] = next.paletteName
             prefs[KEY_HIGH_CONTRAST] = next.highContrastText
             prefs[KEY_FONT] = next.fontChoice.name
@@ -78,6 +79,11 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
         ReaderConfig(
             mode = ReaderValidation.parseEnum(
                 this[KEY_MODE], ReaderMode.entries.toTypedArray(), ReaderMode.PAGED
+            ),
+            imageMode = ReaderValidation.parseEnum(
+                this[KEY_IMAGE_MODE],
+                app.xreader.domain.reader.ImageReaderMode.entries.toTypedArray(),
+                app.xreader.domain.reader.ImageReaderMode.WEBTOON
             ),
             paletteName = this[KEY_PALETTE] ?: "AMOLED",
             highContrastText = this[KEY_HIGH_CONTRAST] ?: false,
@@ -138,6 +144,7 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
 
     private companion object {
         val KEY_MODE = stringPreferencesKey("reader.mode")
+        val KEY_IMAGE_MODE = stringPreferencesKey("reader.image_mode")
         val KEY_PALETTE = stringPreferencesKey("reader.palette")
         val KEY_HIGH_CONTRAST = booleanPreferencesKey("reader.high_contrast")
         val KEY_FONT = stringPreferencesKey("reader.font")

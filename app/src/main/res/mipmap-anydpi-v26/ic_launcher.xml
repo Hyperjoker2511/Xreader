@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon (v1.4.0): the user's own artwork
+  (design/icon-concepts/xreader-icon-next-update.png) as raster
+  layers — the foreground/monochrome PNGs are generated from it
+  with the glyph padded into the 66 dp safe zone; the background
+  stays the pure-black layer. The v1.2.0 "D" vector glyph it
+  replaced remains in drawable/ for the record.
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@drawable/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
-    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
 </adaptive-icon>

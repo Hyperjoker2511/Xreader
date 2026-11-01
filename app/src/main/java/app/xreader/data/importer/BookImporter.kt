@@ -10,6 +10,7 @@ import app.xreader.data.db.ChapterDao
 import app.xreader.data.db.DownloadState
 import app.xreader.data.db.SourceType
 import app.xreader.data.files.BookStorage
+import app.xreader.data.parse.ArchiveLimits
 import app.xreader.data.parse.FormatSniffer
 import app.xreader.data.parse.ParserRegistry
 import java.io.File
@@ -55,6 +56,13 @@ class BookImporter(
         { block -> block() },
     private val clock: () -> Long = System::currentTimeMillis
 ) {
+
+    /** A staged file larger than this is refused and its staging
+     * dir deleted again (production value:
+     * [ArchiveLimits.MAX_SOURCE_FILE_BYTES]). A var only so tests
+     * can trip the cap with a small fixture; the parsers' own
+     * expansion caps are the zip-bomb defence behind it. */
+    internal var maxSourceFileBytes: Long = ArchiveLimits.MAX_SOURCE_FILE_BYTES
 
     private fun stagingDir(token: String): File =
         File(File(storage.filesDir, "import-staging"), token)
@@ -102,6 +110,12 @@ class BookImporter(
     }
 
     private fun candidateFor(token: String, displayName: String, staged: File): AppResult<ImportCandidate> {
+        if (staged.length() > maxSourceFileBytes) {
+            stagingDir(token).deleteRecursively()
+            return AppResult.Err(
+                AppError.BadFile("that file is too large to import")
+            )
+        }
         // The ORIGINAL name decides extension-tied formats (MOBI vs
         // AZW3) — the staged copy is always named book.bin.
         val format = FormatSniffer.sniff(staged, displayName)

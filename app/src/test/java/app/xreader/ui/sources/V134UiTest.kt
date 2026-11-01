@@ -47,6 +47,13 @@ class V134UiTest {
         assertTrue(SanctionedScreenSpec.REQUIRES_SCROLL)
     }
 
+    @Test
+    fun `sanctioned screen webview blocks local and mixed content`() {
+        assertFalse(SanctionedScreenSpec.ALLOW_FILE_ACCESS)
+        assertFalse(SanctionedScreenSpec.ALLOW_CONTENT_ACCESS)
+        assertTrue(SanctionedScreenSpec.MIXED_CONTENT_NEVER_ALLOW)
+    }
+
     // ── U2/U3: login request target ─────────────────────────
 
     @Test

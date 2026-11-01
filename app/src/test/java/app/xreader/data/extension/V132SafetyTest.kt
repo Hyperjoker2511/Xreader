@@ -100,7 +100,8 @@ class V132SafetyTest {
         domain: String?,
         enabled: Boolean = true,
         readable: Boolean = true,
-        installedAt: Long = id
+        installedAt: Long = id,
+        protectedKind: Boolean = false
     ) = SourceDedupePlanner.Row(
         extensionId = id,
         packageId = pkg,
@@ -110,7 +111,8 @@ class V132SafetyTest {
         sourceIds = listOf("s$id"),
         installedAt = installedAt,
         enabled = enabled,
-        readable = readable
+        readable = readable,
+        protectedKind = protectedKind
     )
 
     @Test
@@ -126,6 +128,24 @@ class V132SafetyTest {
         assertEquals(1, plan.size)
         assertEquals(2L, plan.first().removed.extensionId)
         assertEquals(1L, plan.first().survivor.extensionId)
+    }
+
+    @Test
+    fun `a keiyoushi player row never collapses into a name twin`() {
+        val bundled = dedupeRow(
+            1, "bundled.novelbuddy", "NovelBuddy", "novelbuddy.me"
+        )
+        // Disabled and unreadable — exactly the shape the
+        // name-collapse pass exists for — but a player row:
+        // its removal belongs to the player's own cascade.
+        val player = dedupeRow(
+            2, "eu.kanade.tachiyomi.extension.en.novelbuddy",
+            "NovelBuddy", domain = null,
+            enabled = false, readable = false,
+            protectedKind = true
+        )
+        val plan = SourceDedupePlanner.plan(listOf(bundled, player))
+        assertTrue(plan.isEmpty())
     }
 
     @Test

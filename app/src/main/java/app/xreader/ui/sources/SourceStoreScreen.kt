@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.data.db.ExtensionRepo
+import app.xreader.data.extension.ProviderPackManager
 import app.xreader.data.extension.RepoManager
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
@@ -58,7 +59,8 @@ fun SourceStoreScreen(
     onBack: () -> Unit,
     onOpenRepo: (Long) -> Unit = {},
     onOpenBuiltIn: () -> Unit = {},
-    onAddRepo: () -> Unit = {}
+    onAddRepo: () -> Unit = {},
+    packViewModel: ProviderPackViewModel? = null
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var pendingRepoRemoval by remember { mutableStateOf<ExtensionRepo?>(null) }
@@ -70,8 +72,13 @@ fun SourceStoreScreen(
     // Built-ins are not a user repo: they update with the
     // app, full stop, and no one should be one tap from
     // removing the default shelf.
+    // v1.3.5 (Cycle 1): the provider-pack repo gets the same
+    // treatment — it is a delivery channel, not a user repo,
+    // so it never appears as a raw repository row either; the
+    // pack card below carries its state and actions.
     val orderedRepos = state.repos
         .filter { it.indexUrl != RepoManager.BUNDLED_REPO_URL }
+        .filter { it.indexUrl != ProviderPackManager.PACK_REPO_URL }
         .sortedWith(
             compareBy<ExtensionRepo>(
                 { if (it.id in state.pinnedRepoIds) 0 else 1 },
@@ -201,6 +208,13 @@ fun SourceStoreScreen(
                         color = MaterialTheme.colorScheme
                             .onSurfaceVariant
                     )
+                }
+            }
+
+            // ── Provider pack ───────────────────────────────────
+            if (packViewModel != null) {
+                item(key = "repo-pack") {
+                    ProviderPackCard(packViewModel)
                 }
             }
 

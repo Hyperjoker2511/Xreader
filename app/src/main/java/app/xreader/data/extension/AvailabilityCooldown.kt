@@ -14,10 +14,12 @@ import java.util.concurrent.ConcurrentHashMap
  * another's). A request that arrives during the window
  * fails fast with the availability error — the honest
  * "temporarily unavailable" state — instead of reaching the
- * network at all. The clock is injectable for tests.
+ * network at all. The default clock is monotonic, so a
+ * wall-clock change cannot shorten or stretch a park; it is
+ * injectable for tests.
  */
 class AvailabilityCooldowns(
-    private val nowMs: () -> Long = { System.currentTimeMillis() }
+    private val nowMs: () -> Long = { System.nanoTime() / 1_000_000 }
 ) {
     private val untilMs = ConcurrentHashMap<String, Long>()
 

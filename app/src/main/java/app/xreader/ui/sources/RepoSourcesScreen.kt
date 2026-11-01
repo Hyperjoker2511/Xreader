@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.data.db.ExtensionRepo
 import app.xreader.data.extension.ForeignSite
+import app.xreader.data.extension.KeiyoushiIndex
 import app.xreader.data.extension.IndexPackage
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.KitEmptyState
@@ -69,6 +70,20 @@ fun RepoSourcesScreen(
     builtIn: Boolean = false
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Manga programme (M3): the Keiyoushi repository renders
+    // its own catalogue screen (KeiyoushiIndex.rows — the true
+    // Ready / Needs-the-manga-conversion states), not the
+    // novel-style Add list this screen implements.
+    if (!builtIn && repo != null &&
+        repo.indexUrl == KeiyoushiIndex.INDEX_URL
+    ) {
+        KeiyoushiRepoScreen(
+            viewModel = viewModel,
+            repo = repo,
+            onBack = onBack
+        )
+        return
+    }
     val foreign = repo?.let { state.foreignRepos[it.id] }
     var query by remember(repo?.id, builtIn) { mutableStateOf("") }
     var language by remember(repo?.id, builtIn) { mutableStateOf<String?>(null) }
@@ -91,9 +106,36 @@ fun RepoSourcesScreen(
         val site: ForeignSite? = null,
         val pkg: IndexPackage? = null,
         val extensionId: Long? = null,
-        val added: Boolean = false
+        val added: Boolean = false,
+        /** Manga programme (M1): the rating badge a listed
+         * row wears ("18+" / "Mixed"), null for Safe. */
+        val badge: String? = null,
+        /** M1: false when the content preference hides every
+         * rating this entry carries — hidden entries are
+         * absent from the list, never greyed. */
+        val contentVisible: Boolean = true
     )
-    val entries: List<Entry> = when {
+    // M1: an installed extension's ratings, from the view
+    // model's per-source rating map (absence = Safe).
+    fun extRatings(ext: app.xreader.data.db.InstalledExtension):
+        List<app.xreader.data.extension.ContentRating> =
+        ext.sourceIds.split(",")
+            .map { it.trim() }.filter { it.isNotBlank() }
+            .map { sourceId ->
+                state.sourceRatings[
+                    app.xreader.data.extension.SourceHealthRecord
+                        .key(ext.id, sourceId)
+                ] ?: app.xreader.data.extension.ContentRating.SAFE
+            }
+    fun extVisible(ext: app.xreader.data.db.InstalledExtension): Boolean =
+        app.xreader.data.extension.ContentAccess.anyAllowed(
+            extRatings(ext), state.contentVisibility
+        )
+    fun extBadge(ext: app.xreader.data.db.InstalledExtension): String? =
+        app.xreader.data.extension.ContentAccess.visibleBadge(
+            extRatings(ext), state.contentVisibility
+        )
+    val allEntries: List<Entry> = when {
         builtIn -> state.extensions
             .filter { it.packageId.startsWith("bundled.") }
             .map { ext ->
@@ -107,7 +149,9 @@ fun RepoSourcesScreen(
                         novel = true
                     ),
                     extensionId = ext.id,
-                    added = true
+                    added = true,
+                    badge = extBadge(ext),
+                    contentVisible = extVisible(ext)
                 )
             }
         foreign != null -> foreign.sites.map { site ->
@@ -123,11 +167,17 @@ fun RepoSourcesScreen(
                 ),
                 site = site,
                 added = app.xreader.data.extension.WorkMatcher
-                    .normaliseTitle(site.name) in installedNames
+                    .normaliseTitle(site.name) in installedNames,
+                badge = site.contentRating.badge,
+                contentVisible = app.xreader.data.extension
+                    .ContentAccess.allows(
+                        site.contentRating, state.contentVisibility
+                    )
             )
         }
         repo != null && state.catalogues[repo.id] != null ->
             (state.catalogues[repo.id] ?: emptyList()).map { pkg ->
+                val pkgRatings = pkg.sources.map { it.contentRating }
                 Entry(
                     id = "pkg-${pkg.pkg}",
                     row = RepoSourceFilter.Row(
@@ -141,7 +191,12 @@ fun RepoSourcesScreen(
                         )
                     ),
                     pkg = pkg,
-                    added = pkg.pkg in installedByPkg
+                    added = pkg.pkg in installedByPkg,
+                    badge = app.xreader.data.extension.ContentAccess
+                        .visibleBadge(pkgRatings, state.contentVisibility),
+                    contentVisible = pkgRatings.isEmpty() ||
+                        app.xreader.data.extension.ContentAccess
+                            .anyAllowed(pkgRatings, state.contentVisibility)
                 )
             }
         repo != null -> state.extensions
@@ -157,11 +212,14 @@ fun RepoSourcesScreen(
                         novel = true
                     ),
                     extensionId = ext.id,
-                    added = true
+                    added = true,
+                    badge = extBadge(ext),
+                    contentVisible = extVisible(ext)
                 )
             }
         else -> emptyList()
     }
+    val entries: List<Entry> = allEntries.filter { it.contentVisible }
     val allRows = entries.map { it.row }
     val showNovelToggle = !builtIn &&
         RepoSourceFilter.hasNonNovelRows(allRows)
@@ -375,7 +433,11 @@ fun RepoSourcesScreen(
                                         .takeIf { it.isNotBlank() }
                                         ?.uppercase(),
                                     entry.row.domain
-                                        .takeIf { it.isNotBlank() }
+                                        .takeIf { it.isNotBlank() },
+                                    // M1: the rating badge
+                                    // rides the same quiet
+                                    // line where shown.
+                                    entry.badge
                                 ).joinToString(" · "),
                                 style = MaterialTheme.typography
                                     .bodySmall,

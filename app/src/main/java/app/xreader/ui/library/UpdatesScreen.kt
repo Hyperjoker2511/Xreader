@@ -59,14 +59,27 @@ fun UpdatesScreen(
     val zone = remember { ZoneId.systemDefault() }
     val today = remember { LocalDate.now(zone) }
 
-    val withNew = remember(state.books, state.metas) {
-        state.books
+    // Manga programme (M3): the Updates page reads the
+    // Library's active side — the update surface is filtered
+    // by kind, so the Novels side's news and the Manga side's
+    // news each stand on their own (the switch itself lives
+    // on the Library page; this page follows it).
+    val sideBooks = remember(state.books, state.bookKinds, state.librarySide) {
+        app.xreader.data.library.LibrarySplit.onSide(
+            state.books, state.librarySide
+        ) { shelf ->
+            app.xreader.data.library.LibrarySplit
+                .kindOf(shelf.book.id, state.bookKinds)
+        }
+    }
+    val withNew = remember(sideBooks, state.metas) {
+        sideBooks
             .filter { (state.metas[it.book.id]?.newChapterCount ?: 0) > 0 }
             .sortedByDescending { state.metas[it.book.id]?.newChapterCount ?: 0 }
     }
-    val recentByDay = remember(state.books, state.metas) {
+    val recentByDay = remember(sideBooks, state.metas) {
         val newIds = withNew.map { it.book.id }.toSet()
-        state.books
+        sideBooks
             .filter { it.book.id !in newIds }
             .mapNotNull { shelf ->
                 val day = Instant.ofEpochMilli(shelf.book.updatedAt)

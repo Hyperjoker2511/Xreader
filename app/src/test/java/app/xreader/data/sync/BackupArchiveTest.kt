@@ -4,6 +4,7 @@ import app.xreader.core.error.AppError
 import app.xreader.core.error.AppResult
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -65,5 +66,117 @@ class BackupArchiveTest {
         val result = BackupArchive.read(ByteArrayInputStream(out.toByteArray()))
         assertTrue(result is AppResult.Err)
         assertTrue((result as AppResult.Err).error is AppError.BadFile)
+    }
+
+    private fun zipOf(entries: List<Pair<String, ByteArray>>): ByteArray {
+        val out = ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(out).use { zip ->
+            for ((name, bytes) in entries) {
+                zip.putNextEntry(java.util.zip.ZipEntry(name))
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+        }
+        return out.toByteArray()
+    }
+
+    private fun tooLargeReason(result: AppResult<*>): String {
+        assertTrue("expected Err, got $result", result is AppResult.Err)
+        val error = (result as AppResult.Err).error
+        assertTrue("expected BadFile, got $error", error is AppError.BadFile)
+        return (error as AppError.BadFile).reason
+    }
+
+    @Test
+    fun `a metadata entry past the size cap is refused as too large`() {
+        val out = ByteArrayOutputStream()
+        BackupArchive.write(samplePayload(), out)
+        // The real payload JSON is far bigger than a 16-byte cap:
+        // the read must stop at the cap, not decode whatever came.
+        val result = BackupArchive.read(
+            ByteArrayInputStream(out.toByteArray()),
+            maxEntries = 100,
+            maxMetadataBytes = 16
+        )
+        assertTrue(tooLargeReason(result).contains("too large"))
+    }
+
+    @Test
+    fun `an archive with too many entries is refused as too large`() {
+        val bytes = zipOf(
+            listOf(
+                BackupArchive.MANIFEST_ENTRY to
+                    """{"app":"xreader-backup"}""".toByteArray(),
+                BackupArchive.PAYLOAD_ENTRY to
+                    SyncPayload.encode(samplePayload()).toByteArray(),
+                "extra.txt" to "x".toByteArray()
+            )
+        )
+        val result = BackupArchive.read(
+            ByteArrayInputStream(bytes),
+            maxEntries = 2,
+            maxMetadataBytes = 1_000_000
+        )
+        assertTrue(tooLargeReason(result).contains("too large"))
+    }
+
+    @Test
+    fun `a files restore aborts mid-stream when the total size cap is crossed`() {
+        val bytes = zipOf(
+            listOf(
+                BackupArchive.MANIFEST_ENTRY to
+                    """{"app":"xreader-backup"}""".toByteArray(),
+                BackupArchive.PAYLOAD_ENTRY to
+                    SyncPayload.encode(samplePayload()).toByteArray(),
+                "files/a.bin" to ByteArray(100) { 1 },
+                "files/b.bin" to ByteArray(100) { 2 }
+            )
+        )
+        val sunk = mutableMapOf<String, ByteArray>()
+        val result = BackupArchive.readWithFiles(
+            input = ByteArrayInputStream(bytes),
+            fileSink = { name, stream ->
+                sunk[name] = stream.readBytes()
+            },
+            maxEntries = 100,
+            maxMetadataBytes = 1_000_000,
+            maxEntryBytes = 1_000_000,
+            maxTotalBytes = 150
+        )
+        // a.bin (100 bytes) fit the 150 budget and arrived whole;
+        // b.bin crossed it mid-copy, so the restore is an Err and
+        // the payload is never handed back for a partial merge.
+        assertEquals(100, sunk["files/a.bin"]?.size)
+        assertTrue(tooLargeReason(result).contains("too large"))
+    }
+
+    @Test
+    fun `a small backup with files still restores fully`() {
+        val bookFile = File.createTempFile("book", ".epub")
+        bookFile.writeBytes(byteArrayOf(9, 8, 7))
+        try {
+            val out = ByteArrayOutputStream()
+            BackupArchive.writeWithFiles(
+                samplePayload(),
+                """{"files":[]}""",
+                listOf("files/book.epub" to bookFile),
+                out
+            )
+            val sunk = mutableMapOf<String, ByteArray>()
+            val result = BackupArchive.readWithFiles(
+                ByteArrayInputStream(out.toByteArray())
+            ) { name, stream -> sunk[name] = stream.readBytes() }
+            assertTrue("expected Ok, got $result", result is AppResult.Ok)
+            assertEquals(
+                samplePayload(),
+                (result as AppResult.Ok).value.first
+            )
+            assertEquals(
+                listOf<Byte>(9, 8, 7),
+                sunk["files/book.epub"]?.toList()
+            )
+        } finally {
+            bookFile.delete()
+        }
     }
 }

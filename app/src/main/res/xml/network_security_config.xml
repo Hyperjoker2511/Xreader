@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  v1.3.5 (P0, slice E2): cleartext is PERMITTED at the platform
+  level on purpose — this file is not the gate. The platform
+  network security config cannot name private address ranges
+  (there is no way to list 10.0.0.0/8, 192.168.0.0/16 and
+  friends), so a platform rule tight enough to block public
+  http would also block the home-network servers the app
+  itself coaches (a LAN Ollama, a home WebDAV). The real gate
+  is the app's own LocalHttpPolicy (data/net): every Xreader
+  HTTP client that dials a user-supplied address refuses
+  public http in code, before any socket opens, with one
+  plain-words sentence. This platform setting exists only so
+  home-network addresses are reachable at all.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

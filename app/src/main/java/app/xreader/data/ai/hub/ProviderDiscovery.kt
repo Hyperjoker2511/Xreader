@@ -2,6 +2,7 @@ package app.xreader.data.ai.hub
 
 import app.xreader.core.error.AppResult
 import app.xreader.data.net.HttpTransport
+import app.xreader.data.net.LocalHttpPolicy
 
 /**
  * The add-a-provider test-drive (v1.0.3, AI hub §K): paste a site,
@@ -52,6 +53,12 @@ class ProviderDiscovery(private val transport: HttpTransport) {
             ?: return Probe.NotProvider(
                 "That doesn't look like a web address — check what you pasted."
             )
+        // v1.3.5 (P0): the test-drive obeys the same plain-http
+        // rule as the provider calls themselves — a key is never
+        // probed across public http either.
+        LocalHttpPolicy.refusalReason(site)?.let { reason ->
+            return Probe.NotProvider("$reason Nothing was added.")
+        }
         var refusedBase: String? = null
         var refusedProtocol: AiProtocol? = null
         for (base in ProviderUrls.candidateBases(site)) {

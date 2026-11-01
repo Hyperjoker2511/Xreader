@@ -61,6 +61,7 @@ import app.xreader.data.prefs.CustomSchemeSpec
 import app.xreader.data.prefs.GlassStyle
 import app.xreader.ui.theme.CustomSchemeGenerator
 import app.xreader.di.AppContainer
+import app.xreader.domain.reader.ImageReaderMode
 import app.xreader.domain.reader.PagedDirection
 import app.xreader.domain.reader.ReaderConfig
 import app.xreader.domain.reader.TapZoneLayout
@@ -96,7 +97,14 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         val downloads: app.xreader.data.download.DownloadSettings =
             app.xreader.data.download.DownloadSettings(),
         /** v1.0.6 (W2.4): the browser-view master switch. */
-        val browserViewEnabled: Boolean = true
+        val browserViewEnabled: Boolean = true,
+        /** Manga programme (M1): the ONE content preference —
+         * which source ratings are listed (Mihon model). */
+        val contentVisibility: app.xreader.data.extension.ContentVisibility =
+            app.xreader.data.extension.ContentVisibility.DEFAULT,
+        /** Keiyoushi player (K6): the player's kill switch —
+         * off means no Keiyoushi extension loads at all. */
+        val keiyoushiPlayerEnabled: Boolean = true
     )
 
     val state: StateFlow<UiState> = combine(
@@ -105,7 +113,9 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         container.readerPrefs.config,
         container.sourcePrefs.bestSourcePriority,
         container.downloadPrefs.settings,
-        container.sourcePrefs.browserViewEnabled
+        container.sourcePrefs.browserViewEnabled,
+        container.sourcePrefs.contentVisibility,
+        container.sourcePrefs.keiyoushiPlayerEnabled
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         UiState(
@@ -116,7 +126,10 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
                 as app.xreader.data.extension.BestSourcePriority,
             downloads = values[4]
                 as app.xreader.data.download.DownloadSettings,
-            browserViewEnabled = values[5] as Boolean
+            browserViewEnabled = values[5] as Boolean,
+            contentVisibility = values[6]
+                as app.xreader.data.extension.ContentVisibility,
+            keiyoushiPlayerEnabled = values[7] as Boolean
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
@@ -197,6 +210,23 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
     /** v1.0.6 (W2.4): the browser-view master switch. */
     fun setBrowserViewEnabled(value: Boolean) {
         viewModelScope.launch { container.sourcePrefs.setBrowserViewEnabled(value) }
+    }
+
+    /** Manga programme (M1): the content preference. */
+    fun setContentVisibility(
+        value: app.xreader.data.extension.ContentVisibility
+    ) {
+        viewModelScope.launch { container.sourcePrefs.setContentVisibility(value) }
+    }
+
+    /** Keiyoushi player (K6): the kill switch. The DataStore
+     * write is the whole action here — the container's
+     * collector pushes the change into the player manager,
+     * which empties (or refills) the live registry. */
+    fun setKeiyoushiPlayerEnabled(value: Boolean) {
+        viewModelScope.launch {
+            container.sourcePrefs.setKeiyoushiPlayerEnabled(value)
+        }
     }
 
     // ── v1.0.4 (D10/D13): the download switches, moved here from
@@ -1214,6 +1244,42 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     label = { Text("Right to left") }
                 )
             }
+            // Manga programme (M2b): the GLOBAL manga reading
+            // mode (option-scope rule tier 1) — ReaderConfig
+            // .imageMode via ReaderPrefs, the same flow this
+            // screen already collects as `reader`. A series'
+            // own mode, set inside its reader, still wins for
+            // that series only.
+            Text("Manga reading:", style = MaterialTheme.typography.bodyLarge)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = reader.imageMode == ImageReaderMode.WEBTOON,
+                    onClick = {
+                        viewModel.updateReader {
+                            it.copy(imageMode = ImageReaderMode.WEBTOON)
+                        }
+                    },
+                    label = { Text("Scrolling (webtoon)") }
+                )
+                FilterChip(
+                    selected = reader.imageMode == ImageReaderMode.PAGED,
+                    onClick = {
+                        viewModel.updateReader {
+                            it.copy(imageMode = ImageReaderMode.PAGED)
+                        }
+                    },
+                    label = { Text("Page by page") }
+                )
+            }
+            Text(
+                "How manga and comics open. You can change it " +
+                    "for a single series while reading that series.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         // ── Your themes: the full make-your-own editor (R04/R07) ──
@@ -1370,6 +1436,47 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     "Turn it off and those sites can't be added or read.",
                 checked = state.browserViewEnabled,
                 onChange = { viewModel.setBrowserViewEnabled(it) }
+            )
+            // Manga programme (M1, Mihon model): the ONE
+            // content preference — sources carry a rating
+            // (Safe / Mixed / 18+); this decides which ratings
+            // are listed in Explore, search and repositories.
+            Text(
+                "Content shown from sources:",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                for (option in app.xreader.data.extension
+                    .ContentVisibility.entries) {
+                    FilterChip(
+                        selected = state.contentVisibility == option,
+                        onClick = { viewModel.setContentVisibility(option) },
+                        label = { Text(option.label) }
+                    )
+                }
+            }
+            Text(
+                state.contentVisibility.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // Keiyoushi player (K6): the kill switch, beside
+            // the content preference — one switch for the
+            // whole manga-extension player.
+            CustomiseSwitch(
+                label = "Keiyoushi manga sources",
+                description = "Manga sources from the Keiyoushi " +
+                    "repository run as extensions inside Xreader. " +
+                    "Turn this off and none of them load: they " +
+                    "disappear from Explore and search, and books " +
+                    "from them show their source as turned off. " +
+                    "They stay installed — turn it back on and " +
+                    "they load again.",
+                checked = state.keiyoushiPlayerEnabled,
+                onChange = { viewModel.setKeiyoushiPlayerEnabled(it) }
             )
             Text(
                 "When a book exists on several sources, “Best source” picks by:",

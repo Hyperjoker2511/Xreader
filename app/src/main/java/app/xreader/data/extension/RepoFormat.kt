@@ -50,7 +50,21 @@ data class ForeignSite(
     val family: String? = null,
     /** v1.0.9: the plugin's id inside its repo index (LNReader),
      * the stable half of a family install's identity. */
-    val pluginId: String? = null
+    val pluginId: String? = null,
+    /** Manga programme (M1): the site's content rating when
+     * its index declares one — the tachiyomix index form
+     * carries a per-extension `contentWarning`, mapped by
+     * [KeiyoushiIndex.ratingForContentWarning]. SAFE when the
+     * index says nothing (the general-catalogue default).
+     * Defaulted so every sidecar written before it decodes
+     * unchanged. */
+    val contentRating: ContentRating = ContentRating.SAFE,
+    /** Keiyoushi player (K3): the extension package that
+     * carries this site in a tachiyomix index — the player's
+     * install unit, and the join key for the row's player
+     * state. Empty for ecosystems that don't package sites.
+     * Defaulted so older sidecars decode unchanged. */
+    val packageName: String = ""
 )
 
 sealed interface RepoFormat {
@@ -207,6 +221,17 @@ object RepoFormatDetector {
         for (element in extensions) {
             val extension = element as? JsonObject ?: continue
             val sources = extension["sources"] as? JsonArray ?: continue
+            // Manga programme (M1): the extension's declared
+            // content warning rides onto each of its sites, so
+            // a rated catalogue (Keiyoushi's) keeps its ratings
+            // through the foreign-repo sidecar.
+            val rating = KeiyoushiIndex.ratingForContentWarning(
+                stringValue(extension, "contentWarning")
+            )
+            // K3: the carrying package rides onto each site —
+            // the Keiyoushi player's install unit and the row
+            // state join key.
+            val packageName = stringValue(extension, "packageName") ?: ""
             for (sourceElement in sources) {
                 val source = sourceElement as? JsonObject ?: continue
                 val homeUrl = stringValue(source, "homeUrl") ?: continue
@@ -214,7 +239,9 @@ object RepoFormatDetector {
                 sites += ForeignSite(
                     name = stringValue(source, "name") ?: "",
                     lang = stringValue(source, "language") ?: "",
-                    baseUrl = homeUrl
+                    baseUrl = homeUrl,
+                    contentRating = rating,
+                    packageName = packageName
                 )
             }
         }

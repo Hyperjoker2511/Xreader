@@ -31,6 +31,42 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
     suspend fun setBestSourcePriority(priority: BestSourcePriority) =
         store.edit { it[KEY_BEST_PRIORITY] = priority.name }
 
+    // ── Content preference (manga programme, M1) ─────────────
+    //
+    // The ONE content-preference setting (Mihon model): which
+    // source ratings are listed in Explore, search and repo
+    // lists. Default HIDE_ADULT — 18+ sources stay out of the
+    // lists until the reader chooses otherwise. Stored by
+    // enum name, like the Best-source priority above; an
+    // unknown or absent value reads as the default.
+
+    val contentVisibility: Flow<app.xreader.data.extension.ContentVisibility> =
+        store.data.map { prefs ->
+            app.xreader.data.extension.ContentVisibility
+                .fromName(prefs[KEY_CONTENT_VISIBILITY])
+        }
+
+    suspend fun setContentVisibility(
+        visibility: app.xreader.data.extension.ContentVisibility
+    ) = store.edit { it[KEY_CONTENT_VISIBILITY] = visibility.name }
+
+    // ── Keiyoushi player kill switch (K6) ────────────────────
+    //
+    // The master switch for the Keiyoushi manga player
+    // (Customise → Sources & repairs, beside the content
+    // preference above). Default ON. OFF means no extension
+    // code loads at all: player sources vanish from Explore
+    // and search, and a library book on a player source meets
+    // the player's turned-off answer. Installed extensions
+    // stay installed — flipping it back on loads them again.
+
+    val keiyoushiPlayerEnabled: Flow<Boolean> = store.data.map { prefs ->
+        prefs[KEY_KEIYOUSHI_PLAYER] ?: true
+    }
+
+    suspend fun setKeiyoushiPlayerEnabled(enabled: Boolean) =
+        store.edit { it[KEY_KEIYOUSHI_PLAYER] = enabled }
+
     // ── Repositories (R14) ───────────────────────────────────────
 
     val pinnedRepoIds: Flow<Set<Long>> = store.data.map { prefs ->
@@ -80,6 +116,22 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
             prefs[KEY_RECENT_SEARCHES] = (listOf(clean) + current)
                 .take(MAX_RECENT_SEARCHES)
                 .joinToString("\n") { it.replace('\n', ' ') }
+        }
+    }
+
+    /** P0 field fix (2026-11-01): remove ONE recent search —
+     * the recents row's long-press. Case-insensitive, matching
+     * recordSearch's de-dupe; an emptied list removes the key
+     * so the section hides. */
+    suspend fun removeRecentSearch(query: String) {
+        store.edit { prefs ->
+            val current = decodeLines(prefs[KEY_RECENT_SEARCHES])
+                .filterNot { it.equals(query.trim(), ignoreCase = true) }
+            if (current.isEmpty()) {
+                prefs.remove(KEY_RECENT_SEARCHES)
+            } else {
+                prefs[KEY_RECENT_SEARCHES] = current.joinToString("\n")
+            }
         }
     }
 
@@ -363,6 +415,10 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
 
     private companion object {
         val KEY_BEST_PRIORITY = stringPreferencesKey("sources.best_priority")
+        val KEY_CONTENT_VISIBILITY =
+            stringPreferencesKey("sources.content_visibility")
+        val KEY_KEIYOUSHI_PLAYER =
+            booleanPreferencesKey("sources.keiyoushi_player_enabled")
         val KEY_PINNED_REPOS = stringPreferencesKey("sources.pinned_repos")
         val KEY_RECENT_REPOS = stringPreferencesKey("sources.recent_repos")
         val KEY_RECENT_SEARCHES = stringPreferencesKey("search.recent")

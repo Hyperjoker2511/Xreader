@@ -150,27 +150,74 @@ class CbzParser : BookParser {
         staged: File,
         workDir: File,
         onProgress: (Float?) -> Unit
+    ): AppResult<ParsedBook> = parse(
+        staged, workDir, onProgress,
+        maxEntries = ArchiveLimits.MAX_ENTRIES,
+        maxMetadataBytes = ArchiveLimits.MAX_METADATA_ENTRY_BYTES,
+        maxEntryBytes = ArchiveLimits.MAX_STREAMED_ENTRY_BYTES,
+        maxTotalBytes = ArchiveLimits.MAX_TOTAL_EXPANDED_BYTES
+    )
+
+    /** [ArchiveLimits] apply; the limit parameters exist only so
+     * tests can trip the caps with small fixtures. Pages are
+     * counted against one shared budget as they are copied out,
+     * so an oversized archive aborts mid-extraction with a
+     * plain-words error instead of filling the staging dir. */
+    internal fun parse(
+        staged: File,
+        workDir: File,
+        onProgress: (Float?) -> Unit,
+        maxEntries: Int,
+        maxMetadataBytes: Long,
+        maxEntryBytes: Long,
+        maxTotalBytes: Long
     ): AppResult<ParsedBook> {
         return try {
             ZipFile(staged).use { zip ->
                 val names = zip.entries().asSequence().map { it.name.replace('\\', '/') }.toList()
+                if (names.size > maxEntries) {
+                    return AppResult.Err(
+                        AppError.ParseFailed(
+                            format.name, "this comic has too many files inside"
+                        )
+                    )
+                }
                 val comicInfo = names.firstOrNull { it.equals("ComicInfo.xml", true) }
                     ?.let { zip.getEntry(it) }
-                    ?.let { entry -> zip.getInputStream(entry).readBytes().toString(Charsets.UTF_8) }
+                    ?.let { entry ->
+                        zip.getInputStream(entry)
+                            .readBytesCapped(maxMetadataBytes, "this comic's info file")
+                            .toString(Charsets.UTF_8)
+                    }
+                val budget = ArchiveBudget(maxTotalBytes)
                 ImageBookBuilder.build(
                     workDir = workDir,
                     format = BookFormat.CBZ,
                     comicInfoXml = comicInfo,
                     extractPage = { name, dest ->
                         val entry = zip.getEntry(name) ?: return@build false
-                        zip.getInputStream(entry).use { input ->
-                            dest.outputStream().buffered().use { input.copyTo(it) }
+                        try {
+                            zip.getInputStream(entry).use { input ->
+                                dest.outputStream().buffered().use { out ->
+                                    input.copyToCapped(
+                                        out, budget, maxEntryBytes, "this comic"
+                                    )
+                                }
+                            }
+                            true
+                        } catch (e: ArchiveLimitException) {
+                            // No half-written page stays behind.
+                            dest.delete()
+                            throw e
                         }
-                        true
                     },
                     pageNames = names
                 )
             }
+        } catch (e: ArchiveLimitException) {
+            AppResult.Err(
+                AppError.ParseFailed("CBZ", "this comic is too large to open safely")
+            )
         } catch (e: Exception) {
             AppResult.Err(AppError.ParseFailed("CBZ", "the archive couldn't be opened", e.javaClass.simpleName))
         }

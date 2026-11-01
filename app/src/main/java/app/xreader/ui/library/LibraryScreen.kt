@@ -143,9 +143,22 @@ fun LibraryScreen(
     // v1.0.2 (R21): shelf chips + membership from ShelfLogic —
     // the same pure logic the tests pin.
     val nowMillis = System.currentTimeMillis()
+    // Manga programme (M3): the split comes FIRST — every
+    // shelf fact, chip count, membership and list below is
+    // built from the ACTIVE SIDE's books only, so the Novels
+    // page and the Manga page are each complete little
+    // libraries of their own kind.
+    val sideBooks = remember(state.books, state.bookKinds, state.librarySide) {
+        app.xreader.data.library.LibrarySplit.onSide(
+            state.books, state.librarySide
+        ) { shelf ->
+            app.xreader.data.library.LibrarySplit
+                .kindOf(shelf.book.id, state.bookKinds)
+        }
+    }
     val facts = remember(
-        state.books, state.metas, state.favourites, state.bookTags, state.downloadCounts
-    ) { state.shelfFacts(nowMillis) }
+        sideBooks, state.metas, state.favourites, state.bookTags, state.downloadCounts
+    ) { state.shelfFactsFor(sideBooks, nowMillis) }
     val shelfChips = remember(
         facts, state.userShelves, state.memberships, state.hiddenBuiltins
     ) {
@@ -171,12 +184,12 @@ fun LibraryScreen(
         } ?: sort
 
     val visibleBooks = remember(
-        state.books, state.metas, query, effectiveSort, statusFilter, memberFilter
+        sideBooks, state.metas, query, effectiveSort, statusFilter, memberFilter
     ) {
         val inShelf = if (memberFilter == null) {
-            state.books
+            sideBooks
         } else {
-            state.books.filter { it.book.id in memberFilter }
+            sideBooks.filter { it.book.id in memberFilter }
         }
         val rows = inShelf.map { shelf ->
             app.xreader.data.library.LibraryListLogic.Row(
@@ -303,6 +316,35 @@ fun LibraryScreen(
                 }
             }
         )
+        // Manga programme (M3): the Novels | Manga switch at
+        // the TOP of the Library — two pages, one tap apart,
+        // never a mixed grid. Each side's label carries its
+        // new-chapter count from the library-update pass, so
+        // "what's new" on the other side is one glance away.
+        if (!app.xreader.data.library.LibraryEmptyState.show(
+                loading = state.loading,
+                bookCount = state.books.size,
+                candidateCount = candidates.size
+            )
+        ) {
+            val newBySide = remember(state.metas, state.bookKinds) {
+                app.xreader.data.library.LibrarySplit
+                    .newChaptersBySide(state.metas, state.bookKinds)
+            }
+            Spacer(Modifier.height(10.dp))
+            app.xreader.ui.common.MediaKindSwitch(
+                side = state.librarySide,
+                novelsLabel = app.xreader.data.library.LibrarySplit.switchLabel(
+                    app.xreader.data.extension.MediaKind.TEXT,
+                    newBySide[app.xreader.data.extension.MediaKind.TEXT] ?: 0
+                ),
+                mangaLabel = app.xreader.data.library.LibrarySplit.switchLabel(
+                    app.xreader.data.extension.MediaKind.MANGA,
+                    newBySide[app.xreader.data.extension.MediaKind.MANGA] ?: 0
+                ),
+                onSelect = { viewModel.setLibrarySide(it) }
+            )
+        }
         // v1.0.6.3 (P1): "+ Add a book" lives in its OWN full-width
         // row under the header. Inside the header's action row it
         // was starved by the Level pill + search icon until its
@@ -634,6 +676,27 @@ fun LibraryScreen(
                         actionText = null,
                         onAction = null,
                     
+                    )
+                }
+            } else if (sideBooks.isEmpty() && candidates.isEmpty()) {
+                // M3: this SIDE is empty (the library itself
+                // isn't) — say which side and where its books
+                // come from, in plain words.
+                item(key = "side-empty") {
+                    Text(
+                        if (state.librarySide ==
+                            app.xreader.data.extension.MediaKind.MANGA
+                        ) {
+                            "No manga here yet. Manga lives in " +
+                                "Explore — open the Keiyoushi " +
+                                "catalogue, add a series, and it " +
+                                "will live on this side."
+                        } else {
+                            "No novels on this side — your books " +
+                                "are waiting under Manga."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             } else if (memberFilter != null && candidates.isEmpty()) {

@@ -23,6 +23,10 @@ enum class CatalogMode { POPULAR, LATEST, SEARCH }
 data class CatalogUiState(
     val sourceName: String = "",
     val baseUrl: String = "",
+    /** Manga programme (M1): this source's content-rating
+     * badge ("Mixed" / "18+"; null = Safe or not rated) —
+     * shown on the source's own page. */
+    val ratingBadge: String? = null,
     val mode: CatalogMode = CatalogMode.POPULAR,
     val query: String = "",
     val books: List<SourceBook> = emptyList(),
@@ -52,7 +56,21 @@ data class CatalogUiState(
      * along only under [CatalogueCopy.offersSessionAction]'s
      * rules. Raw codes never reach the screen. */
     val fetchClassification:
-        app.xreader.data.extension.FetchClassification.Result? = null
+        app.xreader.data.extension.FetchClassification.Result? = null,
+    /** Keiyoushi player (K5): the handle is a player source —
+     * its Filters / Source settings doors show under the mode
+     * chips. Native kinds never show them (their settings live
+     * on their own pages, as before). */
+    val isPlayerSource: Boolean = false,
+    /** K5: the source offers filters (its filter list is
+     * non-empty) — the Filters door shows. */
+    val hasFilters: Boolean = false,
+    /** K5: how many filters currently differ from the
+     * source's defaults — the Filters chip's count, and its
+     * selected look while any are in force. */
+    val activeFilterCount: Int = 0,
+    /** K5: the filter sheet is open. */
+    val filterSheetOpen: Boolean = false
 )
 
 /**
@@ -175,6 +193,25 @@ class SourceCatalogViewModel(
 
     private var handle: SourceHandle? = null
 
+    /** K5: the player adapter behind the handle, when the
+     * handle is one — the filter doors' way in. */
+    private var playerAdapter:
+        app.xreader.data.extension.player.MihonSourceAdapter? = null
+
+    /** K5: the source's filter list, fetched once per visit
+     * (this ViewModel is created per catalogue visit, so the
+     * list — and the applied set on the adapter — reset with
+     * the visit, exactly the donor's per-visit filter life). */
+    private var filterList:
+        eu.kanade.tachiyomi.source.model.FilterList? = null
+
+    /** K5: the filter states as fetched (the count baseline). */
+    private var filterDefaults: FilterStateSnapshot? = null
+
+    /** K5: states as the sheet opened — closing without
+     * applying restores them. */
+    private var sheetSnapshot: FilterStateSnapshot? = null
+
     init {
         viewModelScope.launch {
             when (val found = container.extensionService.source(extensionId, sourceId)) {
@@ -186,9 +223,12 @@ class SourceCatalogViewModel(
                     handle = found.value
                     _state.value = _state.value.copy(
                         sourceName = found.value.source.name,
-                        baseUrl = found.value.source.baseUrl
+                        baseUrl = found.value.source.baseUrl,
+                        ratingBadge = container.extensionService
+                            .contentRatingOf(found.value).badge
                     )
                     load(reset = true)
+                    discoverFilters(found.value)
                 }
             }
         }
@@ -245,6 +285,94 @@ class SourceCatalogViewModel(
             _state.value = _state.value.copy(sourceOff = false)
             load(reset = true)
         }
+    }
+
+    // ── K5: filters (player sources) ────────────────────────
+
+    /** Ask a player source for its filter list, once. A
+     * source whose getFilterList fails simply shows no
+     * Filters door — browsing itself is unaffected. */
+    private fun discoverFilters(found: SourceHandle) {
+        val adapter = container.extensionService
+            .mihonAdapterOf(found) ?: return
+        playerAdapter = adapter
+        _state.value = _state.value.copy(isPlayerSource = true)
+        viewModelScope.launch {
+            val filters = withContext(Dispatchers.IO) {
+                runCatching { adapter.filterList() }.getOrNull()
+            }
+            if (filters != null && filters.isNotEmpty()) {
+                filterList = filters
+                filterDefaults = FilterStateOps.snapshot(filters)
+                _state.value = _state.value.copy(hasFilters = true)
+            }
+        }
+    }
+
+    /** The live filter list the sheet renders and edits (its
+     * filter objects are the state — see CatalogFilters). */
+    fun currentFilters():
+        eu.kanade.tachiyomi.source.model.FilterList? = filterList
+
+    fun openFilterSheet() {
+        val filters = filterList ?: return
+        sheetSnapshot = FilterStateOps.snapshot(filters)
+        _state.value = _state.value.copy(filterSheetOpen = true)
+    }
+
+    /** Close without applying: every in-sheet edit is put
+     * back, so an unapplied sheet changes nothing — not the
+     * results, and not what the sheet shows next time. */
+    fun cancelFilterSheet() {
+        val filters = filterList
+        val snapshot = sheetSnapshot
+        if (filters != null && snapshot != null) {
+            FilterStateOps.restore(filters, snapshot)
+        }
+        sheetSnapshot = null
+        _state.value = _state.value.copy(filterSheetOpen = false)
+    }
+
+    /** Back to the source's own defaults: a fresh list from
+     * the source replaces the edited one (the sheet stays
+     * open on the fresh list). */
+    fun resetFilters() {
+        val adapter = playerAdapter ?: return
+        viewModelScope.launch {
+            val fresh = withContext(Dispatchers.IO) {
+                runCatching { adapter.filterList() }.getOrNull()
+            } ?: return@launch
+            filterList = fresh
+            filterDefaults = FilterStateOps.snapshot(fresh)
+            sheetSnapshot = FilterStateOps.snapshot(fresh)
+            _state.value = _state.value.copy(activeFilterCount = 0)
+        }
+    }
+
+    /** Apply: the edited list becomes the search's filter
+     * set (the adapter holds it for the rest of the visit),
+     * the sheet closes, and the catalogue re-searches — the
+     * donor's shape: filters live on search, so applying
+     * moves the catalogue to Search with the current query. */
+    fun applyFilters() {
+        val filters = filterList ?: return
+        val adapter = playerAdapter ?: return
+        sheetSnapshot = null
+        adapter.applyFilters(filters)
+        val defaults = filterDefaults
+        _state.value = _state.value.copy(
+            filterSheetOpen = false,
+            activeFilterCount = if (defaults != null) {
+                FilterStateOps.countChanged(filters, defaults)
+            } else {
+                0
+            },
+            mode = CatalogMode.SEARCH,
+            books = emptyList(),
+            page = 1,
+            loadCompleted = false
+        )
+        load(reset = true)
     }
 
     private fun load(reset: Boolean) {

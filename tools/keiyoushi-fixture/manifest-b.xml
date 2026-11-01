@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- K6 smoke fixture B: a SourceFactory making two sources
+     (MangaDex's shape). The loader instantiates the entry
+     class from tachiyomi.extension.class and calls
+     createSources() on it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="eu.kanade.tachiyomi.extension.en.fixturefactory"
+    android:versionCode="1"
+    android:versionName="1.6.1">
+
+    <uses-feature android:name="tachiyomi.extension" android:required="true" />
+
+    <application android:label="Fixture Factory">
+        <meta-data
+            android:name="tachiyomi.extension.class"
+            android:value="fixture.panels.FixtureFactory" />
+        <meta-data
+            android:name="tachiyomix.name"
+            android:value="Fixture Factory" />
+        <meta-data
+            android:name="tachiyomix.extensionLib"
+            android:value="1.6" />
+        <meta-data
+            android:name="tachiyomix.contentWarning"
+            android:value="0" />
+    </application>
+</manifest>

@@ -1147,4 +1147,8 @@ private fun kindOf(dbKind: app.xreader.data.db.ExtensionKind): ExtensionKind? =
         // falls back to the stored name, "LIVE") and none of
         // the kind-specific sections apply.
         app.xreader.data.db.ExtensionKind.LIVE -> null
+        // Keiyoushi player (K3): likewise no package-API kind —
+        // the row is the player's; the detail screen shows its
+        // generic rows only.
+        app.xreader.data.db.ExtensionKind.KEIYOUSHI -> null
     }

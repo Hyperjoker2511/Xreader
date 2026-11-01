@@ -679,6 +679,24 @@ fun BookDetailScreen(
                             color = errorTextColor()
                         )
                     }
+                    // Cycle 1 (F3): the progress carry-over
+                    // notes sit right under the Continue pill —
+                    // that pill is where the resume they
+                    // describe actually happens.
+                    state.carriedOverNote?.let { note ->
+                        Text(
+                            note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    state.progressLinkNote?.let { note ->
+                        Text(
+                            note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     // Secondary quick actions (reference 4-tile
                     // grid): Favourite / Download / Catch me up /
                     // Lore & glossary — the same actions this
@@ -1732,6 +1750,17 @@ fun BookDetailScreen(
                     )
                 }
             }
+            if (state.linkedCopies.isNotEmpty()) {
+                item(key = "progress-links") {
+                    GlassCard(Modifier.fillMaxWidth()) {
+                        ProgressLinkSection(
+                            state = state,
+                            onOpenCopy = { id -> onOpenRelated(id) },
+                            onUnlink = { viewModel.unlinkCopy(it) }
+                        )
+                    }
+                }
+            }
             if (book.sourceType == app.xreader.data.db.SourceType.EXTENSION ||
                 state.duplicates.isNotEmpty() || state.mergedCopies.isNotEmpty()
             ) {
@@ -2157,6 +2186,55 @@ private fun TagsSection(
     }
 }
 
+/** Cycle 1 (F3): same-story copies in the Library that share
+ * reading progress with this book — the entries stay
+ * separate, only progress is linked, and "Not the same book"
+ * severs a wrong link for good. Additive rows in the page's
+ * existing section style. */
+@Composable
+private fun ProgressLinkSection(
+    state: BookDetailUiState,
+    onOpenCopy: (Long) -> Unit,
+    onUnlink: (Long) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Also in your library", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "These copies stay separate — only your reading " +
+                "progress is shared, so each one opens where " +
+                "you left off in the others.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        state.linkedCopies.forEach { copy ->
+            Column {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            copy.title,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            "on ${copy.sourceName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(onClick = { onOpenCopy(copy.bookId) }) {
+                        Text("Open")
+                    }
+                }
+                TextButton(onClick = { onUnlink(copy.bookId) }) {
+                    Text("Not the same book")
+                }
+            }
+        }
+    }
+}
+
 /** R11 + sweep: other sources for this work, duplicates in the
  * library, and copies this book has absorbed — all with visible,
  * reversible actions. */
@@ -2439,6 +2517,20 @@ private fun ChapterRow(
                     Icon(
                         Icons.Filled.ErrorOutline,
                         contentDescription = "Download failed — retry",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+                // Manga programme (M3, additive): a partly
+                // downloaded image chapter — some pages are on
+                // the phone, the rest aren't. The tap fetches
+                // only the missing pages.
+                DownloadState.PARTIAL -> IconButton(
+                    onClick = onDownload,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.Download,
+                        contentDescription = "Partly downloaded — download the rest",
                         tint = MaterialTheme.colorScheme.error
                     )
                 }

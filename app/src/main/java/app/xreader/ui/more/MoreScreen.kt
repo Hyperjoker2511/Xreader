@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Row
@@ -15,12 +17,15 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.FindReplace
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -29,14 +34,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.xreader.ui.common.GlassCard
-import app.xreader.ui.common.RowItem
 import app.xreader.ui.common.ScreenHeader
 
 /**
  * Me hub (PLAN §3; v1.1.0 §5.15 Nocturne pass): identity mini-card,
- * the What's-new and heal-note banners, then the RowItem door list.
+ * the What's-new and heal-note banners, then the uniform door list.
  *
  * v1.1.0 (§7): the Appearance row is REMOVED — AppearanceScreen is
  * dead code whose route already redirects to Customise, so the row
@@ -56,6 +61,11 @@ fun MoreScreen(
     onHistory: () -> Unit = {},
     onCustomise: () -> Unit = {},
     onVocab: () -> Unit = {},
+    /** P0 (Reader Terms): the global terms list's door. */
+    onReaderTerms: () -> Unit = {},
+    /** v1.3.5: the "Updates & about" section (check, switch,
+     * links, app details) — its own door, nothing scattered. */
+    onUpdatesAbout: () -> Unit = {},
     /** v1.0.1 "Me" header: the reader's own name/level/streak. */
     meName: String = "",
     meLevel: Int = 1,
@@ -193,6 +203,12 @@ fun MoreScreen(
             onClick = onVocab
         )
         MeDoor(
+            icon = Icons.Filled.FindReplace,
+            title = "Reader terms",
+            subtitle = "Fix names and words in every book",
+            onClick = onReaderTerms
+        )
+        MeDoor(
             icon = Icons.Filled.History,
             title = "History",
             subtitle = "Everything you've been reading, in time order",
@@ -223,6 +239,12 @@ fun MoreScreen(
             onClick = onLabs
         )
         MeDoor(
+            icon = Icons.Filled.SystemUpdate,
+            title = "Updates & about",
+            subtitle = "Check for updates, version, links and app details",
+            onClick = onUpdatesAbout
+        )
+        MeDoor(
             icon = Icons.Filled.Info,
             title = "About & licences",
             subtitle = "Version and open-source licences",
@@ -232,12 +254,14 @@ fun MoreScreen(
 }
 
 /**
- * One Me-hub door (§5.15): the kit RowItem renders the door row
- * (icon tile + label + chevron) inside the glass card that owns
- * the tap + bounce; the plain-words subtitle stays under the row
- * inside the same card, so no explanation the old rows carried
- * is lost. The RowItem itself is not clickable here — the card
- * is the one tap target.
+ * One Me-hub door (P0 polish, 2026-11-01): EVERY door is the
+ * same compact row — one fixed height, the same padding, the
+ * same 40dp icon tile, title and subtitle each on a single
+ * line inside the row, chevron at the end. The old shape let
+ * each card size itself to its subtitle, so the list landed
+ * as uneven, oversized cards (the user's "asymmetric, very
+ * big" note); now the hub reads as one neat uniform column.
+ * The card stays the one tap target.
  */
 @Composable
 private fun MeDoor(
@@ -249,21 +273,55 @@ private fun MeDoor(
     GlassCard(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
-        bouncePress = true
+        bouncePress = true,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        RowItem(
-            icon = icon,
-            label = title,
-            modifier = Modifier.fillMaxWidth(),
-            value = null,
-            badge = null,
-            onClick = null
-        )
-        Text(
-            subtitle,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 52.dp, top = 2.dp)
-        )
+        Row(
+            Modifier.fillMaxWidth().height(48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceContainerHigh,
+                        androidx.compose.foundation.shape
+                            .RoundedCornerShape(16.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
     }
 }

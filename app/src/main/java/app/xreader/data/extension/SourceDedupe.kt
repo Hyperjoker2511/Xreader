@@ -51,7 +51,18 @@ object SourceDedupePlanner {
          * whether its definition could be read at all — the
          * two facts the name-matched collapse pass judges. */
         val enabled: Boolean = true,
-        val readable: Boolean = true
+        val readable: Boolean = true,
+        /** Keiyoushi player (K6): a player row is NEVER a
+         * dedupe candidate. Its removal lives in the player's
+         * own cascade (record, .ext file, live registry,
+         * namespaced prefs) — a bare row delete here would
+         * orphan all of it, and rebinding its books to a
+         * same-named text survivor would corrupt them. The
+         * name-collapse pass below could otherwise reach a
+         * DISABLED player row whose name matches a bundled
+         * default; the domain pass can't (a player row has
+         * no config, hence no canonical domain). */
+        val protectedKind: Boolean = false
     )
 
     data class Removal(
@@ -114,6 +125,7 @@ object SourceDedupePlanner {
             .groupBy { normaliseName(it.displayName) }
         for (row in rows) {
             if (row.packageId.startsWith("bundled.")) continue
+            if (row.protectedKind) continue
             if (row.extensionId in removedIds) continue
             val inRealGroup = row.canonicalDomain != null &&
                 (groups[row.canonicalDomain]?.size ?: 0) >= 2
@@ -261,6 +273,10 @@ class SourceDedupe(
                     .filter { it.isNotBlank() }
             },
             installedAt = row.installedAt,
+            // Keiyoushi player (K6): player rows are
+            // dedupe-protected (see the planner's Row).
+            protectedKind =
+                row.kind == app.xreader.data.db.ExtensionKind.KEIYOUSHI,
             // v1.3.2 (item 62): the collapse pass's two facts.
             // A non-declarative row has no definition to read —
             // that is not "unreadable" for this purpose (JS/DEX

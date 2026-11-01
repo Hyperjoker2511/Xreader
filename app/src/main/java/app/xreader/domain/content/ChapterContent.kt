@@ -87,8 +87,19 @@ data class MediaOverlay(
 @Serializable
 data class ChapterContent(
     val blocks: List<ChapterBlock> = emptyList(),
-    val mediaOverlay: MediaOverlay? = null
+    val mediaOverlay: MediaOverlay? = null,
+    /** Manga programme (slice M1): an image chapter's ordered
+     * pages, when this content came from a MANGA source. Null
+     * for every text chapter (and, with the storage layer's
+     * encodeDefaults off, absent from their stored files —
+     * text content is byte-identical to before). A manga
+     * chapter's [blocks] stay empty: its pages ARE its
+     * content. See [ChapterPages]. */
+    val pages: ChapterPages? = null
 ) {
+    /** True for a manga chapter: content is an ordered page
+     * list, not prose blocks. */
+    val isImageChapter: Boolean get() = pages?.isEmpty == false
     /** Words across heading + paragraph text (image books count 0). */
     val wordCount: Int
         get() = blocks.sumOf { block ->

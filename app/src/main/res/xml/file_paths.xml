@@ -2,4 +2,7 @@
 <!-- Shares generated files (quote cards) from the cache dir only. -->
 <paths>
     <cache-path name="quote_cards" path="quote-cards/" />
+    <!-- In-app updater (v1.3.5): the verified update APK in
+         cache/updates is handed to the system installer. -->
+    <cache-path name="app_updates" path="updates/" />
 </paths>

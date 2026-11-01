@@ -2,6 +2,11 @@ package app.xreader.data.sync
 
 import app.xreader.core.error.AppError
 import app.xreader.core.error.AppResult
+import app.xreader.data.parse.ArchiveBudget
+import app.xreader.data.parse.ArchiveLimitException
+import app.xreader.data.parse.ArchiveLimits
+import app.xreader.data.parse.CountingEntryInputStream
+import app.xreader.data.parse.readBytesCapped
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.zip.ZipEntry
@@ -106,27 +111,50 @@ object BackupArchive {
 
     /** Reads + validates an archive. Anything that isn't a readable
      * Xreader backup is a plain [AppError.BadFile], never a crash. */
-    fun read(input: InputStream): AppResult<SyncPayload> {
+    fun read(input: InputStream): AppResult<SyncPayload> = read(
+        input,
+        maxEntries = ArchiveLimits.MAX_ENTRIES,
+        maxMetadataBytes = ArchiveLimits.MAX_METADATA_ENTRY_BYTES
+    )
+
+    /** [ArchiveLimits] apply; the limit parameters exist only so
+     * tests can trip the caps with small fixtures. */
+    internal fun read(
+        input: InputStream,
+        maxEntries: Int,
+        maxMetadataBytes: Long
+    ): AppResult<SyncPayload> {
         var manifestOk = false
         var payload: SyncPayload? = null
         try {
             ZipInputStream(input.buffered()).use { zip ->
+                var entries = 0
                 while (true) {
                     val entry = zip.nextEntry ?: break
+                    if (++entries > maxEntries) {
+                        throw ArchiveLimitException("this backup")
+                    }
                     when (entry.name) {
                         MANIFEST_ENTRY -> {
-                            val text = zip.readBytes().toString(Charsets.UTF_8)
+                            val text = zip
+                                .readBytesCapped(maxMetadataBytes, "the backup's contents list")
+                                .toString(Charsets.UTF_8)
                             manifestOk = manifestIsOurs(text)
                         }
                         PAYLOAD_ENTRY -> {
                             payload = SyncPayload.decode(
-                                zip.readBytes().toString(Charsets.UTF_8)
+                                zip.readBytesCapped(maxMetadataBytes, "the backup's data")
+                                    .toString(Charsets.UTF_8)
                             )
                         }
                     }
                     zip.closeEntry()
                 }
             }
+        } catch (e: ArchiveLimitException) {
+            return AppResult.Err(
+                AppError.BadFile("that backup is too large to restore safely")
+            )
         } catch (e: Exception) {
             return AppResult.Err(
                 AppError.BadFile("that file isn't a readable Xreader backup")
@@ -148,32 +176,73 @@ object BackupArchive {
     fun readWithFiles(
         input: InputStream,
         fileSink: (String, InputStream) -> Unit
+    ): AppResult<Pair<SyncPayload, String?>> = readWithFiles(
+        input, fileSink,
+        maxEntries = ArchiveLimits.MAX_ENTRIES,
+        maxMetadataBytes = ArchiveLimits.MAX_METADATA_ENTRY_BYTES,
+        maxEntryBytes = ArchiveLimits.MAX_STREAMED_ENTRY_BYTES,
+        maxTotalBytes = ArchiveLimits.MAX_TOTAL_EXPANDED_BYTES
+    )
+
+    /** [ArchiveLimits] apply; the limit parameters exist only so
+     * tests can trip the caps with small fixtures. `files/…`
+     * entries reach [fileSink] wrapped in a counting stream: every
+     * byte the sink copies is charged as it is read, and crossing
+     * a cap aborts the restore mid-stream with an Err — the merge
+     * behind a restore only ever runs on an Ok, so a partial
+     * restore is never applied or marked complete. */
+    internal fun readWithFiles(
+        input: InputStream,
+        fileSink: (String, InputStream) -> Unit,
+        maxEntries: Int,
+        maxMetadataBytes: Long,
+        maxEntryBytes: Long,
+        maxTotalBytes: Long
     ): AppResult<Pair<SyncPayload, String?>> {
         var manifestOk = false
         var payload: SyncPayload? = null
         var filesManifest: String? = null
         try {
             ZipInputStream(input.buffered()).use { zip ->
+                val budget = ArchiveBudget(maxTotalBytes)
+                var entries = 0
                 while (true) {
                     val entry = zip.nextEntry ?: break
+                    if (++entries > maxEntries) {
+                        throw ArchiveLimitException("this backup")
+                    }
                     when {
                         entry.name == MANIFEST_ENTRY -> {
-                            val text = zip.readBytes().toString(Charsets.UTF_8)
+                            val text = zip
+                                .readBytesCapped(maxMetadataBytes, "the backup's contents list")
+                                .toString(Charsets.UTF_8)
                             manifestOk = manifestIsOurs(text)
                         }
                         entry.name == PAYLOAD_ENTRY -> {
                             payload = SyncPayload.decode(
-                                zip.readBytes().toString(Charsets.UTF_8)
+                                zip.readBytesCapped(maxMetadataBytes, "the backup's data")
+                                    .toString(Charsets.UTF_8)
                             )
                         }
                         entry.name == FILES_MANIFEST_ENTRY -> {
-                            filesManifest = zip.readBytes().toString(Charsets.UTF_8)
+                            filesManifest = zip
+                                .readBytesCapped(maxMetadataBytes, "the backup's file list")
+                                .toString(Charsets.UTF_8)
                         }
-                        entry.name.startsWith("files/") -> fileSink(entry.name, zip)
+                        entry.name.startsWith("files/") -> fileSink(
+                            entry.name,
+                            CountingEntryInputStream(
+                                zip, budget, maxEntryBytes, "this backup"
+                            )
+                        )
                     }
                     zip.closeEntry()
                 }
             }
+        } catch (e: ArchiveLimitException) {
+            return AppResult.Err(
+                AppError.BadFile("that backup is too large to restore safely")
+            )
         } catch (e: Exception) {
             return AppResult.Err(
                 AppError.BadFile("that file isn't a readable Xreader backup")

@@ -62,12 +62,28 @@ data class LibraryUiState(
     val pullRefreshing: Boolean = false,
     /** R22 rec: "For you" — unfinished books carrying a followed
      * tag, computed locally. Empty until a tag is followed. */
-    val forYou: List<ShelfBook> = emptyList()
+    val forYou: List<ShelfBook> = emptyList(),
+    // ── Manga programme (M3): the Novels | Manga split ──────
+    /** bookId → media kind for books whose kind ISN'T Novels
+     * (absence = Novels; see BookKindResolver). */
+    val bookKinds: Map<Long, app.xreader.data.extension.MediaKind> = emptyMap(),
+    /** The split's active side (remembered across restarts). */
+    val librarySide: app.xreader.data.extension.MediaKind =
+        app.xreader.data.extension.MediaKind.TEXT
 ) {
     /** ShelfLogic facts for every visible book (merged-away books
      * never appear: [books] already excludes them at the VM). */
     fun shelfFacts(nowMillis: Long): List<app.xreader.data.library.ShelfLogic.BookFacts> =
-        books.map { shelf ->
+        shelfFactsFor(books, nowMillis)
+
+    /** M3: ShelfLogic facts for a SUBSET of the shelf (one side
+     * of the split), same mapping — the Library screen builds
+     * its chips and membership from the active side only. */
+    fun shelfFactsFor(
+        subset: List<ShelfBook>,
+        nowMillis: Long
+    ): List<app.xreader.data.library.ShelfLogic.BookFacts> =
+        subset.map { shelf ->
             val counts = downloadCounts[shelf.book.id]
             val downloaded = counts?.downloaded ?: 0
             val readDownloaded = counts?.readDownloaded ?: 0
@@ -201,9 +217,18 @@ class LibraryViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), OrgData())
 
+    /** M3: bookId → media kind (MANGA entries only; absence
+     * means Novels), resolved from the shelf's sources whenever
+     * the shelf changes. Resolution is stateless (the extension
+     * service caches the loads), so a source converted by a
+     * pack update re-kinds its books on the next emission. */
+    private val bookKindsFlow =
+        MutableStateFlow<Map<Long, app.xreader.data.extension.MediaKind>>(emptyMap())
+
     val state: StateFlow<LibraryUiState> = combine(
-        baseState, checkingUpdatesFlow, orgState
-    ) { base, checking, org ->
+        baseState, checkingUpdatesFlow, orgState,
+        bookKindsFlow, container.libraryPrefs.librarySide
+    ) { base, checking, org, kinds, side ->
         base.copy(
             checkingUpdates = checking,
             favourites = org.favourites,
@@ -214,12 +239,23 @@ class LibraryViewModel(
             hiddenBuiltins = org.hiddenBuiltins,
             selectedShelf = org.selectedShelf,
             pullRefreshing = org.pullRefreshing,
+            bookKinds = kinds,
+            librarySide = side,
+            // M3: the hero and the For-you row belong to the
+            // active side — a Novels page never leads with a
+            // manga, nor the other way around.
+            continueReading = base.continueReading?.takeIf { hero ->
+                app.xreader.data.library.LibrarySplit
+                    .kindOf(hero.book.id, kinds) == side
+            },
             forYou = if (org.followedTags.isEmpty()) {
                 emptyList()
             } else {
                 base.books.filter { shelfBook ->
-                    org.bookTags[shelfBook.book.id].orEmpty()
-                        .any { it in org.followedTags } &&
+                    app.xreader.data.library.LibrarySplit
+                        .kindOf(shelfBook.book.id, kinds) == side &&
+                        org.bookTags[shelfBook.book.id].orEmpty()
+                            .any { it in org.followedTags } &&
                         shelfBook.fraction < 1f
                 }.sortedByDescending { it.book.updatedAt }.take(12)
             }
@@ -241,6 +277,23 @@ class LibraryViewModel(
                     }
                 }
         }
+        // M3: keep the shelf's kind map current — resolved from
+        // each book's source config whenever the shelf changes.
+        viewModelScope.launch {
+            container.database.bookDao().observeShelf().collect { books ->
+                bookKindsFlow.value =
+                    runCatching {
+                        container.bookKindResolver.kindsOf(books)
+                    }.getOrDefault(emptyMap())
+            }
+        }
+    }
+
+    /** M3: flip the Library/Explore split to a side; the
+     * choice is remembered (LibraryPrefs) and Explore follows
+     * the same switch. */
+    fun setLibrarySide(side: app.xreader.data.extension.MediaKind) {
+        viewModelScope.launch { container.libraryPrefs.setLibrarySide(side) }
     }
 
     /** R20 pull gesture: enqueue the unique refresh; SILENT —

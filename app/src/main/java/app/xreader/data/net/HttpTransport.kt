@@ -71,16 +71,29 @@ interface HttpTransport {
         const val TIMEOUT_DETAIL = "the server took too long to answer"
 
         /** Maps transport failures onto the app's error vocabulary. */
-        fun ioError(e: Exception): AppError = when (e) {
-            is UnknownHostException -> AppError.NoNetwork
-            is SocketTimeoutException ->
-                AppError.ProviderDown("server", detail = TIMEOUT_DETAIL)
-            // v1.3.1 (item 44): the total-call timeout (and a
-            // cancelled call) surfaces as an interrupted IO —
-            // same plain-words timeout family, never "unknown".
-            is java.io.InterruptedIOException ->
-                AppError.ProviderDown("server", detail = TIMEOUT_DETAIL)
-            else -> AppError.Unknown(e)
+        fun ioError(e: Exception): AppError {
+            // v1.3.5 (P0, slice E2): a PLATFORM cleartext refusal
+            // (an UnknownServiceException naming cleartext) is
+            // shown with the same plain words as the app's own
+            // pre-flight refusal — never the raw platform
+            // sentence. Since the platform config now permits
+            // cleartext this should not occur on Xreader's own
+            // clients; the branch keeps any stack that still
+            // enforces the policy honest.
+            if (LocalHttpPolicy.isCleartextRefusal(e)) {
+                return AppError.BadFile(LocalHttpPolicy.REFUSAL_MESSAGE)
+            }
+            return when (e) {
+                is UnknownHostException -> AppError.NoNetwork
+                is SocketTimeoutException ->
+                    AppError.ProviderDown("server", detail = TIMEOUT_DETAIL)
+                // v1.3.1 (item 44): the total-call timeout (and a
+                // cancelled call) surfaces as an interrupted IO —
+                // same plain-words timeout family, never "unknown".
+                is java.io.InterruptedIOException ->
+                    AppError.ProviderDown("server", detail = TIMEOUT_DETAIL)
+                else -> AppError.Unknown(e)
+            }
         }
 
         fun statusError(code: Int): AppError = when (code) {

@@ -1,5 +1,6 @@
 package app.xreader.ui.sources
 
+import android.webkit.CookieManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -1442,15 +1443,77 @@ class ExtensionDetailViewModel(
 
     fun forgetSession() {
         viewModelScope.launch {
-            container.sessionStore.clear(container.repoManagerSessionKey(extensionId))
+            clearSourceSession()
             _sessionSaved.value = false
             say("Saved sign-in forgotten")
+        }
+    }
+
+    /** v1.3.5 (P0, session lifecycle): forgetting a sign-in —
+     * or removing the source — leaves NOTHING of its session
+     * behind: the vault record, the source's read tokens
+     * (the coordinator registry's clear, plus the persisted
+     * records under the same keys), and this source's cookies
+     * in the shared WebView jar, expired by name + host so
+     * OTHER sources' sessions in the same jar stay untouched. */
+    private suspend fun clearSourceSession() {
+        val sessionKey = container.repoManagerSessionKey(extensionId)
+        // The saved jars are read BEFORE the record is cleared:
+        // they name the hosts + cookie names whose WebView-jar
+        // entries must be expired.
+        val saved = runCatching {
+            container.sessionStore.load(sessionKey)
+        }.getOrNull()
+        val sourceIds = runCatching {
+            container.extensionService.sourcesOf(extensionId).getOrNull()
+        }.getOrNull().orEmpty().map { it.source.id }.distinct()
+        for (sourceId in sourceIds) {
+            app.xreader.data.extension.ReadTokenCoordinators
+                .clear(sourceId)
+            runCatching {
+                container.sessionStore.clearReadToken(sourceId)
+            }
+        }
+        expireJarSession(saved, sessionKey)
+        container.sessionStore.clear(sessionKey)
+    }
+
+    /** Expire this source's WebView-jar cookies (see
+     * [JarSessionClear] for the shapes). The jar-wide
+     * removeSessionCookies is a LAST RESORT for exactly one
+     * case — a stored record that exists but cannot be read,
+     * so no targeted clear is possible; it is never run on a
+     * guess, because it would end every source's jar session. */
+    private suspend fun expireJarSession(
+        saved: app.xreader.data.extension.SessionData?,
+        sessionKey: String
+    ) {
+        val manager = CookieManager.getInstance()
+        val calls = JarSessionClear.expiryCalls(saved)
+        if (calls.isNotEmpty()) {
+            for ((url, header) in calls) {
+                runCatching { manager.setCookie(url, header) }
+            }
+            runCatching { manager.flush() }
+            return
+        }
+        val unreadable = saved == null && runCatching {
+            container.sessionStore.has(sessionKey)
+        }.getOrDefault(false)
+        if (unreadable) {
+            runCatching {
+                manager.removeSessionCookies(null)
+                manager.flush()
+            }
         }
     }
 
     fun uninstall() {
         viewModelScope.launch {
             val ext = current() ?: return@launch
+            // v1.3.5 (P0): removal leaves no session behind
+            // either — same complete clear as sign-out.
+            clearSourceSession()
             container.repoManager.uninstall(ext)
             say("“${ext.displayName}” uninstalled")
             _gone.tryEmit(Unit)
@@ -1538,3 +1601,38 @@ class ExtensionDetailViewModel(
 /** Small helper so the VM doesn't reach for the client companion. */
 private fun AppContainer.repoManagerSessionKey(extensionId: Long): String =
     app.xreader.data.extension.ExtensionHttpClient.sessionKeyFor(extensionId)
+
+/**
+ * v1.3.5 (P0, session lifecycle): the WebView-jar half of a
+ * sign-out, as pure data — for every stored (domain, cookie
+ * name), an already-expired Set-Cookie value in BOTH the
+ * host-only form and the Domain form, so whichever shape the
+ * jar actually holds is the one that dies. Other sources'
+ * cookies are never named here. Pure so the shape is
+ * testable without a WebView.
+ */
+internal object JarSessionClear {
+
+    private const val EXPIRED = "Thu, 01 Jan 1970 00:00:00 GMT"
+
+    /** (url, Set-Cookie value) pairs to hand to
+     * CookieManager.setCookie, in stored order. */
+    fun expiryCalls(
+        saved: app.xreader.data.extension.SessionData?
+    ): List<Pair<String, String>> {
+        val calls = ArrayList<Pair<String, String>>()
+        for ((domain, jar) in saved?.cookies.orEmpty()) {
+            val host = domain.trim().trimStart('.')
+                .substringBefore('/').lowercase()
+            if (host.isEmpty()) continue
+            val url = "https://$host/"
+            for (name in jar.keys) {
+                if (name.isBlank()) continue
+                calls += url to "$name=; Path=/; Expires=$EXPIRED"
+                calls += url to
+                    "$name=; Domain=$host; Path=/; Expires=$EXPIRED"
+            }
+        }
+        return calls
+    }
+}

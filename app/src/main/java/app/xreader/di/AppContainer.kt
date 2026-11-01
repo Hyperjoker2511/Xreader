@@ -1,9 +1,11 @@
 package app.xreader.di
 
 import android.app.ActivityManager
+import android.app.Application
 import android.content.Context
 import androidx.room.Room
 import androidx.room.withTransaction
+import app.xreader.BuildConfig
 import app.xreader.core.error.AppResult
 import app.xreader.core.error.CrashGuard
 import app.xreader.core.security.AndroidKeystoreCipher
@@ -18,6 +20,12 @@ import app.xreader.data.download.RoomChapterSourceResolver
 import app.xreader.data.download.UrlChapterFetcher
 import app.xreader.data.download.WorkManagerEnqueuer
 import app.xreader.data.export.BookExporter
+import app.xreader.data.extension.CookieParsing
+import app.xreader.data.extension.player.PlayerApplicationContext
+import app.xreader.data.extension.player.PlayerChallengeBridge
+import app.xreader.data.extension.player.PlayerNetworkHelper
+import app.xreader.data.extension.player.PlayerRegistrar
+import app.xreader.data.extension.player.SessionStoreCookieJar
 import app.xreader.data.files.BookStorage
 import app.xreader.data.importer.BookImporter
 import app.xreader.data.net.HttpTransport
@@ -29,12 +37,15 @@ import app.xreader.data.prefs.AppearancePrefs
 import app.xreader.data.prefs.OnboardingPrefs
 import app.xreader.data.prefs.keyVaultDataStore
 import app.xreader.data.prefs.settingsDataStore
+import eu.kanade.tachiyomi.AppInfo
+import eu.kanade.tachiyomi.network.NetworkPreferences
 import java.io.File
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import tachiyomi.core.common.preference.AndroidPreferenceStore
 
 /**
  * Manual DI (PLAN §1.2): one container, constructed in [app.xreader.XreaderApp],
@@ -118,6 +129,33 @@ class AppContainer(context: Context) {
      * size) layered over the global reader settings. */
     val bookReaderPrefs: app.xreader.data.prefs.BookReaderPrefs =
         app.xreader.data.prefs.BookReaderPrefs(appContext.settingsDataStore)
+
+    /** P0 (Reader Terms): display-time term replacements — one
+     * global list plus a list per book. The stored chapter text
+     * is never modified; this only changes what the reader shows. */
+    val termsPrefs: app.xreader.data.prefs.TermsPrefs =
+        app.xreader.data.prefs.TermsPrefs(appContext.settingsDataStore)
+
+    /** Cycle 1 (F3, progress-linking): the refusals behind
+     * "Not the same book" — the only persisted fact of the
+     * link system; links themselves are derived from the
+     * library by the same-story matcher on every use. */
+    val progressLinkPrefs: app.xreader.data.prefs.ProgressLinkPrefs =
+        app.xreader.data.prefs.ProgressLinkPrefs(appContext.settingsDataStore)
+
+    /** Cycle 1 (F3): same-story copies in the Library share
+     * reading progress by true chapter number. Reconcile runs
+     * when a book page or the reader opens a library book and
+     * writes through the existing reading_progress row. */
+    val progressLinkService: app.xreader.data.library.ProgressLinkService by lazy {
+        app.xreader.data.library.ProgressLinkService(
+            bookDao = database.bookDao(),
+            chapterDao = database.chapterDao(),
+            progressDao = database.readingProgressDao(),
+            prefs = progressLinkPrefs,
+            inTransaction = { block -> database.withTransaction(block) }
+        )
+    }
 
     /** v1.0.2 (R26): AI "More like this" cache + dismissals. */
     val aiSuggestionPrefs: app.xreader.data.prefs.AiSuggestionPrefs =
@@ -236,7 +274,7 @@ class AppContainer(context: Context) {
         sourceMapDao = database.chapterSourceMapDao(),
         storage = bookStorage,
         transport = httpTransport,
-        resolverForItem = { extensionChapterResolver },
+        resolverForItem = { downloadChapterResolver },
         networkGate = networkGate,
         settingsProvider = { downloadPrefs.settings.first() },
         onChapterDownloaded = { bookId, chapterId ->
@@ -368,6 +406,27 @@ class AppContainer(context: Context) {
             store = extensionStore,
             contextFactory = hostContextFactory,
             dexLoader = app.xreader.data.extension.AndroidDexLoader(appContext),
+            // Keiyoushi player (K4): the adapter's two doors
+            // into the player — its live source registry and
+            // its index ratings (the manager's catalogue is
+            // cached after the install flow's first fetch, so
+            // the rating read is a memory hit in practice).
+            // Both are lambdas: they resolve the manager lazily
+            // at call time, after the container exists.
+            keiyoushiLiveSources = { packageName ->
+                keiyoushiPlayerManager.liveSourcesOf(packageName)
+            },
+            keiyoushiRatingProvider = { packageName ->
+                keiyoushiPlayerManager.catalog().getOrNull()
+                    ?.packages
+                    ?.firstOrNull { it.packageName == packageName }
+                    ?.rating
+            },
+            // Keiyoushi player (K6): the kill switch's live
+            // state, read at lookup time from the manager.
+            keiyoushiPlayerEnabled = {
+                keiyoushiPlayerManager.isPlayerEnabled()
+            },
             jsRuntimeFactory = { app.xreader.data.extension.QuickJsRuntime() },
             // v1.3.4 (T1): read-token persistence rides the
             // app's encrypted session store.
@@ -382,7 +441,33 @@ class AppContainer(context: Context) {
             store = extensionStore,
             transport = httpTransport,
             service = extensionService,
-            sessionStore = sessionStore
+            sessionStore = sessionStore,
+            // Keiyoushi player (K6): KEIYOUSHI rows leave
+            // through the player's own uninstall cascade from
+            // every manager removal path (repo removal, the
+            // detail page's uninstall). A lambda for the same
+            // reason as the service's player doors: it resolves
+            // the manager lazily at call time.
+            keiyoushiUninstaller = { packageName ->
+                keiyoushiPlayerManager.uninstall(packageName)
+            }
+        )
+    }
+
+    /** v1.3.5 (Cycle 1): provider packs — the quiet channel
+     * that ships new/updated declarative sources between app
+     * releases (see ProviderPackManager). State persists in
+     * the extension store, beside the repo indexes. */
+    val providerPackManager: app.xreader.data.extension.ProviderPackManager by lazy {
+        app.xreader.data.extension.ProviderPackManager(
+            repoDao = database.extensionRepoDao(),
+            extensionDao = database.installedExtensionDao(),
+            store = extensionStore,
+            transport = httpTransport,
+            service = extensionService,
+            stateStore = app.xreader.data.extension.FileProviderPackStateStore(
+                extensionStore
+            )
         )
     }
 
@@ -513,6 +598,116 @@ class AppContainer(context: Context) {
 
     fun notifySessionSaved(sessionKey: String) {
         sessionSavedEvents.tryEmit(sessionKey)
+    }
+
+    // ── Keiyoushi player core (K2) ──────────────────────────────────
+    //
+    // The player's pieces live here and are REGISTERED during
+    // container construction (the init block at the end of this
+    // section), so the Injekt singletons every Keiyoushi extension
+    // looks up exist before any extension class can load — loads are
+    // K3, and every load path runs after this container exists
+    // (XreaderApp.onCreate builds it first). The pieces stay `by lazy`
+    // for their other consumers; the init forces the two the
+    // registrar needs.
+
+    /** K2: extension cookies, resolved per-source-host from the
+     * encrypted session store (never the WebView jar). */
+    val playerCookieJar: SessionStoreCookieJar by lazy {
+        SessionStoreCookieJar(sessionStore, keyVault)
+    }
+
+    /** K2: Cloudflare challenges from extension traffic surface here;
+     * the shell turns a prompt into the sanctioned screen. A solve
+     * counts only when a cf_clearance cookie resolves for the host
+     * from the player's session record. */
+    val playerChallengeBridge: PlayerChallengeBridge by lazy {
+        PlayerChallengeBridge(
+            sessionSavedEvents = sessionSavedEvents,
+            hasClearance = { host ->
+                val header = sessionStore
+                    .load(SessionStoreCookieJar.PLAYER_SESSION_KEY)
+                    ?.cookieHeaderFor(host)
+                header != null && CookieParsing.parseCookieHeader(header)
+                    .containsKey("cf_clearance")
+            }
+        )
+    }
+
+    /** K2: the NetworkHelper extensions resolve via Injekt — the
+     * donor helper with our cookie jar and our Cloudflare path. */
+    val playerNetworkHelper: PlayerNetworkHelper by lazy {
+        PlayerNetworkHelper(
+            appContext,
+            NetworkPreferences(AndroidPreferenceStore(appContext)),
+            playerCookieJar,
+            playerChallengeBridge
+        )
+    }
+
+    /** K2: the Application extensions resolve via Injekt — the real
+     * app behind a per-extension namespace for prefs/cache/activity. */
+    val playerApplication: PlayerApplicationContext by lazy {
+        PlayerApplicationContext(appContext as Application)
+    }
+
+    init {
+        // AppInfo first (an extension may read the host version from
+        // its very first class load), then the Injekt registration.
+        AppInfo.setVersionInfo(
+            BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME
+        )
+        PlayerRegistrar.register(playerApplication, playerNetworkHelper)
+        // Keiyoushi player (K6): the kill switch's live wire —
+        // every flip of "Keiyoushi manga sources" (Customise →
+        // Sources & repairs) is pushed into the player manager,
+        // which empties or refills its live registry. The flow's
+        // first emission also re-seeds the flag before the
+        // shell's restore runs, so a switch left off is honoured
+        // from the first lookup of the session.
+        appScope.launch {
+            sourcePrefs.keiyoushiPlayerEnabled.collect { enabled ->
+                keiyoushiPlayerManager.setPlayerEnabled(enabled)
+            }
+        }
+    }
+
+    /** K3: the Keiyoushi player manager — download / verify /
+     * consent / load / update / uninstall / restore for
+     * Mihon-format manga extensions. Lazy like the rest of the
+     * extension stack; the shell's startup block calls
+     * restoreInstalled() once per launch. Loads only ever run
+     * after this container exists, so the K2 Injekt
+     * registration above always precedes them. */
+    val keiyoushiPlayerManager:
+        app.xreader.data.extension.player.KeiyoushiPlayerManager by lazy {
+        app.xreader.data.extension.player.KeiyoushiPlayerManager(
+            store = extensionStore,
+            recordStore =
+                app.xreader.data.extension.player.FileKeiyoushiRecordStore(
+                    extensionStore
+                ),
+            transport = httpTransport,
+            apkReader =
+                app.xreader.data.extension.player
+                    .PackageManagerKeiyoushiApkReader(appContext),
+            loader =
+                app.xreader.data.extension.player
+                    .AndroidKeiyoushiExtensionLoader(appContext),
+            extensionDao = database.installedExtensionDao(),
+            repoIdProvider = { repoManager.registerKeiyoushiRepo().id },
+            uninstallCleaner =
+                app.xreader.data.extension.player
+                    .AndroidKeiyoushiUninstallCleaner(
+                        appContext, sessionStore
+                    ),
+            // Keiyoushi player (K6): the kill switch's stored
+            // value seeds the manager's flag at restore; the
+            // init-block collector below pushes later flips.
+            playerEnabledProvider = {
+                sourcePrefs.keiyoushiPlayerEnabled.first()
+            }
+        )
     }
 
     /** v1.3.3 (scope S6): the stored-book repair runner —
@@ -955,10 +1150,54 @@ class AppContainer(context: Context) {
         )
     }
 
+    /** Manga programme (M3): the download engine's own
+     * resolver — identical to [extensionChapterResolver] but
+     * its fetchers also land manga page files, so a finished
+     * manga download works offline. The reader's resolver
+     * above never does this (reading online is not
+     * downloading). */
+    val downloadChapterResolver: app.xreader.data.extension.ExtensionChapterResolver by lazy {
+        app.xreader.data.extension.ExtensionChapterResolver(
+            bookDao = database.bookDao(),
+            sourceMapDao = database.chapterSourceMapDao(),
+            service = extensionService,
+            cleanerStore = cleanerRuleStore,
+            fallback = RoomChapterSourceResolver(database.chapterSourceMapDao()) {
+                UrlChapterFetcher(httpTransport, storage = bookStorage)
+            },
+            storage = bookStorage,
+            fetchPageFiles = true
+        )
+    }
+
+    /** Manga programme (M3): a book's media kind, derived from
+     * its source's config — the Library split, the Updates
+     * filter and search grouping all resolve through this. */
+    val bookKindResolver: app.xreader.data.library.BookKindResolver by lazy {
+        app.xreader.data.library.BookKindResolver(extensionService)
+    }
+
     // -- Phase 6: gamification, migration, file sync -------------------------
 
     val gamePrefs: app.xreader.data.prefs.GamePrefs =
         app.xreader.data.prefs.GamePrefs(appContext.settingsDataStore)
+
+    /** v1.3.5 (Cycle 1): the in-app updater — its prefs (the
+     * auto-check switch, the once-a-day stamps, the cached
+     * release) over the settings store, and the repository
+     * that checks GitHub Releases against the installed
+     * version (BuildConfig) and verifies downloads by
+     * SHA-256 before any install is offered. */
+    val updatePrefs: app.xreader.data.prefs.UpdatePrefs =
+        app.xreader.data.prefs.UpdatePrefs(appContext.settingsDataStore)
+
+    val updateRepository: app.xreader.data.update.AppUpdateRepository by lazy {
+        app.xreader.data.update.AppUpdateRepository(
+            http = app.xreader.data.update.OkHttpUpdateHttp(),
+            prefs = updatePrefs,
+            installedVersion = { app.xreader.BuildConfig.VERSION_NAME }
+        )
+    }
 
     /** The EXP engine: every settle() is idempotent, so callers
      * (reader close, shell start, Profile open) can fire it freely. */

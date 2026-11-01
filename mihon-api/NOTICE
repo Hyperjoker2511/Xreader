@@ -1,0 +1,138 @@
+Xreader — mihon-api module
+===========================
+
+This module is the host-side API surface for Keiyoushi manga extensions
+(extension-lib / "tachiyomix" 1.6). It is a transplant: per the project's
+MAX-COPY rule (user steering, 2026-11-01), donor code is copied rather than
+re-implemented wherever a choice existed, and every remaining substitution is
+named below.
+
+Licence
+-------
+All transplanted code in this module is licensed under the Apache License,
+Version 2.0 — see the LICENSE file in this module (copied from the Komikku
+repository). Xreader's own code elsewhere in the app remains MIT; nothing in
+this module changes that.
+
+Donors
+------
+- Komikku (Komikku app) — PRIMARY donor.
+  https://github.com/komikku-app/Komikku @ 1656575e8fdaaef010c652f9758130c2a01d8890
+  Modules used: source-api (eu.kanade.tachiyomi.source.*) and core/common
+  (eu.kanade.tachiyomi.network.*, tachiyomi.core.common.*, mihon.core.common.*).
+- Mihon (mihonapp/mihon) — upstream of Komikku; fallback donor. Used for the
+  plain `network` lookup shape in HttpSource (Komikku's copy is entangled with
+  its TachiyomiSY delegated-source machinery, see Deviations).
+- Keiyoushi extensions-lib — the binary contract, not a code donor.
+  https://github.com/keiyoushi/extensions-lib @ 42255ee5fa96d9425697b7c143587483207308d1
+  Real Keiyoushi extensions were compiled against these stubs; every class and
+  member in that stub set is present here with a matching JVM signature
+  (verified mechanically at transplant time — see KEIYOUSHI-PLAYER-PLAN §K1).
+
+What was copied verbatim
+------------------------
+ Komikku source-api: SourceFactory, UnmeteredSource, ConfigurableSource,
+   SManga, SChapter, SMangaImpl, SChapterImpl, Page, SMangaUpdate,
+   UpdateStrategy.
+ Komikku core/common: HttpException, AndroidCookieJar, NetworkPreferences
+   (minus a block the donor itself keeps commented out), ProgressListener,
+   ProgressResponseBody, DohProviders, Requests, the four interceptors
+   (UncaughtException, UserAgent, RateLimit, SpecificHostRateLimit),
+   JsonObject.EMPTY (mihon.core.common.extensions), the preference framework
+   (Preference, PreferenceStore, AndroidPreference, AndroidPreferenceStore),
+   and LogcatExtensions (see deviation 12).
+ Keiyoushi extensions-lib (contract text): CatalogueSource, FilterList.
+
+Deviations and substitutions (complete list)
+--------------------------------------------
+1. Source / HttpSource — the deprecated RxJava fetch* bridges and Komikku's
+   Source-level related-manga/query-sanitiser machinery are dropped (RxJava
+   and the lib-1.4 surface are out of scope per the K1 plan; "Lib 1.6 only").
+   Source.getFilterList carries Komikku's production default body
+   (FilterList()) instead of the stub's compile-time throw, because extensions
+   that don't override it dispatch to the host's default implementation.
+   HttpSource keeps Komikku's related-manga block (it is self-contained).
+2. HttpSource.network — upstream (Mihon) shape: `Injekt.get<NetworkHelper>()`.
+   Komikku wraps it in an anonymous NetworkHelper subclass serving its
+   TachiyomiSY/EH delegated sources (exh.* app internals); that wrapper and
+   the EXH delegate block (delegate/bindDelegate) are not carried, and
+   HttpSource.client reads network.client directly.
+3. HttpSource.getImageUrl — body composes imageUrlRequest/imageUrlParse via
+   awaitSuccess(); the direct suspend equivalent of Komikku's
+   fetchImageUrl(page).awaitSingle() RxJava bridge.
+4. NetworkHelper — Komikku's CloudflareInterceptor is NOT wired into the
+   client builders in this slice: Komikku's interceptor raises Komikku's own
+   WebView UI and strings. Slice K2 inserts Xreader's adapted interceptor,
+   which routes challenges through Xreader's sanctioned solve-or-sign-in
+   screen and bridges cookies to Xreader's session store. Komikku's
+   EHLogLevel-gated HTTP logging block is dropped (exh.* app internal).
+   A secondary (Context) constructor is added, restoring the extension-lib
+   (Context) shape on top of Komikku's primary (Context, NetworkPreferences)
+   constructor, backed by the donor AndroidPreferenceStore.
+5. AppInfo — Komikku's getters read its app module's BuildConfig, which a
+   library module cannot see. The two contract getters return values held in
+   internal vars (default 0 / "") that the Xreader app sets at startup (K2).
+   Komikku's getSupportedImageMimeTypes() is not in the extension-lib 1.6
+   contract (it needs Komikku's ImageUtil) and is not carried.
+6. JavaScriptEngine — WIRED in K6 (was a deliberate named stub in K1).
+   The real implementation is Komikku's (Apache-2.0), QuickJS-backed,
+   transplanted verbatim except one named substitution: the donor's
+   withIOContext becomes withContext(Dispatchers.IO). The K6 survey
+   DEX-scanned the whole live Keiyoushi index (1,449 extensions,
+   2026-11-01): ZERO reference this class as a type descriptor or as a
+   dotted string, and an OkHttp sanity needle hit 1,449/1,449, so the
+   zero is a true negative for today's repo. The engine is wired anyway
+   because the transplant is contained (this class + api(libs.quickjs
+   .android) here + one Injekt singleton registration in the player's
+   registrar) and the index is live: a JS-using source can appear in any
+   repo update and works the day it lands, instead of failing with the
+   stub's named refusal.
+7. Filter — Komikku's fork-only Filter.AutoComplete subclass (TachiyomiSY) is
+   not carried; it is outside the lib-1.6 contract and would grow the sealed
+   hierarchy extensions were compiled against. FilterList follows the
+   contract's plain data class (Komikku's copy adds a Compose @Stable
+   annotation and an always-false equals() for its own UI).
+8. MangasPage — final class with plain vals, per the contract. Komikku makes
+   it open solely for its exh MetadataMangasPage subclass (Komikku metadata
+   framework), which is not carried; the contract's component1/component2/
+   copy members are Komikku's own and are kept.
+9. OkHttpExtensions — the RxJava asObservable/asObservableSuccess bridges and
+   the parseAs/decodeFromJsonResponse helpers are not carried (RxJava surface;
+   parseAs additionally needs Kotlin context receivers and the
+   kotlinx-serialization json-okio artifact, and is outside the contract).
+   await, awaitSuccess, newCachelessCallWithProgress and jsonMime are
+   Komikku's, verbatim.
+10. PreferenceScreen — Komikku declares expect/actual across its multiplatform
+    source sets; in this plain Android library the same typealias stands
+    without the actual keyword. It erases identically in signatures.
+11. OkHttp version seam — the donors build against OkHttp 5, where
+    Response.body is non-null; Xreader's catalog pins OkHttp 4.12.0, where it
+    is nullable. Two donor call sites carry a `!!` (NetworkHelper's
+    saveResponseToFile, OkHttpExtensions' newCachelessCallWithProgress),
+    marked in code. Nothing else in the transplant touches an OkHttp-5-only
+    API. (The K2 spike decides whether the player forces an OkHttp upgrade.)
+12. LogcatExtensions — the `logcat.logcat` import is aliased (logcatImpl) so
+    the delegate call inside Any.logcat() is unambiguous under Xreader's
+    Kotlin 2.0.21 (the donor compiles against a newer Kotlin). Behaviour is
+    unchanged.
+13. NetworkHelper and Page are `open` (Komikku's shape) where the stub
+    classes are final. Verified safe at transplant time: every member
+    signature matches the contract exactly, and no extension compiled against
+    the stub can subclass a class its stub declared final, so the difference
+    is unobservable to extension code. (Komikku's host needs both open.)
+14. AppInfo (K2) — a public setVersionInfo(versionCode, versionName) host
+    hook is added. Komikku's getters read its own app-module BuildConfig;
+    this module cannot see the host app's BuildConfig, so Xreader's app sets
+    the two internal values through the hook once at startup (AppContainer).
+    Extension-facing behaviour is unchanged: the getters report the host
+    app's real version code/name.
+15. NetworkHelper.cookieJar (K2) — the declared type is widened from the
+    donor's AndroidCookieJar to okhttp3.CookieJar. Komikku never substitutes
+    the jar; Xreader's player must (its SessionStore-backed jar resolves
+    cookies per-source-host from the encrypted session store, per the D2
+    rule — never the global WebView jar). The default instance remains the
+    verbatim AndroidCookieJar, and nothing in the extension contract
+    references the narrower type.
+
+Fork merge markers (SY/KMK/EXH) present in the donor files were stripped
+during the transplant; they carry no semantics outside the donor repo.

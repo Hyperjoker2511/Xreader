@@ -339,8 +339,15 @@ class WebViewRenderedFetcher(
         val manager = CookieManager.getInstance()
         manager.setAcceptCookie(true)
         for ((domain, cookies) in session.cookies) {
+            // v1.3.5 (P0, session lifecycle): setCookie needs a
+            // real URL — a bare hostname is not one, so the old
+            // call could silently seed nothing. The Domain
+            // attribute keeps the store's parent-domain
+            // semantics (a jar saved for a parent applies to
+            // its subdomains — SessionData.cookieHeaderFor).
+            val (url, host) = seedCookieTarget(domain) ?: continue
             for ((name, value) in cookies) {
-                manager.setCookie(domain, "$name=$value")
+                manager.setCookie(url, "$name=$value; Domain=$host; Path=/")
             }
         }
         manager.flush()
@@ -482,6 +489,22 @@ class WebViewRenderedFetcher(
         /** Slack over the settle budget for main-thread scheduling. */
         const val MAIN_SLACK_MS: Long = 15_000L
     }
+}
+
+/**
+ * v1.3.5 (P0, session lifecycle): the WebView URL + host a
+ * stored cookie domain seeds through. CookieManager.setCookie
+ * takes a URL; the session store keys jars by bare domain
+ * ("books.example", sometimes ".example.com"), which is not
+ * one. Returns (url, host), or null for a domain string with
+ * no usable host in it. Pure, so the shape is testable
+ * without a WebView.
+ */
+internal fun seedCookieTarget(domain: String): Pair<String, String>? {
+    val host = domain.trim().trimStart('.')
+        .substringBefore('/').lowercase()
+    if (host.isEmpty() || host.contains(' ')) return null
+    return "https://$host/" to host
 }
 
 /**

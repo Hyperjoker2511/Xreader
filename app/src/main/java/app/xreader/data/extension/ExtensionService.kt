@@ -5,6 +5,7 @@ import app.xreader.core.error.AppResult
 import app.xreader.data.db.InstalledExtension
 import app.xreader.data.db.InstalledExtensionDao
 import app.xreader.data.db.TrustState
+import app.xreader.data.extension.player.MihonSourceAdapter
 import app.xreader.extensionapi.Source
 import app.xreader.extensionapi.SourceContext
 import app.xreader.extensionapi.SourceException
@@ -49,6 +50,35 @@ class ExtensionService(
     private val store: ExtensionStore,
     private val contextFactory: HostContextFactory,
     private val dexLoader: DexLoader,
+    /** Keiyoushi player (K4): the player's live sources for
+     * one package, by namespaced id — wired to
+     * KeiyoushiPlayerManager.liveSourcesOf in production;
+     * empty in tests that don't exercise the player track.
+     * Declared BEFORE [jsRuntimeFactory] for the same reason
+     * as [sessionStore]: tests pass the runtime factory as a
+     * trailing lambda, which binds to the LAST parameter. */
+    private val keiyoushiLiveSources:
+        (packageName: String) -> Map<String, eu.kanade.tachiyomi.source.Source> =
+        { emptyMap() },
+    /** Keiyoushi player (K4): a package's content rating
+     * from the index's contentWarning (production reads the
+     * player manager's cached catalogue). Null = the rating
+     * couldn't be read — the KEIYOUSHI branch then fails
+     * CLOSED to ADULT, so an unrated player source is hidden
+     * by the content preference until its rating is known,
+     * never shown by default. */
+    private val keiyoushiRatingProvider:
+        suspend (packageName: String) -> ContentRating? =
+        { null },
+    /** Keiyoushi player (K6): the player's kill switch
+     * ("Keiyoushi manga sources" in Customise). Production
+     * wires KeiyoushiPlayerManager.isPlayerEnabled; tests
+     * that don't exercise the switch leave it on. When off,
+     * a player row's lookup refuses with the player's own
+     * turned-off sentence instead of the empty-package one —
+     * a library book on a player source shows exactly why
+     * its source is off and where to turn it back on. */
+    private val keiyoushiPlayerEnabled: () -> Boolean = { true },
     /** v1.3.4 (T1): the session store read-token
      * coordinators persist through (optional so test
      * constructions stay as they were; production wires the
@@ -98,7 +128,19 @@ class ExtensionService(
             is AppResult.Err -> return loaded
             is AppResult.Ok -> loaded.value
         }
-        return handles.firstOrNull { it.source.id == sourceId }?.let { AppResult.Ok(it) }
+        return handles.firstOrNull { it.source.id == sourceId }
+            ?.let { AppResult.Ok(it) }
+            // Keiyoushi player (K4): a player handle's facade
+            // id is namespaced, but the mirroring row's
+            // declared source ids are the bare Mihon ids (the
+            // shape K3 wrote) — surfaces that look a source up
+            // by the row's own id (the detail page's bookshelf
+            // scan, health keys) resolve through this fallback.
+            ?: handles.firstOrNull { handle ->
+                (handle.source as? MihonSourceAdapter)
+                    ?.mihonId?.toString() == sourceId
+            }
+            ?.let { AppResult.Ok(it) }
             ?: AppResult.Err(
                 AppError.ExtensionFailed(
                     handles.firstOrNull()?.extension?.displayName ?: "source",
@@ -110,9 +152,36 @@ class ExtensionService(
     private suspend fun loadExtension(
         row: InstalledExtension
     ): AppResult<List<SourceHandle>> {
-        cache[row.id]?.let { return AppResult.Ok(it) }
+        // Keiyoushi player (K4): player rows are NOT cached
+        // here — the manager's live registry is the authority
+        // and adapters are cheap to build, so an install,
+        // update or uninstall takes effect on the very next
+        // lookup with no invalidation wiring. Every other
+        // kind keeps the cache it has always had.
+        if (row.kind != app.xreader.data.db.ExtensionKind.KEIYOUSHI) {
+            cache[row.id]?.let { return AppResult.Ok(it) }
+        }
         if (!TrustEngine.mayRun(row)) {
             return AppResult.Err(refusalError(row))
+        }
+        // Keiyoushi player (K6): the kill switch outranks an
+        // otherwise-runnable player row. The wording is the
+        // player's own — it must NOT borrow the row-level
+        // "the source is switched off" sentence, whose book-
+        // page card offers to re-enable the ROW (already on);
+        // the fix here is the master switch, and the sentence
+        // says where it lives.
+        if (row.kind == app.xreader.data.db.ExtensionKind.KEIYOUSHI &&
+            !keiyoushiPlayerEnabled()
+        ) {
+            return AppResult.Err(
+                AppError.ExtensionFailed(
+                    row.displayName,
+                    "Keiyoushi manga sources are turned off — " +
+                        "turn them on in Customise, under " +
+                        "Sources & repairs"
+                )
+            )
         }
         val permissions = ExtensionPermissions.parse(row.permissionsJson)
         // v1.0.6 (W1.3): a declarative row's rules are decoded once,
@@ -207,6 +276,15 @@ class ExtensionService(
                         )
                     listOf(LiveSource(spec, context))
                 }
+                // Keiyoushi player (K4): the row's live Mihon
+                // sources, adapted into the pipeline. A
+                // package that isn't installed-and-loaded in
+                // the player (Failed / Incompatible / still
+                // starting) yields NO handles — its sources
+                // simply don't appear anywhere, and its state
+                // already shows on the Keiyoushi shelf.
+                app.xreader.data.db.ExtensionKind.KEIYOUSHI ->
+                    loadKeiyoushiSources(row)
             }
         } catch (e: Exception) {
             return AppResult.Err(
@@ -217,8 +295,41 @@ class ExtensionService(
             )
         }
         val handles = sources.map { SourceHandle(row, it) }
-        if (handles.isNotEmpty()) cache[row.id] = handles
+        if (handles.isNotEmpty() &&
+            row.kind != app.xreader.data.db.ExtensionKind.KEIYOUSHI
+        ) {
+            cache[row.id] = handles
+        }
         return AppResult.Ok(handles)
+    }
+
+    /**
+     * Keiyoushi player (K4): build the facade handles for one
+     * player row from the manager's live registry. The rating
+     * is the extension's index contentWarning, asked per load
+     * (the production provider answers from the catalogue the
+     * install flow already fetched); when it can't be read,
+     * the sources fail CLOSED to ADULT — the content
+     * preference then hides them until the rating is known,
+     * which is the safe direction for an unverified rating.
+     */
+    private suspend fun loadKeiyoushiSources(
+        row: InstalledExtension
+    ): List<Source> {
+        val live = keiyoushiLiveSources(row.packageId)
+        if (live.isEmpty()) return emptyList()
+        val rating = keiyoushiRatingProvider(row.packageId)
+            ?: ContentRating.ADULT
+        return live.entries
+            .map { (namespacedId, source) ->
+                MihonSourceAdapter(
+                    packageName = row.packageId,
+                    namespacedId = namespacedId,
+                    mihon = source,
+                    contentRating = rating
+                )
+            }
+            .sortedBy { it.name.lowercase() }
     }
 
     private suspend fun loadJs(row: InstalledExtension, context: SourceContext): List<Source> {
@@ -321,6 +432,17 @@ class ExtensionService(
      * toward a source's failure health.
      */
     suspend fun fetchBytes(handle: SourceHandle, url: String): AppResult<ByteArray> {
+        // Keiyoushi player (K4): a page this handle's adapter
+        // resolved is fetched through the SOURCE's own image
+        // request (its headers, its client, the player's
+        // session bridge) — never as a bare GET of the final
+        // URL, which is exactly the request shape signed /
+        // referer-guarded CDNs refuse. A URL the adapter
+        // doesn't know (a cover, a text-chapter image) takes
+        // the ordinary path below.
+        (handle.source as? MihonSourceAdapter)?.let { adapter ->
+            adapter.pageBytes(url)?.let { return it }
+        }
         val permissions = ExtensionPermissions.parse(handle.extension.permissionsJson)
         val client = contextFactory.sourceClientFor(
             extensionRowId = handle.extension.id,
@@ -335,6 +457,43 @@ class ExtensionService(
     /** The declarative rules behind a handle, when rule-based. */
     fun declarativeConfigOf(handle: SourceHandle): DeclarativeConfig? =
         (handle.source as? DeclarativeSource)?.config
+
+    /** Keiyoushi player (K4): the player adapter behind a
+     * handle, when the handle is one. */
+    fun mihonAdapterOf(handle: SourceHandle): MihonSourceAdapter? =
+        handle.source as? MihonSourceAdapter
+
+    /**
+     * The ONE media-kind read for a handle (manga programme
+     * M1/M3, completed by K4): a player source is MANGA, a
+     * declarative source carries its config's kind, and
+     * every other kind serves prose. Surfaces that used to
+     * ask [declarativeConfigOf] for the kind read through
+     * here now, so player sources land on the Manga side of
+     * the split identically to converted ones.
+     */
+    fun mediaKindOf(handle: SourceHandle): MediaKind =
+        when (val source = handle.source) {
+            is MihonSourceAdapter -> source.mediaKind
+            is DeclarativeSource -> source.config.mediaKind
+            else -> MediaKind.TEXT
+        }
+
+    /**
+     * The ONE content-rating read for a handle: a player
+     * source carries its extension's index rating (stamped
+     * on the adapter at load), a declarative source its
+     * config's, and an unrated kind (JS/Dex) is Safe — the
+     * same default every surface applied before, now in one
+     * place so the content preference governs player
+     * sources identically.
+     */
+    fun contentRatingOf(handle: SourceHandle): ContentRating =
+        when (val source = handle.source) {
+            is MihonSourceAdapter -> source.contentRating
+            is DeclarativeSource -> source.config.contentRating
+            else -> ContentRating.SAFE
+        }
 
     /**
      * v1.0.6 (WT): the chapter ids the book page marks as locked IN

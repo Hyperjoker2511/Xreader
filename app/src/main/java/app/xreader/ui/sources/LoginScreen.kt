@@ -2,6 +2,7 @@ package app.xreader.ui.sources
 
 import android.annotation.SuppressLint
 import android.webkit.CookieManager
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Column
@@ -55,6 +56,17 @@ object SanctionedScreenSpec {
      * scrolled into view. Always true. */
     const val REQUIRES_SCROLL = true
 
+    /** The sanctioned WebView never needs local files or
+     * content-provider data to show a site's sign-in/check page. */
+    const val ALLOW_FILE_ACCESS = false
+
+    /** See [ALLOW_FILE_ACCESS]. */
+    const val ALLOW_CONTENT_ACCESS = false
+
+    /** Mixed HTTP/HTTPS content is never allowed on the
+     * sanctioned screen (WebSettings.MIXED_CONTENT_NEVER_ALLOW). */
+    const val MIXED_CONTENT_NEVER_ALLOW = true
+
     /** Total bottom lift for content at the web viewport's
      * bottom edge, in dp. */
     fun totalBottomLiftDp(): Int =
@@ -90,6 +102,13 @@ fun LoginScreen(
         WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.allowFileAccess = SanctionedScreenSpec.ALLOW_FILE_ACCESS
+            settings.allowContentAccess =
+                SanctionedScreenSpec.ALLOW_CONTENT_ACCESS
+            if (SanctionedScreenSpec.MIXED_CONTENT_NEVER_ALLOW) {
+                settings.mixedContentMode =
+                    WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            }
             // The page must be able to scroll (SanctionedScreenSpec):
             // scrolling stays enabled so a low-anchored check
             // widget can always be brought into view.
@@ -178,20 +197,22 @@ fun LoginScreen(
             onClick = {
                 val cookieManager = CookieManager.getInstance()
                 val currentUrl = webView.url ?: effectiveUrl
-                val host = CookieParsing.hostOf(currentUrl)
+                val fallbackHost = CookieParsing.hostOf(currentUrl)
                     ?: CookieParsing.hostOf(request.url) ?: ""
-                val cookies = LinkedHashMap<String, String>()
-                // Capture for the page's host and its parent domain —
-                // sites scatter session cookies across both.
-                for (candidate in cookieCandidateUrls(currentUrl, effectiveUrl)) {
-                    cookieManager.getCookie(candidate)?.let { header ->
-                        cookies.putAll(CookieParsing.parseCookieHeader(header))
-                    }
-                }
+                // v1.3.5 (P0): capture PER ORIGIN — the cookies
+                // the jar returns for each candidate are saved
+                // under THAT candidate's host, never merged into
+                // one map under a single host (a sign-in that
+                // crossed origins used to smear every origin's
+                // cookies onto the final page's host).
+                val cookiesByHost = loginCookiesByOrigin(
+                    currentUrl = currentUrl,
+                    originalUrl = effectiveUrl
+                ) { candidate -> cookieManager.getCookie(candidate) }
                 viewModel.saveLoginSession(
                     sessionKey = request.sessionKey,
-                    host = host,
-                    cookies = cookies,
+                    cookiesByHost = cookiesByHost,
+                    fallbackHost = fallbackHost,
                     userAgent = webView.settings.userAgentString
                 )
                 onDone()
@@ -222,4 +243,28 @@ private fun cookieCandidateUrls(currentUrl: String, originalUrl: String): List<S
         }
     }
     return urls.toList()
+}
+
+/**
+ * v1.3.5 (P0): the login capture, grouped by origin — for every
+ * candidate URL, the cookies the jar would send THERE are filed
+ * under that URL's own host. Candidates on the same host merge
+ * into that host's entry; different hosts never mix. Pure (the
+ * jar read is the caller's lambda) so the grouping is testable
+ * without a WebView.
+ */
+internal fun loginCookiesByOrigin(
+    currentUrl: String,
+    originalUrl: String,
+    cookieHeaderFor: (String) -> String?
+): Map<String, Map<String, String>> {
+    val byHost = LinkedHashMap<String, LinkedHashMap<String, String>>()
+    for (candidate in cookieCandidateUrls(currentUrl, originalUrl)) {
+        val host = CookieParsing.hostOf(candidate) ?: continue
+        val header = cookieHeaderFor(candidate) ?: continue
+        val parsed = CookieParsing.parseCookieHeader(header)
+        if (parsed.isEmpty()) continue
+        byHost.getOrPut(host) { LinkedHashMap() }.putAll(parsed)
+    }
+    return byHost
 }

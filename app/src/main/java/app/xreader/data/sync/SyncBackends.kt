@@ -3,6 +3,7 @@ package app.xreader.data.sync
 import app.xreader.core.error.AppError
 import app.xreader.core.error.AppResult
 import app.xreader.data.net.HttpTransport
+import app.xreader.data.net.LocalHttpPolicy
 
 /**
  * One sync route (PLAN §7): a place that can hold the single sync
@@ -42,6 +43,7 @@ class WebDavBackend(
     override val label: String = "WebDAV"
 
     override suspend fun read(name: String): AppResult<ByteArray?> {
+        policyRefusal()?.let { return AppResult.Err(it) }
         val url = fileUrl(name) ?: return AppResult.Err(badUrl())
         val response = when (val result = execute("GET", url, null)) {
             is AppResult.Err -> return result
@@ -71,6 +73,7 @@ class WebDavBackend(
     }
 
     override suspend fun write(name: String, bytes: ByteArray): AppResult<String?> {
+        policyRefusal()?.let { return AppResult.Err(it) }
         val url = fileUrl(name) ?: return AppResult.Err(badUrl())
         val response = when (
             val result = executeBytes("PUT", url, bytes)
@@ -95,6 +98,7 @@ class WebDavBackend(
     suspend fun probe(): AppResult<Unit> {
         val url = baseUrlProvider().trim().trimEnd('/')
         if (url.isBlank()) return AppResult.Err(badUrl())
+        LocalHttpPolicy.refusalFor(url)?.let { return AppResult.Err(it) }
         val credentials = credentialsProvider()
         val request = HttpTransport.Request(
             url = url,
@@ -164,6 +168,14 @@ class WebDavBackend(
         }
         return "$base/$name"
     }
+
+    /** v1.3.5 (P0): the folder address obeys [LocalHttpPolicy]
+     * — the sync password rides these requests as Basic auth,
+     * so a public plain-http folder is refused before anything
+     * is sent. Home-network and on-device http stay allowed,
+     * exactly like the AI-provider paths. */
+    private fun policyRefusal(): AppError? =
+        LocalHttpPolicy.refusalFor(baseUrlProvider().trim())
 
     private fun badUrl(): AppError =
         AppError.BadFile("the WebDAV address doesn't look right — check it in Sync & backup")

@@ -64,6 +64,7 @@ import app.xreader.core.motion.tabExit
 import app.xreader.core.motion.specFor
 import app.xreader.core.motion.SpringMotionEngine
 import app.xreader.data.db.Book
+import app.xreader.data.extension.player.PlayerChallengeBridge
 import app.xreader.data.prefs.AppearanceState
 import app.xreader.di.AppContainer
 import app.xreader.ui.book.BookDetailScreen
@@ -87,7 +88,9 @@ import app.xreader.ui.sources.GlobalSearchViewModel
 import app.xreader.ui.sources.ExtensionDetailScreen
 import app.xreader.ui.sources.ExtensionDetailViewModel
 import app.xreader.ui.sources.LinkAddViewModel
+import app.xreader.ui.sources.LoginMode
 import app.xreader.ui.sources.LoginScreen
+import app.xreader.ui.sources.ProviderPackViewModel
 import app.xreader.ui.sources.SourceCatalogScreen
 import app.xreader.ui.sources.SourceCatalogViewModel
 import app.xreader.ui.sources.SourcesScreen
@@ -180,9 +183,67 @@ fun MainScaffold(
     val sourcesViewModel = androidx.lifecycle.viewmodel.compose.viewModel<SourcesViewModel>(
         factory = SourcesViewModel.factory(container)
     )
+    // K2 (Keiyoushi player): a Cloudflare prompt from extension
+    // traffic opens the sanctioned screen on the existing login
+    // route (SITE_CHECK — a check to finish, not an account
+    // sign-in), at the challenged URL itself. Each prompt is
+    // handled once; when the login request clears (saved or
+    // dismissed) the bridge releases its waiter, which takes the
+    // verdict from the session store.
+    val playerPrompt by container.playerChallengeBridge.prompts
+        .collectAsStateWithLifecycle()
+    var handledPlayerPrompt by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<PlayerChallengeBridge.Prompt?>(null)
+    }
+    androidx.compose.runtime.LaunchedEffect(playerPrompt) {
+        val prompt = playerPrompt
+        if (prompt == null) {
+            handledPlayerPrompt = null
+        } else if (prompt != handledPlayerPrompt) {
+            handledPlayerPrompt = prompt
+            sourcesViewModel.startLogin(
+                sessionKey = prompt.sessionKey,
+                url = "https://${prompt.host}",
+                title = prompt.host,
+                mode = LoginMode.SITE_CHECK,
+                targetUrl = prompt.url
+            )
+            navController.navigate("login")
+        }
+    }
+    val shellLoginRequest by sourcesViewModel.loginRequest
+        .collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(shellLoginRequest) {
+        if (shellLoginRequest == null) {
+            container.playerChallengeBridge.dismissCurrent()
+        }
+    }
+    // v1.3.5 (Cycle 1): the provider-pack card's view model
+    // (Repositories screen).
+    val packViewModel = androidx.lifecycle.viewmodel.compose.viewModel<ProviderPackViewModel>(
+        factory = ProviderPackViewModel.factory(container)
+    )
     val linkAddViewModel = androidx.lifecycle.viewmodel.compose.viewModel<LinkAddViewModel>(
         factory = LinkAddViewModel.factory(container)
     )
+    // v1.3.5 (Cycle 1): the in-app updater — one VM for the
+    // floating card, What's New and the Updates & about
+    // section, so a download's progress shows everywhere.
+    val appUpdateViewModel = androidx.lifecycle.viewmodel.compose
+        .viewModel<app.xreader.ui.update.AppUpdateViewModel>(
+            factory = app.xreader.ui.update.AppUpdateViewModel.factory(container)
+        )
+    androidx.compose.runtime.LaunchedEffect(appUpdateViewModel) {
+        appUpdateViewModel.onAppOpen()
+    }
+    // The updater's intents (system installer, the install-
+    // permission setting) are fired here — the VM never
+    // starts activities itself.
+    androidx.compose.runtime.LaunchedEffect(appUpdateViewModel) {
+        appUpdateViewModel.intents.collect { intent ->
+            runCatching { context.startActivity(intent) }
+        }
+    }
     // v1.3.2: the all-sources search VM and the session hand-off
     // live in XreaderNavHost below, with the destinations that
     // use them.
@@ -217,6 +278,26 @@ fun MainScaffold(
             // source list — offline, idempotent, and it never
             // touches a row the user has changed (RepoManager).
             runCatching { container.repoManager.installBundledDefaults() }
+            // Manga programme (M1): the Keiyoushi repository
+            // row is pre-registered (idempotent, offline — the
+            // row insert only; its site list loads on demand
+            // through the foreign-repo reconstruction).
+            runCatching { container.repoManager.registerKeiyoushiRepo() }
+            // Keiyoushi player (K3): restore the installed
+            // manga extensions — records reload, every file
+            // is re-hashed against its pin, and consented
+            // packages re-load (sequentially, on this
+            // background scope, so app open isn't slowed).
+            runCatching {
+                container.keiyoushiPlayerManager.restoreInstalled()
+            }
+            // v1.3.5 (Cycle 1): the provider-pack channel's
+            // throttled automatic check — at most once a day,
+            // silent on failure, and it can only ever touch
+            // pack-managed sources (ProviderPackManager).
+            runCatching {
+                container.providerPackManager.checkForUpdates(manual = false)
+            }
             // v1.3.1 (item 52): one source per canonical domain
             // — the built-in survives, older duplicates are
             // removed and their books rebound (SourceDedupe).
@@ -364,13 +445,19 @@ fun MainScaffold(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        if (maxWidth >= 840.dp) {
+        // Read at this scope: inside the nested Box the constraints
+        // receiver is no longer implicit under Kotlin 2.2.
+        val isWideLayout = maxWidth >= 840.dp
+        Box(Modifier.fillMaxSize()) {
+        if (isWideLayout) {
             RailShell(
                 navController, snackbar, appearance, container, onPhaseNote,
                 libraryViewModel, downloadsViewModel, opdsViewModel,
                 sourcesViewModel, linkAddViewModel, onAddBook,
                 onExport = { book, kind -> pendingExport = book to kind },
-                libraryState = libraryState
+                libraryState = libraryState,
+                appUpdateViewModel = appUpdateViewModel,
+                packViewModel = packViewModel
             )
         } else {
             PhoneShell(
@@ -378,7 +465,63 @@ fun MainScaffold(
                 libraryViewModel, downloadsViewModel, opdsViewModel,
                 sourcesViewModel, linkAddViewModel, onAddBook,
                 onExport = { book, kind -> pendingExport = book to kind },
-                libraryState = libraryState
+                libraryState = libraryState,
+                appUpdateViewModel = appUpdateViewModel,
+                packViewModel = packViewModel
+            )
+        }
+        // v1.3.5: the floating update card, over the Library
+        // only, above the dock — at most once a day, and it
+        // never blocks reading.
+        UpdateCardOverlay(
+            navController = navController,
+            viewModel = appUpdateViewModel,
+            onReadMore = { navController.navigate("whatsNew") }
+        )
+        }
+    }
+}
+
+/**
+ * v1.3.5: the floating update card's host. It floats over
+ * the Library (the app's home) above the navigation dock,
+ * appears only while the updater has a card to present —
+ * the ViewModel enforces the once-a-day rule — and floats
+ * over the content without ever blocking it: the Library
+ * stays fully usable around and under it.
+ */
+@Composable
+private fun UpdateCardOverlay(
+    navController: NavHostController,
+    viewModel: app.xreader.ui.update.AppUpdateViewModel,
+    onReadMore: () -> Unit
+) {
+    val backStack by navController.currentBackStackEntryAsState()
+    val onLibrary = backStack?.destination?.route == Tab.Library.route
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    androidx.compose.animation.AnimatedVisibility(
+        visible = onLibrary && state.cardRelease != null,
+        enter = fadeIn(fadeTween<Float>()),
+        exit = fadeOut(fadeTween<Float>()),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp)
+                // Above the floating dock (64dp) + its margin,
+                // and clear of the phone's dead bottom strip.
+                .padding(bottom = 108.dp),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            app.xreader.ui.update.UpdateCard(
+                state = state,
+                onUpdateNow = { viewModel.startDownload() },
+                onIgnore = { viewModel.ignoreCard() },
+                onReadMore = onReadMore,
+                onInstall = { viewModel.install() },
+                onCancelDownload = { viewModel.cancelDownload() },
+                onOpenInstallSettings = { viewModel.openInstallPermissionSettings() }
             )
         }
     }
@@ -552,7 +695,9 @@ private fun PhoneShell(
     onAddBook: () -> Unit,
     onExport: (Book, String) -> Unit,
     libraryState: app.xreader.data.library.LibraryState =
-        app.xreader.data.library.LibraryState()
+        app.xreader.data.library.LibraryState(),
+    appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel,
+    packViewModel: app.xreader.ui.sources.ProviderPackViewModel
 ) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -599,7 +744,9 @@ private fun PhoneShell(
                 navController, container, Modifier.fillMaxSize().padding(padding),
                 appearance.reduceMotion, onPhaseNote,
                 libraryViewModel, downloadsViewModel, opdsViewModel,
-                sourcesViewModel, linkAddViewModel, onAddBook, onExport
+                sourcesViewModel, linkAddViewModel, onAddBook, onExport,
+                appUpdateViewModel = appUpdateViewModel,
+                packViewModel = packViewModel
             )
             if (grainOn) {
                 GrainOverlay(appearance.grainIntensity, Modifier.fillMaxSize())
@@ -623,7 +770,9 @@ private fun RailShell(
     onAddBook: () -> Unit,
     onExport: (Book, String) -> Unit,
     libraryState: app.xreader.data.library.LibraryState =
-        app.xreader.data.library.LibraryState()
+        app.xreader.data.library.LibraryState(),
+    appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel,
+    packViewModel: app.xreader.ui.sources.ProviderPackViewModel
 ) {
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
         // v1.0.4 (D1): same backdrop stage as the phone shell.
@@ -662,7 +811,9 @@ private fun RailShell(
                     Modifier.weight(1f),
                     appearance.reduceMotion, onPhaseNote,
                     libraryViewModel, downloadsViewModel, opdsViewModel,
-                    sourcesViewModel, linkAddViewModel, onAddBook, onExport
+                    sourcesViewModel, linkAddViewModel, onAddBook, onExport,
+                    appUpdateViewModel = appUpdateViewModel,
+                    packViewModel = packViewModel
                 )
             }
             if (grainOn) {
@@ -685,7 +836,9 @@ private fun XreaderNavHost(
     sourcesViewModel: SourcesViewModel,
     linkAddViewModel: LinkAddViewModel,
     onAddBook: () -> Unit,
-    onExport: (Book, String) -> Unit
+    onExport: (Book, String) -> Unit,
+    appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel,
+    packViewModel: app.xreader.ui.sources.ProviderPackViewModel
 ) {
     val scope = rememberCoroutineScope()
     // v1.3.2 (scope D): the all-sources search VM, created at
@@ -890,6 +1043,7 @@ private fun XreaderNavHost(
         composable("sourceStore") {
             app.xreader.ui.sources.SourceStoreScreen(
                 viewModel = sourcesViewModel,
+                packViewModel = packViewModel,
                 onBack = { navController.popBackStack() },
                 onOpenRepo = { repoId ->
                     navController.navigate("repo/$repoId")
@@ -969,7 +1123,42 @@ private fun XreaderNavHost(
                 // v1.3.2 (scope A2): the catalogue's hand-off.
                 onSessionHandoff = { kind ->
                     openSessionHandoff(extId, kind, null)
+                },
+                // Keiyoushi player (K5): the source's own
+                // settings (its extension preferences).
+                onOpenSourceSettings = {
+                    navController.navigate(
+                        "sourcePrefs/$extId/${android.net.Uri.encode(sourceId)}"
+                    )
                 }
+            )
+        }
+        // Keiyoushi player (K5): one player source's own
+        // settings — the extension's preference screen, hosted
+        // headlessly and rendered natively.
+        composable(
+            "sourcePrefs/{extId}/{sourceId}",
+            arguments = listOf(
+                androidx.navigation.navArgument("extId") {
+                    type = androidx.navigation.NavType.LongType
+                },
+                androidx.navigation.navArgument("sourceId") {
+                    type = androidx.navigation.NavType.StringType
+                }
+            )
+        ) { entry ->
+            val extId = entry.arguments?.getLong("extId") ?: 0L
+            val sourceId = entry.arguments?.getString("sourceId") ?: ""
+            val viewModel = androidx.lifecycle.viewmodel.compose.viewModel<app.xreader.ui.sources.SourcePreferencesViewModel>(
+                key = "source-prefs-$extId-$sourceId",
+                factory = app.xreader.ui.sources.SourcePreferencesViewModel.factory(container, extId, sourceId)
+            )
+            androidx.compose.runtime.LaunchedEffect(viewModel) {
+                viewModel.messages.collect { msg -> onPhaseNote(msg) }
+            }
+            app.xreader.ui.sources.SourcePreferencesScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
             )
         }
         composable(
@@ -1145,6 +1334,8 @@ private fun XreaderNavHost(
                 onHistory = { navController.navigate("history") },
                 onCustomise = { navController.navigate("customise") },
                 onVocab = { navController.navigate("vocab") },
+                onUpdatesAbout = { navController.navigate("appUpdates") },
+                onReaderTerms = { navController.navigate("terms") },
                 meName = meState.profile?.displayName ?: "",
                 meLevel = meState.profile?.level ?: 1,
                 meTitle = meState.title,
@@ -1408,6 +1599,17 @@ private fun XreaderNavHost(
                 onBack = { navController.popBackStack() }
             )
         }
+        composable("terms") {
+            val viewModel = androidx.lifecycle.viewmodel.compose
+                .viewModel<app.xreader.ui.more.TermsViewModel>(
+                    factory = app.xreader.ui.more.TermsViewModel
+                        .factory(container)
+                )
+            app.xreader.ui.more.TermsScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
         composable(
             "reader/{bookId}/{chapterIndex}",
             arguments = listOf(
@@ -1526,6 +1728,36 @@ private fun XreaderNavHost(
                 container = container
             )
         }
+        // v1.3.5: Settings → "Updates & about" — the one
+        // section for the check, the switch, our links and
+        // the app details.
+        composable("appUpdates") {
+            val updateState by appUpdateViewModel.state
+                .collectAsStateWithLifecycle()
+            app.xreader.ui.update.UpdatesAboutScreen(
+                state = updateState,
+                onBack = { navController.popBackStack() },
+                onCheckNow = { appUpdateViewModel.checkManually() },
+                onAutoCheckChange = { appUpdateViewModel.setAutoCheck(it) },
+                onOpenWhatsNew = { navController.navigate("whatsNew") },
+                onOpenAbout = { navController.navigate("about") }
+            )
+        }
+        // v1.3.5: the full release notes, read inside the
+        // app — the update card's Read more lands here.
+        composable("whatsNew") {
+            val updateState by appUpdateViewModel.state
+                .collectAsStateWithLifecycle()
+            app.xreader.ui.update.WhatsNewScreen(
+                state = updateState,
+                onBack = { navController.popBackStack() },
+                onUpdateNow = { appUpdateViewModel.startDownload() },
+                onInstall = { appUpdateViewModel.install() },
+                onOpenInstallSettings = {
+                    appUpdateViewModel.openInstallPermissionSettings()
+                }
+            )
+        }
     }
 }
 
@@ -1536,7 +1768,8 @@ private fun selectedTab(navController: NavHostController): Tab {
     return when {
         route == "appearance" || route == "about" || route == "labs" ||
             route == "providers" || route == "sync" || route == "profile" ||
-            route == "migration" || route == "customise" || route == "more" -> Tab.Me
+            route == "migration" || route == "customise" || route == "more" ||
+            route == "terms" -> Tab.Me
         route?.startsWith("book/") == true || route?.startsWith("reader/") == true ||
             route?.startsWith("ai/") == true ||
             route?.startsWith("lore/") == true || route == "updates" ||

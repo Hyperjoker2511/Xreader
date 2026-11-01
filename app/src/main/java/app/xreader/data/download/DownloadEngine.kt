@@ -459,7 +459,17 @@ class DownloadEngine(
         // downloaded) — tapping Download PROMOTES it where it
         // stands: state becomes READY, no fetch. Downloaded
         // means the user asked, and only that.
-        if (chapter.contentPath != null) {
+        // Manga programme (M3): an image chapter is the one
+        // exception — its stored record is a page LIST, and a
+        // read-online chapter's pages are URLs, not files.
+        // Promoting it would call a chapter "downloaded" whose
+        // pages aren't on the phone, so promotion requires the
+        // record's pages to be complete (every page carrying
+        // its file); an incomplete record falls through to the
+        // fetch below, which lands only the missing pages.
+        if (chapter.contentPath != null &&
+            storedPagesComplete(item.bookId, chapter) != false
+        ) {
             if (chapter.downloadState != DownloadState.READY) {
                 chapterDao.setDownloadState(
                     chapterId, DownloadState.READY
@@ -508,6 +518,25 @@ class DownloadEngine(
         } else {
             locator
         }
+
+    /**
+     * Manga programme (M3): is a stored chapter's page record
+     * complete — every page carrying its downloaded file?
+     * Null when the stored copy isn't an image chapter at all
+     * (no pages record, or an unreadable one): text chapters
+     * keep the contentPath-is-enough rule they have always
+     * had. Read once per promotion candidate, never per page.
+     */
+    private suspend fun storedPagesComplete(
+        bookId: Long,
+        chapter: app.xreader.data.db.Chapter
+    ): Boolean? {
+        val content = storage.readChapterContent(bookId, chapter.id)
+            .getOrNull() ?: return null
+        val pages = content.pages ?: return null
+        if (pages.isEmpty) return null
+        return pages.downloadedCount == pages.size
+    }
 
     private suspend fun runChapterAttempts(
         item: DownloadQueueItem,
@@ -560,6 +589,35 @@ class DownloadEngine(
                                 return markFailed(current, saved.error)
                             }
                             is AppResult.Ok -> saved.value
+                        }
+                        // Manga programme (M3): an image
+                        // chapter whose page files didn't all
+                        // land is PARTLY downloaded — the
+                        // record just written names the pages
+                        // still missing, the chapter takes the
+                        // PARTIAL state (never READY: a failed
+                        // page never marks a chapter
+                        // downloaded), and the queue item
+                        // fails with the plain count so the
+                        // Downloads retry fetches only what's
+                        // missing.
+                        val pages = outcome.content.pages
+                        if (pages != null && !pages.isEmpty &&
+                            pages.downloadedCount < pages.size
+                        ) {
+                            chapterDao.setContent(
+                                chapterId, relativePath,
+                                outcome.content.wordCount,
+                                DownloadState.PARTIAL
+                            )
+                            return markFailed(
+                                current,
+                                AppError.BadFile(
+                                    "only ${pages.downloadedCount} of " +
+                                        "${pages.size} pages downloaded — " +
+                                        "tap retry to fetch the rest"
+                                )
+                            )
                         }
                         chapterDao.setContent(
                             chapterId, relativePath,

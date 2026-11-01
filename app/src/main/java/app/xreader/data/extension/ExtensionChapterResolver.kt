@@ -12,6 +12,7 @@ import app.xreader.data.download.ChapterSourceResolver
 import app.xreader.data.download.FetchOutcome
 import app.xreader.data.download.ResolvedSource
 import app.xreader.data.download.UrlChapterFetcher
+import app.xreader.data.extension.player.MihonSourceAdapter
 import app.xreader.data.files.BookStorage
 import app.xreader.data.parse.ZipPaths
 import app.xreader.domain.content.ChapterContent
@@ -20,6 +21,7 @@ import java.io.File
 import java.net.URI
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -77,7 +79,17 @@ class ExtensionChapterFetcher(
     private val extensionId: Long,
     private val sourceId: String,
     private val bookId: Long,
-    private val storage: BookStorage? = null
+    private val storage: BookStorage? = null,
+    /**
+     * Manga programme (M3): true only on the DOWNLOAD road
+     * (the engine's resolver) — a manga chapter's page files
+     * are fetched and recorded, so a finished download is a
+     * chapter that works offline. The READ road keeps this
+     * false: reading online is not downloading (the v1.0.7.1
+     * rule) — a read returns the page URLs and the reader
+     * streams them through the image pipeline.
+     */
+    private val fetchPageFiles: Boolean = false
 ) : ChapterFetcher {
 
     override suspend fun fetch(candidate: ChapterCandidate): FetchOutcome {
@@ -97,6 +109,50 @@ class ExtensionChapterFetcher(
         return when (fetched) {
             is app.xreader.core.error.AppResult.Err -> FetchOutcome.Failure(fetched.error)
             is app.xreader.core.error.AppResult.Ok -> {
+                // Manga programme (M1): an image chapter's
+                // content is its page record — the declarative
+                // engine stashed it during the read above. It
+                // bypasses the prose gates below entirely
+                // (there is no prose to sanity-check, and the
+                // not-prose gate would refuse it), and it
+                // persists with the chapter through the
+                // ordinary content write — remote URLs first;
+                // downloaded page files join the record in M3.
+                // Keiyoushi player (K4): a player source's
+                // adapter stashes its record the same way —
+                // same seam, same bypass, same persistence.
+                val pages = when (val source = handle.source) {
+                    is DeclarativeSource ->
+                        source.pagesOf(candidate.locator)
+                    is MihonSourceAdapter ->
+                        source.pagesOf(candidate.locator)
+                    else -> null
+                }
+                if (pages != null && !pages.isEmpty) {
+                    // M3: on the download road, the page FILES
+                    // land too — each page's bytes through the
+                    // source's own session (fetchBytes: the
+                    // saved login, the whitelist and the rate
+                    // limiter all apply, exactly as for chapter
+                    // images), stored beside the chapter record
+                    // and named in it via withLocalFile. Pages
+                    // already on disk from an earlier partial
+                    // pass are kept, never re-fetched — a retry
+                    // fetches only the missing pages. A page
+                    // that fails stays unfilled in the record;
+                    // the engine reads the record's fill count
+                    // and calls the chapter PARTIAL, never
+                    // downloaded.
+                    val store = storage
+                    val record = if (fetchPageFiles && store != null) {
+                        fillPageFiles(handle, candidate, pages, store)
+                    } else {
+                        pages
+                    }
+                    return FetchOutcome.Success(
+                        applyCleaners(handle, ChapterContent(pages = record))
+                    )
+                }
                 val content = contentOf(handle, candidate, fetched.value.html)
                 // v1.3.4 (T2): the not-prose gate — text that
                 // is overwhelmingly base64-shaped blob (the
@@ -270,6 +326,103 @@ class ExtensionChapterFetcher(
         return stored
     }
 
+    /**
+     * M3: the download pass for one manga chapter's pages.
+     * File names are assigned FIRST, in page order (the same
+     * B1 law as the image pass below), so parallel fetches can
+     * never rename a page; each name is chapter-scoped — the
+     * chapter locator's hash rides in it — because every
+     * chapter of a manga names its pages alike (001.jpg,
+     * 002.jpg…) while the content directory is shared by the
+     * whole book. A page whose file already exists non-empty
+     * is kept as-is (a resumed download fetches only the
+     * missing pages); every failure is per-page and leaves
+     * that page unfilled in the returned record.
+     */
+    private suspend fun fillPageFiles(
+        handle: SourceHandle,
+        candidate: ChapterCandidate,
+        pages: app.xreader.domain.content.ChapterPages,
+        store: BookStorage
+    ): app.xreader.domain.content.ChapterPages {
+        val contentDir = store.contentDir(bookId)
+        val usedNames = mutableSetOf<String>()
+        data class PageJob(
+            val index: Int,
+            val url: String,
+            val fileName: String,
+            val target: File
+        )
+        val jobs = pages.pages.mapIndexed { index, page ->
+            val fileName = pageFileName(candidate.locator, page.url, usedNames)
+            PageJob(index, page.url, fileName, File(contentDir, fileName))
+        }
+        val semaphore = Semaphore(MAX_PARALLEL_IMAGE_FETCHES)
+        val fetched: List<Pair<Int, String>?> = coroutineScope {
+            jobs.map { job ->
+                async {
+                    if (job.target.isFile && job.target.length() > 0L) {
+                        job.index to job.fileName
+                    } else {
+                        semaphore.withPermit {
+                            val bytes = runCatching {
+                                when (
+                                    val result =
+                                        service.fetchBytes(handle, job.url)
+                                ) {
+                                    is AppResult.Err -> null
+                                    is AppResult.Ok -> result.value
+                                }
+                            }.getOrElse { error ->
+                                if (error is kotlinx.coroutines
+                                        .CancellationException
+                                ) {
+                                    throw error
+                                }
+                                null
+                            }
+                            val okBytes = bytes?.takeIf { it.isNotEmpty() }
+                            if (okBytes != null &&
+                                writeBytesAtomic(job.target, okBytes)
+                            ) {
+                                job.index to job.fileName
+                            } else {
+                                null
+                            }
+                        }
+                    }
+                }
+            }.awaitAll()
+        }
+        var filled = pages
+        for (entry in fetched) {
+            if (entry != null) {
+                filled = filled.withLocalFile(entry.first, entry.second)
+            }
+        }
+        return filled
+    }
+
+    /**
+     * M3: a page's stored file name — the `img-<name>` layout
+     * the content directory already uses, with the chapter
+     * locator's hash scoping it to this chapter (see
+     * [fillPageFiles]). Deterministic for a given chapter +
+     * page list, which is what makes resume-by-skip work.
+     */
+    private fun pageFileName(
+        chapterLocator: String,
+        pageUrl: String,
+        usedNames: MutableSet<String>
+    ): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(chapterLocator.toByteArray(Charsets.UTF_8))
+        val scope = digest.take(4).joinToString("") { "%02x".format(it) }
+        val uri = runCatching { URI(pageUrl) }.getOrNull()
+        val base = ZipPaths.assetFileName(uri?.path ?: pageUrl, usedNames)
+        return "img-p$scope-$base"
+    }
+
     /** One image to fetch: its resolved URL, its assigned
      * stored name and the file it lands in. */
     private data class PlannedImage(
@@ -344,7 +497,12 @@ class ExtensionChapterResolver(
     private val fallback: ChapterSourceResolver,
     /** v1.0.6.2: chapter-image storage for the fetchers built here
      * (null = the pre-image behaviour, used by older constructions). */
-    private val storage: BookStorage? = null
+    private val storage: BookStorage? = null,
+    /** Manga programme (M3): true for the DOWNLOAD engine's
+     * resolver — its fetchers also land manga page files (see
+     * [ExtensionChapterFetcher.fetchPageFiles]). The reader's
+     * resolver keeps the default: a read never downloads. */
+    private val fetchPageFiles: Boolean = false
 ) : ChapterSourceResolver {
 
     override suspend fun candidatesFor(chapter: Chapter): List<ResolvedSource> {
@@ -368,7 +526,7 @@ class ExtensionChapterResolver(
                 ),
                 ExtensionChapterFetcher(
                     service, cleanerStore, book.extensionId, sourceId, book.id,
-                    storage
+                    storage, fetchPageFiles
                 )
             )
         }
@@ -389,7 +547,7 @@ class ExtensionChapterResolver(
                 ),
                 ExtensionChapterFetcher(
                     service, cleanerStore, map.altExtensionId, altSourceId, book.id,
-                    storage
+                    storage, fetchPageFiles
                 )
             )
         }

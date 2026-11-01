@@ -117,7 +117,24 @@ data class DeclarativeConfig(
      * stays canonical to the primary host (see MirrorHosts).
      * Seeded ONLY from sweep-verified mirrors. Defaulted
      * empty so every older config decodes unchanged. */
-    val backupHosts: List<String> = emptyList()
+    val backupHosts: List<String> = emptyList(),
+    /** Manga programme (Cycle 1, slice M1): what this source
+     * serves — TEXT (prose chapters; every config written
+     * before the manga programme) or MANGA (image chapters:
+     * catalogue, book pages and chapter lists work exactly as
+     * for a text source, but a chapter's content is the
+     * ordered page list [ChapterSpec.pages] extracts, never
+     * prose). See [MediaKind]. Defaulted so every older
+     * config decodes unchanged. */
+    val mediaKind: MediaKind = MediaKind.TEXT,
+    /** Manga programme (slice M1, Mihon model): this source's
+     * content rating — SAFE / MIXED / ADULT (18+). The ONE
+     * content-preference setting decides which ratings are
+     * listed (default: 18+ hidden). Keiyoushi conversions
+     * inherit the rating from the index's own flag. See
+     * [ContentRating] / [ContentAccess]. Defaulted SAFE so
+     * every older config decodes unchanged. */
+    val contentRating: ContentRating = ContentRating.SAFE
 )
 
 /**
@@ -616,7 +633,26 @@ data class ChapterSpec(
     val title: String? = null,
     val nextPage: String? = null,
     val remove: List<String> = emptyList(),
-    val ajax: ChapterTextAjax? = null
+    val ajax: ChapterTextAjax? = null,
+    /** Manga programme (slice M1): for a MANGA source
+     * ([DeclarativeConfig.mediaKind]), the selector for the
+     * chapter page's PAGE IMAGES — the same selector grammar
+     * as every other field (fallback chains included): the
+     * CSS part selects the page elements (usually the <img>
+     * tags inside the reader container), and the `@attr` part
+     * names the attribute carrying the image URL when it
+     * isn't `src` (lazy-loading sites: `img.page@data-src`).
+     * A matched element that carries no URL itself contributes
+     * its first descendant <img>'s. The engine returns the
+     * URLs absolutised, de-duplicated, in page order, as the
+     * chapter's [app.xreader.domain.content.ChapterPages] —
+     * prose extraction never runs for a manga chapter. The
+     * [nextPage] chain still applies (a chapter split across
+     * web pages accumulates its pages in order). Null (every
+     * config written before the manga programme, and every
+     * text source) = no page extraction, exactly as before.
+     * The AJAX text mode does not apply to manga chapters. */
+    val pages: String? = null
 )
 
 /**

@@ -1,17 +1,17 @@
 # Version catalog — pinned per PLAN.md §1.1. Upgrade only between phases.
 [versions]
 agp = "8.7.3"
-kotlin = "2.0.21"
-ksp = "2.0.21-1.0.28"
+kotlin = "2.2.21"
+ksp = "2.2.21-2.0.5"
 composeBom = "2024.12.01"
 coreKtx = "1.15.0"
 activityCompose = "1.9.3"
 lifecycle = "2.8.7"
 navigationCompose = "2.8.5"
 coroutines = "1.9.0"
-okhttp = "4.12.0"
+okhttp = "5.3.2"
 serializationJson = "1.7.3"
-room = "2.6.1"
+room = "2.8.3"
 datastore = "1.1.1"
 workmanager = "2.10.0"
 pdfboxAndroid = "2.0.27.0"
@@ -19,6 +19,7 @@ kxml2 = "2.3.0"
 coil = "2.7.0"
 junrar = "7.5.5"
 junit = "4.13.2"
+androidxTestRunner = "1.6.2"
 jsoup = "1.18.3"
 quickjs = "0.9.2"
 mlkitFace = "16.1.7"
@@ -27,6 +28,9 @@ playServicesAuth = "21.2.0"
 glance = "1.1.1"
 haze = "1.5.1"
 profileinstaller = "1.4.1"
+injekt = "91edab2317"
+androidxPreference = "1.2.1"
+logcat = "0.4"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -45,6 +49,8 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serializationJson" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+okhttp-brotli = { group = "com.squareup.okhttp3", name = "okhttp-brotli", version.ref = "okhttp" }
+okhttp-zstd = { group = "com.squareup.okhttp3", name = "okhttp-zstd", version.ref = "okhttp" }
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
@@ -55,6 +61,7 @@ kxml2 = { group = "net.sf.kxml", name = "kxml2", version.ref = "kxml2" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 junrar = { group = "com.github.junrar", name = "junrar", version.ref = "junrar" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
 jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
 quickjs-android = { group = "app.cash.quickjs", name = "quickjs-android", version.ref = "quickjs" }
 mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkitFace" }
@@ -66,6 +73,10 @@ androidx-glance-appwidget = { group = "androidx.glance", name = "glance-appwidge
 androidx-glance-material3 = { group = "androidx.glance", name = "glance-material3", version.ref = "glance" }
 haze = { group = "dev.chrisbanes.haze", name = "haze", version.ref = "haze" }
 androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }
+injekt = { group = "com.github.mihonapp", name = "injekt", version.ref = "injekt" }
+androidx-preference-ktx = { group = "androidx.preference", name = "preference-ktx", version.ref = "androidxPreference" }
+okhttp-dnsoverhttps = { group = "com.squareup.okhttp3", name = "okhttp-dnsoverhttps", version.ref = "okhttp" }
+logcat = { group = "com.squareup.logcat", name = "logcat", version.ref = "logcat" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

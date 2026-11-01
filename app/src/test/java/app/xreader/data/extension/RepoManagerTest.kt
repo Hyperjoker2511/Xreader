@@ -4,6 +4,7 @@ import app.xreader.core.error.AppResult
 import app.xreader.data.FakeExtensionRepoDao
 import app.xreader.data.FakeInstalledExtensionDao
 import app.xreader.data.FakeTransport
+import app.xreader.data.db.InstalledExtension
 import app.xreader.data.db.TrustState
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -31,6 +32,7 @@ class RepoManagerTest {
     private lateinit var store: ExtensionStore
     private lateinit var service: ExtensionService
     private lateinit var manager: RepoManager
+    private lateinit var sessionStore: SessionStore
 
     private var indexBody: String = indexJson(versionCode = 1)
     private var artifactBody: String = "BUNDLE-V1"
@@ -41,7 +43,7 @@ class RepoManagerTest {
         val filesDir = tmp.newFolder()
         store = ExtensionStore(filesDir)
         val vault = testVault()
-        val sessionStore = SessionStore(vault)
+        sessionStore = SessionStore(vault)
         val transport = FakeTransport { request ->
             when {
                 request.url == INDEX_URL -> FakeTransport.ok(indexBody)
@@ -107,6 +109,175 @@ class RepoManagerTest {
         )
         assertNotNull(store.readText(store.definitionFile(pkg.pkg)))
     }
+
+    /** v1.3.5 (P0, D2b): seed the fixture source with a saved
+     * sign-in and a chapter-scoped read token, as a signed-in
+     * life would leave them in the vault. */
+    private suspend fun seedSessionAndToken(rowId: Long) {
+        sessionStore.save(
+            ExtensionHttpClient.sessionKeyFor(rowId),
+            SessionData(
+                cookies = mapOf(
+                    "novels.example" to mapOf("sess" to "abc")
+                ),
+                userAgent = "test-ua"
+            )
+        )
+        sessionStore.saveReadToken(
+            "novels-example",
+            "https://novels.example/book/sword-saga/chapter-1",
+            StoredReadToken("tok-1", 9_999_999_999_999L, 3)
+        )
+    }
+
+    @Test
+    fun `uninstall through the manager clears the session and every read token`() =
+        runBlocking {
+            setUp()
+            val repo = (manager.addRepo("Repo", INDEX_URL) as AppResult.Ok).value
+            val index = manager.cachedIndex(repo.id)!!
+            val pkg = index.packages.first { it.kindEnum == ExtensionKind.DECLARATIVE }
+            val row = (manager.install(repo, pkg) as AppResult.Ok).value
+            seedSessionAndToken(row.id)
+            assertNotNull(
+                sessionStore.load(ExtensionHttpClient.sessionKeyFor(row.id))
+            )
+
+            manager.uninstall(row)
+
+            assertNull(
+                "the vault session record must not survive uninstall",
+                sessionStore.load(ExtensionHttpClient.sessionKeyFor(row.id))
+            )
+            assertNull(
+                "the chapter-scoped read token must not survive uninstall",
+                sessionStore.loadReadToken(
+                    "novels-example",
+                    "https://novels.example/book/sword-saga/chapter-1"
+                )
+            )
+            assertNull(sessionStore.loadReadToken("novels-example"))
+        }
+
+    @Test
+    fun `removeRepo clears sessions and read tokens of its extensions`() =
+        runBlocking {
+            setUp()
+            val repo = (manager.addRepo("Repo", INDEX_URL) as AppResult.Ok).value
+            val index = manager.cachedIndex(repo.id)!!
+            val pkg = index.packages.first { it.kindEnum == ExtensionKind.DECLARATIVE }
+            val row = (manager.install(repo, pkg) as AppResult.Ok).value
+            seedSessionAndToken(row.id)
+
+            manager.removeRepo(repo)
+
+            assertNull(
+                sessionStore.load(ExtensionHttpClient.sessionKeyFor(row.id))
+            )
+            assertNull(
+                sessionStore.loadReadToken(
+                    "novels-example",
+                    "https://novels.example/book/sword-saga/chapter-1"
+                )
+            )
+        }
+
+    // ── K6: Keiyoushi removal routing ──────────────────────
+    //
+    // A KEIYOUSHI row's life lives in the player (record,
+    // .ext file, live registry, namespaced prefs) — the
+    // generic cascade would orphan all of it. Both manager
+    // removal paths must route player rows to the player's
+    // own uninstall; everything else keeps the generic path.
+
+    private fun keiyoushiRow(repoId: Long) = InstalledExtension(
+        repoId = repoId,
+        displayName = "Fake Panels",
+        packageId = "eu.kanade.tachiyomi.extension.en.fakepanels",
+        versionName = "1.6.5",
+        versionCode = 106005,
+        kind = app.xreader.data.db.ExtensionKind.KEIYOUSHI,
+        artifactPath = null,
+        sha256 = "abc",
+        apiLevel = 16,
+        languages = "en",
+        sourceIds = "777",
+        enabled = true,
+        trustState = TrustState.TRUSTED,
+        permissionsJson = "{}",
+        installedAt = 0,
+        updatedAt = 0
+    )
+
+    private fun routingManager(
+        uninstalled: MutableList<String>
+    ) = RepoManager(
+        repoDao, extDao, store,
+        FakeTransport { FakeTransport.ok("") },
+        service, sessionStore,
+        keiyoushiUninstaller = { packageName ->
+            uninstalled += packageName
+        }
+    )
+
+    @Test
+    fun `removeRepo routes keiyoushi rows through the player cascade`() =
+        runBlocking {
+            setUp()
+            val repo = (manager.addRepo("Repo", INDEX_URL) as AppResult.Ok).value
+            val index = manager.cachedIndex(repo.id)!!
+            val pkg = index.packages.first {
+                it.kindEnum == ExtensionKind.DECLARATIVE
+            }
+            val declarativeRow =
+                (manager.install(repo, pkg) as AppResult.Ok).value
+            val playerRow = keiyoushiRow(repo.id)
+            extDao.insert(playerRow)
+            // A marker under the player package's generic
+            // directory: the generic cascade deletes the
+            // whole directory; the player route must not.
+            val marker = store.packageDir(playerRow.packageId)
+                .resolve("marker.txt")
+            marker.writeText("player-owned")
+
+            val uninstalled = mutableListOf<String>()
+            routingManager(uninstalled).removeRepo(repo)
+
+            assertEquals(listOf(playerRow.packageId), uninstalled)
+            assertTrue(marker.exists())
+            // The declarative row kept the generic cascade.
+            assertNull(extDao.getById(declarativeRow.id))
+            assertNull(store.readText(store.definitionFile(pkg.pkg)))
+        }
+
+    @Test
+    fun `uninstall routes a keiyoushi row through the player cascade`() =
+        runBlocking {
+            setUp()
+            val uninstalled = mutableListOf<String>()
+            val rowId = extDao.insert(keiyoushiRow(repoId = 1))
+            val row = extDao.getById(rowId)!!
+
+            routingManager(uninstalled).uninstall(row)
+
+            assertEquals(listOf(row.packageId), uninstalled)
+            // Row deletion is the player cascade's own step —
+            // the generic path (which deletes it here) did
+            // not run.
+            assertNotNull(extDao.getById(rowId))
+        }
+
+    @Test
+    fun `keiyoushi rows fall back to the generic path without a player wire`() =
+        runBlocking {
+            setUp()
+            val rowId = extDao.insert(keiyoushiRow(repoId = 1))
+            val row = extDao.getById(rowId)!!
+
+            manager.uninstall(row)
+
+            assertNull(extDao.getById(rowId))
+        }
 
     @Test
     fun `js install with mismatched hash is refused and writes no row`() = runBlocking {

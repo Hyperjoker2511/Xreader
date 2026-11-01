@@ -1,6 +1,7 @@
 package app.xreader.ui.sources
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +44,7 @@ import app.xreader.core.motion.pressBounce
 import app.xreader.data.db.InstalledExtension
 import app.xreader.data.db.OpdsServer
 import app.xreader.data.db.TrustState
+import app.xreader.data.extension.ContentAccess
 import app.xreader.data.extension.HealthDot
 import app.xreader.data.extension.SourceHealthRecord
 import app.xreader.data.extension.healthDot
@@ -65,6 +67,7 @@ import app.xreader.ui.theme.primaryTextColor
  * this scroll any more. Per-source Health and Repair stay on
  * each source's Details page, as before.
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun SourcesScreen(
     viewModel: SourcesViewModel,
@@ -89,6 +92,66 @@ fun SourcesScreen(
     // The host collects searchViewModel.openedBook — a result tap
     // opens the book through the same path as everywhere else.
     val searchActive = searchState.searched
+    // Manga programme (M1): the content preference on the
+    // Explore list — an extension is listed when at least one
+    // of its sources is listed; a package whose every source
+    // is hidden disappears entirely (Mihon's model). A source
+    // with no recorded rating reads as Safe.
+    val visibleExtensions = state.extensions.filter { ext ->
+        val ids = ext.sourceIds.split(",")
+            .map { it.trim() }.filter { it.isNotBlank() }
+        ids.isEmpty() || ids.any { sourceId ->
+            val rating = state.sourceRatings[
+                app.xreader.data.extension.SourceHealthRecord
+                    .key(ext.id, sourceId)
+            ] ?: app.xreader.data.extension.ContentRating.SAFE
+            app.xreader.data.extension.ContentAccess
+                .allows(rating, state.contentVisibility)
+        }
+    }
+    // The badge a listed row wears: the strongest rating still
+    // visible across the extension's sources (null = no badge).
+    fun ratingBadgeOf(ext: InstalledExtension): String? {
+        val ratings = ext.sourceIds.split(",")
+            .map { it.trim() }.filter { it.isNotBlank() }
+            .map { sourceId ->
+                state.sourceRatings[
+                    app.xreader.data.extension.SourceHealthRecord
+                        .key(ext.id, sourceId)
+                ] ?: app.xreader.data.extension.ContentRating.SAFE
+            }
+        return app.xreader.data.extension.ContentAccess
+            .visibleBadge(ratings, state.contentVisibility)
+    }
+    // Manga programme (M3): Explore mirrors the Library's
+    // split — the same remembered switch, the same rule (an
+    // extension stands on a side when at least one of its
+    // sources belongs to it; kindless sources are Novels).
+    fun kindsOf(ext: InstalledExtension):
+        List<app.xreader.data.extension.MediaKind> =
+        ext.sourceIds.split(",")
+            .map { it.trim() }.filter { it.isNotBlank() }
+            .mapNotNull { sourceId ->
+                state.sourceKinds[
+                    app.xreader.data.extension.SourceHealthRecord
+                        .key(ext.id, sourceId)
+                ]
+            }
+    val sideExtensions = visibleExtensions.filter { ext ->
+        app.xreader.data.library.LibrarySplit.extensionOnSide(
+            kindsOf(ext), state.librarySide
+        )
+    }
+    val novelsSideCount = visibleExtensions.count { ext ->
+        app.xreader.data.library.LibrarySplit.extensionOnSide(
+            kindsOf(ext), app.xreader.data.extension.MediaKind.TEXT
+        )
+    } + opdsServers.size
+    val mangaSideCount = visibleExtensions.count { ext ->
+        app.xreader.data.library.LibrarySplit.extensionOnSide(
+            kindsOf(ext), app.xreader.data.extension.MediaKind.MANGA
+        )
+    }
 
     Column(
         Modifier
@@ -123,6 +186,21 @@ fun SourcesScreen(
         if (state.busy) {
             LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
         }
+        Spacer(Modifier.height(12.dp))
+        // M3: the Novels | Manga switch — the Library's own
+        // switch, mirrored: it filters the source list below
+        // by kind, and each label carries how many sources
+        // stand on that side.
+        app.xreader.ui.common.MediaKindSwitch(
+            side = state.librarySide,
+            novelsLabel = app.xreader.data.library.LibrarySplit.switchLabel(
+                app.xreader.data.extension.MediaKind.TEXT, novelsSideCount
+            ),
+            mangaLabel = app.xreader.data.library.LibrarySplit.switchLabel(
+                app.xreader.data.extension.MediaKind.MANGA, mangaSideCount
+            ),
+            onSelect = { viewModel.setLibrarySide(it) }
+        )
         Spacer(Modifier.height(12.dp))
         LazyColumn(
             Modifier.fillMaxSize(),
@@ -173,9 +251,18 @@ fun SourcesScreen(
                                 Arrangement.spacedBy(10.dp)
                         ) {
                             Text(
-                                "Searching source " +
-                                    "${searchState.progressDone + 1} of " +
-                                    "${searchState.progressTotal}…",
+                                // P0 (F1): the line's rules live
+                                // in SearchProgressLine — position
+                                // never exceeds the total, and the
+                                // total is the real source count
+                                // from the first frame, never 0
+                                // while sources are searching.
+                                SearchProgressLine.text(
+                                    done = searchState.progressDone,
+                                    total = searchState.progressTotal,
+                                    searchingLibrary =
+                                        searchState.searchingLibrary
+                                ),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme
                                     .onSurfaceVariant,
@@ -187,12 +274,10 @@ fun SourcesScreen(
                         }
                         LinearProgressIndicator(
                             progress = {
-                                if (searchState.progressTotal > 0) {
-                                    searchState.progressDone.toFloat() /
-                                        searchState.progressTotal
-                                } else {
-                                    0f
-                                }
+                                SearchProgressLine.fraction(
+                                    searchState.progressDone,
+                                    searchState.progressTotal
+                                )
                             },
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -203,21 +288,42 @@ fun SourcesScreen(
                 searchState.recents.isNotEmpty()
             ) {
                 item {
-                    Text(
-                        "Recent searches",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Recent searches",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        // P0 field fix: Clear wipes the whole
+                        // list (the prefs function existed with
+                        // no UI caller until now).
+                        TextButton(
+                            onClick = { searchViewModel.clearRecents() }
+                        ) { Text("Clear") }
+                    }
                 }
                 items(
                     searchState.recents.take(5),
                     key = { "recent-$it" }
                 ) { recent ->
+                    // P0 field fix: tap runs the search again;
+                    // HOLD removes just this entry — with the
+                    // hint line under the list saying so.
                     GlassCard(
-                        onClick = {
-                            searchViewModel.setQuery(recent)
-                            searchViewModel.search()
-                        }
+                        modifier = Modifier.combinedClickable(
+                            onClick = {
+                                searchViewModel.setQuery(recent)
+                                searchViewModel.search()
+                            },
+                            onLongClick = {
+                                searchViewModel.removeRecent(recent)
+                            }
+                        )
                     ) {
                         Text(
                             recent,
@@ -225,145 +331,121 @@ fun SourcesScreen(
                         )
                     }
                 }
+                item {
+                    Text(
+                        "Tap one to search again — hold one to " +
+                            "remove it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme
+                            .onSurfaceVariant
+                    )
+                }
             }
 
             if (searchActive) {
-                // ── Streaming results, grouped per source ──────
-                if (searchState.libraryBooks.isNotEmpty()) {
-                    item(key = "gs-lib-head") {
-                        SectionHeader(title = "In your library")
-                    }
-                    items(
-                        searchState.libraryBooks.chunked(3),
-                        key = { row ->
-                            "gs-librow-" +
-                                row.joinToString("-") { it.id.toString() }
-                        }
-                    ) { rowBooks ->
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement =
-                                Arrangement.spacedBy(12.dp)
-                        ) {
-                            rowBooks.forEach { book ->
-                                app.xreader.ui.common.BookPosterCard(
-                                    title = book.title,
-                                    author = book.author
-                                        .takeIf { it.isNotBlank() },
-                                    coverModel = coverFile(book.coverPath)
-                                        ?.takeIf { it.exists() },
-                                    metaLine =
-                                        "${book.totalChapters} chapters",
-                                    onClick = {
-                                        searchViewModel
-                                            .openLibraryBook(book.id)
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            repeat(3 - rowBooks.size) {
-                                Spacer(Modifier.weight(1f))
-                            }
-                        }
-                    }
+                // ── Streaming results, grouped Novels / Manga ──
+                // M3: ONE search box, results under the split's
+                // two headings (the content preference already
+                // filtered hidden sources out of the fan-out).
+                // Inside a side: your library first, then the
+                // inside-downloads hits (Novels only — manga
+                // chapters carry no prose to hit), then each
+                // source's own group.
+                val novelLibraryBooks = searchState.libraryBooks.filter {
+                    searchState.libraryKinds[it.id] !=
+                        app.xreader.data.extension.MediaKind.MANGA
                 }
-                if (searchState.contentHits.isNotEmpty()) {
-                    item(key = "gs-content-head") {
-                        SectionHeader(title = "Inside your downloads")
-                    }
-                    items(
-                        searchState.contentHits,
-                        key = { "gs-hit-${it.bookId}-${it.chapterIndex}" }
-                    ) { hit ->
-                        GlassCard(
-                            onClick = {
-                                searchViewModel.openLibraryBook(hit.bookId)
-                            }
-                        ) {
-                            Text(
-                                hit.bookTitle,
-                                style = MaterialTheme.typography.bodyLarge
-                            )
-                            Text(
-                                hit.chapterTitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme
-                                    .onSurfaceVariant
-                            )
-                            Text(
-                                "…${hit.snippet}…",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
+                val mangaLibraryBooks = searchState.libraryBooks.filter {
+                    searchState.libraryKinds[it.id] ==
+                        app.xreader.data.extension.MediaKind.MANGA
                 }
-                for (group in searchState.groups) {
-                    item(key = "gs-head-${group.sourceId}") {
-                        // v1.3.3 (V132-CHECK 12, scope S8): the
-                        // Mihon shape, unmistakable — every
-                        // result group is headed by its PROVIDER,
-                        // eyebrowed as a source with its count,
-                        // so a result's origin is never a guess.
-                        SectionHeader(
-                            title = group.sourceName,
-                            eyebrow = "Source · " +
-                                "${group.books.size} " +
-                                if (group.books.size == 1) {
-                                    "result"
-                                } else {
-                                    "results"
-                                }
+                val novelGroups = searchState.groups.filter {
+                    it.kind == app.xreader.data.extension.MediaKind.TEXT
+                }
+                val mangaGroups = searchState.groups.filter {
+                    it.kind == app.xreader.data.extension.MediaKind.MANGA
+                }
+                if (novelLibraryBooks.isNotEmpty() ||
+                    searchState.contentHits.isNotEmpty() ||
+                    novelGroups.isNotEmpty()
+                ) {
+                    item(key = "gs-novels-head") {
+                        SectionHeader(title = "Novels")
+                    }
+                    if (novelLibraryBooks.isNotEmpty()) {
+                        searchSubLabel("gs-lib-label-n", "In your library")
+                        searchLibraryRows(
+                            books = novelLibraryBooks,
+                            keyPrefix = "gs-librow-n",
+                            coverFile = coverFile,
+                            onOpen = { searchViewModel.openLibraryBook(it) }
                         )
                     }
-                    items(
-                        group.books.chunked(3),
-                        key = { row ->
-                            "gs-row-${group.sourceId}-" +
-                                row.joinToString("-") { it.id }
-                        }
-                    ) { rowBooks ->
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement =
-                                Arrangement.spacedBy(12.dp)
-                        ) {
-                            rowBooks.forEach { book ->
-                                val workKey =
-                                    app.xreader.data.extension.WorkMatcher
-                                        .normaliseTitle(book.title)
-                                val inLibrary =
-                                    workKey in searchState.libraryKeys
-                                val copies =
-                                    searchState.workCounts[workKey] ?: 1
-                                app.xreader.ui.common.BookPosterCard(
-                                    title = book.title,
-                                    author = book.author
-                                        ?.takeIf { it.isNotBlank() },
-                                    coverModel = book.coverUrl
-                                        ?.takeIf { it.isNotBlank() },
-                                    metaLine = listOfNotNull(
-                                        if (inLibrary) {
-                                            "In your library"
-                                        } else {
-                                            null
-                                        },
-                                        if (copies > 1) {
-                                            "On $copies sources"
-                                        } else {
-                                            null
-                                        }
-                                    ).joinToString(" · ")
-                                        .takeIf { it.isNotBlank() },
-                                    onClick = {
-                                        searchViewModel.openBook(group, book)
-                                    },
-                                    modifier = Modifier.weight(1f)
+                    if (searchState.contentHits.isNotEmpty()) {
+                        searchSubLabel(
+                            "gs-hits-label", "Inside your downloads"
+                        )
+                        items(
+                            searchState.contentHits,
+                            key = { "gs-hit-${it.bookId}-${it.chapterIndex}" }
+                        ) { hit ->
+                            GlassCard(
+                                onClick = {
+                                    searchViewModel.openLibraryBook(hit.bookId)
+                                }
+                            ) {
+                                Text(
+                                    hit.bookTitle,
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Text(
+                                    hit.chapterTitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                                Text(
+                                    "…${hit.snippet}…",
+                                    style = MaterialTheme.typography.bodySmall
                                 )
                             }
-                            repeat(3 - rowBooks.size) {
-                                Spacer(Modifier.weight(1f))
-                            }
                         }
+                    }
+                    for (group in novelGroups) {
+                        searchGroupRows(
+                            group = group,
+                            libraryKeys = searchState.libraryKeys,
+                            workCounts = searchState.workCounts,
+                            onOpen = { g, book ->
+                                searchViewModel.openBook(g, book)
+                            }
+                        )
+                    }
+                }
+                if (mangaLibraryBooks.isNotEmpty() ||
+                    mangaGroups.isNotEmpty()
+                ) {
+                    item(key = "gs-manga-head") {
+                        SectionHeader(title = "Manga")
+                    }
+                    if (mangaLibraryBooks.isNotEmpty()) {
+                        searchSubLabel("gs-lib-label-m", "In your library")
+                        searchLibraryRows(
+                            books = mangaLibraryBooks,
+                            keyPrefix = "gs-librow-m",
+                            coverFile = coverFile,
+                            onOpen = { searchViewModel.openLibraryBook(it) }
+                        )
+                    }
+                    for (group in mangaGroups) {
+                        searchGroupRows(
+                            group = group,
+                            libraryKeys = searchState.libraryKeys,
+                            workCounts = searchState.workCounts,
+                            onOpen = { g, book ->
+                                searchViewModel.openBook(g, book)
+                            }
+                        )
                     }
                 }
                 if (!searchState.searching &&
@@ -417,7 +499,7 @@ fun SourcesScreen(
             // restored silently — this card lists the off
             // sources and only the reader's own tap changes
             // anything. It shows exactly once.
-            val offExtensions = state.extensions.filter { !it.enabled }
+            val offExtensions = visibleExtensions.filter { !it.enabled }
             if (app.xreader.data.extension.SourceRestore.shouldShowCard(
                     cardDone = state.restoreCardDone,
                     rows = offExtensions.map {
@@ -521,19 +603,49 @@ fun SourcesScreen(
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
-            if (state.extensions.isEmpty() && opdsServers.isEmpty()) {
+            if (sideExtensions.isEmpty() &&
+                (state.librarySide ==
+                    app.xreader.data.extension.MediaKind.MANGA ||
+                    opdsServers.isEmpty())
+            ) {
                 item {
                     KitEmptyState(
                         icon = Icons.Filled.LibraryBooks,
-                        message = "No sources yet. Add a repository, paste a novel " +
-                            "site's link, or add a library server — your sources " +
-                            "live here.",
-                        actionText = "Add a source",
-                        onAction = onAddSource
+                        message = when {
+                            state.librarySide ==
+                                app.xreader.data.extension.MediaKind.MANGA ->
+                                "No manga sources yet. Manga comes " +
+                                    "from the Keiyoushi catalogue — " +
+                                    "open Repositories to see which " +
+                                    "sites are converted."
+                            state.extensions.isEmpty() ->
+                                "No sources yet. Add a repository, paste a novel " +
+                                    "site's link, or add a library server — your sources " +
+                                    "live here."
+                            else ->
+                                "No novel sources on this side — " +
+                                    "your sources are under Manga."
+                        },
+                        actionText = if (
+                            state.librarySide ==
+                                app.xreader.data.extension.MediaKind.MANGA
+                        ) {
+                            "Open Repositories"
+                        } else {
+                            "Add a source"
+                        },
+                        onAction = if (
+                            state.librarySide ==
+                                app.xreader.data.extension.MediaKind.MANGA
+                        ) {
+                            onOpenStore
+                        } else {
+                            onAddSource
+                        }
                     )
                 }
             }
-            items(state.extensions, key = { "ext-${it.id}" }) { ext ->
+            items(sideExtensions, key = { "ext-${it.id}" }) { ext ->
                 val firstSource = ext.sourceIds.split(",")
                     .firstOrNull()?.trim()?.takeIf { it.isNotBlank() }
                 val record = firstSource?.let {
@@ -542,6 +654,7 @@ fun SourcesScreen(
                 SourceRow(
                     ext = ext,
                     healthRecord = record,
+                    ratingBadge = ratingBadgeOf(ext),
                     sessionWord = firstSource?.let {
                         state.sessionWords[
                             SourceHealthRecord.key(ext.id, it)
@@ -564,12 +677,18 @@ fun SourcesScreen(
                     modifier = Modifier.animateItem(placementSpec = listPlacementSpec())
                 )
             }
-            items(opdsServers, key = { "opds-${it.id}" }) { server ->
-                OpdsServerRow(
-                    server = server,
-                    onOpen = { onOpenOpdsServer(server) },
-                    modifier = Modifier.animateItem(placementSpec = listPlacementSpec())
-                )
+            // OPDS servers serve books: they stand on the
+            // Novels side of the split only.
+            if (state.librarySide ==
+                app.xreader.data.extension.MediaKind.TEXT
+            ) {
+                items(opdsServers, key = { "opds-${it.id}" }) { server ->
+                    OpdsServerRow(
+                        server = server,
+                        onOpen = { onOpenOpdsServer(server) },
+                        modifier = Modifier.animateItem(placementSpec = listPlacementSpec())
+                    )
+                }
             }
 
             // ── The store and the server manager (§5.3 doors row) ─
@@ -614,6 +733,10 @@ fun SourcesScreen(
 private fun SourceRow(
     ext: InstalledExtension,
     healthRecord: SourceHealthRecord?,
+    /** Manga programme (M1): the content-rating badge for a
+     * listed source ("18+" / "Mixed"), riding the meta line;
+     * null for Safe sources. */
+    ratingBadge: String? = null,
     /** v1.3.2 (R1): the session word — "Check needed" /
      * "Sign in needed" / "Signed in" / "Working" — when this
      * source rides the session road. */
@@ -679,6 +802,10 @@ private fun SourceRow(
                         // deleted to achieve it.
                         if (addedByYou) "Added by you" else null,
                         languageLabel, healthWord,
+                        // M1: the rating badge, same quiet
+                        // line — a listed Mixed / 18+ source
+                        // says so where it stands.
+                        ratingBadge,
                         // v1.3.2 (R1): the session word rides
                         // the same quiet line when it adds
                         // information the health word doesn't
@@ -785,4 +912,126 @@ private fun HealthDotView(dot: HealthDot) {
             .clip(CircleShape)
             .background(color)
     )
+}
+
+/** M3: a quiet sub-label inside one side of the grouped
+ * search results ("In your library" under a Novels/Manga
+ * heading) — a plain text row, never a second heading. */
+private fun androidx.compose.foundation.lazy.LazyListScope.searchSubLabel(
+    key: String,
+    text: String
+) {
+    item(key = key) {
+        Text(
+            text,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** M3: the search results' library poster rows (three to a
+ * row), shared by the Novels and Manga sides of the grouped
+ * results — the row shape is the one the flat list used. */
+private fun androidx.compose.foundation.lazy.LazyListScope.searchLibraryRows(
+    books: List<app.xreader.data.db.Book>,
+    keyPrefix: String,
+    coverFile: (String?) -> java.io.File?,
+    onOpen: (Long) -> Unit
+) {
+    items(
+        books.chunked(3),
+        key = { row ->
+            "$keyPrefix-" + row.joinToString("-") { it.id.toString() }
+        }
+    ) { rowBooks ->
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            rowBooks.forEach { book ->
+                app.xreader.ui.common.BookPosterCard(
+                    title = book.title,
+                    author = book.author.takeIf { it.isNotBlank() },
+                    coverModel = coverFile(book.coverPath)
+                        ?.takeIf { it.exists() },
+                    metaLine = "${book.totalChapters} chapters",
+                    onClick = { onOpen(book.id) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            repeat(3 - rowBooks.size) {
+                Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** M3: one source's search-result group — its provider
+ * header (the Mihon shape: eyebrowed as a source with its
+ * count, so a result's origin is never a guess) and its
+ * poster rows — shared by both sides of the grouped results. */
+private fun androidx.compose.foundation.lazy.LazyListScope.searchGroupRows(
+    group: GlobalSearchGroup,
+    libraryKeys: Set<String>,
+    workCounts: Map<String, Int>,
+    onOpen: (GlobalSearchGroup, app.xreader.extensionapi.SourceBook) -> Unit
+) {
+    item(key = "gs-head-${group.kind}-${group.sourceId}") {
+        SectionHeader(
+            title = group.sourceName,
+            eyebrow = "Source · " +
+                "${group.books.size} " +
+                if (group.books.size == 1) {
+                    "result"
+                } else {
+                    "results"
+                }
+        )
+    }
+    items(
+        group.books.chunked(3),
+        key = { row ->
+            "gs-row-${group.kind}-${group.sourceId}-" +
+                row.joinToString("-") { it.id }
+        }
+    ) { rowBooks ->
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            rowBooks.forEach { book ->
+                val workKey =
+                    app.xreader.data.extension.WorkMatcher
+                        .normaliseTitle(book.title)
+                val inLibrary = workKey in libraryKeys
+                val copies = workCounts[workKey] ?: 1
+                app.xreader.ui.common.BookPosterCard(
+                    title = book.title,
+                    author = book.author
+                        ?.takeIf { it.isNotBlank() },
+                    coverModel = book.coverUrl
+                        ?.takeIf { it.isNotBlank() },
+                    metaLine = listOfNotNull(
+                        if (inLibrary) {
+                            "In your library"
+                        } else {
+                            null
+                        },
+                        if (copies > 1) {
+                            "On $copies sources"
+                        } else {
+                            null
+                        }
+                    ).joinToString(" · ")
+                        .takeIf { it.isNotBlank() },
+                    onClick = { onOpen(group, book) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            repeat(3 - rowBooks.size) {
+                Spacer(Modifier.weight(1f))
+            }
+        }
+    }
 }

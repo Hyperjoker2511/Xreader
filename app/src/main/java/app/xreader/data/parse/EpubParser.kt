@@ -6,12 +6,136 @@ import app.xreader.data.db.BookFormat
 import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.content.MediaClip
 import app.xreader.domain.content.MediaOverlay
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FilterInputStream
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.zip.ZipException
 import java.util.zip.ZipInputStream
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
+
+/**
+ * Hard size caps shared by every archive reader in the app (the
+ * EPUB/CBZ parsers, backup restore, the book importer). Sized
+ * generously — a backup holding thousands of book files, an EPUB
+ * with thousands of chapters, or a comic with thousands of pages
+ * stays far below every limit — but hard: an archive that expands
+ * past them (the classic zip-bomb shape) fails fast with a
+ * plain-words error instead of filling the phone's storage or
+ * running the process out of memory.
+ */
+object ArchiveLimits {
+    /** Zip entries in one archive. */
+    const val MAX_ENTRIES = 100_000
+
+    /** Bytes one metadata entry (the backup payload JSON,
+     * ComicInfo.xml, a files manifest…) may be read into memory. */
+    const val MAX_METADATA_ENTRY_BYTES = 64L * 1024 * 1024
+
+    /** Bytes one streamed entry (a comic page, one backed-up book
+     * file, one EPUB member) may expand to. */
+    const val MAX_STREAMED_ENTRY_BYTES = 1024L * 1024 * 1024
+
+    /** Bytes a whole archive may expand to, across all entries. */
+    const val MAX_TOTAL_EXPANDED_BYTES = 8L * 1024 * 1024 * 1024
+
+    /** Bytes of the picked/downloaded file itself at import. */
+    const val MAX_SOURCE_FILE_BYTES = 2L * 1024 * 1024 * 1024
+}
+
+/** Thrown the moment an archive crosses an [ArchiveLimits] cap;
+ * each reader catches it and turns it into its plain-words error. */
+internal class ArchiveLimitException(message: String) : Exception(message)
+
+/** Running total of expanded bytes for one archive read. */
+internal class ArchiveBudget(private val maxTotalBytes: Long) {
+    var totalBytes: Long = 0
+        private set
+
+    fun charge(bytes: Long, what: String) {
+        totalBytes += bytes
+        if (totalBytes > maxTotalBytes) {
+            throw ArchiveLimitException("$what expands past the safety limit")
+        }
+    }
+}
+
+/** Reads this stream fully, refusing (mid-read, so memory stays
+ * bounded) once it passes [maxBytes]. */
+internal fun InputStream.readBytesCapped(maxBytes: Long, what: String): ByteArray {
+    val out = ByteArrayOutputStream()
+    val buffer = ByteArray(64 * 1024)
+    var total = 0L
+    while (true) {
+        val n = read(buffer)
+        if (n < 0) break
+        total += n
+        if (total > maxBytes) throw ArchiveLimitException("$what is too large")
+        out.write(buffer, 0, n)
+    }
+    return out.toByteArray()
+}
+
+/** Copies this stream to [out], charging every chunk to [budget]
+ * and refusing once this single entry passes [maxEntryBytes]. */
+internal fun InputStream.copyToCapped(
+    out: OutputStream,
+    budget: ArchiveBudget,
+    maxEntryBytes: Long,
+    what: String
+): Long {
+    val buffer = ByteArray(64 * 1024)
+    var entryBytes = 0L
+    while (true) {
+        val n = read(buffer)
+        if (n < 0) break
+        entryBytes += n
+        if (entryBytes > maxEntryBytes) {
+            throw ArchiveLimitException("$what is too large")
+        }
+        budget.charge(n.toLong(), what)
+        out.write(buffer, 0, n)
+    }
+    return entryBytes
+}
+
+/**
+ * A live zip-entry stream that charges everything its reader pulls
+ * from it to [budget] (and to its own per-entry cap) — for sinks
+ * that copy an entry themselves, like backup restore: the copy is
+ * counted as it happens, and crossing a cap aborts it mid-stream.
+ */
+internal class CountingEntryInputStream(
+    base: InputStream,
+    private val budget: ArchiveBudget,
+    private val maxEntryBytes: Long,
+    private val what: String
+) : FilterInputStream(base) {
+    private var entryBytes = 0L
+
+    override fun read(): Int {
+        val b = super.read()
+        if (b >= 0) charge(1)
+        return b
+    }
+
+    override fun read(target: ByteArray, offset: Int, length: Int): Int {
+        val n = super.read(target, offset, length)
+        if (n > 0) charge(n.toLong())
+        return n
+    }
+
+    private fun charge(n: Long) {
+        entryBytes += n
+        if (entryBytes > maxEntryBytes) {
+            throw ArchiveLimitException("$what is too large")
+        }
+        budget.charge(n, what)
+    }
+}
 
 /**
  * EPUB (PLAN §4): streaming zip extraction (entry-by-entry, 64 KB
@@ -248,16 +372,27 @@ class EpubParser : BookParser {
 
     // -- zip ------------------------------------------------------------------
 
-    private fun extractZip(staged: File, destDir: File): AppError? {
+    /** [ArchiveLimits] apply; the limit parameters exist only so
+     * tests can trip the caps with small fixtures. On a size
+     * overflow the partial extraction is deleted again — nothing
+     * half-unzipped stays behind. */
+    internal fun extractZip(
+        staged: File,
+        destDir: File,
+        maxEntries: Int = ArchiveLimits.MAX_ENTRIES,
+        maxEntryBytes: Long = ArchiveLimits.MAX_STREAMED_ENTRY_BYTES,
+        maxTotalBytes: Long = ArchiveLimits.MAX_TOTAL_EXPANDED_BYTES
+    ): AppError? {
         return try {
             destDir.mkdirs()
             val destCanonical = destDir.canonicalPath
             var entries = 0
+            val budget = ArchiveBudget(maxTotalBytes)
             ZipInputStream(staged.inputStream().buffered()).use { zip ->
                 val buffer = ByteArray(64 * 1024)
                 var entry = zip.nextEntry
                 while (entry != null) {
-                    if (++entries > MAX_ENTRIES) {
+                    if (++entries > maxEntries) {
                         return AppError.BadFile("this EPUB has too many files inside")
                     }
                     val name = entry.name.replace('\\', '/')
@@ -268,8 +403,14 @@ class EpubParser : BookParser {
                         }
                         out.parentFile?.mkdirs()
                         out.outputStream().buffered().use { sink ->
+                            var entryBytes = 0L
                             var n = zip.read(buffer)
                             while (n >= 0) {
+                                entryBytes += n
+                                if (entryBytes > maxEntryBytes) {
+                                    throw ArchiveLimitException("this EPUB")
+                                }
+                                budget.charge(n.toLong(), "this EPUB")
                                 sink.write(buffer, 0, n)
                                 n = zip.read(buffer)
                             }
@@ -280,6 +421,9 @@ class EpubParser : BookParser {
                 }
             }
             null
+        } catch (e: ArchiveLimitException) {
+            destDir.deleteRecursively()
+            AppError.BadFile("this EPUB is too large to open safely")
         } catch (e: ZipException) {
             AppError.BadFile("this file isn't a readable EPUB")
         } catch (e: IOException) {
@@ -467,7 +611,6 @@ class EpubParser : BookParser {
     }
 
     companion object {
-        private const val MAX_ENTRIES = 20_000
         private val FONT_EXTENSIONS = listOf(".ttf", ".otf", ".woff", ".woff2")
     }
 }

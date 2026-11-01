@@ -8,11 +8,24 @@ enum class SourceType { LOCAL_FILE, EXTENSION, OPDS }
 /** On-disk formats the import pipeline recognises (PLAN §4). */
 enum class BookFormat { EPUB, PDF, TXT, MARKDOWN, FB2, HTML, CBZ, MOBI, AZW3, CBR, UNKNOWN }
 
-enum class DownloadState { NONE, QUEUED, DOWNLOADING, READY, FAILED }
+enum class DownloadState { NONE, QUEUED, DOWNLOADING, READY, FAILED,
+    /** Manga programme (M3): an image chapter whose page files
+     * are only PARTLY on disk — the stored record names the
+     * pages still missing, and a retry fetches only those.
+     * Never counted as downloaded anywhere (every count in
+     * the app reads READY). Stored by name like the rest, so
+     * no schema change; older builds degrade it to NONE. */
+    PARTIAL }
 
 enum class TrustState { TRUSTED, CHANGED_REQUIRES_RETRUST }
 
-enum class ExtensionKind { DECLARATIVE, JS, DEX, LIVE }
+enum class ExtensionKind { DECLARATIVE, JS, DEX, LIVE,
+    /** Keiyoushi player (K3): a Mihon-format extension APK the
+     * player track (data/extension/player) downloads, verifies
+     * and loads — NOT the facade DexLoader track. Stored by
+     * name like the rest, so no schema change; older builds
+     * degrade it to DECLARATIVE on read. */
+    KEIYOUSHI }
 
 enum class DownloadKind { CHAPTER, PREFETCH, EXPORT }
 

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.FindReplace
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Science
@@ -67,6 +68,8 @@ import app.xreader.data.reader.OverlayPlayer
 import app.xreader.data.reader.ReadAloudController
 import app.xreader.domain.reader.EyeState
 import app.xreader.domain.reader.PageTurnOverride
+import app.xreader.domain.reader.TermPair
+import app.xreader.ui.more.TermsEditor
 import app.xreader.domain.reader.PageTurnTier
 import app.xreader.domain.reader.ReaderAlignment
 import app.xreader.domain.reader.ReaderFontChoice
@@ -112,6 +115,12 @@ fun ReaderSettingsSheet(
     /** v1.0.2 (sweep): save a word from this chapter to
      * "Words I'm learning". */
     onSaveWord: (String) -> Unit = {},
+    /** P0 (Reader Terms): this book's own term pairs and their
+     * editor — the per-book half of Reader Terms (the global
+     * list lives in Settings). Display-only: the book's own
+     * text is never changed. */
+    bookTerms: List<TermPair> = emptyList(),
+    onBookTermsChange: (List<TermPair>) -> Unit = {},
     /** Nocturne §5.11: the reader chrome's Theme tile opens this
      * sheet straight on the "page" sub-page. */
     initialPage: String = "index",
@@ -150,6 +159,7 @@ fun ReaderSettingsSheet(
                     when (page) {
                         "reading" -> "Reading"
                         "page" -> "Page & text"
+                        "terms" -> "Terms for this book"
                         else -> "Extras"
                     },
                     style = MaterialTheme.typography.titleMedium,
@@ -226,7 +236,20 @@ fun ReaderSettingsSheet(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = { page = "extras" },
                     badge = null,
-                
+
+                )
+                RowItem(
+                    icon = Icons.Filled.FindReplace,
+                    label = "Terms for this book",
+                    value = if (bookTerms.isEmpty()) {
+                        "Name fixes for this book"
+                    } else {
+                        "${bookTerms.size} saved"
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { page = "terms" },
+                    badge = null,
+
                 )
                 TextButton(onClick = onOpenCustomise) {
                     Text("Open the Customise screen — colours, glass, layout and more")
@@ -819,6 +842,22 @@ fun ReaderSettingsSheet(
                     value = config.warmLight,
                     range = 0f..0.6f,
                     onChange = { v -> onUpdate { it.copy(warmLight = v) } }
+                )
+            }
+
+            "terms" -> {
+                Text(
+                    "Names or words in THIS book that you want " +
+                        "shown differently. They apply to this " +
+                        "book only — for every book, use " +
+                        "Settings → Reader terms. The book's own " +
+                        "text is never changed.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TermsEditor(
+                    pairs = bookTerms,
+                    onChange = onBookTermsChange
                 )
             }
 

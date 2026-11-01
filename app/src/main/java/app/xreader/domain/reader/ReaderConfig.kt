@@ -3,6 +3,20 @@ package app.xreader.domain.reader
 /** Reading mode: classic pages, or one continuous column. */
 enum class ReaderMode { PAGED, SCROLL }
 
+/**
+ * Manga programme (slice M2): how an IMAGE chapter is read —
+ * one continuous vertical strip (webtoon style) or one page
+ * per screen. The plan's default at BOTH tiers of the
+ * option-scope rule is [WEBTOON]: the value in
+ * [ReaderConfig.imageMode] is the global default for every
+ * series, and a per-series override (BookReaderPrefs) set from
+ * inside the reader wins for that series only.
+ */
+enum class ImageReaderMode(val label: String) {
+    WEBTOON("Webtoon scroll"),
+    PAGED("Paged")
+}
+
 /** The user's page-turn override; AUTO lets the device tier decide. */
 enum class PageTurnOverride { AUTO, FULL, MID, MINIMAL }
 
@@ -103,7 +117,13 @@ data class ReaderConfig(
     /** v1.0.1 custom colour pair: paletteName "Custom" uses these
      * ARGB values (stored as Longs for DataStore). */
     val customPageArgb: Long = 0xFF000000L,
-    val customTextArgb: Long = 0xFFE8DFD0L
+    val customTextArgb: Long = 0xFFE8DFD0L,
+    /** Manga programme (slice M2): the GLOBAL default image-
+     * chapter reading mode (option-scope rule tier 1). A
+     * series' own override, set inside its reader, wins for
+     * that series only and never writes back here. Appended
+     * last so existing constructor call sites are untouched. */
+    val imageMode: ImageReaderMode = ImageReaderMode.WEBTOON
 )
 
 /** How the reader moves between chapters (v1.0.1). */

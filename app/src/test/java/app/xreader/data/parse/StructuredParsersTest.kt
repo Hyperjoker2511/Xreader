@@ -201,6 +201,53 @@ class EpubParserTest : ParserTestBase() {
         assertEquals(3723.25, SmilParser.parseClock("01:02:03.25")!!, 0.001)
         assertEquals(120.0, SmilParser.parseClock("2min")!!, 0.001)
     }
+
+    private fun rawZip(entries: List<Pair<String, ByteArray>>): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip ->
+            for ((name, bytes) in entries) {
+                zip.putNextEntry(ZipEntry(name))
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+        }
+        return out.toByteArray()
+    }
+
+    @Test fun extractionStopsAtTheTotalSizeCap() {
+        val bytes = rawZip(
+            listOf(
+                "a.bin" to ByteArray(600) { 1 },
+                "b.bin" to ByteArray(600) { 2 }
+            )
+        )
+        val (staged, work) = stage("book.epub", bytes)
+        val dest = File(work, "unzipped-test")
+        val error = EpubParser().extractZip(staged, dest, maxTotalBytes = 1_000)
+        assertTrue("expected BadFile, got $error", error is AppError.BadFile)
+        assertTrue((error as AppError.BadFile).reason.contains("too large"))
+        // The partial extraction was cleaned up again.
+        assertTrue(dest.listFiles().isNullOrEmpty())
+    }
+
+    @Test fun extractionStopsAtTheEntryCountCap() {
+        val bytes = rawZip(
+            listOf("a.bin" to byteArrayOf(1), "b.bin" to byteArrayOf(2))
+        )
+        val (staged, work) = stage("book.epub", bytes)
+        val dest = File(work, "unzipped-test")
+        val error = EpubParser().extractZip(staged, dest, maxEntries = 1)
+        assertTrue("expected BadFile, got $error", error is AppError.BadFile)
+        assertTrue((error as AppError.BadFile).reason.contains("too many files"))
+    }
+
+    @Test fun smallArchiveExtractsCleanly() {
+        val bytes = rawZip(listOf("a.bin" to byteArrayOf(1, 2, 3)))
+        val (staged, work) = stage("book.epub", bytes)
+        val dest = File(work, "unzipped-test")
+        assertEquals(null, EpubParser().extractZip(staged, dest))
+        assertTrue(File(dest, "a.bin").isFile)
+    }
 }
 
 class Fb2ParserTest : ParserTestBase() {
@@ -273,5 +320,71 @@ class CbzParserTest : ParserTestBase() {
         val sorted = listOf("10.jpg", "2.jpg", "1.jpg", "02.png", "a3.jpg")
             .sortedWith(NaturalSort)
         assertEquals(listOf("1.jpg", "2.jpg", "02.png", "10.jpg", "a3.jpg"), sorted)
+    }
+
+    private fun cbzBytes(entries: List<Pair<String, ByteArray>>): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip ->
+            for ((name, bytes) in entries) {
+                zip.putNextEntry(ZipEntry(name))
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+        }
+        return out.toByteArray()
+    }
+
+    @Test fun oversizedComicInfoIsRefused() {
+        val bytes = cbzBytes(
+            listOf(
+                "ComicInfo.xml" to ByteArray(100) { 65 },
+                "1.jpg" to byteArrayOf(1, 2, 3)
+            )
+        )
+        val (staged, work) = stage("comic.cbz", bytes)
+        val error = CbzParser().parse(
+            staged, work, {},
+            maxEntries = 100, maxMetadataBytes = 16,
+            maxEntryBytes = 1_000_000, maxTotalBytes = 1_000_000
+        ).unwrapErr()
+        assertTrue("expected ParseFailed, got $error", error is AppError.ParseFailed)
+        assertTrue((error as AppError.ParseFailed).reason.contains("too large"))
+    }
+
+    @Test fun tooManyEntriesAreRefused() {
+        val bytes = cbzBytes(
+            listOf(
+                "1.jpg" to byteArrayOf(1),
+                "2.jpg" to byteArrayOf(2),
+                "3.jpg" to byteArrayOf(3)
+            )
+        )
+        val (staged, work) = stage("comic.cbz", bytes)
+        val error = CbzParser().parse(
+            staged, work, {},
+            maxEntries = 2, maxMetadataBytes = 1_000_000,
+            maxEntryBytes = 1_000_000, maxTotalBytes = 1_000_000
+        ).unwrapErr()
+        assertTrue("expected ParseFailed, got $error", error is AppError.ParseFailed)
+        assertTrue((error as AppError.ParseFailed).reason.contains("too many files"))
+    }
+
+    @Test fun totalExpandedOverflowIsRefused() {
+        // Two 100-byte pages against a 150-byte total budget: the
+        // second page crosses the cap mid-copy.
+        val bytes = cbzBytes(
+            listOf(
+                "1.jpg" to ByteArray(100) { 1 },
+                "2.jpg" to ByteArray(100) { 2 }
+            )
+        )
+        val (staged, work) = stage("comic.cbz", bytes)
+        val error = CbzParser().parse(
+            staged, work, {},
+            maxEntries = 100, maxMetadataBytes = 1_000_000,
+            maxEntryBytes = 1_000_000, maxTotalBytes = 150
+        ).unwrapErr()
+        assertTrue("expected ParseFailed, got $error", error is AppError.ParseFailed)
+        assertTrue((error as AppError.ParseFailed).reason.contains("too large"))
     }
 }

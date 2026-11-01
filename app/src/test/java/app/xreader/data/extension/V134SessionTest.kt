@@ -2,6 +2,7 @@ package app.xreader.data.extension
 
 import app.xreader.core.error.AppResult
 import app.xreader.data.FakeTransport
+import app.xreader.data.net.HttpTransport
 import app.xreader.extensionapi.HostHttp
 import app.xreader.extensionapi.HostResponse
 import app.xreader.extensionapi.SourceChapter
@@ -43,6 +44,12 @@ import java.util.concurrent.atomic.AtomicLong
  *    gone after sign-out;
  *  - the encrypted store round trip + corrupt-record
  *    tolerance.
+ *
+ * v1.3.5 (P0, D1): the coordinator is PER CHAPTER SCOPE —
+ * single-flight per scope, a source-wide mint gate + 429
+ * park, invalidation/harvest/persistence isolated per
+ * scope, and a scope-enforcing fake FenrirRealm that only
+ * accepts a chapter with a token minted for that chapter.
  */
 class V134SessionTest {
 
@@ -97,6 +104,13 @@ class V134SessionTest {
                 "\"expires_at\":${wallNow.get() / 1000 + lifetimeSec}}"
         )
 
+    // v1.3.5 (P0, slice D1): chapter scope keys — opaque to
+    // the coordinator; DeclarativeSource derives them from
+    // the canonical chapter endpoint (chapterScopeKey).
+    private val scope1 = "scope-chapter-1"
+    private val scope2 = "scope-chapter-2"
+    private val scope42 = "scope-chapter-42"
+
     @Test
     fun `single flight - eight concurrent locked chapters mint once`() {
         val mints = AtomicInteger(0)
@@ -112,7 +126,7 @@ class V134SessionTest {
         repeat(8) {
             pool.execute {
                 start.await()
-                outcomes += coordinator.token(http, "42")
+                outcomes += coordinator.token(http, scope42, "42")
             }
         }
         start.countDown()
@@ -131,7 +145,7 @@ class V134SessionTest {
     fun `generation race - a stale failure cannot revoke a newer token`() {
         val http = FakeHostHttp { _, _ -> mintOk("tok-1") }
         val coordinator = coordinator(http)
-        val first = coordinator.token(http, "1")
+        val first = coordinator.token(http, scope1, "1")
             as ReadTokenCoordinator.MintOutcome.Ready
         // The site re-issues in-band: a new generation lands.
         coordinator.noteIssued(
@@ -139,14 +153,18 @@ class V134SessionTest {
                 "x-read-token-issued" to "tok-2",
                 "x-read-token-expires-at" to
                     (wallNow.get() / 1000 + 300).toString()
-            )
+            ),
+            scope1
         )
         // The OLD generation's failure arrives late.
-        coordinator.invalidate(first.generation)
-        assertEquals("tok-2", coordinator.currentToken()?.value)
+        coordinator.invalidate(scope1, first.generation)
+        assertEquals("tok-2", coordinator.currentToken(scope1)?.value)
         // Invalidating the CURRENT generation does clear it.
-        coordinator.invalidate(coordinator.currentToken()!!.generation)
-        assertNull(coordinator.currentToken())
+        coordinator.invalidate(
+            scope1,
+            coordinator.currentToken(scope1)!!.generation
+        )
+        assertNull(coordinator.currentToken(scope1))
     }
 
     @Test
@@ -156,14 +174,14 @@ class V134SessionTest {
             mintOk("tok-${mints.incrementAndGet()}", lifetimeSec = 90)
         }
         val coordinator = coordinator(http)
-        val first = coordinator.token(http, "1")
+        val first = coordinator.token(http, scope1, "1")
             as ReadTokenCoordinator.MintOutcome.Ready
         assertEquals("tok-1", first.token)
         // 40 monotonic seconds pass: inside the 60 s margin
-        // (90 s life), so the next need re-mints — even
-        // though the WALL clock never moved.
+        // (90 s life), so the next need FOR THE SAME SCOPE
+        // re-mints — even though the WALL clock never moved.
         elapsedNow.addAndGet(40_000)
-        val second = coordinator.token(http, "2")
+        val second = coordinator.token(http, scope1, "1")
             as ReadTokenCoordinator.MintOutcome.Ready
         assertEquals("tok-2", second.token)
         assertEquals(2, mints.get())
@@ -173,19 +191,19 @@ class V134SessionTest {
     fun `wall clock jumps do not kill a live token`() {
         val http = FakeHostHttp { _, _ -> mintOk("tok-1", lifetimeSec = 300) }
         val coordinator = coordinator(http)
-        coordinator.token(http, "1")
+        coordinator.token(http, scope1, "1")
         // The wall clock leaps two hours (timezone travel);
         // only 10 monotonic seconds passed — still valid.
         wallNow.addAndGet(2 * 3600_000L)
         elapsedNow.addAndGet(10_000)
-        assertEquals("tok-1", coordinator.currentToken()?.value)
+        assertEquals("tok-1", coordinator.currentToken(scope1)?.value)
     }
 
     @Test
     fun `a stored token is revalidated after restart, never trusted`() = runBlocking {
         val store = testSessionStore()
         store.saveReadToken(
-            "fenrir",
+            "fenrir", scope1,
             StoredReadToken(
                 value = "stored-tok",
                 expiresAtMs = wallNow.get() + 3600_000,
@@ -199,9 +217,9 @@ class V134SessionTest {
         }
         val coordinator = coordinator(http, store, "fenrir")
         // Present-but-unverified: no proactive attach…
-        assertNull(coordinator.currentToken())
+        assertNull(coordinator.currentToken(scope1))
         // …and the first need mints fresh, generation continuing.
-        val outcome = coordinator.token(http, "1")
+        val outcome = coordinator.token(http, scope1, "1")
             as ReadTokenCoordinator.MintOutcome.Ready
         assertEquals("fresh-tok", outcome.token)
         assertEquals(8L, outcome.generation)
@@ -213,7 +231,7 @@ class V134SessionTest {
         val http = FakeHostHttp { _, _ ->
             HostResponse(403, "{\"challenge_required\":true}")
         }
-        val outcome = coordinator(http).token(http, "1")
+        val outcome = coordinator(http).token(http, scope1, "1")
         assertTrue(outcome is ReadTokenCoordinator.MintOutcome.ChallengeRequired)
     }
 
@@ -222,7 +240,7 @@ class V134SessionTest {
         val http = FakeHostHttp { _, _ ->
             HostResponse(401, "{\"error\":\"unauthorized\"}")
         }
-        val outcome = coordinator(http).token(http, "1")
+        val outcome = coordinator(http).token(http, scope1, "1")
         assertTrue(outcome is ReadTokenCoordinator.MintOutcome.SessionDead)
     }
 
@@ -234,11 +252,13 @@ class V134SessionTest {
             HostResponse(429, "slow down", mapOf("Retry-After" to "45"))
         }
         val coordinator = coordinator(http)
-        val first = coordinator.token(http, "1")
+        val first = coordinator.token(http, scope1, "1")
         assertTrue(first is ReadTokenCoordinator.MintOutcome.RateLimited)
         assertEquals(45L, (first as ReadTokenCoordinator.MintOutcome.RateLimited)
             .retryAfterSeconds)
-        val second = coordinator.token(http, "2")
+        // The park is SOURCE-WIDE: another chapter's scope is
+        // parked too, without a second mint POST.
+        val second = coordinator.token(http, scope2, "2")
         assertTrue(second is ReadTokenCoordinator.MintOutcome.RateLimited)
         assertEquals("no second mint during the park", 1, mints.get())
     }
@@ -247,10 +267,14 @@ class V134SessionTest {
     fun `encrypted store round trip and corrupt record tolerance`() = runBlocking {
         val store = testSessionStore()
         val token = StoredReadToken("sekret", 123_456_789L, 3)
-        store.saveReadToken("src-1", token)
-        assertEquals(token, store.loadReadToken("src-1"))
-        store.clearReadToken("src-1")
-        assertNull(store.loadReadToken("src-1"))
+        store.saveReadToken("src-1", scope1, token)
+        assertEquals(token, store.loadReadToken("src-1", scope1))
+        assertNull(
+            "one scope's record never answers for another scope",
+            store.loadReadToken("src-1", scope2)
+        )
+        store.clearReadToken("src-1", scope1)
+        assertNull(store.loadReadToken("src-1", scope1))
 
         // A record written by something else (or corrupted)
         // reads as ABSENT, never a crash.
@@ -265,6 +289,196 @@ class V134SessionTest {
             "{\"version\":99,\"value\":\"x\"}"
         )
         assertNull(vaultStore.loadReadToken("src-2"))
+    }
+
+    // ── v1.3.5 (P0, D1): per-chapter token scope ──────────
+
+    /** A mint whose token ENCODES the chapter hint it was
+     * minted with: `tok-for-<hint>`. */
+    private fun hintedMint(
+        mints: AtomicInteger,
+        active: AtomicInteger? = null,
+        maxActive: AtomicInteger? = null,
+        sleepMs: Long = 0
+    ) = FakeHostHttp { _, body ->
+        mints.incrementAndGet()
+        if (active != null && maxActive != null) {
+            val now = active.incrementAndGet()
+            maxActive.accumulateAndGet(now) { a, b -> maxOf(a, b) }
+            if (sleepMs > 0) Thread.sleep(sleepMs)
+            active.decrementAndGet()
+        } else if (sleepMs > 0) {
+            Thread.sleep(sleepMs)
+        }
+        val hint = body.substringAfter("\"chapter_id\":\"")
+            .substringBefore("\"")
+        mintOk("tok-for-$hint")
+    }
+
+    @Test
+    fun `different chapters mint separately and pair bodies to results`() {
+        val mints = AtomicInteger(0)
+        val active = AtomicInteger(0)
+        val maxActive = AtomicInteger(0)
+        val http = hintedMint(mints, active, maxActive, sleepMs = 120)
+        val coordinator = coordinator(http)
+        val pool = Executors.newFixedThreadPool(2)
+        val start = CountDownLatch(1)
+        val outcomes = ConcurrentLinkedQueue<Pair<String, ReadTokenCoordinator.MintOutcome>>()
+        listOf(scope1 to "1", scope2 to "2").forEach { (scopeKey, hint) ->
+            pool.execute {
+                start.await()
+                outcomes += scopeKey to coordinator.token(http, scopeKey, hint)
+            }
+        }
+        start.countDown()
+        pool.shutdown()
+        assertTrue(pool.awaitTermination(15, TimeUnit.SECONDS))
+        assertEquals("one mint per scope", 2, mints.get())
+        assertEquals(
+            "the mint gate serialises POSTs across scopes",
+            1, maxActive.get()
+        )
+        val byScope = outcomes.toMap()
+        assertEquals(
+            "tok-for-1",
+            (byScope[scope1] as ReadTokenCoordinator.MintOutcome.Ready).token
+        )
+        assertEquals(
+            "tok-for-2",
+            (byScope[scope2] as ReadTokenCoordinator.MintOutcome.Ready).token
+        )
+        assertEquals(
+            listOf("{\"chapter_id\":\"1\"}", "{\"chapter_id\":\"2\"}"),
+            http.posts.map { it.second }.sorted()
+        )
+    }
+
+    @Test
+    fun `no cross-chapter reuse while a token is comfortably valid`() {
+        val mints = AtomicInteger(0)
+        val http = hintedMint(mints)
+        val coordinator = coordinator(http)
+        val first = coordinator.token(http, scope1, "1")
+            as ReadTokenCoordinator.MintOutcome.Ready
+        assertEquals("tok-for-1", first.token)
+        // Chapter 2 must NOT be handed chapter 1's token,
+        // however valid it is: it mints its own.
+        val second = coordinator.token(http, scope2, "2")
+            as ReadTokenCoordinator.MintOutcome.Ready
+        assertEquals("tok-for-2", second.token)
+        assertEquals(2, mints.get())
+        assertEquals("tok-for-1", coordinator.currentToken(scope1)?.value)
+        assertEquals("tok-for-2", coordinator.currentToken(scope2)?.value)
+    }
+
+    @Test
+    fun `same chapter reuses its token without a second mint`() {
+        val mints = AtomicInteger(0)
+        val http = hintedMint(mints)
+        val coordinator = coordinator(http)
+        val first = coordinator.token(http, scope1, "1")
+            as ReadTokenCoordinator.MintOutcome.Ready
+        val second = coordinator.token(http, scope1, "1")
+            as ReadTokenCoordinator.MintOutcome.Ready
+        assertEquals(first.token, second.token)
+        assertEquals(1, mints.get())
+    }
+
+    @Test
+    fun `invalidation is isolated to its own scope`() {
+        val http = hintedMint(AtomicInteger(0))
+        val coordinator = coordinator(http)
+        val a = coordinator.token(http, scope1, "1")
+            as ReadTokenCoordinator.MintOutcome.Ready
+        coordinator.token(http, scope2, "2")
+        coordinator.invalidate(scope1, a.generation)
+        assertNull(coordinator.currentToken(scope1))
+        assertEquals(
+            "chapter 2's token survives chapter 1's failure",
+            "tok-for-2", coordinator.currentToken(scope2)?.value
+        )
+    }
+
+    @Test
+    fun `header harvest is isolated to the responding scope`() {
+        val http = hintedMint(AtomicInteger(0))
+        val coordinator = coordinator(http)
+        coordinator.token(http, scope1, "1")
+        coordinator.token(http, scope2, "2")
+        coordinator.noteIssued(
+            mapOf(
+                "x-read-token-issued" to "tok-1-reissued",
+                "x-read-token-expires-at" to
+                    (wallNow.get() / 1000 + 300).toString()
+            ),
+            scope1
+        )
+        assertEquals("tok-1-reissued", coordinator.currentToken(scope1)?.value)
+        assertEquals(
+            "the other scope keeps its own token",
+            "tok-for-2", coordinator.currentToken(scope2)?.value
+        )
+    }
+
+    @Test
+    fun `persistence is per scope and clear removes every scope`() = runBlocking {
+        val store = testSessionStore()
+        val http = hintedMint(AtomicInteger(0))
+        val coordinator = coordinator(http, store, "fenrir")
+        coordinator.token(http, scope1, "1")
+        coordinator.token(http, scope2, "2")
+        assertEquals(
+            "tok-for-1", store.loadReadToken("fenrir", scope1)?.value
+        )
+        assertEquals(
+            "tok-for-2", store.loadReadToken("fenrir", scope2)?.value
+        )
+        // A fresh coordinator over the same store loads each
+        // scope's record as UNVERIFIED — never the other's.
+        val restarted = coordinator(http, store, "fenrir")
+        assertNull(restarted.currentToken(scope1))
+        assertNull(restarted.currentToken(scope2))
+        // Sign-out (the registry hook) removes BOTH records.
+        ReadTokenCoordinators.forSource("fenrir", spec(), store).clear()
+        assertNull(store.loadReadToken("fenrir", scope1))
+        assertNull(store.loadReadToken("fenrir", scope2))
+    }
+
+    @Test
+    fun `challenge and session-dead mints leave no scoped token`() = runBlocking {
+        val store = testSessionStore()
+        val challengeHttp = FakeHostHttp { _, _ ->
+            HostResponse(403, "{\"challenge_required\":true}")
+        }
+        val challenged = coordinator(challengeHttp, store, "fenrir")
+        val outcome = challenged.token(challengeHttp, scope1, "1")
+        assertTrue(outcome is ReadTokenCoordinator.MintOutcome.ChallengeRequired)
+        assertNull(challenged.currentToken(scope1))
+        assertNull(store.loadReadToken("fenrir", scope1))
+
+        val deadHttp = FakeHostHttp { _, _ ->
+            HostResponse(401, "{\"error\":\"unauthorized\"}")
+        }
+        val dead = coordinator(deadHttp, store, "fenrir")
+        val deadOutcome = dead.token(deadHttp, scope2, "2")
+        assertTrue(deadOutcome is ReadTokenCoordinator.MintOutcome.SessionDead)
+        assertNull(dead.currentToken(scope2))
+        assertNull(store.loadReadToken("fenrir", scope2))
+    }
+
+    @Test
+    fun `chapter scope key strips volatile parts and normalises`() {
+        val a = ReadTokenCoordinator.chapterScopeKey(
+            "HTTPS://Fenrir.Example/api/series/s/chapters/1?cb=99#frag"
+        )
+        val b = ReadTokenCoordinator.chapterScopeKey(
+            "https://fenrir.example/api/series/s/chapters/1/"
+        )
+        assertEquals(b, a)
+        assertEquals(
+            "https://fenrir.example/api/series/s/chapters/1", a
+        )
     }
 
     // ── The FenrirRealm road through DeclarativeSource ──────
@@ -362,6 +576,153 @@ class V134SessionTest {
             "first fetch anonymous, retry with the token",
             listOf("<none>", "Bearer tok-abc"),
             chapterAuth.toList()
+        )
+    }
+
+    // ── v1.3.5 (P0, D1): the scope-enforcing FenrirRealm ──
+
+    /**
+     * A fake FenrirRealm that ACCEPTS a chapter only when
+     * the Bearer token was minted with THAT chapter's remint
+     * hint (`tok[uuid-<n>]`). Under the old per-source
+     * coordinator, chapter 2's first retry would carry
+     * chapter 1's token and be answered locked; under the
+     * scoped coordinator chapter 2 never sees it.
+     */
+    private class ScopeEnforcingServer {
+        val mints = AtomicInteger(0)
+        val activeMints = AtomicInteger(0)
+        val maxActiveMints = AtomicInteger(0)
+        private val authByChapter =
+            java.util.concurrent.ConcurrentHashMap<Int, ConcurrentLinkedQueue<String>>()
+
+        fun authFor(chapter: Int): List<String> =
+            authByChapter[chapter]?.toList() ?: emptyList()
+
+        fun handle(request: HttpTransport.Request): AppResult<HttpTransport.Response> {
+            if (request.url == "https://fenrir.example/api/read-token") {
+                mints.incrementAndGet()
+                val now = activeMints.incrementAndGet()
+                maxActiveMints.accumulateAndGet(now) { a, b -> maxOf(a, b) }
+                Thread.sleep(60)
+                activeMints.decrementAndGet()
+                val hint = (request.body ?: "")
+                    .substringAfter("\"chapter_id\":\"")
+                    .substringBefore("\"")
+                return FakeTransport.ok(
+                    "{\"active\":true,\"token\":\"tok[$hint]\"," +
+                        "\"expires_at\":9999999999}"
+                )
+            }
+            val chapter = request.url.substringAfterLast('/')
+                .toIntOrNull()
+                ?: return AppResult.Ok(FakeTransport.response(404, "nope"))
+            val auth = request.headers.entries.firstOrNull {
+                it.key.equals("Authorization", ignoreCase = true)
+            }?.value
+            authByChapter.computeIfAbsent(chapter) {
+                ConcurrentLinkedQueue()
+            } += auth ?: "<none>"
+            return if (auth == "Bearer tok[uuid-$chapter]") {
+                FakeTransport.ok(
+                    "{\"content\":\"<p>Chapter $chapter of the " +
+                        "scope saga unfolds here in earnest.</p>\"," +
+                        "\"content_format\":\"html\"}"
+                )
+            } else {
+                FakeTransport.ok(
+                    "{\"content\":\"\",\"content_format\":\"locked\"," +
+                        "\"remint_chapter_id\":\"uuid-$chapter\"}"
+                )
+            }
+        }
+    }
+
+    private val chapter2Url =
+        "https://fenrir.example/api/series/absolute-regression/chapters/2"
+
+    @Test
+    fun `scope enforcing server - chapters sequentially never share tokens`() {
+        val server = ScopeEnforcingServer()
+        val transport = FakeTransport { request -> server.handle(request) }
+        val source = DeclarativeSource(
+            fenrirConfig(withCredentials = true),
+            testContext(
+                transport, tempDir(),
+                ExtensionPermissions(domains = listOf(fenrirHost))
+            )
+        )
+        val first = source.chapterContent(
+            SourceChapter(id = chapterUrl, name = "Chapter 1")
+        )
+        val second = source.chapterContent(
+            SourceChapter(id = chapter2Url, name = "Chapter 2")
+        )
+        assertTrue(first.html.contains("Chapter 1 of the scope saga"))
+        assertTrue(second.html.contains("Chapter 2 of the scope saga"))
+        assertEquals("one mint per chapter", 2, server.mints.get())
+        assertEquals(
+            "chapter 1 anonymous, then its own token",
+            listOf("<none>", "Bearer tok[uuid-1]"),
+            server.authFor(1)
+        )
+        assertEquals(
+            "chapter 2 anonymous, then its own token — chapter 1's " +
+                "token was never attached to it",
+            listOf("<none>", "Bearer tok[uuid-2]"),
+            server.authFor(2)
+        )
+    }
+
+    @Test
+    fun `scope enforcing server - chapters concurrently mint separately`() {
+        val server = ScopeEnforcingServer()
+        val config = fenrirConfig(withCredentials = true)
+            .copy(id = "fenrir-test-scope-concurrent")
+        fun sourceFor(transport: FakeTransport) = DeclarativeSource(
+            config,
+            testContext(
+                transport, tempDir(),
+                ExtensionPermissions(domains = listOf(fenrirHost))
+            )
+        )
+        val sourceA = sourceFor(FakeTransport { server.handle(it) })
+        val sourceB = sourceFor(FakeTransport { server.handle(it) })
+        val pool = Executors.newFixedThreadPool(2)
+        val start = CountDownLatch(1)
+        val contents = ConcurrentLinkedQueue<String>()
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        listOf(
+            sourceA to SourceChapter(id = chapterUrl, name = "Chapter 1"),
+            sourceB to SourceChapter(id = chapter2Url, name = "Chapter 2")
+        ).forEach { (source, chapter) ->
+            pool.execute {
+                start.await()
+                runCatching { source.chapterContent(chapter) }
+                    .onSuccess { contents += it.html }
+                    .onFailure { failures += it }
+            }
+        }
+        start.countDown()
+        pool.shutdown()
+        assertTrue(pool.awaitTermination(30, TimeUnit.SECONDS))
+        assertTrue(
+            "no concurrent fetch failed: $failures",
+            failures.isEmpty()
+        )
+        assertEquals(2, contents.size)
+        assertTrue(contents.any { it.contains("Chapter 1 of the scope saga") })
+        assertTrue(contents.any { it.contains("Chapter 2 of the scope saga") })
+        assertEquals("one mint per chapter", 2, server.mints.get())
+        assertEquals(
+            "the mint gate kept one POST on the wire at a time",
+            1, server.maxActiveMints.get()
+        )
+        assertTrue(
+            server.authFor(1).none { it.contains("tok[uuid-2]") }
+        )
+        assertTrue(
+            server.authFor(2).none { it.contains("tok[uuid-1]") }
         )
     }
 

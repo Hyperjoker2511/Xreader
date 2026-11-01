@@ -148,6 +148,22 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
     suspend fun setSelectedShelf(ref: String) =
         store.edit { it[KEY_SELECTED_SHELF] = ref }
 
+    /** Manga programme (M3): the Library/Explore split's
+     * last-used side — Novels (TEXT) or Manga — remembered
+     * across restarts, shared by both screens so the two
+     * always agree. Stored by enum name; anything unreadable
+     * is the Novels side. */
+    val librarySide: Flow<app.xreader.data.extension.MediaKind> =
+        store.data.map { prefs ->
+            parse(
+                prefs[KEY_LIBRARY_SIDE],
+                app.xreader.data.extension.MediaKind.TEXT
+            )
+        }
+
+    suspend fun setLibrarySide(side: app.xreader.data.extension.MediaKind) =
+        store.edit { it[KEY_LIBRARY_SIDE] = side.name }
+
     /** Reset customisation (R07): library VIEW choices only —
      * search query, sort and status filter are session state, not
      * customisation, and shelf hidden/selected state is library
@@ -168,6 +184,7 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
         val KEY_AUTO_DL = booleanPreferencesKey("library.auto_download_tracked")
         val KEY_HIDDEN_SHELVES = stringPreferencesKey("library.hidden_shelves")
         val KEY_SELECTED_SHELF = stringPreferencesKey("library.selected_shelf")
+        val KEY_LIBRARY_SIDE = stringPreferencesKey("library.side")
         val KEY_LAYOUT = stringPreferencesKey("library.layout")
         val KEY_COLUMNS = intPreferencesKey("library.grid_columns")
         val KEY_HERO = booleanPreferencesKey("library.show_continue")

@@ -24,8 +24,8 @@ android {
         applicationId = "app.xreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 36
-        versionName = "1.3.4"
+        versionCode = 37
+        versionName = "1.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -70,6 +70,11 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // v1.4.0 (G-K2-1 fallout): the OkHttp 5.3.2 jars
+            // (okhttp-brotli, okhttp-dnsoverhttps) and jspecify
+            // all ship the same multi-release OSGi manifest;
+            // the merge can only keep one — drop the duplicates.
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
     }
     testOptions {
@@ -134,6 +139,10 @@ dependencies {
     // declarative selector engine; Cash QuickJS runs JS sources in a
     // context with no ambient authority (Apache-2.0).
     implementation(project(":extension-api"))
+    // Keiyoushi player API surface (eu.kanade.tachiyomi.*) — transplanted in
+    // slice K1; nothing in the app consumes it yet, it only needs to be on the
+    // classpath for the slices that follow.
+    implementation(project(":mihon-api"))
     implementation(libs.jsoup)
     implementation(libs.quickjs.android)
 
@@ -162,4 +171,10 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.kxml2)
+
+    // K6: the project's first instrumented tests (the Keiyoushi
+    // fixture load test). Test-only: neither artifact reaches
+    // the app APK.
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }

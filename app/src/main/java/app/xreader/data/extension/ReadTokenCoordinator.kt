@@ -24,11 +24,6 @@ import java.util.concurrent.ConcurrentHashMap
  *    `POST /api/read-token` carrying the account session's
  *    cookies (the fetch road attaches them); the answer's
  *    token then rides the retry as `Authorization: Bearer`;
- *  - SINGLE-FLIGHT: one mint in flight per source — eight
- *    concurrent locked chapters share it (the shared
- *    operation is a standalone [CompletableDeferred] on the
- *    coordinator's own scope: a waiting caller being
- *    cancelled never cancels the mint);
  *  - GENERATION-AWARE: every mint/re-issue bumps the
  *    generation; [invalidate] clears the held token ONLY
  *    when the generation matches, so a stale chapter's
@@ -48,14 +43,29 @@ import java.util.concurrent.ConcurrentHashMap
  *    caller falls back to the honest locked state. A token
  *    problem NEVER masquerades as a sign-in problem.
  *
- * The facade is BLOCKING because the Source API it serves
- * is blocking (HostHttpImpl already bridges with
- * runBlocking); the async machinery stays inside.
- * Coordinators are per-source and process-wide
- * ([ReadTokenCoordinators]) because DeclarativeSource
- * instances are rebuilt per operation.
- *
- * Two refinements from the second design review:
+ * v1.3.5 (P0, slice D1) — the coordinator rebuild:
+ *  - PER-CHAPTER TOKEN SCOPE: whether the site binds a
+ *    read token to the chapter it was minted for is
+ *    unproven either way, so the conservative shape holds:
+ *    token state is a map keyed by chapter scope (see
+ *    [chapterScopeKey]). Single-flight is PER SCOPE — two
+ *    different chapters never share a mint or a token —
+ *    while the mint POST itself is serialised source-wide
+ *    behind a mint gate, and the 429 cooldown stays
+ *    source-wide (one scope's 429 parks every scope).
+ *    [MintOutcome.ChallengeRequired] and
+ *    [MintOutcome.SessionDead] describe the SESSION, never
+ *    create a scoped token, and clear nothing.
+ *  - ONE LOCK DISCIPLINE: ALL coordinator state (every
+ *    scope's held token/deadline/verified/loaded/in-flight,
+ *    the shared cooldown, the clear-epoch) sits behind
+ *    [stateMutex]; the old shape guarded only the in-flight
+ *    slot and force-unwrapped a token after lock release
+ *    (a crash path). No force-unwrap remains. The persisted
+ *    record load COMPLETES under the lock before the scope
+ *    is treated as loaded, and a load never overwrites a
+ *    token this process already holds — a late load can no
+ *    longer clobber a fresher mint.
  *  - CLOCKS: expiry is judged on a MONOTONIC clock
  *    ([elapsedMs]) while the token lives in this process —
  *    a wall-clock jump (timezone travel, NTP sync, the user
@@ -71,7 +81,14 @@ import java.util.concurrent.ConcurrentHashMap
  *    answered locked. Nothing mints because a download was
  *    scheduled or a book was opened — the proactive path
  *    ([currentToken]) only ever ATTACHES an already-held,
- *    comfortably valid token.
+ *    comfortably valid token for the exact scope fetched.
+ *
+ * The facade is BLOCKING because the Source API it serves
+ * is blocking (HostHttpImpl already bridges with
+ * runBlocking); the async machinery stays inside.
+ * Coordinators are per-source and process-wide
+ * ([ReadTokenCoordinators]) because DeclarativeSource
+ * instances are rebuilt per operation.
  */
 class ReadTokenCoordinator(
     private val spec: OperationTokenSpec,
@@ -96,100 +113,204 @@ class ReadTokenCoordinator(
         data class Unavailable(val detail: String) : MintOutcome
     }
 
-    private val mutex = Mutex()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var held: StoredReadToken? = null
-    /** The held token's deadline on the MONOTONIC clock —
-     * the only deadline validity is ever judged by. */
-    private var heldDeadlineElapsedMs = 0L
-    /** False for a token restored from the store after a
-     * restart: present for generation purposes, never
-     * trusted as valid until this process mints/harvests. */
-    private var heldVerified = false
-    private var loadedFromStore = false
-    private var inFlight: CompletableDeferred<MintOutcome>? = null
-    private var cooldownUntilMs = 0L
-    private val json = Json { ignoreUnknownKeys = true }
-
-    /** The currently held token when it is comfortably
-     * valid — no mint, no wait. Null otherwise. */
-    fun currentToken(): StoredReadToken? {
-        val token = held ?: return null
-        return token.takeIf { isComfortablyValid(it) }
+    /** One chapter scope's credential state. Every field is
+     * guarded by [stateMutex] — no exceptions. */
+    private class ScopeState {
+        var held: StoredReadToken? = null
+        /** The held token's deadline on the MONOTONIC clock —
+         * the only deadline validity is ever judged by. */
+        var heldDeadlineElapsedMs = 0L
+        /** False for a token restored from the store after a
+         * restart: present for generation purposes, never
+         * trusted as valid until this process mints/harvests. */
+        var heldVerified = false
+        /** True only AFTER the persisted-record load for this
+         * scope has completed (see ensureLoadedLocked). */
+        var loadedFromStore = false
+        var inFlight: CompletableDeferred<MintOutcome>? = null
     }
 
-    private fun isComfortablyValid(token: StoredReadToken): Boolean =
-        heldVerified &&
-            elapsedMs() < heldDeadlineElapsedMs -
-                spec.renewalMarginSeconds * 1000
+    /** The single lock behind ALL coordinator state. */
+    private val stateMutex = Mutex()
+    /** Serialises the actual mint POST across scopes: one
+     * mint on the wire at a time per source, so a chapter
+     * burst can never become a mint storm. */
+    private val mintGate = Mutex()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val states = HashMap<String, ScopeState>()
+    /** Source-wide 429 park (monotonic deadline), guarded
+     * by [stateMutex]. */
+    private var cooldownUntilMs = 0L
+    /** Bumped by [clear]: a mint launched before a sign-out
+     * must not resurrect a token after it. Guarded by
+     * [stateMutex]. */
+    private var clearEpoch = 0L
+    private val json = Json { ignoreUnknownKeys = true }
 
-    /** Adopt [token] as the held credential: its lifetime
-     * is re-anchored onto the monotonic clock from the
-     * wall-clock expiry the site stated. */
-    private fun adopt(token: StoredReadToken) {
-        held = token
-        heldDeadlineElapsedMs =
+    private fun stateFor(scopeKey: String): ScopeState =
+        states.getOrPut(scopeKey) { ScopeState() }
+
+    /** The currently held token for [scopeKey] when it is
+     * comfortably valid — no mint, no wait. Null otherwise.
+     * Only ever answers for the exact scope asked about. */
+    fun currentToken(scopeKey: String): StoredReadToken? = runBlocking {
+        stateMutex.withLock {
+            val state = states[scopeKey] ?: return@withLock null
+            currentTokenLocked(state)
+        }
+    }
+
+    /** [stateMutex] must be held. */
+    private fun currentTokenLocked(state: ScopeState): StoredReadToken? {
+        val token = state.held ?: return null
+        return token.takeIf {
+            state.heldVerified &&
+                elapsedMs() < state.heldDeadlineElapsedMs -
+                    spec.renewalMarginSeconds * 1000
+        }
+    }
+
+    /** Adopt [token] as [state]'s held credential: its
+     * lifetime is re-anchored onto the monotonic clock from
+     * the wall-clock expiry the site stated.
+     * [stateMutex] must be held. */
+    private fun adoptLocked(state: ScopeState, token: StoredReadToken) {
+        state.held = token
+        state.heldDeadlineElapsedMs =
             elapsedMs() + (token.expiresAtMs - nowMs()).coerceAtLeast(0)
-        heldVerified = true
+        state.heldVerified = true
     }
 
     /**
-     * A token for the caller, minting (single-flight) when
-     * the held one is absent/stale. [http] is the CALLER's
-     * host HTTP — the mint rides the caller's own session
-     * cookies, exactly as the site's client does. Blocking.
+     * A token for [scopeKey], minting (single-flight per
+     * scope) when the held one is absent/stale. [http] is
+     * the CALLER's host HTTP — the mint rides the caller's
+     * own session cookies, exactly as the site's client
+     * does. [mintChapterId] is the value the mint body
+     * carries (the locked record's remint hint or the
+     * chapter's own number) — a different concept from
+     * [scopeKey], the identity the token is held under.
+     * Blocking.
      */
-    fun token(http: HostHttp, chapterId: String?): MintOutcome = runBlocking {
-        ensureLoaded()
-        currentToken()?.let {
-            return@runBlocking MintOutcome.Ready(it.value, it.generation)
-        }
-        if (elapsedMs() < cooldownUntilMs) {
-            return@runBlocking MintOutcome.RateLimited(
-                ((cooldownUntilMs - elapsedMs()) / 1000).coerceAtLeast(1)
-            )
-        }
-        val deferred = mutex.withLock {
-            // Recheck under the lock: another caller's mint
-            // may have landed while this one queued.
-            currentToken()?.let {
-                return@withLock null
+    fun token(
+        http: HostHttp,
+        scopeKey: String,
+        mintChapterId: String?
+    ): MintOutcome = runBlocking {
+        val decision = stateMutex.withLock {
+            val state = stateFor(scopeKey)
+            ensureLoadedLocked(scopeKey, state)
+            currentTokenLocked(state)?.let {
+                return@withLock Decision.Done(
+                    MintOutcome.Ready(it.value, it.generation)
+                )
             }
-            inFlight ?: CompletableDeferred<MintOutcome>().also { fresh ->
-                inFlight = fresh
+            if (elapsedMs() < cooldownUntilMs) {
+                return@withLock Decision.Done(
+                    MintOutcome.RateLimited(
+                        ((cooldownUntilMs - elapsedMs()) / 1000)
+                            .coerceAtLeast(1)
+                    )
+                )
+            }
+            val existing = state.inFlight
+            if (existing != null) {
+                Decision.Join(existing)
+            } else {
+                val fresh = CompletableDeferred<MintOutcome>()
+                state.inFlight = fresh
+                Decision.Start(fresh, clearEpoch)
+            }
+        }
+        when (decision) {
+            is Decision.Done -> decision.outcome
+            is Decision.Join -> decision.deferred.await()
+            is Decision.Start -> {
                 scope.launch {
-                    val outcome = runCatching { doMint(http, chapterId) }
-                        .getOrElse {
-                            MintOutcome.Unavailable(
-                                it.message ?: "the token request failed"
-                            )
-                        }
-                    mutex.withLock {
-                        if (inFlight === fresh) inFlight = null
+                    val outcome = runCatching {
+                        gatedMint(http, scopeKey, mintChapterId, decision.epoch)
+                    }.getOrElse {
+                        MintOutcome.Unavailable(
+                            it.message ?: "the token request failed"
+                        )
                     }
-                    fresh.complete(outcome)
+                    stateMutex.withLock {
+                        val state = states[scopeKey]
+                        if (state?.inFlight === decision.deferred) {
+                            state.inFlight = null
+                        }
+                    }
+                    decision.deferred.complete(outcome)
                 }
+                decision.deferred.await()
             }
-        } ?: return@runBlocking currentToken()!!.let {
-            MintOutcome.Ready(it.value, it.generation)
         }
-        deferred.await()
     }
 
-    /** The mint itself. Runs on the coordinator's scope. */
-    private suspend fun doMint(http: HostHttp, chapterId: String?): MintOutcome {
+    private sealed interface Decision {
+        data class Done(val outcome: MintOutcome) : Decision
+        data class Join(val deferred: CompletableDeferred<MintOutcome>) : Decision
+        data class Start(
+            val deferred: CompletableDeferred<MintOutcome>,
+            val epoch: Long
+        ) : Decision
+    }
+
+    /** The mint gate: at most one mint POST per source on
+     * the wire at any moment, whatever the scope. A waiter
+     * re-checks its scope (and the shared cooldown) after
+     * acquiring the gate — an earlier scope's mint may have
+     * parked the source, or a harvest may have landed. */
+    private suspend fun gatedMint(
+        http: HostHttp,
+        scopeKey: String,
+        mintChapterId: String?,
+        epoch: Long
+    ): MintOutcome = mintGate.withLock {
+        val recheck: MintOutcome? = stateMutex.withLock {
+            val state = states[scopeKey]
+            when {
+                state == null -> null
+                else -> currentTokenLocked(state)?.let {
+                    MintOutcome.Ready(it.value, it.generation)
+                } ?: if (elapsedMs() < cooldownUntilMs) {
+                    MintOutcome.RateLimited(
+                        ((cooldownUntilMs - elapsedMs()) / 1000)
+                            .coerceAtLeast(1)
+                    )
+                } else {
+                    null
+                }
+            }
+        }
+        recheck ?: doMint(http, scopeKey, mintChapterId, epoch)
+    }
+
+    /** The mint itself. Runs under [mintGate] on the
+     * coordinator's scope; state transitions happen under
+     * [stateMutex]. */
+    private suspend fun doMint(
+        http: HostHttp,
+        scopeKey: String,
+        mintChapterId: String?,
+        epoch: Long
+    ): MintOutcome {
         val response: HostResponse = runCatching {
             http.post(
-                spec.mintUrl, spec.mintBody(chapterId),
+                spec.mintUrl, spec.mintBody(mintChapterId),
                 contentType = "application/json"
             )
         }.getOrElse {
-            return MintOutcome.Unavailable(it.message ?: "the token request failed")
+            return MintOutcome.Unavailable(
+                it.message ?: "the token request failed"
+            )
         }
         if (response.status == 429) {
             val retryAfter = retryAfterSeconds(response.headers)
-            cooldownUntilMs = elapsedMs() +
-                (retryAfter ?: DEFAULT_MINT_COOLDOWN_SECONDS) * 1000
+            stateMutex.withLock {
+                cooldownUntilMs = elapsedMs() +
+                    (retryAfter ?: DEFAULT_MINT_COOLDOWN_SECONDS) * 1000
+            }
             return MintOutcome.RateLimited(retryAfter)
         }
         val root = runCatching {
@@ -206,13 +327,24 @@ class ReadTokenCoordinator(
             val expiresAt = root["expires_at"]?.jsonPrimitive?.content
                 ?.toLongOrNull()?.times(1000)
                 ?: (nowMs() + spec.defaultLifetimeSeconds * 1000)
-            val stored = StoredReadToken(
-                value = tokenValue,
-                expiresAtMs = expiresAt,
-                generation = (held?.generation ?: 0) + 1
+            // Adopt + persist under the state lock, and only
+            // if no sign-out landed while the mint was on the
+            // wire (the epoch rule): a cleared source must
+            // never see this token resurrect.
+            val stored = stateMutex.withLock {
+                if (epoch != clearEpoch) return@withLock null
+                val state = stateFor(scopeKey)
+                val fresh = StoredReadToken(
+                    value = tokenValue,
+                    expiresAtMs = expiresAt,
+                    generation = (state.held?.generation ?: 0) + 1
+                )
+                adoptLocked(state, fresh)
+                persistLocked(scopeKey, fresh)
+                fresh
+            } ?: return MintOutcome.Unavailable(
+                "the session was cleared while the token was issued"
             )
-            adopt(stored)
-            persist(stored)
             return MintOutcome.Ready(stored.value, stored.generation)
         }
         if (challenge || response.status == 403 &&
@@ -236,75 +368,110 @@ class ReadTokenCoordinator(
      * Harvest a re-issued token from a chapter response's
      * headers (the site refreshes the token in-band; its
      * own client does exactly this). A harvest REPLACES the
-     * held token as a new generation — never the reverse.
+     * held token OF THE RESPONDING CHAPTER'S SCOPE as a new
+     * generation — it never touches another scope, and
+     * never the reverse.
      */
-    fun noteIssued(headers: Map<String, String>) {
+    fun noteIssued(headers: Map<String, String>, scopeKey: String) {
         val issued = headerValue(headers, spec.issuedHeader) ?: return
         if (issued.isBlank()) return
         val expiresAt = headerValue(headers, spec.issuedExpiresHeader)
             ?.toLongOrNull()?.times(1000)
             ?: (nowMs() + spec.defaultLifetimeSeconds * 1000)
-        val stored = StoredReadToken(
-            value = issued,
-            expiresAtMs = expiresAt,
-            generation = (held?.generation ?: 0) + 1
-        )
-        adopt(stored)
-        scope.launch { persist(stored) }
+        runBlocking {
+            stateMutex.withLock {
+                val state = stateFor(scopeKey)
+                val stored = StoredReadToken(
+                    value = issued,
+                    expiresAtMs = expiresAt,
+                    generation = (state.held?.generation ?: 0) + 1
+                )
+                adoptLocked(state, stored)
+                persistLocked(scopeKey, stored)
+            }
+        }
     }
 
     /**
-     * Forget the held token — ONLY when [generation] is the
-     * generation currently held. A failure that rode an old
-     * token must never revoke a newer one.
+     * Forget [scopeKey]'s held token — ONLY when
+     * [generation] is the generation that scope currently
+     * holds. A failure that rode an old token must never
+     * revoke a newer one, and one chapter's failure must
+     * never revoke another chapter's token.
      */
-    fun invalidate(generation: Long) {
-        val current = held ?: return
-        if (current.generation != generation) return
-        held = null
-        heldVerified = false
-        heldDeadlineElapsedMs = 0
-        val key = storeKey
-        if (store != null && key.isNotBlank()) {
-            scope.launch { runCatching { store.clearReadToken(key) } }
+    fun invalidate(scopeKey: String, generation: Long) {
+        runBlocking {
+            stateMutex.withLock {
+                val state = states[scopeKey] ?: return@withLock
+                val current = state.held ?: return@withLock
+                if (current.generation != generation) return@withLock
+                state.held = null
+                state.heldVerified = false
+                state.heldDeadlineElapsedMs = 0
+                val storeNow = store
+                if (storeNow != null && storeKey.isNotBlank()) {
+                    runCatching {
+                        storeNow.clearReadToken(storeKey, scopeKey)
+                    }
+                }
+            }
         }
     }
 
-    /** Forget everything (sign-out): held token, stored
-     * record, cooldown. */
+    /** Forget everything (sign-out): every scope's held
+     * token and stored record, plus the shared cooldown. */
     fun clear() {
-        held = null
-        heldVerified = false
-        heldDeadlineElapsedMs = 0
-        cooldownUntilMs = 0
-        val key = storeKey
-        if (store != null && key.isNotBlank()) {
-            scope.launch { runCatching { store.clearReadToken(key) } }
+        runBlocking {
+            stateMutex.withLock {
+                states.clear()
+                cooldownUntilMs = 0
+                clearEpoch += 1
+                val storeNow = store
+                if (storeNow != null && storeKey.isNotBlank()) {
+                    runCatching { storeNow.clearReadTokens(storeKey) }
+                }
+            }
         }
     }
 
-    private suspend fun ensureLoaded() {
-        if (loadedFromStore) return
-        loadedFromStore = true
-        val storeNow = store ?: return
-        if (storeKey.isBlank()) return
-        val stored = runCatching { storeNow.loadReadToken(storeKey) }
-            .getOrNull() ?: return
-        // REVALIDATION (second-review refinement): the
-        // stored record seeds the generation counter, but
-        // its wall-clock deadline is NOT trusted after a
-        // restart — the token is held UNVERIFIED, so the
-        // next locked chapter mints fresh instead of riding
-        // a possibly-dead credential into a locked answer.
-        held = stored
-        heldVerified = false
-        heldDeadlineElapsedMs = 0
+    /**
+     * Load [scopeKey]'s persisted record. Called with
+     * [stateMutex] held; the scope is marked loaded only
+     * AFTER the store read has completed, and the record is
+     * adopted only when the scope holds nothing yet — a
+     * token this process minted/harvested is always fresher
+     * than anything on disk.
+     *
+     * REVALIDATION (second-review refinement): the stored
+     * record seeds the generation counter, but its
+     * wall-clock deadline is NOT trusted after a restart —
+     * the token is held UNVERIFIED, so the next locked
+     * chapter mints fresh instead of riding a possibly-dead
+     * credential into a locked answer.
+     */
+    private suspend fun ensureLoadedLocked(scopeKey: String, state: ScopeState) {
+        if (state.loadedFromStore) return
+        val storeNow = store
+        if (storeNow == null || storeKey.isBlank()) {
+            state.loadedFromStore = true
+            return
+        }
+        val stored = runCatching {
+            storeNow.loadReadToken(storeKey, scopeKey)
+        }.getOrNull()
+        state.loadedFromStore = true
+        if (stored != null && state.held == null) {
+            state.held = stored
+            state.heldVerified = false
+            state.heldDeadlineElapsedMs = 0
+        }
     }
 
-    private suspend fun persist(token: StoredReadToken) {
+    /** [stateMutex] must be held. */
+    private suspend fun persistLocked(scopeKey: String, token: StoredReadToken) {
         val storeNow = store ?: return
         if (storeKey.isBlank()) return
-        runCatching { storeNow.saveReadToken(storeKey, token) }
+        runCatching { storeNow.saveReadToken(storeKey, scopeKey, token) }
     }
 
     private fun headerValue(headers: Map<String, String>, name: String): String? {
@@ -318,6 +485,38 @@ class ReadTokenCoordinator(
 
     companion object {
         const val DEFAULT_MINT_COOLDOWN_SECONDS = 60L
+
+        /**
+         * The canonical chapter scope key for a chapter
+         * identity (the resolved chapter id or chapter API
+         * URL): query and fragment are volatile and stripped;
+         * scheme and authority are case-insensitive and
+         * lowered; a trailing slash is normalised away. The
+         * mint body's chapter hint stays a separate concept
+         * (see [token]).
+         */
+        fun chapterScopeKey(chapterIdentity: String): String {
+            val trimmed = chapterIdentity.trim()
+            val bare = trimmed.substringBefore('#').substringBefore('?')
+            val schemeSep = bare.indexOf("://")
+            val normalised = if (schemeSep > 0) {
+                val rest = bare.substring(schemeSep + 3)
+                val slash = rest.indexOf('/')
+                val authority =
+                    if (slash >= 0) rest.substring(0, slash) else rest
+                val path = if (slash >= 0) rest.substring(slash) else ""
+                bare.substring(0, schemeSep).lowercase() + "://" +
+                    authority.lowercase() + path
+            } else {
+                bare
+            }
+            val noTrailing = if (normalised.length > 1) {
+                normalised.trimEnd('/')
+            } else {
+                normalised
+            }
+            return noTrailing.ifBlank { trimmed }
+        }
     }
 }
 
@@ -325,8 +524,9 @@ class ReadTokenCoordinator(
  * The process-wide coordinators, one per source id — the
  * registry exists because DeclarativeSource instances are
  * per-operation while the mint's single-flight must be
- * per-SOURCE. The first store offered wins (ExtensionService
- * passes the app SessionStore; probes pass null and stay
+ * per-SOURCE (per chapter scope within the source). The
+ * first store offered wins (ExtensionService passes the
+ * app SessionStore; probes pass null and stay
  * memory-only).
  */
 object ReadTokenCoordinators {
@@ -342,7 +542,8 @@ object ReadTokenCoordinators {
             ReadTokenCoordinator(spec, store, storeKey = sourceId)
         }
 
-    /** Sign-out hook: forget a source's token everywhere. */
+    /** Sign-out hook: forget a source's tokens everywhere —
+     * every chapter scope, in memory and in the store. */
     fun clear(sourceId: String) {
         coordinators[sourceId]?.clear()
     }

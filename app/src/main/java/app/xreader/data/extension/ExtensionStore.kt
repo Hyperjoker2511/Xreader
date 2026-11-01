@@ -68,6 +68,46 @@ class ExtensionStore(private val filesDir: File) {
     fun repoIndexFile(repoId: Long): File =
         File(root, "repos").apply { mkdirs() }.let { File(it, "$repoId.json") }
 
+    // ── Keiyoushi player (K3) ─────────────────────────────────
+
+    /** The player's extension files live OUTSIDE the
+     * extensions/<packageId> tree: donor-shaped flat files,
+     * `<packageName>.ext`, read-only once installed (the
+     * Komikku private-extension layout — Android 14+ requires
+     * dex-bearing files to be read-only). */
+    fun keiyoushiExtDir(): File =
+        File(filesDir, "keiyoushi-exts").apply { mkdirs() }
+
+    fun keiyoushiExtFile(packageName: String): File =
+        File(keiyoushiExtDir(), packageName.sanitise() + ".ext")
+
+    /** A downloaded APK awaiting verification + consent. */
+    fun keiyoushiStagingFile(packageName: String): File =
+        File(keiyoushiExtDir(), packageName.sanitise() + ".staging")
+
+    /** The player's persisted per-extension records (the K3
+     * state machine's durable form — file-backed like the
+     * pack state, so no Room migration rides this slice). */
+    fun keiyoushiPlayerStateFile(): File =
+        File(root, "keiyoushi-player.json")
+
+    /** v1.3.5 (Cycle 1, provider packs): one pack channel's
+     * persisted state (active/previous pack documents + check
+     * bookkeeping) — see [ProviderPackManager]. Lives beside
+     * the repo indexes; the pack id is sanitised like a
+     * package id before it becomes a file name. */
+    fun packStateFile(packId: String): File =
+        File(root, "packs").apply { mkdirs() }
+            .let { File(it, "${packId.sanitise()}.json") }
+
+    /** The pack ids that have a state file on disk — the
+     * cross-pack ownership check reads every channel's state. */
+    fun packIdsOnDisk(): List<String> =
+        File(root, "packs").listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".json") }
+            ?.map { it.name.removeSuffix(".json") }
+            ?: emptyList()
+
     /** v1.3.2 (scope E): the persisted site list of a FOREIGN
      * repository (another app's index) — foreign repos get their
      * own screen long after the add flow that detected them. */

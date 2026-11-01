@@ -517,6 +517,65 @@ fun ReaderScreen(
                 }
             }
 
+            // Manga programme (slice M2): an image chapter
+            // (its content carries a page list) opens the
+            // IMAGE reader — never the text renderers below,
+            // never the stream. The pages were set in the same
+            // state copy as the chapter text, so a chapter
+            // turn keeps showing the outgoing chapter's pages
+            // until the incoming chapter's land, exactly like
+            // the text path's keep-previous rule.
+            state.mangaPages != null -> {
+                MangaReader(
+                    pages = state.mangaPages!!,
+                    chapterKey = state.mangaChapterId,
+                    mode = state.imageMode,
+                    lowRam = state.imageLowRam,
+                    palette = palette,
+                    bookTitle = state.bookTitle,
+                    chapterTitle = ReaderCounters.headerLine(
+                        chapterTitle = state.chapter?.title ?: "",
+                        chapterIndex = state.chapterIndex,
+                        chapterCount = state.chapters.size,
+                        ownNumber = state.chapter?.let {
+                            app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
+                        }
+                    ),
+                    chapterFooter = ReaderCounters.footerLine(
+                        state.chapterIndex,
+                        state.chapters.size,
+                        state.chapter?.let {
+                            app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
+                        }
+                    ),
+                    hasPrevious = state.hasPrevious,
+                    hasNext = state.hasNext,
+                    chromeVisible = chromeVisible,
+                    restoreOffset = state.restoreOffset,
+                    restoreScrollFraction = state.restoreScrollFraction,
+                    restoreHint = state.restoreHint,
+                    restoreGeneration = state.restoreGeneration,
+                    doubleTapToZoom = config.doubleTapToZoom,
+                    disableZoomOut = config.disableZoomOut,
+                    assetFile = { assetFile(bookId, it) },
+                    onPosition = { page, fraction ->
+                        viewModel.onPosition(page, fraction)
+                    },
+                    onNextChapter = { viewModel.nextChapter() },
+                    onPreviousChapter = { viewModel.previousChapter() },
+                    onReachedEnd = { viewModel.onScrollReachedEnd() },
+                    onModeChange = { viewModel.setImageMode(it) },
+                    onBack = onBack,
+                    onOpenToc = { activeSheet = ActiveSheet.TOC },
+                    onOpenSettings = {
+                        settingsInitialPage = "index"
+                        activeSheet = ActiveSheet.SETTINGS
+                    },
+                    onToggleChrome = { chromeVisible = !chromeVisible },
+                    reduceMotion = reduceMotion
+                )
+            }
+
             // v1.0.2 (R17): the endless stream — scroll mode with
             // the Continuous transition renders the window, not a
             // single chapter.
@@ -617,6 +676,13 @@ fun ReaderScreen(
             }
         }
 
+        // Manga programme (slice M2): while the image reader
+        // owns the screen it draws its OWN chrome (its bottom
+        // bar carries the page position and the mode switch);
+        // the text chrome — seek slider, Listen, time
+        // estimates — has nothing honest to say about a page
+        // list and stays away.
+        if (state.mangaPages == null) {
         ReaderChrome(
             visible = chromeVisible,
             palette = palette,
@@ -679,6 +745,7 @@ fun ReaderScreen(
             onTopBarHeight = { px -> if (px > 0) topChromePx = px },
             onBottomBarHeight = { px -> if (px > 0) bottomChromePx = px }
         )
+        } // (text chrome — skipped while the image reader is up)
 
         // Eye-tracking status (Labs): small, honest, dismissible.
         if (config.eyeTracking && eyeState != EyeState.OFF) {
@@ -810,6 +877,8 @@ fun ReaderScreen(
                     hasBookOverride = state.hasBookOverride,
                     onClearBookOverride = { viewModel.clearBookOverride() },
                     onSaveWord = { word -> viewModel.saveWord(word) },
+                    bookTerms = state.bookTerms,
+                    onBookTermsChange = { pairs -> viewModel.setBookTerms(pairs) },
                     previewFontFamily = fontFamily
                 )
                 ActiveSheet.LISTEN -> ListenSheet(

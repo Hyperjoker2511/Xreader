@@ -80,6 +80,17 @@ data class BookDetailUiState(
      * already-merged copies of THIS book). */
     val duplicates: List<Book> = emptyList(),
     val mergedCopies: List<Book> = emptyList(),
+    /** Cycle 1 (F3): same-story copies in the Library that
+     * share reading progress with this book (separate entries,
+     * linked progress — never merged). */
+    val linkedCopies: List<LinkedCopy> = emptyList(),
+    /** Cycle 1 (F3): set when a sibling's progress was carried
+     * into this book — "Reading progress carried over from …". */
+    val carriedOverNote: String? = null,
+    /** Cycle 1 (F3): set when the carry-over landed on the
+     * NEAREST chapter because this site's numbering differs —
+     * shown under the Continue pill, where the resume happens. */
+    val progressLinkNote: String? = null,
     /** Cross-source copies found by "Other sources" (R11). */
     val otherSources: List<OtherSourceCandidate> = emptyList(),
     val otherSourcesState: OtherSourcesState = OtherSourcesState.NOT_LOADED,
@@ -174,6 +185,14 @@ data class OtherSourceCandidate(
     val downloadedCount: Int = 0
 )
 
+/** Cycle 1 (F3): one same-story copy in the Library whose
+ * reading progress this book shares. */
+data class LinkedCopy(
+    val bookId: Long,
+    val title: String,
+    val sourceName: String
+)
+
 /**
  * Book Detail (Stitch design, PLAN §4): cover header, Start reading /
  * Download actions, synopsis, and the chapter list with per-chapter
@@ -237,6 +256,9 @@ class BookDetailViewModel(
             storyError = story.storyError,
             storyOpen = story.storyOpen,
             providerName = story.providerName,
+            linkedCopies = story.linkedCopies,
+            carriedOverNote = story.carriedOverNote,
+            progressLinkNote = story.progressLinkNote,
             bookMeta = metas[bookId] ?: app.xreader.data.library.BookMeta(),
             chaptersLoading = story.chaptersLoading,
             chaptersError = story.chaptersError,
@@ -690,6 +712,110 @@ class BookDetailViewModel(
                         app.xreader.data.extension.SourceHealthState.NEEDS_SETUP
             )
         }
+        // Cycle 1 (F3): progress-linking — the "Also in your
+        // library" list. Derived live from the library and
+        // the refusals, so an unlink (or a new copy arriving)
+        // is reflected on this page without a reload.
+        viewModelScope.launch {
+            combine(
+                container.database.bookDao().observeAllBooks(),
+                container.progressLinkPrefs.refusedPairs
+            ) { books, refused -> books to refused }.collect { (books, refused) ->
+                val book = books.firstOrNull { it.id == bookId }
+                    ?: return@collect
+                val library = books.filter {
+                    it.inLibrary && it.mergedIntoId == null
+                }
+                val siblings = app.xreader.data.library.ProgressLinker
+                    .siblingsOf(book, library, refused)
+                val copies = siblings.map { sibling ->
+                    LinkedCopy(
+                        bookId = sibling.id,
+                        title = sibling.title,
+                        sourceName = sourceNameFor(sibling)
+                    )
+                }
+                storyLocal.value = storyLocal.value.copy(
+                    linkedCopies = copies
+                )
+            }
+        }
+        // Cycle 1 (F3): once this book's chapters are on the
+        // page, let a further-along linked copy move this
+        // book's resume point (the progress row every resume
+        // path reads). Converges: after a carry-over this
+        // book IS the group's furthest, so later opens no-op.
+        viewModelScope.launch {
+            state.first { it.book != null && it.chapters.isNotEmpty() }
+            runProgressLinkReconcile(growthRetried = false)
+        }
+    }
+
+    /** Cycle 1 (F3): one reconcile pass against the link
+     * group; a partial chapter list that doesn't reach the
+     * sibling yet grows toward it once, then reconciles
+     * again with the longer list. */
+    private suspend fun runProgressLinkReconcile(growthRetried: Boolean) {
+        val book = container.database.bookDao().getById(bookId) ?: return
+        when (val outcome = container.progressLinkService.reconcile(bookId)) {
+            is app.xreader.data.library.ProgressLinkService.Outcome.Applied -> {
+                storyLocal.value = storyLocal.value.copy(
+                    carriedOverNote = "Reading progress carried over from " +
+                        sourceNameFor(outcome.sourceBook) + ".",
+                    progressLinkNote = if (outcome.plan.exact) {
+                        null
+                    } else {
+                        "Chapter numbering differs on this site — " +
+                            "opened the closest chapter."
+                    }
+                )
+            }
+            is app.xreader.data.library.ProgressLinkService.Outcome.NeedsGrowth -> {
+                if (!growthRetried &&
+                    book.sourceType == app.xreader.data.db.SourceType.EXTENSION
+                ) {
+                    container.sourceBookSync.ensureChapters(
+                        book,
+                        kotlin.math.ceil(outcome.targetNumber.toDouble())
+                            .toInt() + 10
+                    )
+                    runProgressLinkReconcile(growthRetried = true)
+                }
+            }
+            app.xreader.data.library.ProgressLinkService.Outcome.NoChange ->
+                Unit
+        }
+    }
+
+    /** Cycle 1 (F3): "Not the same book" — sever the link
+     * with [otherBookId] both ways, for good. The list above
+     * updates itself from the refusal flow. */
+    fun unlinkCopy(otherBookId: Long) {
+        viewModelScope.launch {
+            container.progressLinkService.unlink(bookId, otherBookId)
+            _messages.tryEmit(
+                "Got it — these two copies won't share reading progress."
+            )
+        }
+    }
+
+    /** The plain site name a book's rows are labelled with —
+     * the same resolution the provider badge uses, with the
+     * extension's name and a plain fallback behind it. */
+    private suspend fun sourceNameFor(book: Book): String {
+        if (book.sourceType != app.xreader.data.db.SourceType.EXTENSION) {
+            return "Local file"
+        }
+        val extensionId = book.extensionId ?: return "another site"
+        val sourceId = app.xreader.data.extension.SourceBookIds
+            .decode(book.remoteId)?.first
+        val handles = container.extensionService
+            .sourcesOf(extensionId).getOrNull().orEmpty()
+        handles.firstOrNull { it.source.id == sourceId }
+            ?.source?.name?.let { return it }
+        handles.firstOrNull()?.source?.name?.let { return it }
+        return container.database.installedExtensionDao()
+            .getById(extensionId)?.displayName ?: "another site"
     }
 
     private val _messages = kotlinx.coroutines.flow.MutableSharedFlow<String>(

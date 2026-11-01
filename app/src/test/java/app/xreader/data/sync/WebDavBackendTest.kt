@@ -93,4 +93,47 @@ class WebDavBackendTest {
         assertTrue(result is AppResult.Err)
         assertTrue((result as AppResult.Err).error is AppError.BadFile)
     }
+
+    // ── v1.3.5 (P0): the plain-http rule (LocalHttpPolicy) ──
+
+    private fun backendAt(
+        transport: FakeTransport,
+        baseUrl: String
+    ) = WebDavBackend(
+        transport = transport,
+        baseUrlProvider = { baseUrl },
+        credentialsProvider = { "reader" to "s3cret" }
+    )
+
+    @Test
+    fun `public http folder is refused before anything is sent`() = runBlocking {
+        val transport = FakeTransport { FakeTransport.ok("") }
+        val backend = backendAt(transport, "http://dav.example.com/xreader")
+        val read = backend.read(SyncBackend.SYNC_FILE_NAME)
+        assertTrue(read is AppResult.Err)
+        assertEquals(
+            app.xreader.data.net.LocalHttpPolicy.REFUSAL_MESSAGE,
+            ((read as AppResult.Err).error as AppError.BadFile).reason
+        )
+        val write = backend.write(SyncBackend.SYNC_FILE_NAME, "{}".toByteArray())
+        assertTrue(write is AppResult.Err)
+        val probe = backend.probe()
+        assertTrue(probe is AppResult.Err)
+        assertTrue(
+            "no request may leave the app for a refused address",
+            transport.requests.isEmpty()
+        )
+    }
+
+    @Test
+    fun `home network http folder still syncs`() = runBlocking {
+        val transport = FakeTransport { FakeTransport.ok("""{"format":1}""") }
+        val backend = backendAt(transport, "http://192.168.1.20:8080/xreader")
+        val result = backend.read(SyncBackend.SYNC_FILE_NAME)
+        assertTrue(result is AppResult.Ok)
+        assertEquals(
+            "http://192.168.1.20:8080/xreader/xreader-sync.json",
+            transport.requests.single().url
+        )
+    }
 }

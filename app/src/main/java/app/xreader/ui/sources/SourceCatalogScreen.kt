@@ -51,7 +51,11 @@ fun SourceCatalogScreen(
      * failure that is a site check or a sign-in gate. */
     onSessionHandoff: (
         app.xreader.data.extension.SessionNeed.Kind
-    ) -> Unit = {}
+    ) -> Unit = {},
+    /** Keiyoushi player (K5): open this source's own settings
+     * (its extension preferences). Only wired for player
+     * sources — the door itself renders only for them. */
+    onOpenSourceSettings: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     // v1.0.6.2 (F8a): search opens from an icon, like the Library —
@@ -87,6 +91,16 @@ fun SourceCatalogScreen(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                // Manga programme (M1): the source's content
+                // rating, where it has one — Safe sources stay
+                // unbadged, a visible Mixed/18+ source says so.
+                state.ratingBadge?.let { badge ->
+                    Text(
+                        badge,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 // v1.2.0 (WS4 declutter): the raw base URL under
                 // the name is gone — the name identifies the
                 // source here; the URL lives on its Details page.
@@ -121,6 +135,34 @@ fun SourceCatalogScreen(
                         viewModel.setMode(mode)
                         if (mode == CatalogMode.SEARCH) searchOpen = true
                     }
+                )
+            }
+        }
+        // Keiyoushi player (K5): a player source's own doors —
+        // Filters (when the source offers any) and its own
+        // settings — labelled chips in the open, never buried.
+        // Native kinds don't show this row: their settings live
+        // on their own pages, exactly as before.
+        if (state.isPlayerSource) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (state.hasFilters) {
+                    NocturneChip(
+                        label = if (state.activeFilterCount > 0) {
+                            "Filters · ${state.activeFilterCount}"
+                        } else {
+                            "Filters"
+                        },
+                        selected = state.activeFilterCount > 0,
+                        onClick = { viewModel.openFilterSheet() }
+                    )
+                }
+                NocturneChip(
+                    label = "Source settings",
+                    selected = false,
+                    onClick = onOpenSourceSettings
                 )
             }
         }
@@ -347,6 +389,16 @@ fun SourceCatalogScreen(
                 }
             }
         }
+    }
+
+    // Keiyoushi player (K5): the filter sheet. Dismissing it
+    // (scrim, back, or Cancel) restores the states it opened
+    // with — only Apply changes the search.
+    if (state.filterSheetOpen) {
+        SourceFilterSheet(
+            viewModel = viewModel,
+            onDismiss = { viewModel.cancelFilterSheet() }
+        )
     }
 
     // v1.3.1 (item 45): long-press on a cover asks plainly —

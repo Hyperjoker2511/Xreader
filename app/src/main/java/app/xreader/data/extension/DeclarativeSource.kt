@@ -1,6 +1,8 @@
 package app.xreader.data.extension
 
 import app.xreader.domain.content.ChapterContent
+import app.xreader.domain.content.ChapterPage
+import app.xreader.domain.content.ChapterPages
 import app.xreader.extensionapi.Source
 import app.xreader.extensionapi.SourceBook
 import app.xreader.extensionapi.SourceBookPage
@@ -85,12 +87,32 @@ class DeclarativeSource(
         synchronized(contentCache) { contentCache[chapterId]?.document }
 
     private fun cacheChapter(chapterId: String, document: Document) {
-        val cached = CachedChapter(
-            content = HtmlToContent.fromDocument(document, chapterId),
-            document = document
+        cacheChapter(
+            chapterId,
+            HtmlToContent.fromDocument(document, chapterId),
+            document
         )
+    }
+
+    /** Manga programme (M1): cache a chapter whose normalised
+     * content was built directly (an image chapter's page
+     * list) rather than converted from its document. */
+    private fun cacheChapter(
+        chapterId: String,
+        content: ChapterContent,
+        document: Document
+    ) {
+        val cached = CachedChapter(content = content, document = document)
         synchronized(contentCache) { contentCache[chapterId] = cached }
     }
+
+    /** Manga programme (M1): the ordered page list of a manga
+     * chapter read through this instance, or null when the
+     * chapter isn't cached (evicted / never read / not a
+     * manga chapter) — the fetch path treats null as "no
+     * page record", exactly like a [contentOf] miss. */
+    fun pagesOf(chapterId: String): ChapterPages? =
+        synchronized(contentCache) { contentCache[chapterId]?.content?.pages }
 
     // ── v1.3.3 (V132-CHECK 21): the chapter-walk budget ─────
     // One walk — however many pages it chains — gets a hard
@@ -2224,6 +2246,12 @@ class DeclarativeSource(
         chapter: SourceChapter,
         prefetchedFirstPage: Document?
     ): SourceChapterContent {
+        // Manga programme (M1): an image source's chapter is
+        // its ordered page list — the prose road below (AJAX
+        // text mode included) never runs for it.
+        if (config.mediaKind.isManga) {
+            return mangaChapterContent(chapter, prefetchedFirstPage)
+        }
         val spec = config.chapter
         // v1.0.5 Stage 1.5: AJAX text mode — when the config
         // declares it AND this chapter's URL yields a numeric id,
@@ -2292,6 +2320,163 @@ class DeclarativeSource(
     }
 
     /**
+     * Manga programme (M1): the image chapter read. The
+     * chapter page (and its [ChapterSpec.nextPage] chain — a
+     * chapter split across web pages accumulates in order,
+     * under the same next-chapter guard as the text road) is
+     * mined for its page images via [ChapterSpec.pages]; the
+     * result is the chapter's [ChapterPages] record, stashed
+     * as the chapter's normalised [ChapterContent] exactly
+     * where the host's fetch path looks for it ([contentOf] /
+     * [pagesOf]), so it persists with the chapter through the
+     * ordinary storage path. The returned HTML is the same
+     * pages as an <img> fragment, in order — the honest
+     * string form of an image chapter for any consumer that
+     * only speaks the extension API. A chapter page with no
+     * page images on it fails in plain words, like a text
+     * page with no prose.
+     */
+    private fun mangaChapterContent(
+        chapter: SourceChapter,
+        prefetchedFirstPage: Document?
+    ): SourceChapterContent {
+        val spec = config.chapter
+        val pagesSpec = spec.pages?.takeIf { it.isNotBlank() }
+            ?: throw SourceException(
+                "this manga source doesn't say where its chapter pages are"
+            )
+        var url: String? = chapter.id
+        val pageUrls = LinkedHashSet<String>()
+        var title: String? = null
+        var firstDoc: Document? = null
+        var pagesWalked = 0
+        while (url != null && pagesWalked < MAX_CHAPTER_PAGES) {
+            pagesWalked++
+            val pageUrl: String = url!!
+            val doc = if (pagesWalked == 1) {
+                prefetchedFirstPage?.takeIf { documentUrl(it) == pageUrl }
+                    ?: fetchDoc(pageUrl)
+            } else {
+                fetchDoc(pageUrl)
+            }
+            if (firstDoc == null) firstDoc = doc
+            if (title == null) {
+                title = spec.title?.let { readDocSpec(doc, it) }
+                    ?.ifBlank { null }
+            }
+            pageUrls += extractPageUrls(doc, pagesSpec, pageUrl)
+            url = spec.nextPage?.let { nextSel ->
+                val (nextEl, parsed) = firstChainedMatch(doc, nextSel)
+                    ?: return@let null
+                val href = if (parsed.attr != null) {
+                    readAttr(nextEl, parsed.attr)
+                } else {
+                    nextEl.attr("href")
+                        .ifBlank { nextEl.selectFirst("a")?.attr("href") }
+                }
+                val target = href?.takeIf { it.isNotBlank() }
+                    ?.let { absolute(it, pageUrl) } ?: return@let null
+                // The same chaining guard as the text road: a
+                // "next" link that actually points at the NEXT
+                // CHAPTER ends this chapter's walk.
+                if (LinkInference.isNextChapterHref(pageUrl, target, nextEl.text())) {
+                    null
+                } else {
+                    target
+                }
+            }
+        }
+        if (pageUrls.isEmpty()) {
+            throw SourceException("the chapter pages weren't found on the page")
+        }
+        val pages = ChapterPages(pageUrls.map { ChapterPage(url = it) })
+        firstDoc?.let { doc ->
+            cacheChapter(chapter.id, ChapterContent(pages = pages), doc)
+        }
+        val html = pages.pages.joinToString("\n") { page ->
+            "<img src=\"" +
+                page.url.replace("&", "&amp;").replace("\"", "&quot;") +
+                "\"/>"
+        }
+        return SourceChapterContent(html = html, title = title)
+    }
+
+    /** One chapter page's page-image URLs under the pages
+     * spec: absolutised against the page, http(s) only, in
+     * document order. */
+    private fun extractPageUrls(
+        doc: Document,
+        rawSpec: String,
+        pageUrl: String
+    ): List<String> {
+        val (elements, spec) = selectAllChained(doc, rawSpec)
+        if (elements.isEmpty() || spec == null) return emptyList()
+        val attr = spec.attr ?: "src"
+        return elements.mapNotNull { element ->
+            pageUrlOf(element, attr, pageUrl)
+        }
+    }
+
+    /** One page element's image URL. Candidates are read in
+     * priority order — the spec's own attribute first, then
+     * (for an @src read) the lazy-image attributes, since
+     * manga pages commonly park the real URL in `data-src`
+     * behind a `data:` placeholder in `src` — and a container
+     * element falls back to its first descendant <img>. The
+     * first candidate that resolves to a real http(s) URL
+     * wins; blank and `data:` candidates never do. */
+    private fun pageUrlOf(
+        element: Element,
+        attr: String,
+        pageUrl: String
+    ): String? {
+        val candidates = mutableListOf<String>()
+        readAttr(element, attr)?.let { candidates += it }
+        if (attr == "src") {
+            for (lazy in LAZY_IMAGE_ATTRS) {
+                readAttr(element, lazy)?.let { candidates += it }
+            }
+        }
+        val img = element.selectFirst("img")
+        if (img != null && img !== element) {
+            readAttr(img, attr)?.let { candidates += it }
+            if (attr == "src") {
+                for (lazy in LAZY_IMAGE_ATTRS) {
+                    readAttr(img, lazy)?.let { candidates += it }
+                }
+            }
+        }
+        for (raw in candidates) {
+            val cleaned = raw.trim()
+            if (cleaned.isBlank() || cleaned.startsWith("data:")) continue
+            val absoluteUrl = absolute(cleaned, pageUrl)
+            if (absoluteUrl.startsWith("http://") ||
+                absoluteUrl.startsWith("https://")
+            ) {
+                return absoluteUrl
+            }
+        }
+        return null
+    }
+
+    /** All elements the first matching candidate of a
+     * (possibly chained) selector matches, with that
+     * candidate's parsed spec — [firstChainedMatch]'s
+     * plural twin, for list-shaped reads (manga pages). */
+    private fun selectAllChained(
+        doc: Document,
+        rawSpec: String
+    ): Pair<List<Element>, SelectorSpec?> {
+        for (candidate in SelectorChains.split(rawSpec)) {
+            val spec = SelectorSpec.parse(candidate)
+            if (spec.css.isBlank()) continue
+            val found = runCatching { doc.select(spec.css) }.getOrNull()
+            if (!found.isNullOrEmpty()) return found to spec
+        }
+        return emptyList<Element>() to null
+    }
+
+    /**
      * The AJAX text mode's read (v1.0.5 Stage 1.5): fetch the
      * declared endpoint through the source's own HTTP context —
      * the declared headers ride along, and the whitelist, login
@@ -2320,16 +2505,23 @@ class DeclarativeSource(
         // (FenrirRealm) runs the read-token lifecycle around
         // the fetch; every other source takes exactly the
         // road it always did.
+        // v1.3.5 (P0, slice D1): the lifecycle is PER CHAPTER
+        // SCOPE — the token for this chapter's canonical
+        // endpoint only; another chapter's token never rides
+        // this fetch, and this chapter's failures never touch
+        // another chapter's token.
         val tokenSpec = config.credentials?.operationToken
         val coordinator = tokenSpec?.let {
             ReadTokenCoordinators.forSource(config.id, it, readTokenStore)
         }
-        // A comfortably valid held token rides proactively —
-        // the common case costs no extra round trip.
-        var authToken = coordinator?.currentToken()
+        val chapterScope = ReadTokenCoordinator.chapterScopeKey(endpoint)
+        // A comfortably valid held token for THIS chapter
+        // rides proactively — the common case costs no extra
+        // round trip.
+        var authToken = coordinator?.currentToken(chapterScope)
         var response = fetchAjax(chapter, ajax, endpoint, tokenSpec, authToken?.value)
         if (response.status in 200..299) {
-            coordinator?.noteIssued(response.headers)
+            coordinator?.noteIssued(response.headers, chapterScope)
         }
         val root = runCatching {
             ajaxJson.parseToJsonElement(response.body)
@@ -2365,24 +2557,27 @@ class DeclarativeSource(
             }
             throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
         }
-        // The mint road: ONE mint (single-flight, shared with
-        // every concurrent locked chapter), ONE retry. A
-        // proactive token that was already attached and STILL
-        // answered locked is revoked server-side whatever its
-        // clock says — invalidate its generation first so the
-        // mint below is a genuine fresh mint, not a replay.
-        if (authToken != null) coordinator.invalidate(authToken.generation)
+        // The mint road: ONE mint for THIS chapter's scope
+        // (single-flight per scope, serialised source-wide),
+        // ONE retry. A proactive token that was already
+        // attached and STILL answered locked is revoked
+        // server-side whatever its clock says — invalidate
+        // its generation IN THIS SCOPE first so the mint
+        // below is a genuine fresh mint, not a replay.
+        if (authToken != null) {
+            coordinator.invalidate(chapterScope, authToken.generation)
+        }
         val chapterHint = (root?.get(REMINT_ID_FIELD) as? JsonPrimitive)
             ?.contentOrNull
             ?: (root?.get(REMINT_UUID_FIELD) as? JsonPrimitive)?.contentOrNull
             ?: chapter.id.substringAfterLast('/').takeIf { it.isNotBlank() }
-        when (val outcome = coordinator.token(context.http, chapterHint)) {
+        when (val outcome = coordinator.token(context.http, chapterScope, chapterHint)) {
             is ReadTokenCoordinator.MintOutcome.Ready -> {
                 response = fetchAjax(
                     chapter, ajax, endpoint, tokenSpec, outcome.token
                 )
                 if (response.status in 200..299) {
-                    coordinator.noteIssued(response.headers)
+                    coordinator.noteIssued(response.headers, chapterScope)
                 }
                 val retryRoot = runCatching {
                     ajaxJson.parseToJsonElement(response.body)
@@ -2399,10 +2594,11 @@ class DeclarativeSource(
                     retryFormat.equals(FORMAT_LOCKED, ignoreCase = true) ||
                     response.status == 401
                 if (stillLocked) {
-                    // Only THIS generation may be invalidated
-                    // by this failure — a newer token minted
-                    // meanwhile is untouched.
-                    coordinator.invalidate(outcome.generation)
+                    // Only THIS scope's generation may be
+                    // invalidated by this failure — a newer
+                    // token minted meanwhile, and every other
+                    // chapter's token, is untouched.
+                    coordinator.invalidate(chapterScope, outcome.generation)
                     throw SourceException(STAYED_LOCKED_MESSAGE)
                 }
                 if (response.status !in 200..299) {

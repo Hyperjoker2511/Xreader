@@ -19,9 +19,15 @@ import kotlinx.coroutines.flow.map
  */
 data class BookReaderOverride(
     val paletteName: String? = null,
-    val fontSizeSp: Float? = null
+    val fontSizeSp: Float? = null,
+    /** Manga programme (slice M2): this series' own image-
+     * reading mode, set from inside its reader (option-scope
+     * rule tier 2). Null = the series follows the global
+     * default in ReaderConfig.imageMode. */
+    val imageMode: app.xreader.domain.reader.ImageReaderMode? = null
 ) {
-    val isEmpty: Boolean get() = paletteName == null && fontSizeSp == null
+    val isEmpty: Boolean
+        get() = paletteName == null && fontSizeSp == null && imageMode == null
 }
 
 class BookReaderPrefs(private val store: DataStore<Preferences>) {
@@ -29,7 +35,11 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
     fun overrides(bookId: Long): Flow<BookReaderOverride> = store.data.map { prefs ->
         BookReaderOverride(
             paletteName = prefs[paletteKey(bookId)],
-            fontSizeSp = prefs[fontKey(bookId)]
+            fontSizeSp = prefs[fontKey(bookId)],
+            imageMode = prefs[imageModeKey(bookId)]?.let { stored ->
+                app.xreader.domain.reader.ImageReaderMode.entries
+                    .firstOrNull { it.name == stored }
+            }
         )
     }
 
@@ -47,10 +57,21 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    suspend fun setImageMode(
+        bookId: Long,
+        mode: app.xreader.domain.reader.ImageReaderMode?
+    ) {
+        store.edit { prefs ->
+            if (mode == null) prefs.remove(imageModeKey(bookId))
+            else prefs[imageModeKey(bookId)] = mode.name
+        }
+    }
+
     suspend fun clear(bookId: Long) {
         store.edit { prefs ->
             prefs.remove(paletteKey(bookId))
             prefs.remove(fontKey(bookId))
+            prefs.remove(imageModeKey(bookId))
         }
     }
 
@@ -59,4 +80,7 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
 
     private fun fontKey(bookId: Long) =
         floatPreferencesKey("bookreader.$bookId.font_size")
+
+    private fun imageModeKey(bookId: Long) =
+        stringPreferencesKey("bookreader.$bookId.image_mode")
 }

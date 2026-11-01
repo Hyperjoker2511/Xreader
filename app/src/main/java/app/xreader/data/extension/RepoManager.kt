@@ -40,7 +40,20 @@ class RepoManager(
     private val transport: HttpTransport,
     private val service: ExtensionService,
     private val sessionStore: SessionStore,
-    private val nowMs: () -> Long = { System.currentTimeMillis() }
+    private val nowMs: () -> Long = { System.currentTimeMillis() },
+    /** Keiyoushi player (K6): the player's own uninstall, by
+     * package name — wired to KeiyoushiPlayerManager.uninstall
+     * in production. KEIYOUSHI rows route through it from
+     * every manager removal path (repo removal, single
+     * uninstall): the generic cascade knows nothing of the
+     * player record, the .ext file in keiyoushi-exts/, the
+     * live registry or the namespaced prefs, and would orphan
+     * all four. Null in tests that don't exercise the player
+     * track (the generic steps then apply, as before K6).
+     * Declared last: every existing construction is
+     * positional over the parameters above. */
+    private val keiyoushiUninstaller:
+        (suspend (packageName: String) -> Unit)? = null
 ) {
 
     sealed interface IndexFetch {
@@ -262,9 +275,33 @@ class RepoManager(
         val installed = installedSnapshot()
             .filter { it.repoId == repo.id }
         installed.forEach { ext ->
-            store.deletePackage(ext.packageId)
-            sessionStore.clear(ExtensionHttpClient.sessionKeyFor(ext.id))
-            service.invalidate(ext.id)
+            // Keiyoushi player (K6): a player row leaves
+            // through the player's own cascade — it deletes
+            // the mirroring row itself as its last-but-one
+            // step, so the generic per-extension steps (which
+            // would orphan the player record + .ext file)
+            // must not also run for it.
+            if (ext.kind ==
+                app.xreader.data.db.ExtensionKind.KEIYOUSHI &&
+                keiyoushiUninstaller != null
+            ) {
+                keiyoushiUninstaller.invoke(ext.packageId)
+            } else {
+                // Same order as uninstall(), for the same reason:
+                // the session cascade names the extension's
+                // sources through the service, which needs the
+                // row AND its definition file still in place —
+                // clearing after deletePackage silently cleared
+                // nothing (the D2b cascade's read tokens survived
+                // a repo removal; gate-found at v1.4.0). The row
+                // delete is explicit rather than left to the
+                // repo FK cascade alone, so the manager's
+                // contract holds regardless of schema details.
+                clearExtensionSession(ext.id)
+                extensionDao.delete(ext)
+                store.deletePackage(ext.packageId)
+                service.invalidate(ext.id)
+            }
         }
         repoDao.delete(repo)
         runCatching { store.repoIndexFile(repo.id).delete() }
@@ -648,10 +685,64 @@ class RepoManager(
     }
 
     suspend fun uninstall(row: InstalledExtension) {
+        // Keiyoushi player (K6): the detail page's uninstall
+        // reaches this generic entry too — a player row leaves
+        // through the player's cascade (record, .ext file,
+        // live sources, namespaced prefs, session cookies,
+        // row), never the generic steps below.
+        if (row.kind ==
+            app.xreader.data.db.ExtensionKind.KEIYOUSHI &&
+            keiyoushiUninstaller != null
+        ) {
+            keiyoushiUninstaller.invoke(row.packageId)
+            return
+        }
+        // v1.3.5 (P0, D2b): the session cascade runs FIRST —
+        // it names the extension's sources through the service,
+        // which needs the row still installed.
+        clearExtensionSession(row.id)
         extensionDao.delete(row)
         store.deletePackage(row.packageId)
-        sessionStore.clear(ExtensionHttpClient.sessionKeyFor(row.id))
         service.invalidate(row.id)
+    }
+
+    /**
+     * v1.3.5 (P0, D2b): the manager-side session cascade — the
+     * same complete clear the detail screen's sign-out performs,
+     * for the parts that live at this layer: every read token of
+     * every source in the extension (the coordinator registry's
+     * clear plus the persisted records under the same key, all
+     * chapter scopes — slice D1's shape) and the vault session
+     * record itself. Removal through any manager path (repo
+     * removal, the storefront's uninstall) now leaves no stored
+     * credential behind; before this, those paths cleared only
+     * the vault record and a removed source's read tokens
+     * survived in the vault.
+     *
+     * The WebView-jar half of the clear stays with the UI path
+     * (ExtensionDetailViewModel.clearSourceSession): expiring
+     * jar cookies needs android.webkit.CookieManager, which this
+     * layer deliberately does not touch — so a removal that only
+     * ever passes through the manager (the storefront's
+     * uninstall, repo removal) still owes the jar half, and the
+     * removed source's cookies can linger in the shared jar
+     * until a later sign-out on that host expires them. Nothing
+     * in the vault or the token store survives, and the image
+     * path reads the store, not the jar (slice D2), so the
+     * residue is inert for reading. Duplication note: the token
+     * loop mirrors the ViewModel's — the two layers cannot share
+     * the code without the data layer depending on the UI (or
+     * vice versa), so both call the same registry + store APIs.
+     */
+    private suspend fun clearExtensionSession(extensionRowId: Long) {
+        val sourceIds = runCatching {
+            service.sourcesOf(extensionRowId).getOrNull()
+        }.getOrNull().orEmpty().map { it.source.id }.distinct()
+        for (sourceId in sourceIds) {
+            ReadTokenCoordinators.clear(sourceId)
+            runCatching { sessionStore.clearReadToken(sourceId) }
+        }
+        sessionStore.clear(ExtensionHttpClient.sessionKeyFor(extensionRowId))
     }
 
     suspend fun setEnabled(row: InstalledExtension, enabled: Boolean) {
@@ -931,6 +1022,35 @@ class RepoManager(
         val repo = ExtensionRepo(
             name = "Built-in sources",
             indexUrl = BUNDLED_REPO_URL,
+            indexSha256 = null,
+            lastFetchedAt = null,
+            enabled = true
+        )
+        return repo.copy(id = repoDao.insert(repo))
+    }
+
+    /**
+     * Manga programme (M1): the Keiyoushi repository row —
+     * pre-registered at startup so the manga catalogue's home
+     * exists in the Repositories list from first launch. The
+     * row points at the repo's real published index (see
+     * [KeiyoushiIndex]); its site list arrives through the
+     * ordinary foreign-repo reconstruction (the index is the
+     * tachiyomix form the detector already reads, ratings
+     * included), and a site becomes installable only when a
+     * native manga conversion for it ships — the row itself
+     * installs nothing, and no foreign code ever runs.
+     * Idempotent, like [bundledRepo]: a row the user already
+     * added by hand for the same address is returned
+     * untouched, and the row stays removable like any repo.
+     */
+    suspend fun registerKeiyoushiRepo(): ExtensionRepo {
+        val repos = repoDaoSnapshot()
+        repos.firstOrNull { it.indexUrl == KeiyoushiIndex.INDEX_URL }
+            ?.let { return it }
+        val repo = ExtensionRepo(
+            name = KeiyoushiIndex.REPO_NAME,
+            indexUrl = KeiyoushiIndex.INDEX_URL,
             indexSha256 = null,
             lastFetchedAt = null,
             enabled = true

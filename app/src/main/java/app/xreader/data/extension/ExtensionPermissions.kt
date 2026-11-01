@@ -52,8 +52,32 @@ data class ExtensionPermissions(
             domains.joinToString(", ")
         }
         val notify = if (canNotify) " It may show notifications." else ""
-        return "This $kindLabel can open: $sites.$notify " +
-            "It cannot see your books, your other sources, or your saved passwords."
+        val kind = ExtensionKind.entries.firstOrNull { it.label == kindLabel }
+        return when (kind) {
+            ExtensionKind.DECLARATIVE ->
+                "This $kindLabel can open: $sites.$notify " +
+                    "It provides reading rules only — data, not program code — " +
+                    "and Xreader uses those rules to read the site."
+
+            ExtensionKind.DEX ->
+                "This $kindLabel declares these sites: $sites.$notify " +
+                    "Its DEX code runs inside Xreader with the app's own " +
+                    "permissions. It is not sandboxed or kept separate from " +
+                    "the app, so only enable it if you completely trust " +
+                    "this source."
+
+            ExtensionKind.JS ->
+                "This $kindLabel can open: $sites.$notify " +
+                    "It runs JavaScript code to read its sites, so only " +
+                    "install it if you trust this source."
+
+            null ->
+                "This $kindLabel can open: $sites.$notify " +
+                    "Rule-based sources provide data-only reading rules. " +
+                    "Code sources run program code; DEX code runs with " +
+                    "Xreader's own permissions and is not sandboxed. Only " +
+                    "enable a code source if you completely trust it."
+        }
     }
 
     companion object {

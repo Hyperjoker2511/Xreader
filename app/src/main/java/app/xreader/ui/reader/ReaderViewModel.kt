@@ -28,15 +28,20 @@ import app.xreader.domain.reader.SessionTracker
 import app.xreader.domain.reader.SleepMode
 import app.xreader.domain.reader.StreamWindowPlanner
 import app.xreader.domain.reader.Soundscape
+import app.xreader.domain.reader.TermPair
+import app.xreader.domain.reader.TermReplacer
 import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** Where a freshly loaded chapter should open. */
@@ -95,7 +100,30 @@ data class ReaderUiState(
     /** v1.0.6 (W3.4): one-shot plain note when this book's source
      * reads through the browser view — shown once per source per
      * session via the reader's transient notice, then consumed. */
-    val browserViewNotice: String? = null
+    val browserViewNotice: String? = null,
+    /** P0 (Reader Terms): this book's OWN term pairs, for the
+     * settings sheet's "Terms for this book" editor. The global
+     * list is edited from Settings, not here. */
+    val bookTerms: List<TermPair> = emptyList(),
+    // ── Manga programme (slice M2) ───────────────────────────
+    /** The open chapter's pages when it is an IMAGE chapter
+     * (a MANGA source's chapter): ReaderScreen renders the
+     * image reader instead of the text renderers while this
+     * is set. Sourced from the chapter's ORIGINAL content in
+     * the same state copy that sets the chapter text, so a
+     * chapter turn can never pair one chapter's text with
+     * another's pages. Null for every text chapter. */
+    val mangaPages: app.xreader.domain.content.ChapterPages? = null,
+    /** The chapter [mangaPages] belongs to (same copy). */
+    val mangaChapterId: Long? = null,
+    /** The resolved image-reading mode for THIS book: its own
+     * override when one is set, else the global default
+     * (option-scope rule — see [MangaModeResolution]). */
+    val imageMode: app.xreader.domain.reader.ImageReaderMode =
+        app.xreader.domain.reader.ImageReaderMode.WEBTOON,
+    /** True on the low-RAM (MINIMAL) performance tier: manga
+     * pages then decode downscaled to screen width. */
+    val imageLowRam: Boolean = false
 ) {
     val chapter: Chapter? get() = chapters.getOrNull(chapterIndex)
     val hasPrevious: Boolean get() = chapterIndex > 0
@@ -163,6 +191,32 @@ class ReaderViewModel(
         )
     }
 
+    /** Manga programme (slice M2): the image-reading mode in
+     * force for this book — its own override over the global
+     * default ([MangaModeResolution]). Republished whenever
+     * either layer changes. */
+    private fun publishImageMode() {
+        _state.value = _state.value.copy(
+            imageMode = MangaModeResolution.resolve(
+                bookOverride.imageMode, globalConfig.imageMode
+            )
+        )
+    }
+
+    /** Manga programme (slice M2): the image reader's mode
+     * switch — option-scope tier 2: the change is written as
+     * THIS series' override only; the global default in
+     * ReaderConfig is never touched from inside a reader.
+     * The override collector republishes the resolved mode;
+     * the state is also set directly so the switch answers
+     * the tap immediately. */
+    fun setImageMode(mode: app.xreader.domain.reader.ImageReaderMode) {
+        _state.value = _state.value.copy(imageMode = mode)
+        viewModelScope.launch {
+            container.bookReaderPrefs.setImageMode(bookId, mode)
+        }
+    }
+
     private val _bookmarks = MutableStateFlow<List<Bookmark>>(emptyList())
     val bookmarks: StateFlow<List<Bookmark>> = _bookmarks
 
@@ -197,7 +251,37 @@ class ReaderViewModel(
         }
     }
     private val readAloud: ReadAloudController by readAloudLazy
-    val ttsState: StateFlow<ReadAloudController.State> by lazy { readAloud.state }
+
+    /**
+     * P0 (Reader Terms): the controller speaks the ORIGINAL text
+     * (terms are a display-only feature), so its sentence range
+     * is in original coordinates while the page shows display
+     * coordinates. The published state is remapped through the
+     * current chapter's term offset map, so the karaoke
+     * highlight still lands on the sentence being spoken. With
+     * no terms in force the state passes through untouched.
+     */
+    val ttsState: StateFlow<ReadAloudController.State> by lazy {
+        readAloud.state
+            .map { spoken -> remapSpokenRange(spoken) }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.Eagerly,
+                readAloud.state.value
+            )
+    }
+
+    private fun remapSpokenRange(
+        spoken: ReadAloudController.State
+    ): ReadAloudController.State {
+        if (spoken.sentenceStart < 0) return spoken
+        val map = ttsChapterId?.let { termsMaps[it] } ?: return spoken
+        if (map.isEmpty) return spoken
+        return spoken.copy(
+            sentenceStart = map.originalToDisplay(spoken.sentenceStart),
+            sentenceEnd = map.originalToDisplay(spoken.sentenceEnd)
+        )
+    }
 
     // -- Media Overlay -------------------------------------------------------
     private val overlayPlayerLazy = lazy { OverlayPlayer(viewModelScope) }
@@ -271,6 +355,22 @@ class ReaderViewModel(
     private var pendingAutoplayTts = false
     private val chapterCache = LinkedHashMap<Long, ChapterText>()
 
+    // ── P0 (Reader Terms): display-time replacements ────────────
+    // The caches above always hold the ORIGINAL text (storage
+    // bytes, untouched). What lands in the UI state is a display
+    // copy built by [displayText] when terms are in force.
+    /** Global + this book's pairs, book first (it wins ties). */
+    @Volatile
+    private var activeTerms: List<TermPair> = emptyList()
+
+    /** Joined-text offset maps of transformed chapters, by
+     * chapter id — the bridge between the read-aloud
+     * controller's original coordinates and the page's. */
+    private val termsMaps = mutableMapOf<Long, TermReplacer.OffsetMap>()
+
+    /** The chapter the read-aloud controller currently holds. */
+    private var ttsChapterId: Long? = null
+
     /** Chapters the reader asked to see in the original even though
      * a RAW translation exists (in-memory only — the translation
      * stays the default view; nothing is ever deleted). */
@@ -295,6 +395,7 @@ class ReaderViewModel(
             container.readerPrefs.config.collectLatest { newConfig ->
                 globalConfig = newConfig
                 publishConfig()
+                publishImageMode()
                 _state.value = _state.value.copy(
                     pageTurnTier = computeTier(newConfig)
                 )
@@ -310,6 +411,32 @@ class ReaderViewModel(
                 bookOverride = override
                 _state.value = _state.value.copy(hasBookOverride = !override.isEmpty)
                 publishConfig()
+                publishImageMode()
+            }
+        }
+        // Manga programme (slice M2): the low-RAM decode flag
+        // resolves once from the same performance policy the
+        // stream window uses (the 2 GB tier decodes manga
+        // pages at screen width — see MangaDecode).
+        viewModelScope.launch {
+            _state.value = _state.value.copy(imageLowRam = isMinimalTier())
+        }
+        // P0 (Reader Terms): this book's own pairs feed the
+        // settings sheet's editor; the merged list (book first,
+        // then global) is what's in force for the display text.
+        // Any change re-derives the visible chapter's display
+        // copy from its cached original — the stored text and
+        // the caches are never touched.
+        viewModelScope.launch {
+            container.termsPrefs.bookPairs(bookId).collectLatest { pairs ->
+                _state.value = _state.value.copy(bookTerms = pairs)
+            }
+        }
+        viewModelScope.launch {
+            container.termsPrefs.pairsForBook(bookId).collectLatest { pairs ->
+                activeTerms = pairs
+                termsMaps.clear()
+                reapplyTerms()
             }
         }
         viewModelScope.launch {
@@ -348,6 +475,25 @@ class ReaderViewModel(
                 }
                 chapters = container.database.chapterDao().forBook(bookId)
             }
+            // Cycle 1 (F3): progress-linking — a RESUME launch
+            // (the caller asked for the saved position, or
+            // there is none yet) first lets a further-along
+            // linked copy move this book's resume point, then
+            // reads the row back. A deliberate chapter tap (an
+            // index that is NOT the saved position) skips the
+            // reconcile entirely: the reader's pick wins.
+            val preSaved = container.database.readingProgressDao().getForBook(bookId)
+            var resumeIndex = initialChapterIndex
+            if (preSaved == null || preSaved.chapterIndex == initialChapterIndex) {
+                val outcome = runCatching {
+                    container.progressLinkService.reconcile(bookId)
+                }.getOrNull()
+                if (outcome is
+                    app.xreader.data.library.ProgressLinkService.Outcome.Applied
+                ) {
+                    resumeIndex = outcome.plan.targetChapter.index
+                }
+            }
             val saved = container.database.readingProgressDao().getForBook(bookId)
             // v1.0.6 (W3.4): a browser-view source gets ONE plain
             // note per source per session, so slower chapter turns
@@ -359,7 +505,7 @@ class ReaderViewModel(
                 pageTurnTier = computeTier(_config.value),
                 browserViewNotice = sourceNotice ?: _state.value.browserViewNotice
             )
-            val startIndex = initialChapterIndex.coerceIn(0, maxOf(0, chapters.lastIndex))
+            val startIndex = resumeIndex.coerceIn(0, maxOf(0, chapters.lastIndex))
             val restore = if (saved != null && saved.chapterIndex == startIndex) {
                 saved.charOffset to saved.scrollFraction
             } else {
@@ -524,6 +670,59 @@ class ReaderViewModel(
         }
     }
 
+    /**
+     * P0 (Reader Terms): the display copy of [original] with the
+     * terms in force applied. Returns [original] itself when no
+     * term matches — the common case costs one engine pass and
+     * no copy. The chapter's offset map is recorded so the
+     * read-aloud highlight (original coordinates) can be
+     * remapped onto the displayed page.
+     */
+    private fun displayText(original: ChapterText, chapterId: Long): ChapterText {
+        if (activeTerms.isEmpty()) {
+            termsMaps.remove(chapterId)
+            return original
+        }
+        val result = TermReplacer.applyToContent(original.content, activeTerms)
+        if (result.offsetMap.isEmpty) {
+            termsMaps.remove(chapterId)
+            return original
+        }
+        termsMaps[chapterId] = result.offsetMap
+        return ChapterText(result.content)
+    }
+
+    /** Terms changed while reading: rebuild what's on screen
+     * from the cached originals. The reading position is kept
+     * as-is — offsets can drift by the length difference of
+     * the terms before it, the same drift a translation toggle
+     * already causes. */
+    private fun reapplyTerms() {
+        if (_state.value.streamActive) {
+            openStream(
+                _state.value.chapterIndex,
+                _state.value.positionOffset
+            )
+            return
+        }
+        val chapter = _state.value.chapter ?: return
+        val original = chapterCache[chapter.id]
+            ?: streamTexts[chapter.id] ?: return
+        val display = displayText(original, chapter.id)
+        if (display !== _state.value.chapterText) {
+            _state.value = _state.value.copy(chapterText = display)
+        }
+    }
+
+    /** The settings sheet's "Terms for this book" editor writes
+     * through here; the collectors above pick the change up and
+     * re-derive the display text. */
+    fun setBookTerms(pairs: List<TermPair>) {
+        viewModelScope.launch {
+            container.termsPrefs.setBookPairs(bookId, pairs)
+        }
+    }
+
     private suspend fun loadChapter(
         index: Int,
         restoreOffset: Int,
@@ -627,13 +826,21 @@ class ReaderViewModel(
         visibleTextChapterIndex = index
         _state.value = _state.value.copy(
             loading = false,
-            chapterText = text,
+            chapterText = displayText(text, chapter.id),
             restoreOffset = restoreOffset,
             restoreScrollFraction = restoreScrollFraction,
             restoreHint = hint,
             restoreGeneration = _state.value.restoreGeneration + 1,
             hasOverlay = content.mediaOverlay != null,
             isImageBook = content.isImageBook,
+            // Manga programme (slice M2): an image chapter's
+            // pages ride along with its text in the SAME copy
+            // (the keep-previous invariant above holds for them
+            // too). From the ORIGINAL content, never the
+            // display copy — display-time transforms rebuild
+            // ChapterContent and do not carry the pages record.
+            mangaPages = if (content.isImageChapter) content.pages else null,
+            mangaChapterId = if (content.isImageChapter) chapter.id else null,
             showingTranslation = useTranslation
         )
         // Follow this chapter's cached AI summary for the Contents
@@ -655,6 +862,11 @@ class ReaderViewModel(
         }
         if (pendingAutoplayTts) {
             pendingAutoplayTts = false
+            // Read-aloud deliberately gets the ORIGINAL text:
+            // terms change what's seen, not what's spoken. Its
+            // sentence range is remapped for the highlight in
+            // [ttsState].
+            ttsChapterId = chapter.id
             readAloud.loadChapter(text, 0)
             readAloud.setRate(_config.value.speechRate)
             readAloud.play()
@@ -993,7 +1205,12 @@ class ReaderViewModel(
         val text = stateNow.chapterText ?: return
         val next = stateNow.chapters.getOrNull(stateNow.chapterIndex + 1)
         val shouldWarm = PrefetchPolicy.shouldWarmNext(
-            isImageChapter = ReaderCounters.isImageChapter(text.content),
+            // Manga programme (slice M2): pages chapters warm
+            // through the same near-end path as CBZ image
+            // chapters (their blocks-based check is false —
+            // a manga chapter's content is its page list).
+            isImageChapter = ReaderCounters.isImageChapter(text.content) ||
+                text.content.isImageChapter,
             fraction = chapterFraction,
             hasNext = next != null,
             nextStored = next?.contentPath != null,
@@ -1049,7 +1266,10 @@ class ReaderViewModel(
     private val streamFractions = mutableMapOf<Int, Float>()
 
     private suspend fun loadStreamText(chapter: Chapter): ChapterText? {
-        streamTexts[chapter.id]?.let { return it }
+        // The stream cache holds ORIGINALS (like chapterCache);
+        // each caller gets the display copy for the terms in
+        // force right now.
+        streamTexts[chapter.id]?.let { return displayText(it, chapter.id) }
         if (chapter.contentPath == null) return null
         val useTranslation = chapter.id !in originalPreferred &&
             container.bookStorage.hasTranslatedContent(bookId, chapter.id)
@@ -1058,12 +1278,22 @@ class ReaderViewModel(
         } else {
             container.bookStorage.readChapterContent(bookId, chapter.id)
         }
-        return (result as? AppResult.Ok)?.value?.let { ChapterText(it) }
-            ?.also { streamTexts[chapter.id] = it }
+        val original = (result as? AppResult.Ok)?.value
+            ?.let { ChapterText(it) } ?: return null
+        streamTexts[chapter.id] = original
+        return displayText(original, chapter.id)
     }
 
     /** Open (or re-anchor) the stream at [anchorIndex]. */
     fun openStream(anchorIndex: Int, anchorOffset: Int = 0) {
+        // Manga programme (slice M2): the endless stream is a
+        // TEXT window — a manga book never enters it (its
+        // chapters are page lists; the image reader owns them).
+        // The book-config check covers the book; the pages
+        // check covers the brief window before the config
+        // resolves, once a chapter has shown what it is.
+        if (bookConfig?.mediaKind?.isManga == true) return
+        if (_state.value.mangaPages != null) return
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
             val chapters = _state.value.chapters
@@ -1334,7 +1564,18 @@ class ReaderViewModel(
         // entered. The renderer's own fraction (scroll or
         // page) is the honest one there; text chapters keep
         // the char-derived fraction exactly as before.
-        val chapterFraction = if (ReaderCounters.isImageChapter(text.content)) {
+        // Manga programme (slice M2): a pages chapter is the
+        // same shape of problem — its text is empty by
+        // construction — so the image reader reports
+        // (pageIndex, pageFraction) through this same method
+        // and the renderer's fraction wins identically. The
+        // offset clamps to the empty text as usual; the
+        // FRACTION is the persisted carrier (restore maps it
+        // back to the page — see MangaProgress.restorePage).
+        val chapterFraction = if (
+            ReaderCounters.isImageChapter(text.content) ||
+            text.content.isImageChapter
+        ) {
             scrollFraction.coerceIn(0f, 1f)
         } else {
             PageLocator.chapterFraction(clamped, text.length)
@@ -1591,12 +1832,30 @@ class ReaderViewModel(
     // -- Read-aloud controls ---------------------------------------------------------
 
     fun listenPlayPause() {
-        val text = _state.value.chapterText ?: return
+        val display = _state.value.chapterText ?: return
         if (readAloud.state.value.playing) {
             readAloud.pause()
         } else {
             if (readAloud.state.value.sentenceCount == 0) {
-                readAloud.loadChapter(text, _state.value.positionOffset)
+                // P0 (Reader Terms): the controller speaks the
+                // ORIGINAL text, so it is loaded from the
+                // caches — never the display copy in the state —
+                // and the on-screen offset is mapped back into
+                // original coordinates to start at the sentence
+                // the reader is looking at.
+                val chapterId = _state.value.chapter?.id
+                val original = chapterId
+                    ?.let { chapterCache[it] ?: streamTexts[it] }
+                    ?: display
+                val startOffset = if (original === display) {
+                    _state.value.positionOffset
+                } else {
+                    chapterId?.let { termsMaps[it] }
+                        ?.displayToOriginal(_state.value.positionOffset)
+                        ?: _state.value.positionOffset
+                }
+                ttsChapterId = chapterId
+                readAloud.loadChapter(original, startOffset)
                 readAloud.setRate(_config.value.speechRate)
             }
             readAloud.play()

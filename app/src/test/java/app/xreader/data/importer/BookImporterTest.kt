@@ -1,5 +1,6 @@
 package app.xreader.data.importer
 
+import app.xreader.core.error.AppError
 import app.xreader.core.error.AppResult
 import app.xreader.data.FakeBookDao
 import app.xreader.data.FakeChapterDao
@@ -63,6 +64,21 @@ class BookImporterTest {
         assertNotNull(candidate.unsupportedReason)
         val result = importer.importStaged(candidate)
         assertTrue(result is AppResult.Err)
+    }
+
+    @Test fun oversizedFileIsRefusedAtStaging() = runTest {
+        val storage = BookStorage(temp.newFolder("files"))
+        val importer = importer(storage, FakeBookDao(), FakeChapterDao())
+        importer.maxSourceFileBytes = 8
+        val text = "Chapter 1\n\nA story far longer than eight bytes."
+        val result = importer.stage("big.txt") { text.byteInputStream() }
+        assertTrue("expected Err, got $result", result is AppResult.Err)
+        val error = (result as AppResult.Err).error
+        assertTrue("expected BadFile, got $error", error is AppError.BadFile)
+        assertTrue((error as AppError.BadFile).reason.contains("too large"))
+        // The staging dir went away again — nothing half-staged stays.
+        val stagingRoot = File(storage.filesDir, "import-staging")
+        assertTrue(stagingRoot.listFiles().isNullOrEmpty())
     }
 
     @Test fun epubImportExtractsCover() = runTest {
