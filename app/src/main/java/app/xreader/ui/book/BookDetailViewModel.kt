@@ -90,10 +90,28 @@ data class BookDetailUiState(
      * here is a tag yet — accepting writes it (INFERRED origin). */
     val tagSuggestions: List<app.xreader.data.ai.TagSuggestion> = emptyList(),
     val tagSuggestBusy: Boolean = false,
-    val tagSuggestNote: String? = null
+    val tagSuggestNote: String? = null,
+    /** v1.3.2 (scope A2): the session hand-off the current
+     * chapters error calls for (a site check to solve, a
+     * sign-in to make), or null when the error is ordinary.
+     * The Chapters card renders it as its primary door. */
+    val sessionNeed: app.xreader.data.extension.SessionNeed.Kind? = null,
+    /** v1.3.2 (item 77): the chapters failure is "this source
+     * is switched off" — the card offers one tap to turn it
+     * back on and retry. */
+    val sourceOff: Boolean = false,
+    /** v1.3.2 (item 79): the stored index of the book's
+     * identity-FIRST chapter — the Start Reading target when
+     * there is no progress. Computed from the chapters' own
+     * numbers, never assumed to be stored index 0 (a
+     * newest-first store keeps chapter 1 at its END). */
+    val startChapterIndex: Int = 0
 ) {
     val downloadedCount: Int get() = chapters.count { it.downloadState == DownloadState.READY }
-    val continueChapterIndex: Int get() = progress?.chapterIndex ?: 0
+    /** v1.3.2 (item 79): Continue follows saved progress
+     * (already identity-anchored); Start follows identity —
+     * the chapter whose own number is 1. */
+    val continueChapterIndex: Int get() = progress?.chapterIndex ?: startChapterIndex
     /** v1.0.4 (D14): non-null blocks the Read action — the loaded
      * chapter list is empty, so reading could only fail downstream
      * in the reader ("isn't in the book anymore"). The reason is
@@ -216,6 +234,14 @@ class BookDetailViewModel(
             bookMeta = metas[bookId] ?: app.xreader.data.library.BookMeta(),
             chaptersLoading = story.chaptersLoading,
             chaptersError = story.chaptersError,
+            // v1.3.2 (scope A2 + item 79): the hand-off the
+            // chapters error calls for, and the identity-first
+            // chapter's stored index for Start Reading.
+            sessionNeed = story.sessionNeed,
+            sourceOff = story.sourceOff,
+            startChapterIndex =
+                app.xreader.domain.reader.ChapterDisplayOrder
+                    .firstChapter(chapters)?.index ?: 0,
             isLinkSource = story.isLinkSource,
             sourceNeedsSiteCheck = story.sourceNeedsSiteCheck,
             recheckBusy = story.recheckBusy,
@@ -416,11 +442,7 @@ class BookDetailViewModel(
                     )
                 }
                 is app.xreader.core.error.AppResult.Err -> {
-                    storyLocal.value = storyLocal.value.copy(
-                        chaptersLoading = false,
-                        chaptersError = app.xreader.core.error.ErrorText
-                            .displayText(result.error)
-                    )
+                    noteChaptersError(result.error)
                 }
             }
         }
@@ -451,11 +473,7 @@ class BookDetailViewModel(
                     )
                 }
                 is app.xreader.core.error.AppResult.Err -> {
-                    storyLocal.value = storyLocal.value.copy(
-                        chaptersLoading = false,
-                        chaptersError = app.xreader.core.error.ErrorText
-                            .displayText(result.error)
-                    )
+                    noteChaptersError(result.error)
                 }
             }
         }
@@ -590,6 +608,11 @@ class BookDetailViewModel(
                 .getById(extensionId) ?: return@launch
             val handle = container.extensionService
                 .sourcesOf(extensionId).getOrNull()?.firstOrNull()
+            // v1.3.2 (scope A2): cache the config for the
+            // session hand-off classifier.
+            bookConfig = handle?.let {
+                container.extensionService.declarativeConfigOf(it)
+            }
             val health = handle?.let {
                 container.sourcePrefs.sourceHealth.first()[
                     app.xreader.data.extension.SourceHealthRecord.key(
@@ -693,11 +716,7 @@ class BookDetailViewModel(
                     _messages.tryEmit("Chapter list refreshed — ${result.value.totalChapters} chapters")
                 }
                 is app.xreader.core.error.AppResult.Err -> {
-                    storyLocal.value = storyLocal.value.copy(
-                        chaptersLoading = false,
-                        chaptersError = app.xreader.core.error.ErrorText
-                            .displayText(result.error)
-                    )
+                    noteChaptersError(result.error)
                     _messages.tryEmit(
                         app.xreader.core.error.ErrorText.displayText(result.error)
                     )
@@ -705,6 +724,41 @@ class BookDetailViewModel(
             }
         }
     }
+
+    /** v1.3.2 (scope A2): one place where a chapters failure
+     * lands in state — its plain-words text AND the session
+     * hand-off it calls for, classified against this book's
+     * source config (cached at init; user-added lanes and
+     * bundled defaults alike). */
+    private fun noteChaptersError(error: app.xreader.core.error.AppError) {
+        storyLocal.value = storyLocal.value.copy(
+            chaptersLoading = false,
+            chaptersError = app.xreader.core.error.ErrorText
+                .displayText(error),
+            sessionNeed = app.xreader.data.extension.SessionNeed
+                .classify(bookConfig, error),
+            sourceOff = error.detail?.contains("switched off") == true
+        )
+    }
+
+    /** v1.3.2 (item 77): one tap — turn this book's source back
+     * on AND retry the chapter load. */
+    fun turnBackOnAndRetry() {
+        viewModelScope.launch {
+            val book = container.database.bookDao().getById(bookId)
+                ?: return@launch
+            val extId = book.extensionId ?: return@launch
+            val row = container.database.installedExtensionDao()
+                .getById(extId) ?: return@launch
+            container.repoManager.setEnabled(row, true)
+            storyLocal.value = storyLocal.value.copy(sourceOff = false)
+            refreshChapters()
+        }
+    }
+
+    /** This book's source config, resolved once at init for
+     * the hand-off classifier. */
+    private var bookConfig: app.xreader.data.extension.DeclarativeConfig? = null
 
     /**
      * v1.0.5 (B1/E2): the Chapters section's "Re-check now" door.

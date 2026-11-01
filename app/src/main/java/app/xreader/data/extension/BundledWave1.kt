@@ -164,6 +164,13 @@ object BundledWave1 {
         BundledDefaults.Spec("wetriedtls", "WeTriedTLS") { id, name ->
             BundledSingles.weTriedTls(id, name)
         },
+        // v1.3.2 (items 75/75b): FenrirRealm returns as a
+        // SIGN-IN-SUPPORTED default — its API legs passed
+        // anonymously at capture; chapter text unlocks via
+        // the one-time sign-in hand-off (the LOGIN RULE).
+        BundledDefaults.Spec("fenrirealm", "FenrirRealm") { id, name ->
+            BundledSingles.fenrirRealm(id, name)
+        },
         // ── Render-backed (Cloudflare) defaults — the user's
         // 2026-11-01 01:17 decision: needsRendering +
         // maintainerVerified under the E4 proof-pending

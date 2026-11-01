@@ -302,7 +302,14 @@ class DeclarativeSource(
                 },
                 coverUrl = spec.cover?.let {
                     EmbeddedJson.stringAt(record, it)?.trim()?.ifEmpty { null }
-                }?.let { absolute(it, pageUrl) }
+                }?.let { raw ->
+                    // v1.3.2: a cover template expands a bare
+                    // storage path into its serving URL first
+                    // (fenrirealm's "storage/…" covers).
+                    val expanded = spec.jsonCoverTemplate
+                        ?.replace("{value}", raw) ?: raw
+                    absolute(expanded, pageUrl)
+                }
             )
         }
         // Paging evidence, when the payload states it: the
@@ -587,6 +594,10 @@ class DeclarativeSource(
         private var totalPages = 0
         private var firstPageSize = -1
         private var fetchedPages = 0
+        /** v1.3.2 (scope A4): the v1.3.1 seed-and-start-at-2
+         * behaviour, armed as the fallback when this walk's
+         * page-1 fetch fails on a DOM/fragment road. */
+        private var seedFallbackArmed = false
         /** v1.3.0 (E1): the chapter total a JSON endpoint
          * states; 0 = not stated. Ends the walk exactly. */
         private var knownTotal = 0
@@ -631,13 +642,22 @@ class DeclarativeSource(
                 // like the full walk does.
                 nextPage = 1
             } else {
-                // DOM/fragment pagination (the novelight
-                // contract): the book page carries page 1's
-                // slice itself and the endpoint serves pages
-                // 2..N — seed from the page, fetch from page 2.
-                rows += bookPageRows
-                seen += bookPageRows.map { it.id }
-                nextPage = 2
+                // v1.3.2 (items 71/80, scope A4): DOM/fragment
+                // pagination starts at PAGE 1 too. v1.3.1
+                // seeded the book page's slice and fetched
+                // from page 2, assuming the slice WAS page 1 —
+                // on the NovelFire family the book page's slice
+                // is a later page, so the list opened at
+                // chapter 101 and page 1 was never fetched.
+                // The walk now fetches page 1 itself; when it
+                // turns out to BE the book slice, its rows
+                // dedupe in step() and the walk walks on. If
+                // the page-1 fetch FAILS, step() falls back to
+                // the seeded slice and continues from page 2 —
+                // the pre-v1.3.2 behaviour — rather than
+                // failing a list that used to work.
+                seedFallbackArmed = bookPageRows.isNotEmpty()
+                nextPage = 1
             }
         }
 
@@ -684,7 +704,8 @@ class DeclarativeSource(
             }
         }
 
-        fun readingRows(): List<SourceChapter> = finishChapterRows(rows)
+        fun readingRows(): List<SourceChapter> =
+            finishChapterRows(rows, pageUrl)
 
         fun walk(): ChapterWalk = ChapterWalk(
             nextPage = if (complete) 0 else nextPage,
@@ -730,6 +751,19 @@ class DeclarativeSource(
             }
             val fetchedPage = fetchListPage(p, id, nextPage)
             if (fetchedPage == null) {
+                // v1.3.2 (scope A4): a failed PAGE-1 fetch on a
+                // DOM/fragment road with a book-page slice in
+                // hand degrades to the pre-v1.3.2 behaviour —
+                // seed the slice, walk from page 2 — instead of
+                // failing a list that used to work. Any other
+                // failed page ends the chunk here, resumable.
+                if (seedFallbackArmed && nextPage == 1) {
+                    seedFallbackArmed = false
+                    rows += bookPageRows
+                    seen += bookPageRows.map { it.id }
+                    nextPage = 2
+                    return true
+                }
                 failed = true
                 return false
             }
@@ -737,9 +771,21 @@ class DeclarativeSource(
             val fragmentRows = fetchedPage.rows
             fetchedPages++
             if (fragmentRows.isEmpty()) {
+                // v1.3.2: an empty page 1 with a slice in hand
+                // is the same degradation — the endpoint's
+                // first page is not where this site keeps its
+                // rows; seed and walk on from page 2.
+                if (seedFallbackArmed && nextPage == 1) {
+                    seedFallbackArmed = false
+                    rows += bookPageRows
+                    seen += bookPageRows.map { it.id }
+                    nextPage = 2
+                    return true
+                }
                 complete = true
                 return false
             }
+            seedFallbackArmed = false
             val fresh = fragmentRows.filter { it.id !in seen }
             if (fresh.isEmpty()) {
                 complete = true
@@ -911,7 +957,10 @@ class DeclarativeSource(
             if (!LinkInference.isSameSiteHost(pageUrl, absoluteLink)) {
                 return@mapIndexedNotNull null
             }
-            val name = jsonRecordName(record, spec, index)
+            val rawName = jsonRecordName(record, spec, index)
+            // v1.3.2 (item 78): JSON roads de-glue too — name
+            // and date are separate fields on every road.
+            val (name, gluedDate) = cleanChapterName(rawName)
             SourceChapter(
                 id = absoluteLink,
                 name = name,
@@ -920,7 +969,7 @@ class DeclarativeSource(
                 dateText = spec.jsonDateField?.let { field ->
                     EmbeddedJson.stringAt(record, field)
                         ?.trim()?.ifEmpty { null }
-                }
+                } ?: gluedDate
             )
         }
     }
@@ -988,7 +1037,22 @@ class DeclarativeSource(
      * the merged set, exactly as the single-page parse did. */
     private fun parseAllChapters(doc: Document, pageUrl: String): List<SourceChapter> {
         val spec = config.details.chapters
-        val rows = parseChapterRows(doc, pageUrl).toMutableList()
+        // v1.3.2 (item 85): when the spec declares a JSON
+        // chapters ENDPOINT (pagination.jsonArrayPath), that
+        // endpoint is the road — the book page's DOM rows do
+        // NOT seed the list. NovelBin's book pages carry a
+        // loose `a` chapter selector (the chapter anchors
+        // share the page with the site's nav and genre menu);
+        // seeding from it put ~49 menu rows ahead of the API's
+        // real list. The DOM rows return only as the fallback
+        // when the endpoint answers nothing at all.
+        val endpointIsTheRoad = spec.pagination?.jsonArrayPath != null
+        val domRows = parseChapterRows(doc, pageUrl)
+        val rows = if (endpointIsTheRoad) {
+            mutableListOf()
+        } else {
+            domRows.toMutableList()
+        }
         // v1.2.3: the embedded-JSON chapter rows merge in —
         // the payload's list runs longer than the rendered
         // window on Next.js book pages (novelbuddy: latest 50
@@ -1020,12 +1084,18 @@ class DeclarativeSource(
                 seededFromEndpoint = seededFromEndpoint
             )
         }
+        // v1.3.2 (item 85): the endpoint road answered
+        // nothing — only then do the book page's DOM rows
+        // stand as the list (the pre-v1.3.2 degradation).
+        if (endpointIsTheRoad && rows.isEmpty()) {
+            rows += domRows
+        }
         // v1.0.8.1: a pattern-completed list is already in
         // reading order — it must NOT pass through the reverse
         // finishing the parsed-rows path uses.
         val patterned = patternCompletedRows(doc, pageUrl, rows)
-        if (patterned != null) return patterned.distinctBy { it.id }
-        return finishChapterRows(rows)
+        if (patterned != null) return ChapterIdentity.merge(patterned)
+        return finishChapterRows(rows, pageUrl)
     }
 
     /**
@@ -1150,7 +1220,9 @@ class DeclarativeSource(
                 if (!LinkInference.isSameSiteHost(pageUrl, absoluteLink)) {
                     return@mapIndexedNotNull null
                 }
-                val name = jsonRecordName(record, spec, index)
+                val rawName = jsonRecordName(record, spec, index)
+                // v1.3.2 (item 78): de-glue on this road too.
+                val (name, gluedDate) = cleanChapterName(rawName)
                 SourceChapter(
                     id = absoluteLink,
                     name = name,
@@ -1159,7 +1231,7 @@ class DeclarativeSource(
                     dateText = spec.jsonDateField?.let { field ->
                         EmbeddedJson.stringAt(record, field)
                             ?.trim()?.ifEmpty { null }
-                    }
+                    } ?: gluedDate
                 )
             }
         }
@@ -1201,12 +1273,15 @@ class DeclarativeSource(
             if (!LinkInference.isSameSiteHost(pageUrl, absolute(link, pageUrl))) {
                 return@mapIndexedNotNull null
             }
-            val name = EmbeddedJson.stringAt(record, spec.jsonNameField)
+            val rawName = EmbeddedJson.stringAt(record, spec.jsonNameField)
                 ?.trim()?.ifEmpty { null } ?: "Chapter ${index + 1}"
+            // v1.3.2 (item 78): de-glue on this road too.
+            val (name, gluedDate) = cleanChapterName(rawName)
             SourceChapter(
                 id = absolute(link, pageUrl),
                 name = name,
-                number = ChapterNumbers.parse(name)
+                number = ChapterNumbers.parse(name),
+                dateText = gluedDate
             )
         }
     }
@@ -1227,8 +1302,15 @@ class DeclarativeSource(
             if (!LinkInference.isSameSiteHost(pageUrl, absolute(link, pageUrl))) {
                 return@mapIndexedNotNull null
             }
-            val chapterName = readSpec(el, spec.name)?.trim()
+            val rawName = readSpec(el, spec.name)?.trim()
                 ?.ifEmpty { null } ?: "Chapter ${index + 1}"
+            // v1.3.2 (items 71/78): name and date are separate
+            // fields — a row whose text glues them together
+            // ("Chapter 156: Totally Awful 3 days ago", the
+            // NovelFire family's "101Chapter 101 – Unexpected
+            // Clue5 years ago") is split here, at the builder
+            // every DOM road shares.
+            val (chapterName, gluedDate) = cleanChapterName(rawName)
             SourceChapter(
                 id = absolute(link, pageUrl),
                 name = chapterName,
@@ -1236,9 +1318,38 @@ class DeclarativeSource(
                 // v1.0.6.3: the row's release date when the spec
                 // declares one (novelight's ".date@text"); rides
                 // the pagination walk too — it shares this builder.
-                dateText = spec.date?.let { readSpec(el, it)?.trim()?.ifEmpty { null } }
+                dateText = spec.date?.let {
+                    readSpec(el, it)?.trim()?.ifEmpty { null }
+                } ?: gluedDate
             )
         }
+    }
+
+    /**
+     * v1.3.2 (items 71/78): the shared chapter-name hygiene
+     * for every row builder — split a glued trailing date
+     * into its own field ([ChapterDateText.splitGluedDate])
+     * and drop a duplicated leading number ("101Chapter 101
+     * – …" — the site's row index glued onto the chapter's
+     * own label). Returns (clean name, split-off date text).
+     */
+    private fun cleanChapterName(raw: String): Pair<String, String?> {
+        val (split, date) =
+            app.xreader.domain.reader.ChapterDateText.splitGluedDate(raw)
+        val deduped = DUPLICATE_NUMBER_PREFIX.find(split)?.let { match ->
+            if (match.groupValues[1] == match.groupValues[2]) {
+                // Drop only the glued prefix number, keeping
+                // the chapter's own label: "101Chapter 101 – X"
+                // → "Chapter 101 – X".
+                val rest = split.substring(
+                    match.groups[2]?.range?.last?.plus(1) ?: match.range.last + 1
+                )
+                "Chapter ${match.groupValues[2]}$rest"
+            } else {
+                split
+            }
+        } ?: split
+        return deduped to date
     }
 
     /** The chapter-shape gate (item 50): can this row be a
@@ -1258,7 +1369,10 @@ class DeclarativeSource(
         return segments.none { it.lowercase() in LISTING_PATH_SEGMENTS }
     }
 
-    private fun finishChapterRows(rows: List<SourceChapter>): List<SourceChapter> {
+    private fun finishChapterRows(
+        rows: List<SourceChapter>,
+        pageUrl: String
+    ): List<SourceChapter> {
         val spec = config.details.chapters
         // v1.3.0 delta (V120-CHECK 50): the chapter-shape gate.
         // A book page's furniture — the "Start Reading" call to
@@ -1273,13 +1387,40 @@ class DeclarativeSource(
         // never produce either shape, so the gate is free for
         // them; DOM roads stop leaking furniture here, at the
         // one choke point every declarative list passes.
-        val shaped = rows.filter { isChapterShaped(it) }
-        // v1.0.5 (E3): sites that show a "latest chapters" block
-        // AND the full list on the same page (Novelight: 10 + 51
-        // rows under one selector) would otherwise hand back the
-        // overlap twice. One entry per chapter URL, first
-        // occurrence wins, order preserved — the COMPLETE list.
-        val unique = shaped.distinctBy { it.id }
+        // v1.3.2 (item 85): the shape-consistency gate runs
+        // over the CTA/tag survivors — a row with no chapter
+        // number anywhere survives only when its URL wears
+        // the book's own chapter-URL shape (nav and genre
+        // menu anchors never do).
+        val shaped = ChapterShape.filterConsistent(
+            rows.filter { isChapterShaped(it) }, pageUrl
+        )
+        // v1.3.2 (items 64/80/82, scope B/R3): the fragments a
+        // list arrives in — book-page slice, embedded JSON,
+        // pagination pages, an API answer — MERGE by canonical
+        // chapter identity (the richest record wins a
+        // duplicate: the dated API row beats the dateless DOM
+        // row for the same chapter) and, when the list's
+        // numbers are unique and near-complete, ORDER BY
+        // NUMBER: a newest-first fragment stitched onto an
+        // ascending one (WoopRead, LibRead) settles into
+        // reading order here instead of reaching the store
+        // stitched. Lists whose numbers can't carry the order
+        // fall through to the site-order finishing below,
+        // unchanged.
+        return ChapterIdentity.settle(shaped) { merged ->
+            settleSiteOrder(merged, spec)
+        }
+    }
+
+    /** The pre-v1.3.2 finishing, kept as the fallback for
+     * lists whose numbers cannot carry their order: the
+     * config's reverse flag, then the reading-order
+     * invariant flip. */
+    private fun settleSiteOrder(
+        unique: List<SourceChapter>,
+        spec: ChapterListSpec
+    ): List<SourceChapter> {
         val ordered = if (spec.reverse) unique.asReversed() else unique
         // v1.1.2: the reading-order invariant. Everything
         // downstream — the stored Chapter.index the reconciler
@@ -1322,7 +1463,6 @@ class DeclarativeSource(
         val bookId = pagination.bookIdIn(bookIdHaystack(bookDoc)) ?: return
         val seen = rows.mapTo(HashSet()) { it.id }
         var firstPageSize = -1
-        var page = 2
         var fetched = 0
         // v1.3.0 (E1): page 1 of a slug/id-addressed endpoint is
         // NOT the book page — API chapter lists start at page 1
@@ -1333,8 +1473,29 @@ class DeclarativeSource(
         // [seededFromEndpoint]: the spec's jsonEndpointPath
         // seeded page 1's payload as the book rows — where
         // the walk starts at page 2 as it always did.
-        if (pagination.jsonArrayPath != null && !seededFromEndpoint) {
-            page = 1
+        //
+        // v1.3.2 (items 71/80, scope A4): where the walk
+        // starts depends on what the endpoint IS:
+        //  - a JSON API road (jsonArrayPath): the book page
+        //    is not a page of the endpoint at all — start at
+        //    page 1 (the E1 rule above).
+        //  - a {bookUrl} TOC pager (the NovelFire family):
+        //    the book page embeds only a WINDOW of the table
+        //    of contents — on device it was the pager's page 2
+        //    (the list opened at chapter 101 and page 1 was
+        //    never fetched) — start at page 1; when page 1
+        //    does equal the book slice, its rows dedupe
+        //    against the seeds and the walk walks on (the
+        //    loop's first-page tolerance below).
+        //  - a {bookId} AJAX continuation (Novelight, the F1
+        //    road): the book page IS page 1 and the endpoint
+        //    serves the REST — its page 1 may not even exist —
+        //    start at page 2, as the road always did.
+        var page = when {
+            seededFromEndpoint -> 2
+            pagination.jsonArrayPath != null -> 1
+            pagination.urlTemplate.contains("{bookUrl}") -> 1
+            else -> 2
         }
         val startPage = page
         // v1.3.0 (E1): the chapter total a JSON endpoint states.
@@ -1516,16 +1677,39 @@ class DeclarativeSource(
         val extracted = spec.description
             ?.let { readDocSpec(doc, it) }?.ifBlank { null }
             ?: return null
-        if (!LinkInference.isTruncatedSnippet(extracted)) {
-            return extracted
-        }
+        // v1.3.2 (item 76): the page's own synopsis body vs
+        // the configured read. A META description is an SEO
+        // snippet by construction — boilerplate lead, cut
+        // short — so when the spec reads a meta tag (or the
+        // text carries the boilerplate / a truncation cut)
+        // and the page carries a LONGER synopsis body, the
+        // body wins. A body-selector spec reads the body
+        // directly and keeps the old heal-only-on-truncation
+        // behaviour. Boilerplate is stripped either way.
+        val cleaned =
+            app.xreader.domain.reader.SynopsisText.stripBoilerplate(extracted)
         val block = doc.select(
             "[class*=synopsis], [class*=description], [class*=summary]"
-        ).map { it.text().trim() }
+        ).map {
+            app.xreader.domain.reader.SynopsisText
+                .stripBoilerplate(it.text().trim())
+        }
             .filter { it.length >= 40 }
             .maxByOrNull { it.length }
-        return block?.takeIf { it.length > extracted.length }
-            ?: extracted
+        val snippetShaped =
+            LinkInference.isTruncatedSnippet(cleaned) ||
+                app.xreader.domain.reader.SynopsisText
+                    .hasBoilerplatePrefix(extracted) ||
+                app.xreader.domain.reader.SynopsisText
+                    .isMetaSpec(spec.description)
+        return if (
+            block != null && block.length > cleaned.length &&
+            (snippetShaped || block.length >= cleaned.length * 5 / 4)
+        ) {
+            block
+        } else {
+            cleaned
+        }
     }
 
     private fun readTitle(doc: Document, rawSpec: String?): String? {
@@ -1916,6 +2100,13 @@ class DeclarativeSource(
     }
 
     companion object {
+        /** v1.3.2 (item 71): a row label that repeats its own
+         * chapter number as a glued prefix — "101Chapter 101
+         * – …" (the site's row index concatenated onto the
+         * chapter's label by a whole-row @text read). */
+        private val DUPLICATE_NUMBER_PREFIX =
+            Regex("^(\\d+)\\s*Chapter\\s+(\\d+)\\b")
+
         /** v1.2.0 (audit #4): the content/document cache cap —
          * enough for a reading session's working set (current +
          * neighbours + recent history), small enough that the
@@ -1974,12 +2165,92 @@ object ChapterNumbers {
         Regex("(?i)\\bch\\.?\\s*(\\d+(?:\\.\\d+)?)"),
         Regex("(?i)episode\\s*(\\d+(?:\\.\\d+)?)"),
         Regex("第\\s*(\\d+)\\s*[章话話节節回]"),
-        Regex("^\\s*(\\d+(?:\\.\\d+)?)\\s*[.:\\-]")
+        Regex("^\\s*(\\d+(?:\\.\\d+)?)\\s*[.:\\-]"),
+        // v1.3.2: the number-first house style — "760 chapter"
+        // (Novelight). The word must follow the number, so a
+        // rating-led title ("5.0 The Star-Painting Genius")
+        // never parses.
+        Regex("(?i)^\\s*(\\d+(?:\\.\\d+)?)\\s+chapter\\b")
     )
 
     fun parse(name: String): Float? {
         for (pattern in patterns) {
             pattern.find(name)?.let { return it.groupValues[1].toFloatOrNull() }
+        }
+        return null
+    }
+
+    // ── v1.3.2 (items 78/79/80): slug-shaped names ─────────────
+    // Chapter URLs and some sites' row text name chapters in
+    // slug form — "chapter-156-totally-awful", "ch-12",
+    // "episode-3-part-1". The word patterns above all demand
+    // whitespace (or a word boundary the hyphen defeats), so a
+    // slug-named list parsed to NO numbers at all: the
+    // strongly-descending detector went blind, a newest-first
+    // list was stored as-is, and the reader — labelling by
+    // position — opened chapter 158 under a "Chapter 1" label.
+    private val slugPatterns = listOf(
+        Regex("(?i)(?:^|[-_])chapter[-_](\\d+(?:\\.\\d+)?)(?:[-_]|$)"),
+        Regex("(?i)(?:^|[-_])ch[-_](\\d+(?:\\.\\d+)?)(?:[-_]|$)"),
+        Regex("(?i)(?:^|[-_])episode[-_](\\d+(?:\\.\\d+)?)(?:[-_]|$)")
+    )
+
+    /** The number inside a slug-shaped name or URL tail
+     * ("chapter-156-totally-awful" → 156). Null when the text
+     * is not slug-shaped chapter naming. */
+    fun parseSlug(text: String): Float? {
+        for (pattern in slugPatterns) {
+            pattern.find(text)?.let { return it.groupValues[1].toFloatOrNull() }
+        }
+        return null
+    }
+
+    /** The number a chapter URL itself carries: its last path
+     * segment read as a name, then as a slug, then as a bare
+     * number ("…/chapter-214", "…/214", "…/chapter/214").
+     * Null when the URL carries no chapter number. */
+    fun parseFromUrl(url: String): Float? {
+        val path = url.substringBefore('?').substringBefore('#')
+        val segments = path.split('/').filter { it.isNotBlank() }
+        val tail = segments.lastOrNull() ?: return null
+        return parse(tail) ?: parseSlug(tail) ?: tail.toFloatOrNull()
+            ?: segments.getOrNull(segments.lastIndex - 1)
+                ?.takeIf { prev ->
+                    prev.equals("chapter", ignoreCase = true) ||
+                        prev.equals("ch", ignoreCase = true)
+                }?.let { tail.toFloatOrNull() }
+    }
+
+    /** Any number a chapter row carries, name first, then
+     * slug-shaped name, then its URL — the identity number
+     * the merge, the ordering and the reader all key on. */
+    fun parseAny(name: String, url: String): Float? =
+        parse(name) ?: parseSlug(name) ?: parseFromUrl(url)
+
+    /** The number for ORDERING a list: the name's own number,
+     * or a slug-shaped number in the name or URL — but never a
+     * bare numeric URL tail. A bare tail is as often a
+     * database id as a chapter number (Novelight's
+     * …/chapter/346374 is chapter 760), and one list mixing
+     * name numbers with id numbers sorts into nonsense:
+     * v1.3.2's first gate run caught exactly that — the
+     * Novelight list "sorted" by id interleaved its fragments.
+     * A list whose numbers live only in bare tails keeps its
+     * site order instead (the fallback finishing). */
+    fun parseForOrder(name: String, url: String): Float? {
+        parse(name)?.let { return it }
+        parseSlug(name)?.let { return it }
+        val path = url.substringBefore('?').substringBefore('#')
+        val segments = path.split('/').filter { it.isNotBlank() }
+        val tail = segments.lastOrNull() ?: return null
+        parse(tail)?.let { return it }
+        parseSlug(tail)?.let { return it }
+        val prev = segments.getOrNull(segments.lastIndex - 1)
+        if (prev != null &&
+            (prev.equals("chapter", ignoreCase = true) ||
+                prev.equals("ch", ignoreCase = true))
+        ) {
+            return tail.toFloatOrNull()
         }
         return null
     }
@@ -2023,11 +2294,8 @@ object ChapterOrder {
     /** The chapter number a chapter URL's tail carries, when
      * it carries one ("…/series/x/214", "…/chapter-214") —
      * the shape chapter links take on sites whose row text
-     * shows only a date. A slug tail yields null. */
-    private fun hrefTailNumber(id: String): Float? {
-        val tail = id.substringBefore('?').substringBefore('#')
-            .trimEnd('/').substringAfterLast('/')
-        if (tail.isEmpty()) return null
-        return ChapterNumbers.parse(tail) ?: tail.toFloatOrNull()
-    }
+     * shows only a date. v1.3.2: slug tails parse too
+     * ("chapter-214-a-title" → 214) via [ChapterNumbers]. */
+    private fun hrefTailNumber(id: String): Float? =
+        ChapterNumbers.parseFromUrl(id)
 }

@@ -49,7 +49,10 @@ fun AddSourceScreen(
     viewModel: SourcesViewModel,
     onBack: () -> Unit,
     onAddFromLink: () -> Unit,
-    onOpenStore: () -> Unit
+    onOpenStore: () -> Unit,
+    /** v1.3.2 (scope E): the persisted foreign repo's own
+     * screen — the full site list lives there now. */
+    onOpenRepo: (Long) -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var repoName by remember { mutableStateOf("") }
@@ -393,9 +396,25 @@ fun AddSourceScreen(
                         }
                         if (foreign.sites.size > 40) {
                             Text(
-                                "…and ${foreign.sites.size - 40} more sites in that list.",
+                                "Showing the first 40 of ${foreign.sites.size} sites.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        // v1.3.2 (scope E): the dead-end count
+                        // line is a DOOR now — the repo was saved
+                        // and its own screen carries the FULL
+                        // list, searchable.
+                        if (state.lastForeignRepoId != null) {
+                            Spacer(Modifier.height(8.dp))
+                            PrimaryPill(
+                                text = "See all ${foreign.sites.size} sites",
+                                onClick = {
+                                    onOpenRepo(
+                                        state.lastForeignRepoId ?: 0L
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
                             )
                         }
                         GhostPill(

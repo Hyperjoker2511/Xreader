@@ -35,8 +35,12 @@ data class CodeDefinition(
  * - js/dex artifacts are hash-checked against the pinned fingerprint
  *   before EVERY cold load — a mismatch freezes the row
  *   (CHANGED_REQUIRES_RETRUST) and nothing runs;
- * - three consecutive failures from one extension disable it
- *   (§9.1 defect containment), with a plain-words reason surfaced;
+ * - failures NEVER disable an extension (v1.3.2, V120-CHECK
+ *   item 84 — the §9.1 auto-disable breaker is retired: a
+ *   source is off only because its reader turned it off.
+ *   Failures surface as the health state on the source's row
+ *   and page, in plain words, and the next try simply tries
+ *   again);
  * - loaded sources are cached; install/update/trust changes call
  *   [invalidate] so stale code never lingers.
  */
@@ -49,7 +53,6 @@ class ExtensionService(
 ) {
 
     private val cache = ConcurrentHashMap<Long, List<SourceHandle>>()
-    private val failureCounts = ConcurrentHashMap<Long, Int>()
     private val jsRuntimes = ConcurrentHashMap<Long, JsRuntime>()
 
     fun invalidate(extensionId: Long) {
@@ -283,7 +286,7 @@ class ExtensionService(
      * failure, whitelist refusal included, is an Err; callers
      * treat it as "skip this one". Image fetches deliberately do
      * NOT run through [guarded]: a dead image host must not count
-     * toward the §9.1 disable counter.
+     * toward a source's failure health.
      */
     suspend fun fetchBytes(handle: SourceHandle, url: String): AppResult<ByteArray> {
         val permissions = ExtensionPermissions.parse(handle.extension.permissionsJson)
@@ -332,47 +335,40 @@ class ExtensionService(
         return guarded(handle) { source.bookshelf(page) }
     }
 
-    // ── failure containment (§9.1) ──────────────────────────────────
+    // ── failure containment (§9.1, as amended by item 84) ─────────
 
     /**
-     * Run a source call with defect containment: successes reset the
-     * counter; the third consecutive failure disables the extension.
+     * Run a source call with defect containment: the failure
+     * becomes a plain-words error for the caller, and NOTHING
+     * else happens — v1.3.2 (V120-CHECK item 84) retired the
+     * failure circuit-breaker that used to switch a source
+     * off after three consecutive failures. On a real device
+     * that rule turned a run of transient render timeouts
+     * (BOTI's Turnstile stalls) into EVERY source silently
+     * off by morning. The rule now: a source is off only
+     * because its reader turned it off. Failures earn the
+     * health badge on the source's row; the next try tries
+     * again. (The audit that closed this path: this was the
+     * ONLY non-user write of `enabled = false` for a source
+     * in the app — install probes save nothing on failure,
+     * health checks write health records only, and
+     * [RepoManager.setEnabled] is called solely from the
+     * source page's own switch.)
      */
     suspend fun <T> guarded(
         handle: SourceHandle,
         block: (Source) -> T
     ): AppResult<T> {
         return try {
-            val value = block(handle.source)
-            failureCounts.remove(handle.extension.id)
-            AppResult.Ok(value)
+            AppResult.Ok(block(handle.source))
         } catch (e: Exception) {
-            val count = failureCounts.merge(handle.extension.id, 1, Int::plus) ?: 1
-            if (count >= FAILURE_LIMIT) {
-                val row = extensionDao.getById(handle.extension.id) ?: handle.extension
-                extensionDao.update(row.copy(enabled = false))
-                invalidate(handle.extension.id)
-                failureCounts.remove(handle.extension.id)
-                AppResult.Err(
-                    AppError.ExtensionFailed(
-                        handle.extension.displayName,
-                        "it failed $FAILURE_LIMIT times in a row, so Xreader switched it off. " +
-                            "You can turn it back on from Sources."
-                    )
+            AppResult.Err(
+                AppError.ExtensionFailed(
+                    handle.extension.displayName,
+                    e.message?.take(300) ?: "it failed (${e.javaClass.simpleName})"
                 )
-            } else {
-                AppResult.Err(
-                    AppError.ExtensionFailed(
-                        handle.extension.displayName,
-                        e.message?.take(300) ?: "it failed (${e.javaClass.simpleName})"
-                    )
-                )
-            }
+            )
         }
-    }
-
-    companion object {
-        const val FAILURE_LIMIT = 3
     }
 }
 

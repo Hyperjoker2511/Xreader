@@ -30,6 +30,15 @@ interface PageFetcher {
     ): AppResult<HostResponse>
 }
 
+/** v1.3.2 (scope A1): the HTTP statuses that mean "the site
+ * refused the plain request" — a block, a gate or a rate
+ * refusal the browser view's session may pass. */
+private val BLOCK_STATUSES = setOf(401, 403, 429, 503)
+
+/** The same verdicts as they appear inside a transport
+ * error's detail ("HTTP 403 for …"). */
+private val BLOCK_STATUS = Regex("HTTP (401|403|429|503)\\b")
+
 /**
  * v1.2.1 (Defect 4): the fetch layer's ROAD MEMORY — the set of
  * hosts that have actually SERVED a JavaScript shell to this
@@ -166,7 +175,55 @@ class EscalatingPageFetcher(
             return render(url)
         }
         val staticResult = staticFetcher.get(url, headers)
-        if (staticResult !is AppResult.Ok) return staticResult
+        if (staticResult !is AppResult.Ok) {
+            // v1.3.2 (scope A1/A6): a block-shaped transport
+            // failure — the site refused the plain request
+            // (401/403/429/503 in the error detail) — escalates
+            // to the browser view when policy allows a render
+            // at all. v1.3.1 returned the refusal untouched, so
+            // a source whose catalogue squeaked through static
+            // died at the chapter-text fetch with "check your
+            // connection" wording for what was a site block.
+            // Genuine connectivity failures (offline, DNS,
+            // timeouts) never escalate: they are not blocks,
+            // and their wording stays honest.
+            val detail = (staticResult as AppResult.Err).error.detail ?: ""
+            val blockShaped = BLOCK_STATUS.containsMatchIn(detail)
+            if (blockShaped && mode != RenderMode.STATIC_ONLY) {
+                val renderedResult = render(url)
+                if (renderedResult is AppResult.Ok) return renderedResult
+                val renderedDetail =
+                    (renderedResult as AppResult.Err).error.detail
+                // The render hit the check too: ITS error is
+                // the actionable one (it offers the solve
+                // screen); any other render failure leaves the
+                // original refusal standing.
+                if (SiteCheck.isChallengeDetail(renderedDetail)) {
+                    return renderedResult
+                }
+            }
+            return staticResult
+        }
+        // v1.3.2 (scope A1): an HTTP block status or a
+        // challenge page that arrived AS a response (the
+        // static client hands error statuses through as
+        // responses) escalates the same way — the browser
+        // view's session is the one road through a check.
+        val response = staticResult.value
+        val blocked = response.status in BLOCK_STATUSES ||
+            SiteCheck.isChallengePage(response.body)
+        if (blocked && mode != RenderMode.STATIC_ONLY) {
+            val renderedResult = render(url)
+            if (renderedResult is AppResult.Ok) return renderedResult
+            val renderedDetail =
+                (renderedResult as? AppResult.Err)?.error?.detail
+            if (SiteCheck.isChallengeDetail(renderedDetail)) {
+                return renderedResult
+            }
+            // The render failed some other way: the static
+            // block stands as the honest answer.
+            return staticResult
+        }
         val isShell = withContext(Dispatchers.Default) {
             runCatching {
                 LinkInference.isJsShell(
@@ -200,7 +257,60 @@ class EscalatingPageFetcher(
         headers: Map<String, String>
     ): AppResult<HostResponse> = staticFetcher.post(url, body, contentType, headers)
 
+    /**
+     * v1.3.2 (scope A1/A2/A6): every render passes through
+     * this verdict on its way out. A render that lands on a
+     * challenge interstitial the engine couldn't pass alone
+     * is NOT a page — it becomes the typed challenge failure
+     * the hand-off offers the one-time solve screen for
+     * (v1.3.1 handed the interstitial over as content, and
+     * the catalogue parse then reported a dishonest empty
+     * list). A render of a JSON endpoint (an API road behind
+     * a check) comes back wrapped by the browser in a lone
+     * <pre> — the JSON is unwrapped so the caller's parser
+     * sees the payload it asked for.
+     */
     private suspend fun render(url: String): AppResult<HostResponse> {
+        val result = renderSettled(url)
+        if (result !is AppResult.Ok) return result
+        val body = result.value.body
+        if (SiteCheck.isChallengePage(body)) {
+            return AppResult.Err(
+                AppError.ProviderDown(
+                    "source",
+                    retryable = true,
+                    detail = SiteCheck.challengeDetail()
+                )
+            )
+        }
+        val json = unwrapRenderedJson(body)
+        return if (json != null) {
+            AppResult.Ok(result.value.copy(body = json))
+        } else {
+            result
+        }
+    }
+
+    /** The JSON a browser view wraps in a lone <pre> when it
+     * renders an API URL directly; null when the body is a
+     * real page. Pure string work — the payload must be the
+     * pre's whole content and must look like JSON. */
+    private fun unwrapRenderedJson(body: String): String? {
+        val trimmed = body.trim()
+        if (!trimmed.startsWith("<")) return null
+        val doc = runCatching { Jsoup.parse(trimmed) }.getOrNull()
+            ?: return null
+        val pres = doc.select("pre")
+        if (pres.size != 1) return null
+        val text = pres.first()?.text()?.trim() ?: return null
+        if (!text.startsWith("{") && !text.startsWith("[")) return null
+        // The pre must be the page's only content — a real
+        // page that quotes JSON in one block keeps its HTML.
+        val bodyText = doc.body()?.text()?.trim() ?: return null
+        return if (bodyText == text) text else null
+    }
+
+    private suspend fun renderSettled(url: String): AppResult<HostResponse> {
         rendered.set(true)
         val hint = waitForSelector()
         val first = renderOnce(url, hint)

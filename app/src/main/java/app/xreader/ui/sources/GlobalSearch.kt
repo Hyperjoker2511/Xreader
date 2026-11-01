@@ -43,6 +43,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -65,6 +66,10 @@ data class GlobalSearchUiState(
     val searched: Boolean = false,
     val groups: List<GlobalSearchGroup> = emptyList(),
     val failedSources: List<String> = emptyList(),
+    /** v1.3.2 (scope D): live fan-out progress — sources settled
+     * out of the total, for the "Searching source N of M" line. */
+    val progressDone: Int = 0,
+    val progressTotal: Int = 0,
     // ── v1.0.2 (R15 + sweep) ─────────────────────────────────────
     val recents: List<String> = emptyList(),
     val saved: List<String> = emptyList(),
@@ -117,14 +122,29 @@ class GlobalSearchViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { _openedBook.emit(bookId) }
     }
 
+    private var searchJob: kotlinx.coroutines.Job? = null
+
+    /** v1.3.2 (scope D): stop the fan-out — the sources still in
+     * flight are abandoned and the results already on screen
+     * stay exactly as they are. */
+    fun cancelSearch() {
+        searchJob?.cancel()
+        searchJob = null
+        if (_state.value.searching) {
+            _state.value = _state.value.copy(searching = false)
+        }
+    }
+
     fun search() {
         val query = _state.value.query.trim()
         if (query.isBlank()) return
-        viewModelScope.launch {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
             _state.value = _state.value.copy(
                 searching = true, searched = true,
                 groups = emptyList(), failedSources = emptyList(),
-                libraryBooks = emptyList(), contentHits = emptyList()
+                libraryBooks = emptyList(), contentHits = emptyList(),
+                progressDone = 0, progressTotal = 0
             )
             container.sourcePrefs.recordSearch(query)
             // Library first (instant, offline): title/author matches
@@ -167,37 +187,85 @@ class GlobalSearchViewModel(private val container: AppContainer) : ViewModel() {
                     app.xreader.data.library.ContentSearcher.search(query, texts)
                 }.getOrDefault(emptyList())
             }
-            val groups = mutableListOf<GlobalSearchGroup>()
-            val failed = mutableListOf<String>()
-            for (handle in container.extensionService.allSources()) {
-                when (val result = container.extensionService.guarded(handle) {
-                    it.search(query, 1)
-                }) {
-                    is AppResult.Ok -> if (result.value.books.isNotEmpty()) {
-                        groups += GlobalSearchGroup(
-                            sourceName = handle.source.name,
-                            extensionId = handle.extension.id,
-                            sourceId = handle.source.id,
-                            books = result.value.books
-                        )
-                    }
-                    is AppResult.Err -> failed += handle.source.name
-                }
-            }
-            // Work-level dedupe annotation: how many sources carry
-            // each work (the same novel is not five discoveries).
-            val workCounts = groups.flatMap { it.books }
-                .groupingBy {
-                    app.xreader.data.extension.WorkMatcher
-                        .normaliseTitle(it.title)
-                }
-                .eachCount()
+            // The local sections land first (instant, offline);
+            // the source fan-out then STREAMS in below them.
             _state.value = _state.value.copy(
-                searching = false, groups = groups, failedSources = failed,
                 libraryBooks = libraryBooks, contentHits = contentHits,
-                libraryKeys = libraryKeys, workCounts = workCounts
+                libraryKeys = libraryKeys
             )
+            // v1.3.2 (scope D): every source searches at once
+            // behind a small permit pool; each group's results
+            // publish the moment its source answers, the progress
+            // line counts settled sources, and a hung source can
+            // no longer hold the others hostage (the v1.3.1 hang).
+            val handles = container.extensionService.allSources()
+            _state.value = _state.value.copy(
+                progressTotal = handles.size, progressDone = 0
+            )
+            StreamingSearch.run(
+                items = handles,
+                parallelism = 5,
+                search = { handle ->
+                    container.extensionService.guarded(handle) {
+                        it.search(query, 1)
+                    }
+                },
+                onResult = { handle, result ->
+                    val outcome = result.getOrNull()
+                    when {
+                        outcome is AppResult.Ok &&
+                            outcome.value.books.isNotEmpty() -> {
+                            val group = GlobalSearchGroup(
+                                sourceName = handle.source.name,
+                                extensionId = handle.extension.id,
+                                sourceId = handle.source.id,
+                                books = outcome.value.books
+                            )
+                            _state.value = _state.value.copy(
+                                groups = _state.value.groups + group,
+                                workCounts = _state.value.groups
+                                    .plus(group)
+                                    .flatMap { it.books }
+                                    .groupingBy {
+                                        app.xreader.data.extension
+                                            .WorkMatcher
+                                            .normaliseTitle(it.title)
+                                    }
+                                    .eachCount()
+                            )
+                        }
+                        outcome is AppResult.Err || outcome == null -> {
+                            _state.value = _state.value.copy(
+                                failedSources =
+                                    _state.value.failedSources +
+                                        handle.source.name
+                            )
+                        }
+                        else -> Unit
+                    }
+                },
+                onProgress = { done, total ->
+                    _state.value = _state.value.copy(
+                        progressDone = done, progressTotal = total
+                    )
+                }
+            )
+            if (isActive) {
+                _state.value = _state.value.copy(searching = false)
+            }
         }
+    }
+
+    /** v1.3.2 (scope D): leave the results view — back to the
+     * plain Explore list. */
+    fun clearSearch() {
+        cancelSearch()
+        _state.value = _state.value.copy(
+            query = "", searched = false, searching = false,
+            groups = emptyList(), failedSources = emptyList(),
+            libraryBooks = emptyList(), contentHits = emptyList(),
+            progressDone = 0, progressTotal = 0
+        )
     }
 
     fun openBook(group: GlobalSearchGroup, book: SourceBook) {
@@ -219,249 +287,5 @@ class GlobalSearchViewModel(private val container: AppContainer) : ViewModel() {
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
                     GlobalSearchViewModel(container) as T
             }
-    }
-}
-
-@Composable
-fun GlobalSearchScreen(
-    viewModel: GlobalSearchViewModel,
-    onOpenBook: (Long) -> Unit,
-    onBack: () -> Unit,
-    coverFile: (String?) -> java.io.File? = { null }
-) {
-    val state by viewModel.state.collectAsStateWithLifecycle()
-    LaunchedEffect(viewModel) {
-        viewModel.openedBook.collect { onOpenBook(it) }
-    }
-    Column(
-        Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
-    ) {
-        ScreenHeader(title = "Search", eyebrow = "All your sources")
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = state.query,
-            onValueChange = { viewModel.setQuery(it) },
-            label = { Text("Search every source") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { viewModel.search() }),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(8.dp))
-        androidx.compose.material3.Button(
-            onClick = { viewModel.search() },
-            enabled = state.query.isNotBlank() && !state.searching,
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Search") }
-        if (state.searched && state.query.isNotBlank() &&
-            state.query.trim() !in state.saved
-        ) {
-            TextButton(onClick = { viewModel.saveCurrentSearch() }) {
-                Text("Save this search")
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        when {
-            state.searching -> CircularProgressIndicator()
-            !state.searched -> {
-                // v1.0.2 (sweep): recent + saved searches, one tap.
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (state.recents.isNotEmpty()) {
-                        item {
-                            Text(
-                                "Recent searches",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        items(state.recents, key = { "recent-$it" }) { recent ->
-                            GlassCard(onClick = {
-                                viewModel.setQuery(recent)
-                                viewModel.search()
-                            }) {
-                                Text(recent, style = MaterialTheme.typography.bodyLarge)
-                            }
-                        }
-                    }
-                    if (state.saved.isNotEmpty()) {
-                        item {
-                            Text(
-                                "Saved searches",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        items(state.saved, key = { "saved-$it" }) { saved ->
-                            GlassCard(onClick = {
-                                viewModel.setQuery(saved)
-                                viewModel.search()
-                            }) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        saved,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    TextButton(
-                                        onClick = { viewModel.removeSavedSearch(saved) }
-                                    ) { Text("Remove") }
-                                }
-                            }
-                        }
-                    }
-                    if (state.recents.isEmpty() && state.saved.isEmpty()) {
-                        item {
-                            Text(
-                                "Search your library, your downloads and " +
-                                    "every source at once.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-            state.groups.isEmpty() && state.libraryBooks.isEmpty() &&
-                state.contentHits.isEmpty() -> Text(
-                    "Nothing found for “${state.query}”. " +
-                        if (state.failedSources.isNotEmpty()) {
-                            "These sources couldn't be searched: " +
-                                state.failedSources.joinToString(", ") + "."
-                        } else {
-                            "Try a different word, or check the spelling."
-                        },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            else -> LazyColumn(
-                Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (state.libraryBooks.isNotEmpty()) {
-                    item(key = "lib-head") {
-                        Text(
-                            "In your library",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                    }
-                    // v1.0.6.2 (S1): library hits use the shared
-                    // poster card, in rows of three like the shelf.
-                    items(
-                        state.libraryBooks.chunked(3),
-                        key = { row -> "librow-" + row.joinToString("-") { it.id.toString() } }
-                    ) { rowBooks ->
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            rowBooks.forEach { book ->
-                                app.xreader.ui.common.BookPosterCard(
-                                    title = book.title,
-                                    author = book.author.takeIf { it.isNotBlank() },
-                                    coverModel = coverFile(book.coverPath)
-                                        ?.takeIf { it.exists() },
-                                    metaLine = "${book.totalChapters} chapters",
-                                    onClick = { viewModel.openLibraryBook(book.id) },
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            repeat(3 - rowBooks.size) {
-                                Spacer(Modifier.weight(1f))
-                            }
-                        }
-                    }
-                }
-                if (state.contentHits.isNotEmpty()) {
-                    item(key = "content-head") {
-                        Text(
-                            "Inside your downloads",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                    }
-                    items(
-                        state.contentHits,
-                        key = { "hit-${it.bookId}-${it.chapterIndex}" }
-                    ) { hit ->
-                        GlassCard(onClick = { viewModel.openLibraryBook(hit.bookId) }) {
-                            Text(
-                                hit.bookTitle,
-                                style = MaterialTheme.typography.bodyLarge
-                            )
-                            Text(
-                                hit.chapterTitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                "…${hit.snippet}…",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                }
-                state.groups.forEach { group ->
-                    item(key = "head-${group.sourceId}") {
-                        Text(
-                            group.sourceName,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                    }
-                    // v1.0.6.2 (S1): source hits use the shared
-                    // poster card too — one card everywhere.
-                    items(
-                        group.books.chunked(3),
-                        key = { row ->
-                            "gsrow-${group.sourceId}-" +
-                                row.joinToString("-") { it.id }
-                        }
-                    ) { rowBooks ->
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            rowBooks.forEach { book ->
-                                val workKey = app.xreader.data.extension.WorkMatcher
-                                    .normaliseTitle(book.title)
-                                val inLibrary = workKey in state.libraryKeys
-                                val copies = state.workCounts[workKey] ?: 1
-                                app.xreader.ui.common.BookPosterCard(
-                                    title = book.title,
-                                    author = book.author
-                                        ?.takeIf { it.isNotBlank() },
-                                    coverModel = book.coverUrl
-                                        ?.takeIf { it.isNotBlank() },
-                                    metaLine = listOfNotNull(
-                                        if (inLibrary) "In your library" else null,
-                                        if (copies > 1) "On $copies sources" else null
-                                    ).joinToString(" · ").takeIf { it.isNotBlank() },
-                                    onClick = { viewModel.openBook(group, book) },
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            repeat(3 - rowBooks.size) {
-                                Spacer(Modifier.weight(1f))
-                            }
-                        }
-                    }
-                }
-                if (state.failedSources.isNotEmpty()) {
-                    item {
-                        Text(
-                            "These sources couldn't be searched: " +
-                                state.failedSources.joinToString(", ") + ".",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-        TextButton(onClick = onBack) { Text("Back") }
     }
 }

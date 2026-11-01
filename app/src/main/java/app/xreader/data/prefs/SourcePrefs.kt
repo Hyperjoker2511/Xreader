@@ -105,6 +105,22 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    // ── v1.3.2 (item 84): the one-time restore card ─────────────
+    //
+    // v1.3.1's failure breaker could switch sources off without
+    // the user, and it stored no reason — so an already-off
+    // source can't be proven breaker-off rather than
+    // deliberately-off. The card offers the repair ONCE; this
+    // flag records that it was shown and answered either way.
+
+    val sourceRestoreCardDone: Flow<Boolean> = store.data.map { prefs ->
+        prefs[KEY_RESTORE_CARD_DONE] == "1"
+    }
+
+    suspend fun setSourceRestoreCardDone() {
+        store.edit { it[KEY_RESTORE_CARD_DONE] = "1" }
+    }
+
     // ── Source health (R10) ──────────────────────────────────────
     //
     // The last test-drive verdict per source, keyed
@@ -339,6 +355,8 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         val KEY_RECENT_SEARCHES = stringPreferencesKey("search.recent")
         val KEY_SAVED_SEARCHES = stringPreferencesKey("search.saved")
         val KEY_SOURCE_HEALTH = stringPreferencesKey("source.health_map")
+        val KEY_RESTORE_CARD_DONE =
+            stringPreferencesKey("source.restore_card_done")
         val KEY_REPAIR_LOG = stringPreferencesKey("source.repair_log_map")
         val KEY_HEAL_DONE_FOR =
             androidx.datastore.preferences.core.intPreferencesKey("heal.sweep_done_for_code")

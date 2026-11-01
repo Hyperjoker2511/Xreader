@@ -220,9 +220,19 @@ fun ScrollStreamReader(
                                 title = ReaderCounters.headerLine(
                                     chapterTitle = flatItem.title,
                                     chapterIndex = flatItem.chapterIndex,
-                                    chapterCount = totalChapters
+                                    chapterCount = totalChapters,
+                                    // v1.3.2 (item 79): identity
+                                    // over position, as in the
+                                    // paged reader's chrome.
+                                    ownNumber =
+                                        app.xreader.data.extension
+                                            .ChapterNumbers
+                                            .parseAny(flatItem.title, "")
                                 ),
-                                chapterNumber = flatItem.chapterIndex + 1,
+                                chapterNumber =
+                                    app.xreader.data.extension.ChapterNumbers
+                                        .parseAny(flatItem.title, "")
+                                        ?.toInt() ?: (flatItem.chapterIndex + 1),
                                 palette = palette
                             )
                         }

@@ -86,7 +86,21 @@ data class SourcesUiState(
     val health: Map<String, app.xreader.data.extension.SourceHealthRecord> =
         emptyMap(),
     val pinnedRepoIds: Set<Long> = emptySet(),
-    val recentRepoIds: List<Long> = emptyList()
+    val recentRepoIds: List<Long> = emptyList(),
+    // ── v1.3.2 (scope E + R1 + item 84) ─────────────────────────
+    /** Persisted foreign repos by repo row id (their own
+     * screens read the full site list from here). */
+    val foreignRepos:
+        Map<Long, app.xreader.data.extension.RepoFormat.ForeignRepo> =
+        emptyMap(),
+    /** The repo row created by the most recent foreign add —
+     * the Add screen's "See all N sites" door target. */
+    val lastForeignRepoId: Long? = null,
+    /** R1: the plain session word per source ("extId:sourceId"):
+     * "Working" / "Check needed" / "Sign in needed" / "Signed in". */
+    val sessionWords: Map<String, String> = emptyMap(),
+    /** Item 84: the one-time restore card has been answered. */
+    val restoreCardDone: Boolean = true
 )
 
 /**
@@ -109,6 +123,11 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
     private val _legadoRows = MutableStateFlow<List<LegadoImportRow>>(emptyList())
     private val _repoStage = MutableStateFlow<String?>(null)
     private val _repoOutcome = MutableStateFlow<Pair<String, Boolean>?>(null)
+    private val _foreignRepos = MutableStateFlow<
+        Map<Long, app.xreader.data.extension.RepoFormat.ForeignRepo>
+    >(emptyMap())
+    private val _lastForeignRepoId = MutableStateFlow<Long?>(null)
+    private val _sessionWords = MutableStateFlow<Map<String, String>>(emptyMap())
 
     val state: StateFlow<SourcesUiState> = combine(
         container.database.extensionRepoDao().observeAll(),
@@ -118,7 +137,9 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         container.sourcePrefs.sourceHealth,
         container.sourcePrefs.pinnedRepoIds,
         container.sourcePrefs.recentRepoIds,
-        _repoStage, _repoOutcome
+        _repoStage, _repoOutcome,
+        _foreignRepos, _lastForeignRepoId, _sessionWords,
+        container.sourcePrefs.sourceRestoreCardDone
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val rawExtensions = values[1] as List<InstalledExtension>
@@ -140,7 +161,12 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
             repoStage = values[11] as String?,
             repoOutcome = (values[12] as Pair<String, Boolean>?)?.first,
             repoOutcomeIsError =
-                (values[12] as Pair<String, Boolean>?)?.second ?: false
+                (values[12] as Pair<String, Boolean>?)?.second ?: false,
+            foreignRepos =
+                values[13] as Map<Long, app.xreader.data.extension.RepoFormat.ForeignRepo>,
+            lastForeignRepoId = values[14] as Long?,
+            sessionWords = values[15] as Map<String, String>,
+            restoreCardDone = values[16] as Boolean
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SourcesUiState())
 
@@ -165,7 +191,83 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                 if (cached.isNotEmpty()) {
                     _catalogues.value = cached + _catalogues.value
                 }
+                // v1.3.2 (scope E): persisted foreign repos ride
+                // the same collection — their site lists load
+                // from the sidecar files.
+                val foreign = repos.mapNotNull { repo ->
+                    manager.loadForeignRepo(repo.id)
+                        ?.let { repo.id to it }
+                }.toMap()
+                _foreignRepos.value = foreign
             }
+        }
+        // v1.3.2 (R1): the plain session word per source row,
+        // recomputed when the sources or their verdicts change.
+        viewModelScope.launch {
+            combine(
+                container.database.installedExtensionDao().observeAll(),
+                container.sourcePrefs.sourceHealth
+            ) { exts, health -> exts to health }
+                .collect { (exts, health) ->
+                    _sessionWords.value = computeSessionWords(exts, health)
+                }
+        }
+    }
+
+    /** R1: "Signed in" / "Sign in needed" for sign-in sources;
+     * "Working" / "Check needed" for browser-view sources —
+     * computed from the source's own config, its stored session
+     * and its last test-drive verdict. */
+    private suspend fun computeSessionWords(
+        extensions: List<InstalledExtension>,
+        health: Map<String, app.xreader.data.extension.SourceHealthRecord>
+    ): Map<String, String> {
+        val words = HashMap<String, String>()
+        for (ext in extensions) {
+            val handles = container.extensionService
+                .sourcesOf(ext.id).getOrNull() ?: continue
+            val handle = handles.firstOrNull() ?: continue
+            val config = container.extensionService
+                .declarativeConfigOf(handle) ?: continue
+            val key = app.xreader.data.extension.SourceHealthRecord
+                .key(ext.id, handle.source.id)
+            val hasSession = container.sessionStore
+                .has(sessionKeyFor(ext.id))
+            var word = app.xreader.data.extension.SessionNeed
+                .stateWord(config, hasSession, null)
+            if (word == "Working" &&
+                health[key]?.state ==
+                app.xreader.data.extension.SourceHealthState.BROKEN
+            ) {
+                word = "Check needed"
+            }
+            if (word != null) words[key] = word
+        }
+        return words
+    }
+
+    // ── v1.3.2 (item 84): the one-time restore card ─────────────
+
+    /** The user's own tap: turn every listed off source back
+     * on — exactly the rows the card listed, no others. */
+    fun restoreAllOffSources(rows: List<InstalledExtension>) {
+        viewModelScope.launch {
+            rows.filter { !it.enabled }.forEach { ext ->
+                manager.setEnabled(ext, true)
+            }
+            container.sourcePrefs.setSourceRestoreCardDone()
+            say(
+                "Turned ${rows.count { !it.enabled }} " +
+                    "source(s) back on."
+            )
+        }
+    }
+
+    /** "Leave them off" — a complete answer; the card never
+     * comes back. */
+    fun dismissRestoreCard() {
+        viewModelScope.launch {
+            container.sourcePrefs.setSourceRestoreCardDone()
         }
     }
 
@@ -246,6 +348,22 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                         _foreignRepo.value = result.format
                         _repoOutcome.value =
                             foreignOutcomeLine(result.format) to false
+                        // v1.3.2 (scope E): PERSIST the foreign
+                        // repo — it joins the Repositories view
+                        // with its own full-list screen, instead
+                        // of living only in this one-shot card.
+                        // (Plugin-index stubs carry no sites to
+                        // persist as a browsable list.)
+                        if (!result.format.pluginIndex) {
+                            val saved = manager.saveForeignRepo(
+                                name.trim(), indexUrl.trim(),
+                                result.format
+                            )
+                            _foreignRepos.value =
+                                _foreignRepos.value +
+                                    (saved.id to result.format)
+                            _lastForeignRepoId.value = saved.id
+                        }
                         if (result.format.ecosystemName == "Legado") {
                             importLegadoText(
                                 manager.fetchText(indexUrl.trim()).let {
@@ -492,6 +610,28 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _busy.value = true
             try {
+                // v1.3.2 (scope E): a foreign repo refreshes its
+                // own way (re-read the index, refresh the
+                // sidecar) — the native TOFU walk doesn't apply.
+                if (_foreignRepos.value.containsKey(repo.id)) {
+                    when (val result = manager.refreshForeignRepo(repo)) {
+                        is AppResult.Err ->
+                            say(
+                                "Couldn't check “${repo.name}”. " +
+                                    ErrorText.displayText(result.error)
+                            )
+                        is AppResult.Ok -> {
+                            _foreignRepos.value =
+                                _foreignRepos.value +
+                                    (repo.id to result.value)
+                            say(
+                                "“${repo.name}” checked — " +
+                                    "${result.value.sites.size} sites."
+                            )
+                        }
+                    }
+                    return@launch
+                }
                 when (val result = manager.refresh(repo)) {
                     is AppResult.Err ->
                         say("Couldn't check “${repo.name}”. ${ErrorText.displayText(result.error)}")

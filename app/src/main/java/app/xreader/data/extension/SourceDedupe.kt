@@ -46,13 +46,23 @@ object SourceDedupePlanner {
         val origin: String,
         val canonicalDomain: String?,
         val sourceIds: List<String>,
-        val installedAt: Long
+        val installedAt: Long,
+        /** v1.3.2 (item 62): the row's switch state and
+         * whether its definition could be read at all — the
+         * two facts the name-matched collapse pass judges. */
+        val enabled: Boolean = true,
+        val readable: Boolean = true
     )
 
     data class Removal(
         val removed: Row,
         val survivor: Row
     )
+
+    /** Display-name identity for the collapse pass: case and
+     * spacing folded ("NovelBuddy" == "novelbuddy"). */
+    fun normaliseName(name: String): String =
+        name.trim().replace(Regex("\\s+"), " ").lowercase()
 
     /** The canonical domain of a config base URL: the host,
      * lowercased, one leading "www." removed. Mirrors SHOULD
@@ -85,6 +95,35 @@ object SourceDedupePlanner {
                     removals += Removal(row, survivor)
                 }
             }
+        }
+        // v1.3.2 (item 62): the name-matched collapse. The
+        // domain pass left a duplicate standing on device: a
+        // second "NovelBuddy" row carrying an Off badge whose
+        // definition could not group with the bundled row
+        // (unreadable, or a domain of its own). A row that
+        // CANNOT group (no domain, or a domain nobody else
+        // holds), whose display name matches a bundled
+        // default, and which is DISABLED or UNREADABLE,
+        // collapses into that bundled default. The guards are
+        // the safety: a row that reads fine, is switched on,
+        // and lives on its own distinct registrable domain is
+        // NEVER merged — the .me/.com mirror rule stands.
+        val removedIds = removals.mapTo(HashSet()) { it.removed.extensionId }
+        val bundledByName = rows
+            .filter { it.packageId.startsWith("bundled.") }
+            .groupBy { normaliseName(it.displayName) }
+        for (row in rows) {
+            if (row.packageId.startsWith("bundled.")) continue
+            if (row.extensionId in removedIds) continue
+            val inRealGroup = row.canonicalDomain != null &&
+                (groups[row.canonicalDomain]?.size ?: 0) >= 2
+            if (inRealGroup) continue
+            if (row.enabled && row.readable) continue
+            val survivor = bundledByName[normaliseName(row.displayName)]
+                ?.firstOrNull { it.extensionId != row.extensionId }
+                ?: continue
+            removals += Removal(row, survivor)
+            removedIds += row.extensionId
         }
         return removals
     }
@@ -165,7 +204,11 @@ class SourceDedupe(
             service.invalidate(removedRow.id)
             removed += RemovedRow(
                 name = removal.removed.displayName,
-                domain = removal.removed.canonicalDomain ?: "",
+                // v1.3.2: a name-matched collapse may have no
+                // domain of its own — the audit line names the
+                // survivor's domain rather than a blank.
+                domain = removal.removed.canonicalDomain
+                    ?: removal.survivor.canonicalDomain ?: "",
                 origin = removal.removed.origin,
                 packageId = removal.removed.packageId,
                 survivorPackageId = removal.survivor.packageId,
@@ -217,7 +260,19 @@ class SourceDedupe(
                 row.sourceIds.split(",").map { it.trim() }
                     .filter { it.isNotBlank() }
             },
-            installedAt = row.installedAt
+            installedAt = row.installedAt,
+            // v1.3.2 (item 62): the collapse pass's two facts.
+            // A non-declarative row has no definition to read —
+            // that is not "unreadable" for this purpose (JS/DEX
+            // rows are judged by their domain alone), so only
+            // declarative/live rows can be unreadable.
+            enabled = row.enabled,
+            readable = when (row.kind) {
+                app.xreader.data.db.ExtensionKind.DECLARATIVE,
+                app.xreader.data.db.ExtensionKind.LIVE ->
+                    configs.isNotEmpty()
+                else -> true
+            }
         )
     }
 }

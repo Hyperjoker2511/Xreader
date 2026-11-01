@@ -50,9 +50,17 @@ object AppImageLoader {
     fun build(
         context: Context,
         totalRamMb: Long,
-        capBytes: Long = DISK_CACHE_MAX_BYTES
+        capBytes: Long = DISK_CACHE_MAX_BYTES,
+        /** v1.3.2 (scope A3): the session-carrying call
+         * factory (see [ImageSessionClient]) — covers ride
+         * the browser view's cleared session. Null keeps
+         * Coil's stock client (tests, previews). */
+        callFactory: okhttp3.Call.Factory? = null
     ): ImageLoader =
         ImageLoader.Builder(context)
+            .apply {
+                if (callFactory != null) callFactory(callFactory)
+            }
             .memoryCache {
                 MemoryCache.Builder(context)
                     .maxSizePercent(memoryCacheFraction(totalRamMb))

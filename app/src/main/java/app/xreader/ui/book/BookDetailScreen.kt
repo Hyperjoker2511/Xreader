@@ -135,7 +135,15 @@ fun BookDetailScreen(
     onOpenSourceDetails: (extensionId: Long) -> Unit = {},
     /** v1.0.6 (W4.3): the Chapters section's site-check door —
      * opens the app-styled check screen for this book's source. */
-    onSiteCheck: (extensionId: Long) -> Unit = {}
+    onSiteCheck: (extensionId: Long) -> Unit = {},
+    /** v1.3.2 (scope A2): the session hand-off door — when a
+     * chapters failure is a site check or a sign-in gate, the
+     * recovery card offers the one-time sanctioned screen
+     * (solve the check / sign in) as its primary action. */
+    onSessionHandoff: (
+        extensionId: Long,
+        kind: app.xreader.data.extension.SessionNeed.Kind
+    ) -> Unit = { _, _ -> }
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val engineLabel by viewModel.engineLabel.collectAsStateWithLifecycle()
@@ -171,8 +179,14 @@ fun BookDetailScreen(
             chapterPartFilter
         )
     }
+    // v1.3.2 (items 78c/79): the display order is keyed to
+    // each chapter's OWN number, never to stored position —
+    // under "Oldest" a newest-first stored list displays
+    // ascending by identity; under "Newest", descending.
     val displayChapters = remember(visibleChapters, newestFirst) {
-        if (newestFirst) visibleChapters.asReversed() else visibleChapters
+        app.xreader.domain.reader.ChapterDisplayOrder.ordered(
+            visibleChapters, newestFirst
+        )
     }
     // v1.3.1 (V120-CHECK 54): windowed chapter display — the
     // list renders 100 rows at a time, never the whole book
@@ -598,10 +612,25 @@ fun BookDetailScreen(
                                 Text(
                                     if (state.progress == null) {
                                         continueChapter?.let {
-                                            "Chapter ${it.index + 1} · ${it.title}"
+                                            // v1.3.2 (item 79): the
+                                            // pill names the chapter
+                                            // by its OWN number (the
+                                            // identity-first target),
+                                            // never by stored position.
+                                            "Chapter " +
+                                                (app.xreader.domain.reader
+                                                    .ChapterDisplayOrder
+                                                    .displayNumber(it)
+                                                    ?: "${it.index + 1}") +
+                                                " · ${it.title}"
                                         } ?: "Begin at chapter 1"
                                     } else {
-                                        "Chapter ${state.continueChapterIndex + 1}" +
+                                        "Chapter " +
+                                            (continueChapter?.let {
+                                                app.xreader.domain.reader
+                                                    .ChapterDisplayOrder
+                                                    .displayNumber(it)
+                                            } ?: "${state.continueChapterIndex + 1}") +
                                             (continueChapter?.let {
                                                 " · ${it.title}"
                                             } ?: "") +
@@ -1020,6 +1049,22 @@ fun BookDetailScreen(
                                 var expanded by remember {
                                     mutableStateOf(false)
                                 }
+                                // v1.3.2 (item 76): the expander
+                                // answers to the LAYOUT, not a
+                                // character count — a synopsis
+                                // that visually overflows the
+                                // 3-line clamp ALWAYS offers
+                                // Read more, at any length (the
+                                // old length > 200 rule left
+                                // shorter truncated synopses
+                                // with no way to read the rest).
+                                var synopsisOverflows by remember {
+                                    mutableStateOf(
+                                        app.xreader.domain.reader
+                                            .SynopsisText
+                                            .mayOverflow(book.description.length)
+                                    )
+                                }
                                 Text(
                                     book.description,
                                     style = MaterialTheme.typography.bodyMedium,
@@ -1030,9 +1075,15 @@ fun BookDetailScreen(
                                     } else {
                                         3
                                     },
-                                    overflow = TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis,
+                                    onTextLayout = { layout ->
+                                        if (!expanded) {
+                                            synopsisOverflows =
+                                                layout.hasVisualOverflow
+                                        }
+                                    }
                                 )
-                                if (book.description.length > 200) {
+                                if (expanded || synopsisOverflows) {
                                     TextButton(
                                         onClick = { expanded = !expanded }
                                     ) {
@@ -1429,6 +1480,40 @@ fun BookDetailScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
+                            }
+                            // v1.3.2 (item 77): a switched-off
+                            // source gets its one-tap way back,
+                            // ahead of everything else on the card.
+                            if (state.sourceOff) {
+                                XreaderPrimaryButton(
+                                    text = "Turn back on and try again",
+                                    onClick = {
+                                        viewModel.turnBackOnAndRetry()
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            // v1.3.2 (scope A2): a check or a
+                            // sign-in gate is SOLVABLE — the
+                            // hand-off is the card's primary
+                            // door, ahead of the re-check.
+                            state.sessionNeed?.let { need ->
+                                XreaderPrimaryButton(
+                                    text = when (need) {
+                                        app.xreader.data.extension
+                                            .SessionNeed.Kind.SITE_CHECK ->
+                                            "Solve the check"
+                                        app.xreader.data.extension
+                                            .SessionNeed.Kind.SIGN_IN ->
+                                            "Sign in to read"
+                                    },
+                                    onClick = {
+                                        book.extensionId?.let {
+                                            onSessionHandoff(it, need)
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             }
                             XreaderPrimaryButton(
                                 text = if (state.recheckBusy) {

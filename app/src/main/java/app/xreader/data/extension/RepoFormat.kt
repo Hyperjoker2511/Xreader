@@ -37,6 +37,7 @@ import kotlinx.serialization.json.contentOrNull
  */
 
 /** One site listed by a foreign repository index. */
+@kotlinx.serialization.Serializable
 data class ForeignSite(
     val name: String,
     val lang: String = "",
@@ -57,6 +58,7 @@ sealed interface RepoFormat {
     object XreaderIndex : RepoFormat
 
     /** The text is another reader app's repository format. */
+    @kotlinx.serialization.Serializable
     data class ForeignRepo(
         val ecosystemName: String,
         val sites: List<ForeignSite>,

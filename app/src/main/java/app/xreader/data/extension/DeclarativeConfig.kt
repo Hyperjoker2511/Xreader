@@ -81,6 +81,18 @@ data class DeclarativeConfig(
      * domain whitelist. Defaulted empty so every older config
      * decodes unchanged. */
     val extraDomains: List<String> = emptyList(),
+    /** v1.3.2 (items 75/75b, the LOGIN RULE): this site's
+     * chapter TEXT sits behind an account — catalogue, search,
+     * book pages and chapter lists read anonymously, but the
+     * prose unlocks only with a signed-in session. The source
+     * is labelled "Sign in needed to read", a locked text
+     * fetch offers the one-time sign-in screen (the app keeps
+     * the session's cookies, never the password), and after
+     * signing in the same fetch rides the session natively.
+     * A login gate is a solvable state, never a dead end.
+     * Defaulted false so every older config decodes
+     * unchanged. */
+    val signInNeeded: Boolean = false,
     /** Source-shipped cleaner rules (origin "source", not editable). */
     val cleaners: List<CleanerRuleData> = emptyList()
 )
@@ -131,7 +143,15 @@ data class ListSpec(
      * the records ride the api. host but the books live on the
      * apex). Null = the field value IS the link, resolved
      * against the listing URL like any href. */
-    val jsonLinkTemplate: String? = null
+    val jsonLinkTemplate: String? = null,
+    /** v1.3.2: JSON mode — builds a row's COVER from a record
+     * field whose value is a bare storage path rather than a
+     * resolvable URL (fenrirealm's "storage/…" covers, which
+     * serve from the site's root, not from beside the API
+     * path a relative resolve would produce). "{value}" is
+     * the field's value. Null = the field value resolves
+     * against the listing URL like any cover. */
+    val jsonCoverTemplate: String? = null
 )
 
 /** The book page: fills details and carries the chapter list. When the

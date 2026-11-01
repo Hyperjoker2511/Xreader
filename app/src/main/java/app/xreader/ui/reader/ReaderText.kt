@@ -35,6 +35,9 @@ fun rememberReaderFontFamily(config: ReaderConfig, container: AppContainer): Fon
     return remember(config.fontChoice, userFile) {
         when (config.fontChoice) {
             ReaderFontChoice.LITERATA -> LiterataSerif
+            ReaderFontChoice.LORA -> app.xreader.ui.theme.LoraSerif
+            ReaderFontChoice.MERRIWEATHER -> app.xreader.ui.theme.MerriweatherSerif
+            ReaderFontChoice.NOTO_SERIF -> app.xreader.ui.theme.NotoSerif
             ReaderFontChoice.JAKARTA -> JakartaSans
             ReaderFontChoice.INTER -> InterSans
             ReaderFontChoice.USER ->

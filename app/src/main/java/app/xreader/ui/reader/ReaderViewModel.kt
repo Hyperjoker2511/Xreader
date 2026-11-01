@@ -57,6 +57,10 @@ data class ReaderUiState(
     /** v1.0.6.2 (F3): the error came from a live chapter fetch
      * that can simply be retried (the error block offers it). */
     val chapterFetchFailed: Boolean = false,
+    /** v1.3.2 (A2): the fetch failed at a site check or a sign-in
+     * gate — the error block offers the one-time hand-off screen
+     * for this kind instead of only "Try again". */
+    val sessionNeed: app.xreader.data.extension.SessionNeed.Kind? = null,
     /** Live position (char offset in the current chapter). */
     val positionOffset: Int = 0,
     val bookFraction: Float = 0f,
@@ -262,6 +266,11 @@ class ReaderViewModel(
      * stays the default view; nothing is ever deleted). */
     private val originalPreferred = mutableSetOf<Long>()
 
+    /** v1.3.2 (A2): this book's declarative config, resolved once
+     * at load — the session-need classifier's input. */
+    private var bookConfig: app.xreader.data.extension.DeclarativeConfig? = null
+    private val signInConfig: Boolean get() = bookConfig?.signInNeeded == true
+
     init {
         viewModelScope.launch { container.sessionRecorder.warmUp() }
         viewModelScope.launch {
@@ -303,6 +312,17 @@ class ReaderViewModel(
         }
         viewModelScope.launch {
             val book = container.database.bookDao().getById(bookId)
+            bookConfig = book?.extensionId
+                ?.takeIf {
+                    book.sourceType == app.xreader.data.db.SourceType.EXTENSION
+                }
+                ?.let { extId ->
+                    container.extensionService.sourcesOf(extId).getOrNull()
+                        ?.firstNotNullOfOrNull { handle ->
+                            container.extensionService
+                                .declarativeConfigOf(handle)
+                        }
+                }
             val chapters = container.database.chapterDao().forBook(bookId)
             val saved = container.database.readingProgressDao().getForBook(bookId)
             // v1.0.6 (W3.4): a browser-view source gets ONE plain
@@ -558,20 +578,63 @@ class ReaderViewModel(
                 fresh
             }
             is app.xreader.data.download.ChapterTextLoader.Outcome.Failed -> {
-                if (outcome.detail.contains("paid or locked", ignoreCase = true)) {
-                    _state.value = _state.value.copy(
-                        loading = false,
-                        errorMessage = "This chapter is paid or locked " +
-                            "on the site, so it can't be read here.",
-                        chapterFetchFailed = true
-                    )
-                } else {
-                    _state.value = _state.value.copy(
-                        loading = false,
-                        errorMessage = "This chapter couldn't be read just " +
-                            "now. Check your connection and try again.",
-                        chapterFetchFailed = true
-                    )
+                // v1.3.2 (A2/F): the wording names the TRUE cause.
+                // A site check or sign-in gate offers the one-time
+                // hand-off; a block says the site blocked it; the
+                // generic branch shows the fetch's own reason and
+                // never blames the connection for a gate.
+                val need = app.xreader.data.extension.SessionNeed.classify(
+                    bookConfig, outcome.detail, null
+                )
+                when {
+                    outcome.detail.contains("paid or locked", ignoreCase = true) &&
+                        !signInConfig -> {
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            errorMessage = "This chapter is paid or locked " +
+                                "on the site, so it can't be read here.",
+                            chapterFetchFailed = true
+                        )
+                    }
+                    need == app.xreader.data.extension.SessionNeed.Kind.SITE_CHECK -> {
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            errorMessage = "This site is asking for a quick " +
+                                "human check before it shows the chapter.",
+                            chapterFetchFailed = true,
+                            sessionNeed = need
+                        )
+                    }
+                    need == app.xreader.data.extension.SessionNeed.Kind.SIGN_IN -> {
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            errorMessage = "This chapter needs you to sign " +
+                                "in on the site first — sign in once and " +
+                                "it opens here like any other chapter.",
+                            chapterFetchFailed = true,
+                            sessionNeed = need
+                        )
+                    }
+                    outcome.detail.contains("HTTP 401") ||
+                        outcome.detail.contains("HTTP 403") ||
+                        outcome.detail.contains("HTTP 429") -> {
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            errorMessage = "The site blocked this chapter " +
+                                "load. Trying again in a moment sometimes " +
+                                "helps; if it keeps happening, the site " +
+                                "may be limiting readers right now.",
+                            chapterFetchFailed = true
+                        )
+                    }
+                    else -> {
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            errorMessage = "This chapter couldn't be read: " +
+                                outcome.detail,
+                            chapterFetchFailed = true
+                        )
+                    }
                 }
                 null
             }

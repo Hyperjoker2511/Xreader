@@ -7,7 +7,25 @@ enum class ReaderMode { PAGED, SCROLL }
 enum class PageTurnOverride { AUTO, FULL, MID, MINIMAL }
 
 /** Bundled reader fonts, plus fonts the user imports himself. */
-enum class ReaderFontChoice { LITERATA, JAKARTA, INTER, USER }
+enum class ReaderFontChoice { LITERATA, LORA, MERRIWEATHER, NOTO_SERIF, JAKARTA, INTER, USER }
+
+/**
+ * v1.3.2 (items 86/87): the plain-words paragraph-spacing choice.
+ * It writes through to [ReaderConfig.paragraphSpacingDp] — the
+ * stored value stays a dp float exactly as before; the choice is
+ * just the three named stops on that scale.
+ */
+enum class ParagraphSpacing(val dp: Float, val label: String) {
+    COMPACT(4f, "Compact"),
+    NORMAL(10f, "Normal"),
+    RELAXED(18f, "Relaxed");
+
+    companion object {
+        /** The named stop nearest a stored dp value. */
+        fun of(dp: Float): ParagraphSpacing =
+            entries.minByOrNull { kotlin.math.abs(it.dp - dp) } ?: NORMAL
+    }
+}
 
 enum class ReaderAlignment { LEFT, JUSTIFY }
 

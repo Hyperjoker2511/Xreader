@@ -176,6 +176,11 @@ object ChapterReconciler {
         return null
     }
 
+    /** v1.3.2 (items 64/80): the canonical rung now uses the
+     * shared chapter identity — scheme/host case, a leading
+     * www., default ports, percent-escapes and trailing
+     * slashes all fold, so a stored row and its fetched twin
+     * in another URL form match here instead of duplicating. */
     private fun canonicalId(id: String?): String =
-        (id ?: "").trim().trimEnd('/').lowercase()
+        ChapterIdentity.canonicalKey(id ?: "")
 }

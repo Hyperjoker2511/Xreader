@@ -59,6 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.xreader.data.db.Bookmark
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.Highlight
@@ -113,7 +114,11 @@ fun ReaderSettingsSheet(
     onSaveWord: (String) -> Unit = {},
     /** Nocturne §5.11: the reader chrome's Theme tile opens this
      * sheet straight on the "page" sub-page. */
-    initialPage: String = "index"
+    initialPage: String = "index",
+    /** v1.3.2 (item 86): the resolved family for the font shelf's
+     * live preview (the screen resolves it so user fonts work). */
+    previewFontFamily: androidx.compose.ui.text.font.FontFamily =
+        app.xreader.ui.theme.LiterataSerif
 ) {
     // v1.0.6.2 (F8c): the sheet is a short INDEX of plainly-named
     // groups now — not one long scroll. Each group is its own
@@ -663,41 +668,46 @@ fun ReaderSettingsSheet(
                 }
 
                 SheetSection("Font") {
+                    // v1.3.2 (item 86): a live preview in the
+                    // currently chosen font — the shelf answers
+                    // "what will it look like" before a tap.
+                    val previewFamily = previewFontFamily
+                    Text(
+                        text = "The night was cold, and the river " +
+                            "carried the lantern light a long way " +
+                            "downstream.",
+                        fontFamily = previewFamily,
+                        fontSize = config.fontSizeSp.sp,
+                        lineHeight = (config.fontSizeSp *
+                            config.lineHeightMultiplier).sp,
+                        color = primaryTextColor(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 10.dp)
+                    )
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        NocturneChip(
-                            label = "Literata",
-                            selected = config.fontChoice == ReaderFontChoice.LITERATA,
-                            onClick = {
-                                onUpdate { it.copy(fontChoice = ReaderFontChoice.LITERATA) }
-                            },
-                            modifier = Modifier,
-                            dotColor = null,
-                        
-                        )
-                        NocturneChip(
-                            label = "Jakarta",
-                            selected = config.fontChoice == ReaderFontChoice.JAKARTA,
-                            onClick = {
-                                onUpdate { it.copy(fontChoice = ReaderFontChoice.JAKARTA) }
-                            },
-                            modifier = Modifier,
-                            dotColor = null,
-                        
-                        )
-                        NocturneChip(
-                            label = "Inter",
-                            selected = config.fontChoice == ReaderFontChoice.INTER,
-                            onClick = {
-                                onUpdate { it.copy(fontChoice = ReaderFontChoice.INTER) }
-                            },
-                            modifier = Modifier,
-                            dotColor = null,
-                        
-                        )
+                        for ((label, choice) in listOf(
+                            "Literata" to ReaderFontChoice.LITERATA,
+                            "Lora" to ReaderFontChoice.LORA,
+                            "Merriweather" to ReaderFontChoice.MERRIWEATHER,
+                            "Noto Serif" to ReaderFontChoice.NOTO_SERIF,
+                            "Jakarta" to ReaderFontChoice.JAKARTA,
+                            "Inter" to ReaderFontChoice.INTER
+                        )) {
+                            NocturneChip(
+                                label = label,
+                                selected = config.fontChoice == choice,
+                                onClick = {
+                                    onUpdate { it.copy(fontChoice = choice) }
+                                },
+                                modifier = Modifier,
+                                dotColor = null,
+                            )
+                        }
                     }
                     for (fontName in userFonts) {
                         NocturneChip(
@@ -734,13 +744,33 @@ fun ReaderSettingsSheet(
                     range = 1.1f..2.2f,
                     onChange = { v -> onUpdate { it.copy(lineHeightMultiplier = v) } }
                 )
-                SheetSlider(
-                    label = "Space between paragraphs",
-                    valueText = "${config.paragraphSpacingDp.roundToInt()} dp",
-                    value = config.paragraphSpacingDp,
-                    range = 0f..32f,
-                    onChange = { v -> onUpdate { it.copy(paragraphSpacingDp = v) } }
-                )
+                // v1.3.2 (item 87): the spacing choice in plain
+                // words — three named stops writing the same
+                // stored dp value the slider used to write.
+                SheetSection("Paragraph spacing") {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        for (spacing in
+                            app.xreader.domain.reader.ParagraphSpacing.entries) {
+                            NocturneChip(
+                                label = spacing.label,
+                                selected =
+                                    app.xreader.domain.reader.ParagraphSpacing
+                                        .of(config.paragraphSpacingDp) == spacing,
+                                onClick = {
+                                    onUpdate {
+                                        it.copy(paragraphSpacingDp = spacing.dp)
+                                    }
+                                },
+                                modifier = Modifier,
+                                dotColor = null,
+                            )
+                        }
+                    }
+                }
                 SheetSlider(
                     label = "Side margins",
                     valueText = "${config.marginHorizontalDp.roundToInt()} dp",

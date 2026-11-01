@@ -134,6 +134,36 @@ fun ExtensionDetailScreen(
             Modifier.weight(1f).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // ── v1.3.2 (items 77/84): an off source says so, and
+            // why, with the way back on the same card. Xreader
+            // never switches a source off by itself (the v1.3.1
+            // failure breaker is gone); a source found off was
+            // either turned off here or retired by that old
+            // breaker, which stored no reason.
+            if (!ext.enabled) {
+                GlassCard {
+                    Text(
+                        "This source is off",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = errorTextColor()
+                    )
+                    Text(
+                        "While it's off, its books can't refresh " +
+                            "and new chapters can't load. Xreader " +
+                            "never switches a source off by itself — " +
+                            "if you didn't turn it off, an older " +
+                            "version's failure breaker may have.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    PrimaryPill(
+                        text = "Turn back on",
+                        onClick = { viewModel.setEnabled(true) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
             // ── trust state ─────────────────────────────────────────
             if (ext.trustState == TrustState.CHANGED_REQUIRES_RETRUST &&
                 state.pending == null
@@ -804,7 +834,34 @@ fun ExtensionDetailScreen(
 
             // ── session ─────────────────────────────────────────────
             GlassCard {
-                SectionHeader(title = "Sign-in")
+                SectionHeader(title = "Sign-in & site check")
+                // v1.3.2 (R1 + LOGIN RULE): the state in plain
+                // words, before any reading is attempted.
+                if (state.linkConfig?.signInNeeded == true &&
+                    !state.sessionSaved
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    ) {
+                        StatusPill(
+                            text = "Sign in needed to read",
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+                if (state.linkConfig?.needsRendering == true) {
+                    Text(
+                        "This site loads through the browser view " +
+                            "and sometimes shows a human check. If " +
+                            "reading stops, solve the check here — " +
+                            "once is usually enough.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                }
                 if (state.sessionSaved) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -829,7 +886,14 @@ fun ExtensionDetailScreen(
                 )
                 Spacer(Modifier.height(6.dp))
                 PrimaryPill(
-                    text = if (state.sessionSaved) "Sign in again" else "Log in",
+                    text = when {
+                        state.sessionSaved -> "Sign in again"
+                        state.linkConfig?.signInNeeded == true ->
+                            "Sign in"
+                        state.linkConfig?.needsRendering == true ->
+                            "Solve the check"
+                        else -> "Log in"
+                    },
                     onClick = onLogin,
                     modifier = Modifier.fillMaxWidth()
                 )

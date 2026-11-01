@@ -174,4 +174,94 @@ object ChapterDateText {
             ?: return null
         return relative(newest.format(ISO), today)
     }
+
+    // ── v1.3.2 (items 71/78): de-gluing ──────────────────────
+    // Some roads read a chapter row's WHOLE text as its name —
+    // number, title and release date in one string ("Chapter
+    // 156: Totally Awful 3 days ago", "101Chapter 101 –
+    // Unexpected Clue5 years ago"). The name and the date are
+    // separate fields everywhere in the app; when a name
+    // ENDS in a date phrase, the phrase is split off here and
+    // returned as a storable date text (relative phrases are
+    // converted against [nowMs] into ISO instants, which the
+    // renderer reads back exactly; absolute dates ride as
+    // written). A name that is ONLY a date, or carries no
+    // trailing date phrase, comes back untouched with a null
+    // date — nothing is ever invented.
+
+    private val RELATIVE_TAIL = Regex(
+        "(?i)^(.*?)[\\s·•|–—-]*(about\\s+|around\\s+|~\\s*)?" +
+            "(\\d+|a|an)\\s+" +
+            "(second|minute|min|hour|day|week|month|year)s?" +
+            "\\s+ago\\s*$"
+    )
+    private val JUST_NOW_TAIL = Regex("(?i)^(.*?)[\\s·•|–—-]*just\\s+now\\s*$")
+    private val DAY_WORD_TAIL = Regex(
+        "(?i)^(.*?)[\\s·•|–—-]*(today|yesterday)\\s*$"
+    )
+    private val ABSOLUTE_TAIL = Regex(
+        "^(.*?)[\\s·•|–—-]*" +
+            "(\\d{1,2}[./-]\\d{1,2}[./-]\\d{2,4}|\\d{4}-\\d{2}-\\d{2})\\s*$"
+    )
+
+    /** (clean name, split-off date text) — the date is null
+     * when the name carries no trailing date phrase. */
+    fun splitGluedDate(
+        name: String,
+        nowMs: Long = System.currentTimeMillis()
+    ): Pair<String, String?> {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return name to null
+        JUST_NOW_TAIL.matchEntire(trimmed)?.let { match ->
+            val head = match.groupValues[1].trim()
+            if (head.isNotEmpty()) {
+                return head to Instant.ofEpochMilli(nowMs).toString()
+            }
+        }
+        RELATIVE_TAIL.matchEntire(trimmed)?.let { match ->
+            val head = match.groupValues[1].trim()
+            if (head.isNotEmpty()) {
+                val amountText = match.groupValues[3]
+                val amount = amountText.toLongOrNull() ?: 1L
+                val unitMs = when (match.groupValues[4].lowercase()) {
+                    "second" -> 1_000L
+                    "minute", "min" -> 60_000L
+                    "hour" -> 3_600_000L
+                    "day" -> 86_400_000L
+                    "week" -> 7 * 86_400_000L
+                    "month" -> 30 * 86_400_000L
+                    "year" -> 365 * 86_400_000L
+                    else -> 0L
+                }
+                if (unitMs > 0L) {
+                    return head to Instant
+                        .ofEpochMilli(nowMs - amount * unitMs)
+                        .toString()
+                }
+            }
+        }
+        DAY_WORD_TAIL.matchEntire(trimmed)?.let { match ->
+            val head = match.groupValues[1].trim()
+            if (head.isNotEmpty()) {
+                val days = if (
+                    match.groupValues[2].equals("yesterday", true)
+                ) {
+                    1L
+                } else {
+                    0L
+                }
+                return head to Instant
+                    .ofEpochMilli(nowMs - days * 86_400_000L)
+                    .toString()
+            }
+        }
+        ABSOLUTE_TAIL.matchEntire(trimmed)?.let { match ->
+            val head = match.groupValues[1].trim()
+            val dateText = match.groupValues[2].trim()
+            if (head.isNotEmpty() && parse(dateText) != null) {
+                return head to dateText
+            }
+        }
+        return name to null
+    }
 }

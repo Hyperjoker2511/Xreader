@@ -88,6 +88,78 @@ object SiteCheck {
         "are you a robot"
     )
 
+    /** v1.3.2 (scope A2): the marker a challenge failure
+     * carries in its error detail, so every layer above the
+     * fetchers (health, view models, failure cards) can
+     * recognise "this needs the one-time solve screen"
+     * without re-parsing pages. */
+    const val CHALLENGE_MARKER = "site-check-needed"
+
+    /** The canonical challenge failure detail. */
+    fun challengeDetail(): String =
+        "$CHALLENGE_MARKER: the site is showing a human check"
+
+    /** True when an error's detail marks a site check. */
+    fun isChallengeDetail(detail: String?): Boolean {
+        val text = detail?.lowercase() ?: return false
+        return CHALLENGE_MARKER in text ||
+            CHALLENGE_PHRASES.any { it in text }
+    }
+
+    /** Challenge markers in a raw HTML body (the fetch
+     * layer's check — no document parse needed): the
+     * Cloudflare phrases, or the challenge widgets'
+     * fingerprints in the markup. */
+    fun hasChallengeMarkersIn(html: String): Boolean {
+        val text = html.lowercase()
+        if (CHALLENGE_PHRASES.any { it in text }) return true
+        return "challenge-form" in text || "cf-turnstile" in text ||
+            "challenges.cloudflare" in text || "id=\"challenge-running\"" in text
+    }
+
+    /**
+     * True when a whole PAGE is a challenge interstitial,
+     * not a content page that merely mentions a phrase:
+     *  - a challenge TITLE is conclusive at any size;
+     *  - Cloudflare's own markup (turnstile widgets, the
+     *    challenge form/platform) is conclusive at any size —
+     *    prose never carries it;
+     *  - the challenge PHRASES prove a check only when the
+     *    page carries almost no visible prose (an
+     *    interstitial is a few hundred characters of text;
+     *    a chapter that happens to say "just a moment" is
+     *    thousands — v1.3.2: the phrase alone on a small but
+     *    real prose page must not read as a check).
+     */
+    fun isChallengePage(html: String): Boolean {
+        val title = Regex("(?is)<title[^>]*>(.*?)</title>")
+            .find(html)?.groupValues?.get(1)?.lowercase().orEmpty()
+        if (CHALLENGE_PHRASES.any { it in title }) return true
+        val text = html.lowercase()
+        if ("challenge-form" in text || "cf-turnstile" in text ||
+            "challenges.cloudflare" in text ||
+            "cdn-cgi/challenge-platform" in text ||
+            "id=\"challenge-running\"" in text
+        ) {
+            return true
+        }
+        if (html.length >= CHALLENGE_PAGE_MAX_BYTES) return false
+        if (CHALLENGE_PHRASES.none { it in text }) return false
+        val visible = html
+            .replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), " ")
+            .replace(Regex("<[^>]+>"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        return visible.length < CHALLENGE_VISIBLE_MAX_CHARS
+    }
+
+    /** An interstitial's visible text is a few hundred
+     * characters at most; even a short chapter is more. */
+    private const val CHALLENGE_VISIBLE_MAX_CHARS = 1_500
+
+    /** Interstitials are small; content pages are not. */
+    private const val CHALLENGE_PAGE_MAX_BYTES = 65_536
+
     fun needsSiteCheck(doc: Document, pageUrl: String): Boolean =
         LinkInference.needsLogin(doc, pageUrl) || hasChallengeMarkers(doc)
 

@@ -68,6 +68,13 @@ class ExtensionStore(private val filesDir: File) {
     fun repoIndexFile(repoId: Long): File =
         File(root, "repos").apply { mkdirs() }.let { File(it, "$repoId.json") }
 
+    /** v1.3.2 (scope E): the persisted site list of a FOREIGN
+     * repository (another app's index) — foreign repos get their
+     * own screen long after the add flow that detected them. */
+    fun foreignRepoFile(repoId: Long): File =
+        File(root, "repos").apply { mkdirs() }
+            .let { File(it, "$repoId.foreign.json") }
+
     fun rulesFile(scope: String): File =
         File(root, "rules").apply { mkdirs() }.let { File(it, "$scope.json") }
 

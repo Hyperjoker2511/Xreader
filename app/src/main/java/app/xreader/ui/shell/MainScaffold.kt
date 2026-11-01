@@ -83,7 +83,6 @@ import app.xreader.ui.opds.OpdsViewModel
 import app.xreader.ui.reader.ReaderScreen
 import app.xreader.ui.reader.ReaderViewModel
 import app.xreader.ui.sources.AddFromLinkScreen
-import app.xreader.ui.sources.GlobalSearchScreen
 import app.xreader.ui.sources.GlobalSearchViewModel
 import app.xreader.ui.sources.ExtensionDetailScreen
 import app.xreader.ui.sources.ExtensionDetailViewModel
@@ -184,6 +183,9 @@ fun MainScaffold(
     val linkAddViewModel = androidx.lifecycle.viewmodel.compose.viewModel<LinkAddViewModel>(
         factory = LinkAddViewModel.factory(container)
     )
+    // v1.3.2: the all-sources search VM and the session hand-off
+    // live in XreaderNavHost below, with the destinations that
+    // use them.
     androidx.compose.runtime.LaunchedEffect(libraryViewModel) {
         libraryViewModel.messages.collect { msg -> snackbar.showSnackbar(msg) }
     }
@@ -675,6 +677,56 @@ private fun XreaderNavHost(
     onExport: (Book, String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    // v1.3.2 (scope D): the all-sources search VM, created at
+    // nav-host level (the destinations that use it live here).
+    val globalSearchViewModel = androidx.lifecycle.viewmodel.compose
+        .viewModel<GlobalSearchViewModel>(
+            factory = GlobalSearchViewModel.factory(container)
+        )
+    androidx.compose.runtime.LaunchedEffect(globalSearchViewModel) {
+        globalSearchViewModel.openedBook.collect { bookId ->
+            navController.navigate("book/$bookId")
+        }
+    }
+    // v1.3.2 (scope A2): THE session hand-off, shared by every
+    // surface (catalogue, book page, reader): open the sanctioned
+    // one-time screen for a source — solve its check or sign in
+    // on the site's own page — in the mode the failure itself
+    // called for. The screen keeps only the session's cookies;
+    // the app never sees a password.
+    val openSessionHandoff: (
+        Long, app.xreader.data.extension.SessionNeed.Kind
+    ) -> Unit = { extId, kind ->
+        scope.launch {
+            val ext = container.database
+                .installedExtensionDao().getById(extId)
+            val firstHost = ext?.let {
+                app.xreader.data.extension.ExtensionPermissions
+                    .parse(it.permissionsJson)
+                    .domains.firstOrNull()
+            }
+            if (ext != null && firstHost != null) {
+                sourcesViewModel.startLogin(
+                    sessionKey = sourcesViewModel.sessionKeyFor(extId),
+                    url = "https://$firstHost",
+                    title = ext.displayName,
+                    mode = when (kind) {
+                        app.xreader.data.extension
+                            .SessionNeed.Kind.SITE_CHECK ->
+                            app.xreader.ui.sources.LoginMode.SITE_CHECK
+                        app.xreader.data.extension
+                            .SessionNeed.Kind.SIGN_IN ->
+                            app.xreader.ui.sources.LoginMode.SIGN_IN
+                    }
+                )
+                navController.navigate("login")
+            } else {
+                onPhaseNote(
+                    "This source doesn't declare a site to sign in to"
+                )
+            }
+        }
+    }
     val coverFile: (String?) -> File? = { path ->
         path?.let { container.bookStorage.resolve(it) }
     }
@@ -769,26 +821,44 @@ private fun XreaderNavHost(
                 onBack = { navController.popBackStack() }
             )
         }
-        composable(Tab.Browse.route) {
+        composable(Tab.Browse.route) { entry ->
             // v1.0.5 (C3): Browse is the neat list; OPDS servers
             // fold into it, adding and the store are pushed screens.
             val opdsServers by opdsViewModel.servers
                 .collectAsStateWithLifecycle()
+            // v1.3.2 (scope D): a "Find this title" from a book
+            // page arrives as a preset on THIS entry — run it in
+            // Explore's own search field, then clear it.
+            androidx.compose.runtime.LaunchedEffect(entry) {
+                entry.savedStateHandle
+                    .getStateFlow<String?>("presetQuery", null)
+                    .collect { preset ->
+                        if (!preset.isNullOrBlank()) {
+                            entry.savedStateHandle["presetQuery"] = null
+                            globalSearchViewModel.setQuery(preset)
+                            globalSearchViewModel.search()
+                        }
+                    }
+            }
             SourcesScreen(
                 viewModel = sourcesViewModel,
+                searchViewModel = globalSearchViewModel,
                 onOpenSource = { extId, sourceId ->
                     navController.navigate("source/$extId/${android.net.Uri.encode(sourceId)}")
                 },
                 onOpenExtension = { extId -> navController.navigate("extensions/$extId") },
                 onOpenOpdsServers = { navController.navigate("opdsServers") },
-                onSearchAll = { navController.navigate("globalSearch") },
                 onAddSource = { navController.navigate("addSource") },
                 onOpenStore = { navController.navigate("sourceStore") },
                 opdsServers = opdsServers,
                 onOpenOpdsServer = { server ->
                     opdsViewModel.openServer(server)
                     navController.navigate("opds/${server.id}")
-                }
+                },
+                onOpenBook = { bookId ->
+                    navController.navigate("book/$bookId")
+                },
+                coverFile = coverFile
             )
         }
         composable("addSource") {
@@ -796,13 +866,55 @@ private fun XreaderNavHost(
                 viewModel = sourcesViewModel,
                 onBack = { navController.popBackStack() },
                 onAddFromLink = { navController.navigate("addFromLink") },
-                onOpenStore = { navController.navigate("sourceStore") }
+                onOpenStore = { navController.navigate("sourceStore") },
+                onOpenRepo = { repoId ->
+                    navController.navigate("repo/$repoId")
+                }
             )
         }
         composable("sourceStore") {
             app.xreader.ui.sources.SourceStoreScreen(
                 viewModel = sourcesViewModel,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onOpenRepo = { repoId ->
+                    navController.navigate("repo/$repoId")
+                },
+                onOpenBuiltIn = { navController.navigate("repoBuiltIn") },
+                onAddRepo = { navController.navigate("addSource") }
+            )
+        }
+        // v1.3.2 (scope E): one repository's own screen — its
+        // full source list, searchable, novels-led.
+        composable(
+            "repo/{repoId}",
+            arguments = listOf(
+                androidx.navigation.navArgument("repoId") {
+                    type = androidx.navigation.NavType.LongType
+                }
+            )
+        ) { entry ->
+            val repoId = entry.arguments?.getLong("repoId") ?: 0L
+            val repoState by sourcesViewModel.state
+                .collectAsStateWithLifecycle()
+            val repo = repoState.repos.firstOrNull { it.id == repoId }
+            app.xreader.ui.sources.RepoSourcesScreen(
+                viewModel = sourcesViewModel,
+                repo = repo,
+                onBack = { navController.popBackStack() },
+                onOpenExtension = { extId ->
+                    navController.navigate("extensions/$extId")
+                }
+            )
+        }
+        composable("repoBuiltIn") {
+            app.xreader.ui.sources.RepoSourcesScreen(
+                viewModel = sourcesViewModel,
+                repo = null,
+                onBack = { navController.popBackStack() },
+                onOpenExtension = { extId ->
+                    navController.navigate("extensions/$extId")
+                },
+                builtIn = true
             )
         }
         composable("opdsServers") {
@@ -838,7 +950,11 @@ private fun XreaderNavHost(
                 viewModel = viewModel,
                 extensionId = extId,
                 onBack = { navController.popBackStack() },
-                onOpenBook = { bookId -> navController.navigate("book/$bookId") }
+                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
+                // v1.3.2 (scope A2): the catalogue's hand-off.
+                onSessionHandoff = { kind ->
+                    openSessionHandoff(extId, kind)
+                }
             )
         }
         composable(
@@ -1024,30 +1140,14 @@ private fun XreaderNavHost(
                 navigateToTab(navController, Tab.Me)
             }
         }
-        composable("globalSearch") { entry ->
-            val viewModel = androidx.lifecycle.viewmodel.compose.viewModel<GlobalSearchViewModel>(
-                factory = GlobalSearchViewModel.factory(container)
-            )
-            // R26: an AI suggestion's Find arrives as a preset query
-            // on the previous entry — run it once, then clear it.
-            androidx.compose.runtime.LaunchedEffect(entry) {
-                val preset = navController.previousBackStackEntry
-                    ?.savedStateHandle
-                    ?.get<String>("presetQuery")
-                if (!preset.isNullOrBlank()) {
-                    navController.previousBackStackEntry
-                        ?.savedStateHandle
-                        ?.remove<String>("presetQuery")
-                    viewModel.setQuery(preset)
-                    viewModel.search()
-                }
+        // v1.3.2 (scope D): the standalone "globalSearch" route
+        // is retired — searching every source happens in Explore
+        // itself now (the field at its top). Old internal links
+        // land on Explore rather than a dead end.
+        composable("globalSearch") {
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                navigateToTab(navController, Tab.Browse)
             }
-            GlobalSearchScreen(
-                viewModel = viewModel,
-                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
-                onBack = { navController.popBackStack() },
-                coverFile = coverFile
-            )
         }
         composable(Tab.History.route) {
             // History is a first-class tab now (R08); its header back
@@ -1198,9 +1298,13 @@ private fun XreaderNavHost(
                     )
                 },
                 onFindTitle = { title ->
-                    navController.currentBackStackEntry?.savedStateHandle
-                        ?.set("presetQuery", title)
-                    navController.navigate("globalSearch")
+                    // v1.3.2 (scope D): the preset lands on the
+                    // EXPLORE entry and runs in its search field.
+                    runCatching {
+                        navController.getBackStackEntry(Tab.Browse.route)
+                            .savedStateHandle["presetQuery"] = title
+                    }
+                    navigateToTab(navController, Tab.Browse)
                 },
                 // v1.0.5 (B1): the Chapters section's Repair door
                 // lands on the source's Details page.
@@ -1234,7 +1338,9 @@ private fun XreaderNavHost(
                             )
                         }
                     }
-                }
+                },
+                // v1.3.2 (scope A2): the session hand-off.
+                onSessionHandoff = openSessionHandoff
             )
             }
         }
@@ -1298,6 +1404,21 @@ private fun XreaderNavHost(
                 onOpenCustomise = { navController.navigate("customise") },
                 onOpenAiPage = {
                     navController.navigate("ai/$bookId/$chapterIndex")
+                },
+                onSessionHandoff = { kind ->
+                    // The book's source owns the session; resolve
+                    // its extension row from the book itself.
+                    scope.launch {
+                        val bookRow = container.database.bookDao()
+                            .getById(bookId)
+                        val extId = bookRow?.extensionId
+                        if (extId != null) {
+                            openSessionHandoff(extId, kind)
+                        } else {
+                            onPhaseNote("This book's source can't be " +
+                                "opened for sign-in.")
+                        }
+                    }
                 }
             )
         }

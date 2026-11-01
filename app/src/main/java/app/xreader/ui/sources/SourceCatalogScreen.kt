@@ -46,7 +46,12 @@ fun SourceCatalogScreen(
     viewModel: SourceCatalogViewModel,
     extensionId: Long,
     onBack: () -> Unit,
-    onOpenBook: (Long) -> Unit
+    onOpenBook: (Long) -> Unit,
+    /** v1.3.2 (scope A2): the session hand-off door for a
+     * failure that is a site check or a sign-in gate. */
+    onSessionHandoff: (
+        app.xreader.data.extension.SessionNeed.Kind
+    ) -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     // v1.0.6.2 (F8a): search opens from an icon, like the Library —
@@ -148,21 +153,80 @@ fun SourceCatalogScreen(
         val errorMessage = state.errorMessage
         when {
             errorMessage != null && state.books.isEmpty() -> {
-                KitEmptyState(
-                    icon = Icons.Filled.CloudOff,
-                    message = "This source didn't answer. $errorMessage",
-                    actionText = "Try again",
-                    onAction = { viewModel.retry() },
-                    modifier = Modifier.weight(1f)
-                )
+                // v1.3.2 (scope A2/A6): the failure card tells
+                // the TRUE cause in plain words, and when the
+                // cause is a check or a sign-in gate, the
+                // hand-off is its primary door — never a
+                // dead-end "check your connection".
+                Column(Modifier.weight(1f)) {
+                    KitEmptyState(
+                        icon = Icons.Filled.CloudOff,
+                        message = when {
+                            state.sourceOff ->
+                                "This source is switched off, so it " +
+                                    "can't load its books."
+                            state.sessionNeed ==
+                                app.xreader.data.extension
+                                    .SessionNeed.Kind.SITE_CHECK ->
+                                "This site is showing a human check. " +
+                                    "Solve it once and Xreader keeps " +
+                                    "the session — after that, reading " +
+                                    "works as normal."
+                            state.sessionNeed ==
+                                app.xreader.data.extension
+                                    .SessionNeed.Kind.SIGN_IN ->
+                                "This site needs you to sign in before " +
+                                    "it will share its books. Sign in " +
+                                    "once on its own page; Xreader keeps " +
+                                    "only the session, never your password."
+                            else ->
+                                "This source didn't answer. $errorMessage"
+                        },
+                        actionText = when {
+                            state.sourceOff -> "Turn back on and try again"
+                            state.sessionNeed ==
+                                app.xreader.data.extension
+                                    .SessionNeed.Kind.SITE_CHECK ->
+                                "Solve the check"
+                            state.sessionNeed ==
+                                app.xreader.data.extension
+                                    .SessionNeed.Kind.SIGN_IN ->
+                                "Sign in"
+                            else -> "Try again"
+                        },
+                        onAction = {
+                            val need = state.sessionNeed
+                            when {
+                                state.sourceOff ->
+                                    viewModel.turnBackOnAndRetry()
+                                need != null -> onSessionHandoff(need)
+                                else -> viewModel.retry()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (state.sessionNeed != null) {
+                        TextButton(
+                            onClick = { viewModel.retry() },
+                            modifier = Modifier.align(
+                                androidx.compose.ui.Alignment.CenterHorizontally
+                            )
+                        ) { Text("Try again without it") }
+                    }
+                }
             }
             !state.loading && state.books.isEmpty() -> {
                 KitEmptyState(
                     icon = Icons.Filled.AutoStories,
                     message = if (state.mode == CatalogMode.SEARCH) {
-                        "Nothing here yet. No matches — try a different title."
+                        "No matches in this source — try a different title."
                     } else {
-                        "Nothing here yet. This page of the catalogue is empty."
+                        // v1.3.2 (scope A6): a SUCCESSFUL load
+                        // that came back empty is a source-shape
+                        // fact, not "nothing here yet".
+                        "This source's catalogue came back empty — " +
+                            "the site may have changed how it lists " +
+                            "its books."
                     },
                     modifier = Modifier.weight(1f)
                 )

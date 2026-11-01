@@ -37,7 +37,15 @@ data class CatalogUiState(
      * still loading, falsely declaring the list finished. */
     val loadCompleted: Boolean = false,
     val errorMessage: String? = null,
-    val openingBookId: String? = null
+    val openingBookId: String? = null,
+    /** v1.3.2 (scope A2): the session hand-off the current
+     * failure calls for — the failure card offers the
+     * one-time solve/sign-in screen as its primary door. */
+    val sessionNeed: app.xreader.data.extension.SessionNeed.Kind? = null,
+    /** v1.3.2 (item 77): the failure is simply "this source is
+     * switched off" — the card offers to turn it back on and
+     * retry in one tap. */
+    val sourceOff: Boolean = false
 )
 
 /** One source's catalogue: popular / latest / search, paged. Tapping a
@@ -105,11 +113,26 @@ class SourceCatalogViewModel(
 
     fun retry() = load(reset = true)
 
+    /** v1.3.2 (item 77): one tap — turn the source back on AND
+     * retry the load it failed. */
+    fun turnBackOnAndRetry() {
+        viewModelScope.launch {
+            val row = container.database.installedExtensionDao()
+                .getById(extensionId) ?: return@launch
+            container.repoManager.setEnabled(row, true)
+            _state.value = _state.value.copy(sourceOff = false)
+            load(reset = true)
+        }
+    }
+
     private fun load(reset: Boolean) {
         val current = handle ?: return
         val snapshot = _state.value
         val page = if (reset) 1 else snapshot.page + 1
-        _state.value = snapshot.copy(loading = true, errorMessage = null)
+        _state.value = snapshot.copy(
+            loading = true, errorMessage = null,
+            sessionNeed = if (reset) null else snapshot.sessionNeed
+        )
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 container.extensionService.guarded(current) { source ->
@@ -123,7 +146,28 @@ class SourceCatalogViewModel(
             _state.value = when (result) {
                 is AppResult.Err -> _state.value.copy(
                     loading = false,
-                    errorMessage = if (reset) ErrorText.displayText(result.error) else null
+                    errorMessage = if (reset) ErrorText.displayText(result.error) else null,
+                    // v1.3.2 (scope A2): classify the failure
+                    // against this source's config — bundled
+                    // and user-added sources alike.
+                    sessionNeed = if (reset) {
+                        app.xreader.data.extension.SessionNeed.classify(
+                            container.extensionService
+                                .declarativeConfigOf(current),
+                            result.error
+                        )
+                    } else {
+                        _state.value.sessionNeed
+                    },
+                    // v1.3.2 (item 77): a switched-off source is
+                    // its own plain state, with its own one-tap
+                    // way back.
+                    sourceOff = if (reset) {
+                        result.error.detail
+                            ?.contains("switched off") == true
+                    } else {
+                        _state.value.sourceOff
+                    }
                 )
                 is AppResult.Ok -> {
                     // v1.0.6.2 (F2): pages are merged by book id —

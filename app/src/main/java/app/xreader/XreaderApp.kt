@@ -41,14 +41,21 @@ class XreaderApp : Application(), ImageLoaderFactory {
                 container.downloadPrefs.settings.first().autoCleanCapMb
             }
         }.getOrNull()
+        // v1.3.2 (scope A3): covers ride the browser view's
+        // session (see ImageSessionClient).
+        val callFactory = app.xreader.di.ImageSessionClient.create(this)
         return if (capMb != null) {
             AppImageLoader.build(
                 this,
                 container.totalRamMb(),
-                AppImageLoader.capBytesFor(capMb)
+                AppImageLoader.capBytesFor(capMb),
+                callFactory
             )
         } else {
-            AppImageLoader.build(this, container.totalRamMb())
+            AppImageLoader.build(
+                this, container.totalRamMb(),
+                callFactory = callFactory
+            )
         }
     }
 }

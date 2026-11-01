@@ -268,6 +268,73 @@ class RepoManager(
         }
         repoDao.delete(repo)
         runCatching { store.repoIndexFile(repo.id).delete() }
+        runCatching { store.foreignRepoFile(repo.id).delete() }
+    }
+
+    /**
+     * v1.3.2 (scope E): persist a FOREIGN repository (another
+     * app's index) as a repo row + a sidecar site list, so the
+     * Repositories view can give it its own screen — the full
+     * list, searchable — instead of the add flow's one-shot
+     * 40-row preview card with its "…and N more" dead end.
+     */
+    suspend fun saveForeignRepo(
+        name: String,
+        indexUrl: String,
+        format: RepoFormat.ForeignRepo
+    ): ExtensionRepo {
+        val repo = ExtensionRepo(
+            name = name.ifBlank { format.ecosystemName },
+            indexUrl = indexUrl,
+            lastFetchedAt = nowMs()
+        )
+        val id = repoDao.insert(repo)
+        store.writeText(
+            store.foreignRepoFile(id),
+            repoJson.encodeToString(
+                RepoFormat.ForeignRepo.serializer(), format
+            )
+        )
+        return repo.copy(id = id)
+    }
+
+    /** The persisted site list of a foreign repo, if [repoId]
+     * is one. */
+    fun loadForeignRepo(repoId: Long): RepoFormat.ForeignRepo? {
+        val raw = store.readText(store.foreignRepoFile(repoId))
+            ?: return null
+        return runCatching {
+            repoJson.decodeFromString(
+                RepoFormat.ForeignRepo.serializer(), raw
+            )
+        }.getOrNull()
+    }
+
+    /** Re-read a foreign repo's index and refresh its sidecar. */
+    suspend fun refreshForeignRepo(
+        repo: ExtensionRepo
+    ): AppResult<RepoFormat.ForeignRepo> {
+        val text = when (val fetched = fetchText(repo.indexUrl)) {
+            is AppResult.Err -> return fetched
+            is AppResult.Ok -> fetched.value
+        }
+        val format = RepoFormatDetector.detect(text)
+        if (format !is RepoFormat.ForeignRepo) {
+            return AppResult.Err(
+                AppError.ExtensionFailed(
+                    repo.name,
+                    "the list no longer reads as a ${repo.name} list"
+                )
+            )
+        }
+        repoDao.update(repo.copy(lastFetchedAt = nowMs()))
+        store.writeText(
+            store.foreignRepoFile(repo.id),
+            repoJson.encodeToString(
+                RepoFormat.ForeignRepo.serializer(), format
+            )
+        )
+        return AppResult.Ok(format)
     }
 
     /** Fetch + TOFU-check a repo's index. */

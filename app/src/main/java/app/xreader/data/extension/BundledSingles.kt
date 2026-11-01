@@ -75,6 +75,83 @@ internal object BundledSingles {
         )
     }
 
+    /** FenrirRealm (fenrirealm.com) — v1.3.2 (items 75/75b,
+     * the LOGIN RULE): a sign-in-supported default. The site's
+     * own JSON API reads anonymously for catalogue, search,
+     * book and the FULL chapter list in one answer (verified
+     * live at capture: 896/896 chapters on the drive book,
+     * records {slug = the chapter number as text, title,
+     * number}); chapter TEXT answers `content: ""` with
+     * `content_format: "locked"` until the reader signs in
+     * once — the app shows the site's own sign-in page in the
+     * sanctioned screen, keeps only the session cookies, and
+     * the same fetch then carries the prose. Labelled "Sign
+     * in needed to read" ([DeclarativeConfig.signInNeeded]).
+     * Covers are bare "storage/…" paths serving from the
+     * site's root — hence the cover template. The chapter
+     * row's id IS the API chapter URL, so the text ajax
+     * derives the series slug as {seg-3} and the chapter
+     * number as {seg-1}. */
+    fun fenrirRealm(id: String, name: String): DeclarativeConfig {
+        val listing = ListSpec(
+            url = "https://fenrirealm.com/api/new/v2/series" +
+                "?page={page}&per_page=24&sort=popular",
+            results = "",
+            title = "title",
+            link = "slug",
+            cover = "cover",
+            author = "user.name",
+            jsonPath = "data",
+            jsonLinkTemplate =
+                "https://fenrirealm.com/api/new/v2/series/{value}",
+            jsonCoverTemplate = "https://fenrirealm.com/{value}"
+        )
+        return DeclarativeConfig(
+            id = id,
+            name = name,
+            baseUrl = "https://fenrirealm.com",
+            signInNeeded = true,
+            search = listing.copy(
+                url = "https://fenrirealm.com/api/new/v2/series" +
+                    "?search={query}&per_page=24"
+            ),
+            popular = listing,
+            latest = listing.copy(
+                url = "https://fenrirealm.com/api/new/v2/series" +
+                    "?page={page}&per_page=24"
+            ),
+            details = DetailsSpec(
+                chapters = ChapterListSpec(
+                    list = "a",
+                    name = "@text",
+                    link = "@href",
+                    reverse = false,
+                    pagination = ChapterListPagination(
+                        urlTemplate = "https://fenrirealm.com/api/new/v2" +
+                            "/series/{bookSlug}/chapters",
+                        bookIdPattern = "",
+                        // The endpoint answers the whole list
+                        // as a bare JSON array (the root).
+                        jsonArrayPath = ""
+                    ),
+                    jsonNameField = "title",
+                    jsonLinkField = "slug",
+                    jsonLinkTemplate = "https://fenrirealm.com/api/new/v2" +
+                        "/series/{bookSlug}/chapters/{value}",
+                    jsonDateField = "created_at"
+                )
+            ),
+            chapter = ChapterSpec(
+                content = "body",
+                ajax = ChapterTextAjax(
+                    urlTemplate = "https://fenrirealm.com/api/new/v2" +
+                        "/series/{seg-3}/chapters/{seg-1}",
+                    jsonContentField = "content"
+                )
+            )
+        )
+    }
+
     /** NovelBuddy (novelbuddy.me) — API default, verified live:
      * catalogue/search from api.novelbuddy.me (search's text
      * parameter is `q`; the catalogue's sort call takes an empty

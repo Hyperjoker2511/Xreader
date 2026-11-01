@@ -126,7 +126,11 @@ fun ReaderScreen(
     /** v1.0.1: the settings sheet's Customise jump. */
     onOpenCustomise: () -> Unit = {},
     /** v1.0.6.2 (F9b): Ask AI is a full page, not a sheet. */
-    onOpenAiPage: () -> Unit = {}
+    onOpenAiPage: () -> Unit = {},
+    /** v1.3.2 (A2): the one-time check / sign-in hand-off for
+     * this book's source, when a chapter fetch hits the gate. */
+    onSessionHandoff: (app.xreader.data.extension.SessionNeed.Kind) -> Unit =
+        {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val config by viewModel.config.collectAsStateWithLifecycle()
@@ -451,19 +455,62 @@ fun ReaderScreen(
                 CircularProgressIndicator(color = palette.accent)
             }
 
-            state.errorMessage != null -> EmptyState(
-                title = "Can't open this chapter",
-                message = state.errorMessage ?: "",
-                modifier = Modifier.fillMaxSize(),
-                // v1.0.6.2 (F3): a failed live fetch can simply
-                // be tried again, right here.
-                actionLabel = if (state.chapterFetchFailed) "Try again" else null,
-                onAction = if (state.chapterFetchFailed) {
-                    { viewModel.retryCurrentChapter() }
-                } else {
-                    null
+            state.errorMessage != null -> Column(
+                Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                EmptyState(
+                    title = "Can't open this chapter",
+                    message = state.errorMessage ?: "",
+                    modifier = Modifier.fillMaxWidth(),
+                    // v1.3.2 (A2): a check / sign-in gate leads
+                    // with the hand-off; retry stays available
+                    // below it. Otherwise retry is the action,
+                    // as before (v1.0.6.2 F3).
+                    actionLabel = when {
+                        state.sessionNeed != null -> null
+                        state.chapterFetchFailed -> "Try again"
+                        else -> null
+                    },
+                    onAction = if (state.sessionNeed == null &&
+                        state.chapterFetchFailed
+                    ) {
+                        { viewModel.retryCurrentChapter() }
+                    } else {
+                        null
+                    }
+                )
+                if (state.sessionNeed != null) {
+                    app.xreader.ui.common.XreaderPrimaryButton(
+                        text = if (
+                            state.sessionNeed ==
+                            app.xreader.data.extension.SessionNeed.Kind.SIGN_IN
+                        ) {
+                            "Sign in to read"
+                        } else {
+                            "Solve the check"
+                        },
+                        onClick = {
+                            onSessionHandoff(
+                                state.sessionNeed
+                                    ?: app.xreader.data.extension
+                                        .SessionNeed.Kind.SITE_CHECK
+                            )
+                        },
+                        modifier = Modifier
+                            .padding(horizontal = 24.dp)
+                            .fillMaxWidth()
+                    )
+                    if (state.chapterFetchFailed) {
+                        androidx.compose.material3.TextButton(
+                            onClick = { viewModel.retryCurrentChapter() }
+                        ) {
+                            androidx.compose.material3.Text("Try again without it")
+                        }
+                    }
                 }
-            )
+            }
 
             // v1.0.2 (R17): the endless stream — scroll mode with
             // the Continuous transition renders the window, not a
@@ -576,10 +623,19 @@ fun ReaderScreen(
             chapterTitle = ReaderCounters.headerLine(
                 chapterTitle = state.chapter?.title ?: "",
                 chapterIndex = state.chapterIndex,
-                chapterCount = state.chapters.size
+                chapterCount = state.chapters.size,
+                // v1.3.2 (item 79): the chapter's OWN number —
+                // the header agrees with the chapter that was
+                // actually opened, never with list position.
+                ownNumber = state.chapter?.let {
+                    app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
+                }
             ),
             chapterIndex = state.chapterIndex,
             chapterCount = state.chapters.size,
+            chapterOwnNumber = state.chapter?.let {
+                app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
+            },
             bookFraction = state.bookFraction,
             minutesLeftInChapter = state.minutesLeftInChapter,
             minutesLeftInBook = state.minutesLeftInBook,
@@ -748,7 +804,8 @@ fun ReaderScreen(
                     onScopeChange = { viewModel.setSettingsScope(it) },
                     hasBookOverride = state.hasBookOverride,
                     onClearBookOverride = { viewModel.clearBookOverride() },
-                    onSaveWord = { word -> viewModel.saveWord(word) }
+                    onSaveWord = { word -> viewModel.saveWord(word) },
+                    previewFontFamily = fontFamily
                 )
                 ActiveSheet.LISTEN -> ListenSheet(
                     ttsState = ttsState ?: app.xreader.data.reader.ReadAloudController.State(),
@@ -790,7 +847,17 @@ fun ReaderScreen(
                             val book = container.database.bookDao().getById(bookId)
                             val chapterLabel = state.chapters
                                 .firstOrNull { it.id == highlight.chapterId }
-                                ?.let { "Chapter ${it.index + 1}" } ?: ""
+                                ?.let {
+                                    // v1.3.2 (item 79): the
+                                    // chapter's own number, not
+                                    // its list position.
+                                    "Chapter " + (
+                                        app.xreader.domain.reader
+                                            .ChapterDisplayOrder
+                                            .displayNumber(it)
+                                            ?: "${it.index + 1}"
+                                        )
+                                } ?: ""
                             val cover = book?.coverPath?.let {
                                 container.bookStorage.resolve(it)
                             }
@@ -902,6 +969,9 @@ private fun ReaderChrome(
     chapterTitle: String,
     chapterIndex: Int,
     chapterCount: Int,
+    /** v1.3.2 (item 79): the open chapter's own number — the
+     * footer line derives from it when present. */
+    chapterOwnNumber: Float? = null,
     bookFraction: Float,
     minutesLeftInChapter: Int,
     minutesLeftInBook: Int,
@@ -1060,7 +1130,8 @@ private fun ReaderChrome(
                             ) {
                                 Text(
                                     ReaderCounters.footerLine(
-                                        chapterIndex, chapterCount
+                                        chapterIndex, chapterCount,
+                                        chapterOwnNumber
                                     ) + " · ${(bookFraction * 100).toInt()}%",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = palette.muted,

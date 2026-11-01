@@ -522,7 +522,22 @@ class SourceBookSync(
         }
         bookDao.update(updated)
         val existing = chapterDao.forBook(book.id)
-        val plan = ChapterReconciler.reconcilePartial(existing, chunk.chapters)
+        // v1.3.2 (items 64/80, scope B/R3): the COMPLETION
+        // AUDIT. A chunk that completes the list settles it
+        // with the FULL reconcile, not the append-only
+        // partial: stale rows left by older roads (a DOM-era
+        // duplicate of an API chapter, a form-variant URL)
+        // are matched by identity or dropped when disposable,
+        // so the stored list ends up == the source's list
+        // instead of accumulating a residue no partial merge
+        // could ever remove (NovelBuddy: 3,253 stored rows
+        // against the API's own 3,229). Partial chunks keep
+        // the append-only merge — a prefix must never drop.
+        val plan = if (chunk.complete) {
+            ChapterReconciler.reconcile(existing, chunk.chapters)
+        } else {
+            ChapterReconciler.reconcilePartial(existing, chunk.chapters)
+        }
         applyPlan(book.id, plan, now)
         if (chunk.complete) {
             // v1.3.0 delta: background, never on this path.

@@ -68,19 +68,27 @@ import app.xreader.ui.theme.primaryTextColor
 @Composable
 fun SourcesScreen(
     viewModel: SourcesViewModel,
+    /** v1.3.2 (scope D): the all-sources search lives HERE now,
+     * Mihon-style — the field at the top of Explore searches
+     * every source with results streaming in per source. */
+    searchViewModel: GlobalSearchViewModel,
     onOpenSource: (extensionId: Long, sourceId: String) -> Unit,
     onOpenExtension: (extensionId: Long) -> Unit,
     onOpenOpdsServers: () -> Unit,
-    /** v1.0.1 declutter: global search lives on its own screen. */
-    onSearchAll: () -> Unit = {},
     /** v1.0.5 (C3): the Add-a-source screen and the Source store. */
     onAddSource: () -> Unit = {},
     onOpenStore: () -> Unit = {},
     /** v1.0.5 (C3/D23): OPDS servers fold into this list. */
     opdsServers: List<OpdsServer> = emptyList(),
-    onOpenOpdsServer: (OpdsServer) -> Unit = {}
+    onOpenOpdsServer: (OpdsServer) -> Unit = {},
+    onOpenBook: (Long) -> Unit = {},
+    coverFile: (String?) -> java.io.File? = { null }
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val searchState by searchViewModel.state.collectAsStateWithLifecycle()
+    // The host collects searchViewModel.openedBook — a result tap
+    // opens the book through the same path as everywhere else.
+    val searchActive = searchState.searched
 
     Column(
         Modifier
@@ -113,28 +121,332 @@ fun SourcesScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 88.dp)
         ) {
-            // ── Search everything: the one-line glass pill ──────
+            // ── Search everything, right here (v1.3.2 scope D) ─
+            // Mihon-style: the field sits at the top of Explore;
+            // from here it searches every source at once and the
+            // results stream in per source below it. (Inside one
+            // source, that source's own screen searches only it.)
             item {
-                GlassCard(
-                    onClick = onSearchAll,
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 13.dp),
-                    bouncePress = true
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Icon(
-                            Icons.Filled.Search,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
+                androidx.compose.material3.OutlinedTextField(
+                    value = searchState.query,
+                    onValueChange = { searchViewModel.setQuery(it) },
+                    label = { Text("Search all your sources") },
+                    singleLine = true,
+                    leadingIcon = {
+                        Icon(Icons.Filled.Search, contentDescription = null)
+                    },
+                    trailingIcon = {
+                        if (searchState.query.isNotBlank() ||
+                            searchState.searched
+                        ) {
+                            TextButton(
+                                onClick = { searchViewModel.clearSearch() }
+                            ) { Text("Clear") }
+                        }
+                    },
+                    keyboardOptions = androidx.compose.foundation.text
+                        .KeyboardOptions(
+                            imeAction = androidx.compose.ui.text.input
+                                .ImeAction.Search
+                        ),
+                    keyboardActions = androidx.compose.foundation.text
+                        .KeyboardActions(
+                            onSearch = { searchViewModel.search() }
+                        ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            if (searchState.searching) {
+                item {
+                    Column {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement =
+                                Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                "Searching source " +
+                                    "${searchState.progressDone + 1} of " +
+                                    "${searchState.progressTotal}…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = { searchViewModel.cancelSearch() }
+                            ) { Text("Cancel") }
+                        }
+                        LinearProgressIndicator(
+                            progress = {
+                                if (searchState.progressTotal > 0) {
+                                    searchState.progressDone.toFloat() /
+                                        searchState.progressTotal
+                                } else {
+                                    0f
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
                         )
+                    }
+                }
+            }
+            if (!searchState.searched &&
+                searchState.recents.isNotEmpty()
+            ) {
+                item {
+                    Text(
+                        "Recent searches",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                items(
+                    searchState.recents.take(5),
+                    key = { "recent-$it" }
+                ) { recent ->
+                    GlassCard(
+                        onClick = {
+                            searchViewModel.setQuery(recent)
+                            searchViewModel.search()
+                        }
+                    ) {
                         Text(
-                            "Search all your sources",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            recent,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+            }
+
+            if (searchActive) {
+                // ── Streaming results, grouped per source ──────
+                if (searchState.libraryBooks.isNotEmpty()) {
+                    item(key = "gs-lib-head") {
+                        SectionHeader(title = "In your library")
+                    }
+                    items(
+                        searchState.libraryBooks.chunked(3),
+                        key = { row ->
+                            "gs-librow-" +
+                                row.joinToString("-") { it.id.toString() }
+                        }
+                    ) { rowBooks ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement =
+                                Arrangement.spacedBy(12.dp)
+                        ) {
+                            rowBooks.forEach { book ->
+                                app.xreader.ui.common.BookPosterCard(
+                                    title = book.title,
+                                    author = book.author
+                                        .takeIf { it.isNotBlank() },
+                                    coverModel = coverFile(book.coverPath)
+                                        ?.takeIf { it.exists() },
+                                    metaLine =
+                                        "${book.totalChapters} chapters",
+                                    onClick = {
+                                        searchViewModel
+                                            .openLibraryBook(book.id)
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            repeat(3 - rowBooks.size) {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+                if (searchState.contentHits.isNotEmpty()) {
+                    item(key = "gs-content-head") {
+                        SectionHeader(title = "Inside your downloads")
+                    }
+                    items(
+                        searchState.contentHits,
+                        key = { "gs-hit-${it.bookId}-${it.chapterIndex}" }
+                    ) { hit ->
+                        GlassCard(
+                            onClick = {
+                                searchViewModel.openLibraryBook(hit.bookId)
+                            }
+                        ) {
+                            Text(
+                                hit.bookTitle,
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Text(
+                                hit.chapterTitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                            Text(
+                                "…${hit.snippet}…",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+                for (group in searchState.groups) {
+                    item(key = "gs-head-${group.sourceId}") {
+                        SectionHeader(title = group.sourceName)
+                    }
+                    items(
+                        group.books.chunked(3),
+                        key = { row ->
+                            "gs-row-${group.sourceId}-" +
+                                row.joinToString("-") { it.id }
+                        }
+                    ) { rowBooks ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement =
+                                Arrangement.spacedBy(12.dp)
+                        ) {
+                            rowBooks.forEach { book ->
+                                val workKey =
+                                    app.xreader.data.extension.WorkMatcher
+                                        .normaliseTitle(book.title)
+                                val inLibrary =
+                                    workKey in searchState.libraryKeys
+                                val copies =
+                                    searchState.workCounts[workKey] ?: 1
+                                app.xreader.ui.common.BookPosterCard(
+                                    title = book.title,
+                                    author = book.author
+                                        ?.takeIf { it.isNotBlank() },
+                                    coverModel = book.coverUrl
+                                        ?.takeIf { it.isNotBlank() },
+                                    metaLine = listOfNotNull(
+                                        if (inLibrary) {
+                                            "In your library"
+                                        } else {
+                                            null
+                                        },
+                                        if (copies > 1) {
+                                            "On $copies sources"
+                                        } else {
+                                            null
+                                        }
+                                    ).joinToString(" · ")
+                                        .takeIf { it.isNotBlank() },
+                                    onClick = {
+                                        searchViewModel.openBook(group, book)
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            repeat(3 - rowBooks.size) {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+                if (!searchState.searching &&
+                    searchState.groups.isEmpty() &&
+                    searchState.libraryBooks.isEmpty() &&
+                    searchState.contentHits.isEmpty()
+                ) {
+                    item {
+                        Text(
+                            "Nothing found for “${searchState.query}”." +
+                                if (searchState.failedSources.isNotEmpty()) {
+                                    " These sources couldn't be searched: " +
+                                        searchState.failedSources
+                                            .joinToString(", ") + "."
+                                } else {
+                                    " Try a different word, or check " +
+                                        "the spelling."
+                                },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                }
+                if (searchState.failedSources.isNotEmpty() &&
+                    searchState.groups.isNotEmpty()
+                ) {
+                    item {
+                        Text(
+                            "These sources couldn't be searched: " +
+                                searchState.failedSources
+                                    .joinToString(", ") + ".",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                }
+                item {
+                    TextButton(
+                        onClick = { searchViewModel.clearSearch() }
+                    ) { Text("← Back to your sources") }
+                }
+            }
+
+            if (!searchActive) {
+            // ── v1.3.2 (item 84): the one-time restore card ────
+            // v1.3.1's failure breaker could switch sources off
+            // without the user and stored no reason, so an off
+            // source can't be proven breaker-off. Nothing is
+            // restored silently — this card lists the off
+            // sources and only the reader's own tap changes
+            // anything. It shows exactly once.
+            val offExtensions = state.extensions.filter { !it.enabled }
+            if (app.xreader.data.extension.SourceRestore.shouldShowCard(
+                    cardDone = state.restoreCardDone,
+                    rows = offExtensions.map {
+                        app.xreader.data.extension.SourceRestore.Row(
+                            it.id, it.displayName, it.enabled
+                        )
+                    }
+                )
+            ) {
+                item(key = "restore-card") {
+                    GlassCard(Modifier.fillMaxWidth()) {
+                        Text(
+                            "Some sources are switched off",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Older Xreader versions could switch a " +
+                                "source off after failed loads — " +
+                                "without asking you. These are off " +
+                                "right now: " +
+                                offExtensions.take(6).joinToString(", ") {
+                                    it.displayName
+                                } +
+                                if (offExtensions.size > 6) {
+                                    " and ${offExtensions.size - 6} more"
+                                } else {
+                                    ""
+                                } +
+                                ". Turn them back on, or leave them " +
+                                "off — either way, this card won't " +
+                                "come back.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        PrimaryPill(
+                            text = "Turn them all back on",
+                            onClick = {
+                                viewModel.restoreAllOffSources(
+                                    offExtensions
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        app.xreader.ui.common.GhostPill(
+                            text = "Leave them off",
+                            onClick = { viewModel.dismissRestoreCard() },
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
@@ -192,6 +504,11 @@ fun SourcesScreen(
                 SourceRow(
                     ext = ext,
                     healthRecord = record,
+                    sessionWord = firstSource?.let {
+                        state.sessionWords[
+                            SourceHealthRecord.key(ext.id, it)
+                        ]
+                    },
                     hasUpdate = state.updates[ext.packageId] != null,
                     hasPending = state.pendings.containsKey(ext.packageId),
                     addedByYou = ext.id in state.addedByYouIds,
@@ -239,6 +556,7 @@ fun SourcesScreen(
                     )
                 }
             }
+            }
         }
     }
 }
@@ -255,6 +573,10 @@ fun SourcesScreen(
 private fun SourceRow(
     ext: InstalledExtension,
     healthRecord: SourceHealthRecord?,
+    /** v1.3.2 (R1): the session word — "Check needed" /
+     * "Sign in needed" / "Signed in" / "Working" — when this
+     * source rides the session road. */
+    sessionWord: String? = null,
     hasUpdate: Boolean,
     hasPending: Boolean,
     addedByYou: Boolean = false,
@@ -315,7 +637,14 @@ private fun SourceRow(
                         // are never confusable, and nothing was
                         // deleted to achieve it.
                         if (addedByYou) "Added by you" else null,
-                        languageLabel, healthWord, typeLabel
+                        languageLabel, healthWord,
+                        // v1.3.2 (R1): the session word rides
+                        // the same quiet line when it adds
+                        // information the health word doesn't
+                        // carry (a bare "Working" would just
+                        // repeat it).
+                        sessionWord?.takeIf { it != healthWord },
+                        typeLabel
                     )
                         .joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,

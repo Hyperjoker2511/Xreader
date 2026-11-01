@@ -36,6 +36,35 @@ object ReaderCounters {
     fun footerLine(chapterIndex: Int, chapterCount: Int): String =
         if (chapterCount > 0) "Chapter ${chapterIndex + 1} of $chapterCount" else ""
 
+    /**
+     * v1.3.2 (item 79): the IDENTITY footer line — the
+     * chapter's OWN number against the book's count. This is
+     * the line the reader shows whenever the open chapter
+     * carries a number of its own: position is a storage
+     * fact that a mis-ordered stored list can make a lie
+     * (the device check opened chapter 158 under a "Chapter
+     * 1 of 170" label computed from position), while the
+     * chapter's own number is the chapter's identity and
+     * agrees with its heading by construction. [ownNumber]
+     * null (a chapter with no number anywhere) falls back to
+     * the position line — the only honest label left.
+     */
+    fun footerLine(
+        chapterIndex: Int,
+        chapterCount: Int,
+        ownNumber: Float?
+    ): String {
+        if (ownNumber == null) return footerLine(chapterIndex, chapterCount)
+        if (chapterCount <= 0) return ""
+        val asInt = ownNumber.toInt()
+        val label = if (ownNumber == asInt.toFloat()) {
+            asInt.toString()
+        } else {
+            ownNumber.toString()
+        }
+        return "Chapter $label of $chapterCount"
+    }
+
     /** The header pill's chapter line. */
     fun headerLine(
         chapterTitle: String,
@@ -54,6 +83,33 @@ object ReaderCounters {
             chapterTitle.isNotBlank() -> chapterTitle
             chapterCount > 0 -> "Chapter $position"
             else -> chapterTitle
+        }
+    }
+
+    /**
+     * v1.3.2 (item 79): the header line when the chapter's
+     * identity is known. The title still shows when it
+     * AGREES with the chapter's own number; when the title
+     * and the identity disagree (a mislabelled row, a
+     * foreign heading), the identity line wins — the header
+     * must agree with the chapter the reader actually
+     * opened, and the regression test pins exactly that.
+     */
+    fun headerLine(
+        chapterTitle: String,
+        chapterIndex: Int,
+        chapterCount: Int,
+        ownNumber: Float?
+    ): String {
+        if (ownNumber == null) {
+            return headerLine(chapterTitle, chapterIndex, chapterCount)
+        }
+        val named = ChapterNumbers.parse(chapterTitle)
+        val agrees = named != null && abs(named - ownNumber) < 1f
+        return when {
+            chapterTitle.isNotBlank() && (named == null || agrees) ->
+                chapterTitle
+            else -> footerLine(chapterIndex, chapterCount, ownNumber)
         }
     }
 

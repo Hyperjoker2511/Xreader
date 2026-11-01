@@ -12,10 +12,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.AlertDialog
@@ -23,7 +21,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,41 +35,51 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.data.db.ExtensionRepo
-import app.xreader.data.db.InstalledExtension
-import app.xreader.data.extension.ExtensionKind
-import app.xreader.data.extension.IndexPackage
 import app.xreader.data.extension.RepoManager
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.KitEmptyState
-import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.PrimaryPill
-import app.xreader.ui.common.SearchCapsule
-import app.xreader.ui.theme.errorTextColor
 import app.xreader.ui.theme.primaryTextColor
 
 /**
- * v1.0.5 (C3/D23): the Source store — repositories as a pushed
- * screen of their own (the Mihon pattern: repo management lives
- * one tap deep, Browse stays a list of YOUR sources). Search,
- * the Installed/Updates/Language filter chips, pinned +
- * recently-used ordering, install rows and the changed-list
- * warnings all moved here unchanged from the old Browse scroll;
- * the safety line stands at the store's foot.
+ * v1.3.2 (scope E): the Repositories view — one card per
+ * repository (name, source count, last-checked line), "Add
+ * repository" at the top, and every card opening THAT
+ * repository's own screen ([RepoSourcesScreen]) with its full
+ * source list. The built-in sources get a card of their own
+ * with the same treatment. (Before v1.3.2 this screen expanded
+ * every repo's packages inline under store-wide filters; the
+ * per-repo screens carry the searching and filtering now.)
  */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun SourceStoreScreen(
     viewModel: SourcesViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenRepo: (Long) -> Unit = {},
+    onOpenBuiltIn: () -> Unit = {},
+    onAddRepo: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var pendingInstall by remember { mutableStateOf<Pair<ExtensionRepo, IndexPackage>?>(null) }
     var pendingRepoRemoval by remember { mutableStateOf<ExtensionRepo?>(null) }
-    var pendingUninstall by remember { mutableStateOf<InstalledExtension?>(null) }
-    var repoQuery by remember { mutableStateOf("") }
-    var repoFilter by remember { mutableStateOf("ALL") }
-    var repoLanguage by remember { mutableStateOf<String?>(null) }
+
+    val orderedRepos = state.repos.sortedWith(
+        compareBy<ExtensionRepo>(
+            { if (it.id in state.pinnedRepoIds) 0 else 1 },
+            {
+                val idx = state.recentRepoIds.indexOf(it.id)
+                if (idx < 0) Int.MAX_VALUE else idx
+            },
+            { it.name.lowercase() }
+        )
+    )
+    val builtInCount = state.extensions.count {
+        it.packageId.startsWith("bundled.")
+    }
+    fun sourceCount(repo: ExtensionRepo): Int =
+        state.foreignRepos[repo.id]?.sites?.size
+            ?: state.catalogues[repo.id]?.size
+            ?: state.extensions.count { it.repoId == repo.id }
 
     Column(
         Modifier
@@ -82,17 +89,25 @@ fun SourceStoreScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back"
+                )
             }
-            Text("Source store", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "Repositories",
+                style = MaterialTheme.typography.headlineSmall
+            )
         }
         if (state.busy) {
-            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+            LinearProgressIndicator(
+                Modifier.fillMaxWidth().padding(top = 8.dp)
+            )
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            "Repositories you've added, and the sources they offer. " +
-                "Pinned and recently used repositories come first.",
+            "Every repository you've added, and the sources built " +
+                "into the app. Tap one to see its sources.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -103,160 +118,170 @@ fun SourceStoreScreen(
             contentPadding = androidx.compose.foundation.layout
                 .PaddingValues(bottom = 88.dp)
         ) {
+            item {
+                PrimaryPill(
+                    text = "Add repository",
+                    onClick = onAddRepo,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
             // ── Changed-index warnings (§5.5 Banner) ────────────
-            items(state.repos.filter { it.id in state.changedRepos }, key = { "changed-${it.id}" }) { repo ->
-                GlassCard(Modifier.animateItem(placementSpec = listPlacementSpec())) {
+            items(
+                state.repos.filter { it.id in state.changedRepos },
+                key = { "changed-${it.id}" }
+            ) { repo ->
+                GlassCard(
+                    Modifier.animateItem(
+                        placementSpec = listPlacementSpec()
+                    )
+                ) {
                     Text(
                         "“${repo.name}” changed its list",
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        "The repository's list no longer matches the fingerprint from when " +
-                            "you added it. That can be a normal update — or a sign the " +
-                            "repository was taken over. Only accept if you trust it.",
+                        "The repository's list no longer matches " +
+                            "the fingerprint from when you added " +
+                            "it. That can be a normal update — or " +
+                            "a sign the repository was taken over. " +
+                            "Only accept if you trust it.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme
+                            .onSurfaceVariant
                     )
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        verticalArrangement =
+                            Arrangement.spacedBy(8.dp)
+                    ) {
                         PrimaryPill(
                             text = "Accept the new list",
-                            onClick = { viewModel.acceptChangedIndex(repo) },
+                            onClick = {
+                                viewModel.acceptChangedIndex(repo)
+                            },
                             modifier = Modifier.fillMaxWidth()
                         )
                         GhostPill(
                             text = "Not now",
-                            onClick = { viewModel.dismissChangedIndex(repo) },
+                            onClick = {
+                                viewModel.dismissChangedIndex(repo)
+                            },
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
             }
 
-            // ── Search + filters (v1.0.2 R14 storefront) ────────
-            item {
-                SearchCapsule(
-                    value = repoQuery,
-                    onValueChange = { repoQuery = it },
-                    placeholder = "Name, site address or language…",
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
-                androidx.compose.foundation.layout.FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf(
-                        "ALL" to "All",
-                        "INSTALLED" to "Installed",
-                        "UPDATES" to "Updates"
-                    ).forEach { (key, label) ->
-                        NocturneChip(
-                            label = label,
-                            selected = repoFilter == key,
-                            onClick = { repoFilter = key }
-                        )
-                    }
-                    val languages = state.catalogues.values.flatten()
-                        .flatMap { it.languages }.distinct().sorted()
-                    languages.forEach { lang ->
-                        NocturneChip(
-                            label = lang.uppercase(),
-                            selected = repoFilter == "LANGUAGE" &&
-                                repoLanguage == lang,
-                            onClick = {
-                                repoFilter = "LANGUAGE"
-                                repoLanguage = lang
-                            }
-                        )
-                    }
-                }
-            }
-            val installedByPkg = state.extensions.associateBy { it.packageId }
-            val orderedRepos = state.repos.sortedWith(
-                compareBy<ExtensionRepo>(
-                    { if (it.id in state.pinnedRepoIds) 0 else 1 },
-                    {
-                        val idx = state.recentRepoIds.indexOf(it.id)
-                        if (idx < 0) Int.MAX_VALUE else idx
-                    },
-                    { it.name.lowercase() }
-                )
-            )
-            fun pkgMatches(repo: ExtensionRepo, pkg: IndexPackage): Boolean {
-                val q = repoQuery.trim().lowercase()
-                val queryHit = q.isEmpty() ||
-                    repo.name.lowercase().contains(q) ||
-                    repo.indexUrl.lowercase().contains(q) ||
-                    pkg.name.lowercase().contains(q) ||
-                    pkg.languages.any { it.lowercase().contains(q) } ||
-                    pkg.sources.any {
-                        it.baseUrl.lowercase().contains(q) ||
-                            it.name.lowercase().contains(q)
-                    }
-                if (!queryHit) return false
-                return when (repoFilter) {
-                    "INSTALLED" -> pkg.pkg in installedByPkg
-                    "UPDATES" -> state.updates.containsKey(pkg.pkg)
-                    "LANGUAGE" -> repoLanguage == null ||
-                        repoLanguage in pkg.languages
-                    else -> true
-                }
-            }
-            val visibleRepos = orderedRepos.mapNotNull { repo ->
-                val catalogue = (state.catalogues[repo.id] ?: emptyList())
-                    .filter { pkgMatches(repo, it) }
-                val filtering = repoQuery.isNotBlank() || repoFilter != "ALL"
-                if (filtering && catalogue.isEmpty() &&
-                    (state.catalogues[repo.id] ?: emptyList()).isNotEmpty()
-                ) {
-                    null
-                } else {
-                    repo to catalogue
-                }
-            }
-            if (state.repos.isEmpty()) {
-                item {
-                    KitEmptyState(
-                        icon = Icons.Filled.Storefront,
-                        message = "No repositories yet. Add one from “Add a source” " +
-                            "and its sources will appear here."
+            // ── Built-in sources ────────────────────────────────
+            item(key = "repo-builtin") {
+                GlassCard(
+                    onClick = onOpenBuiltIn,
+                    modifier = Modifier.animateItem(
+                        placementSpec = listPlacementSpec()
                     )
-                }
-            }
-            items(visibleRepos, key = { "repo-${it.first.id}" }) { (repo, catalogue) ->
-                RepoCard(
-                    repo = repo,
-                    catalogue = catalogue,
-                    installedByPkg = installedByPkg,
-                    updates = state.updates,
-                    pinned = repo.id in state.pinnedRepoIds,
-                    busy = state.busy,
-                    onRefresh = { viewModel.refreshRepo(repo) },
-                    onRemove = { pendingRepoRemoval = repo },
-                    onInstall = { pkg -> pendingInstall = repo to pkg },
-                    onUpdatePkg = { pkg ->
-                        state.updates[pkg.pkg]?.let { viewModel.applyUpdate(it) }
-                    },
-                    onUninstall = { ext -> pendingUninstall = ext },
-                    onTogglePin = {
-                        viewModel.setRepoPinned(repo.id, repo.id !in state.pinnedRepoIds)
-                    },
-                    modifier = Modifier.animateItem(placementSpec = listPlacementSpec())
-                )
-            }
-            if (visibleRepos.isEmpty() && state.repos.isNotEmpty()) {
-                item {
-                    KitEmptyState(
-                        icon = Icons.Filled.Search,
-                        message = "Nothing matches that search."
+                ) {
+                    Text(
+                        "Built-in sources",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = primaryTextColor()
+                    )
+                    Text(
+                        "$builtInCount sources · Ships with the app — " +
+                            "always up to date",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme
+                            .onSurfaceVariant
                     )
                 }
             }
 
-            // ── The safety line stands at the store's foot ──────
+            if (orderedRepos.isEmpty()) {
+                item {
+                    KitEmptyState(
+                        icon = Icons.Filled.Storefront,
+                        message = "No repositories added yet. Add " +
+                            "one and its sources will appear here."
+                    )
+                }
+            }
+            items(orderedRepos, key = { "repo-${it.id}" }) { repo ->
+                val isLinkRepo =
+                    repo.indexUrl == RepoManager.LINK_REPO_URL
+                GlassCard(
+                    onClick = { onOpenRepo(repo.id) },
+                    modifier = Modifier.animateItem(
+                        placementSpec = listPlacementSpec()
+                    )
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                repo.name,
+                                style = MaterialTheme.typography
+                                    .titleMedium,
+                                color = primaryTextColor()
+                            )
+                            Text(
+                                "${sourceCount(repo)} sources · " +
+                                    checkedLine(repo.lastFetchedAt),
+                                style = MaterialTheme.typography
+                                    .bodySmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (!isLinkRepo) {
+                                Text(
+                                    repo.indexUrl,
+                                    style = MaterialTheme.typography
+                                        .bodySmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        TextButton(
+                            onClick = {
+                                viewModel.setRepoPinned(
+                                    repo.id,
+                                    repo.id !in state.pinnedRepoIds
+                                )
+                            }
+                        ) {
+                            Text(
+                                if (repo.id in state.pinnedRepoIds) {
+                                    "📌 Pinned"
+                                } else {
+                                    "Pin"
+                                }
+                            )
+                        }
+                    }
+                    if (!isLinkRepo) {
+                        Row(
+                            horizontalArrangement =
+                                Arrangement.spacedBy(8.dp)
+                        ) {
+                            TextButton(
+                                onClick = { viewModel.refreshRepo(repo) },
+                                enabled = !state.busy
+                            ) { Text("Check for updates") }
+                            TextButton(
+                                onClick = { pendingRepoRemoval = repo }
+                            ) { Text("Remove") }
+                        }
+                    }
+                }
+            }
+
+            // ── The safety line stands at the foot ──────────────
             item {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
+                    Modifier.fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -269,49 +294,12 @@ fun SourceStoreScreen(
                     Text(
                         "Sources can only open the sites you allow.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme
+                            .onSurfaceVariant
                     )
                 }
             }
         }
-    }
-
-    // ── Install consent ─────────────────────────────────────────
-    pendingInstall?.let { (repo, pkg) ->
-        val permissions = pkg.installPermissions()
-        AlertDialog(
-            onDismissRequest = { pendingInstall = null },
-            title = { Text("Add “${pkg.name}”?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(permissions.consentSummary(pkg.kindEnum?.label ?: "source"))
-                    if (pkg.kindEnum == ExtensionKind.DEX) {
-                        Text(
-                            "This kind runs REAL app code inside Xreader — the strongest " +
-                                "kind there is. Only install it from a repository you fully " +
-                                "trust, and it will still ask for a separate opt-in before " +
-                                "it can run.",
-                            color = errorTextColor()
-                        )
-                    }
-                    Text(
-                        "Version ${pkg.versionName} • Fingerprint " +
-                            fingerprintPreview(pkg),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingInstall = null
-                    viewModel.install(repo, pkg)
-                }) { Text("Install") }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingInstall = null }) { Text("Cancel") }
-            }
-        )
     }
 
     pendingRepoRemoval?.let { repo ->
@@ -319,7 +307,10 @@ fun SourceStoreScreen(
             onDismissRequest = { pendingRepoRemoval = null },
             title = { Text("Remove “${repo.name}”?") },
             text = {
-                Text("Its sources will be uninstalled. Books you already downloaded stay in your library.")
+                Text(
+                    "Its sources will be uninstalled. Books you " +
+                        "already downloaded stay in your library."
+                )
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -328,164 +319,28 @@ fun SourceStoreScreen(
                 }) { Text("Remove") }
             },
             dismissButton = {
-                TextButton(onClick = { pendingRepoRemoval = null }) { Text("Cancel") }
-            }
-        )
-    }
-
-    pendingUninstall?.let { ext ->
-        AlertDialog(
-            onDismissRequest = { pendingUninstall = null },
-            title = { Text("Uninstall “${ext.displayName}”?") },
-            text = {
-                Text(
-                    "The source leaves your list. Books you already " +
-                        "downloaded stay in your library."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingUninstall = null
-                    viewModel.uninstallExtension(ext)
-                }) { Text("Uninstall") }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingUninstall = null }) { Text("Cancel") }
+                TextButton(onClick = { pendingRepoRemoval = null }) {
+                    Text("Cancel")
+                }
             }
         )
     }
 }
 
-private fun fingerprintPreview(pkg: IndexPackage): String {
-    val fp = if (pkg.kindEnum == ExtensionKind.DECLARATIVE) {
-        app.xreader.data.extension.DeclarativeFingerprints.of(pkg.sources)
-    } else {
-        pkg.sha256
-    }
-    return if (fp.length > 12) fp.take(12) + "…" else fp
-}
-
-/**
- * v1.0.2 (R14): a repository as a small app store — pin, name and
- * address, then one row per source with chips (version · languages ·
- * kind), a status, and ONE action: Install / Update / Uninstall.
- * (Re-homed to the Source store screen in v1.0.5, unchanged.)
- */
-@Composable
-private fun RepoCard(
-    repo: ExtensionRepo,
-    catalogue: List<IndexPackage>,
-    installedByPkg: Map<String, InstalledExtension>,
-    updates: Map<String, RepoManager.UpdateCandidate>,
-    pinned: Boolean,
-    busy: Boolean,
-    onRefresh: () -> Unit,
-    onRemove: () -> Unit,
-    onInstall: (IndexPackage) -> Unit,
-    onUpdatePkg: (IndexPackage) -> Unit,
-    onUninstall: (InstalledExtension) -> Unit,
-    onTogglePin: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val isLinkRepo = repo.indexUrl == RepoManager.LINK_REPO_URL
-    GlassCard(modifier = modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(repo.name, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    if (isLinkRepo) "Sources you added from links" else repo.indexUrl,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            TextButton(onClick = onTogglePin) {
-                Text(if (pinned) "📌 Pinned" else "Pin")
-            }
-        }
-        if (!isLinkRepo) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onRefresh, enabled = !busy) { Text("Check for updates") }
-                TextButton(onClick = onRemove) { Text("Remove") }
-            }
-        }
-        if (catalogue.isEmpty() && !isLinkRepo) {
-            Text(
-                "Tap “Check for updates” to load its source list.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        catalogue.forEach { pkg ->
-            val installedExt = installedByPkg[pkg.pkg]
-                ?.takeIf { it.repoId == repo.id || isLinkRepo }
-            val hasUpdate = updates.containsKey(pkg.pkg)
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                    modifier = Modifier.size(38.dp)
-                ) {
-                    Column(
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            pkg.name.firstOrNull()?.uppercase() ?: "?",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = primaryTextColor()
-                        )
-                    }
-                }
-                Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
-                    Text(pkg.name, style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        "v${pkg.versionName} · " +
-                            pkg.languages.joinToString(", ") { it.uppercase() } +
-                            " · ${pkg.kindEnum?.label ?: pkg.kind}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (installedExt != null) {
-                        Text(
-                            if (hasUpdate) "Update available" else "Installed",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (hasUpdate) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.secondary
-                            }
-                        )
-                    }
-                }
-                // §5.5: the package row's ONE action is a state
-                // pill-button — Install / Update as PrimaryPill,
-                // Uninstall as the quieter GhostPill.
-                when {
-                    installedExt != null && hasUpdate ->
-                        PrimaryPill(
-                            text = "Update",
-                            onClick = { onUpdatePkg(pkg) },
-                            enabled = !busy
-                        )
-                    installedExt != null ->
-                        GhostPill(
-                            text = "Uninstall",
-                            onClick = { onUninstall(installedExt) },
-                            enabled = !busy
-                        )
-                    else ->
-                        PrimaryPill(
-                            text = "Install",
-                            onClick = { onInstall(pkg) },
-                            enabled = !busy
-                        )
-                }
-            }
-        }
+/** "Checked 3 days ago" for a repo card — quiet, human, and
+ * never a fabricated time. */
+private fun checkedLine(lastFetchedAt: Long?): String {
+    if (lastFetchedAt == null) return "Not checked yet"
+    val ageMs = System.currentTimeMillis() - lastFetchedAt
+    val minutes = ageMs / 60_000
+    val hours = minutes / 60
+    val days = hours / 24
+    return "Checked " + when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "$minutes minute(s) ago"
+        hours < 24 -> "$hours hour(s) ago"
+        days < 30 -> "$days day(s) ago"
+        days < 365 -> "${days / 30} month(s) ago"
+        else -> "over a year ago"
     }
 }

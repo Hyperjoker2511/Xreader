@@ -35,6 +35,28 @@ val LiterataSerif = FontFamily(
     Font(R.font.literata_italic, FontWeight.Normal, FontStyle.Italic)
 )
 
+/** v1.3.2 (item 86): the rest of the reader font shelf — Lora,
+ * Merriweather and Noto Serif, all SIL OFL, subset to Latin +
+ * book punctuation and instanced to static weights so the shelf
+ * costs ~0.5 MB in total. */
+val LoraSerif = FontFamily(
+    Font(R.font.lora_regular, FontWeight.Normal, FontStyle.Normal),
+    Font(R.font.lora_bold, FontWeight.Bold, FontStyle.Normal),
+    Font(R.font.lora_italic, FontWeight.Normal, FontStyle.Italic)
+)
+
+val MerriweatherSerif = FontFamily(
+    Font(R.font.merriweather_regular, FontWeight.Normal, FontStyle.Normal),
+    Font(R.font.merriweather_bold, FontWeight.Bold, FontStyle.Normal),
+    Font(R.font.merriweather_italic, FontWeight.Normal, FontStyle.Italic)
+)
+
+val NotoSerif = FontFamily(
+    Font(R.font.notoserif_regular, FontWeight.Normal, FontStyle.Normal),
+    Font(R.font.notoserif_bold, FontWeight.Bold, FontStyle.Normal),
+    Font(R.font.notoserif_italic, FontWeight.Normal, FontStyle.Italic)
+)
+
 val XreaderTypography = Typography(
     displayLarge = TextStyle(
         fontFamily = JakartaSans, fontWeight = FontWeight.ExtraBold,

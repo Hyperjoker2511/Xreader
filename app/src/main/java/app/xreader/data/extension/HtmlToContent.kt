@@ -97,8 +97,48 @@ object HtmlToContent {
     private fun visibleText(doc: Document): String {
         val copy = doc.clone()
         copy.select("script, style").remove()
-        return copy.body()?.text().orEmpty()
+        return structuredText(copy)
     }
+
+    /**
+     * v1.3.2 (item 87): the same readable text with PARAGRAPH
+     * STRUCTURE kept. jsoup's `Element.text()` collapses every
+     * boundary into a single space, so the fallback built one
+     * giant paragraph per chapter and the reader's paragraph
+     * spacing could never show. Here block elements close a
+     * paragraph (`\n\n`) and `<br>` breaks a line (`\n`), which
+     * is exactly what [plainTextFallback] splits on.
+     */
+    private fun structuredText(doc: Document): String {
+        val body = doc.body() ?: return ""
+        val out = StringBuilder()
+        fun walk(node: org.jsoup.nodes.Node) {
+            when (node) {
+                is org.jsoup.nodes.TextNode -> out.append(node.text())
+                is Element -> {
+                    if (node.tagName() == "br") {
+                        out.append('\n')
+                        return
+                    }
+                    node.childNodes().forEach(::walk)
+                    if (node.tagName() in BLOCK_TAGS) out.append("\n\n")
+                }
+                else -> node.childNodes().forEach(::walk)
+            }
+        }
+        walk(body)
+        return out.toString()
+            .replace(Regex("[ \\t\\x0B\\f]+"), " ")
+            .replace(Regex(" *\\n *"), "\n")
+            .replace(Regex("\\n{3,}"), "\n\n")
+            .trim()
+    }
+
+    private val BLOCK_TAGS = setOf(
+        "p", "div", "li", "ul", "ol", "blockquote", "pre", "tr",
+        "h1", "h2", "h3", "h4", "h5", "h6",
+        "section", "article", "header", "footer", "table"
+    )
 
     /** Below this much readable text the sliver guard stays
      * out of the way — short chapters and fragments convert
@@ -125,9 +165,31 @@ object HtmlToContent {
     }
 
     fun plainTextFallback(text: String): ChapterContent {
-        val paragraphs = text.split(Regex("\\n\\s*\\n"))
+        var paragraphs = text.split(Regex("\\n\\s*\\n"))
             .map { it.trim() }
             .filter { it.isNotEmpty() }
+        if (paragraphs.size == 1) {
+            // v1.3.2 (item 87): line-per-paragraph plain text
+            // (single line breaks, no blank lines) would render
+            // as one wall. When the lines look like paragraphs —
+            // several of them, long, and mostly ending a
+            // sentence — each line is its own paragraph.
+            // Hard-wrapped prose fails the punctuation test and
+            // stays whole.
+            val lines = paragraphs[0].split('\n')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            if (lines.size >= 4) {
+                val lengths = lines.map { it.length }.sorted()
+                val median = lengths[lengths.size / 2]
+                val sentenceEnds = lines.count {
+                    it.last() in ".!?\"”’"
+                }
+                if (median >= 50 && sentenceEnds * 2 >= lines.size) {
+                    paragraphs = lines
+                }
+            }
+        }
         return ChapterContent(
             paragraphs.map { ChapterBlock.Paragraph.plain(it) }
         )
