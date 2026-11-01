@@ -8,6 +8,8 @@ import app.xreader.extensionapi.SourceChapter
 import app.xreader.extensionapi.SourceChapterContent
 import app.xreader.extensionapi.SourceContext
 import app.xreader.extensionapi.SourceException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -84,6 +86,41 @@ class DeclarativeSource(
             document = document
         )
         synchronized(contentCache) { contentCache[chapterId] = cached }
+    }
+
+    // ── v1.3.3 (V132-CHECK 21): the chapter-walk budget ─────
+    // One walk — however many pages it chains — gets a hard
+    // wall-clock budget, so a list fetch on a stalling road
+    // degrades instead of spinning forever: the progressive
+    // road ends its chunk resumable, the full road reports
+    // what it gathered with [lastWalkTruncated] set (the
+    // sync layer then refuses to call the list complete).
+    // Injectable so the gate can shrink it.
+    internal var walkBudgetMs: Long = WALK_BUDGET_MS
+
+    /** Wall-clock deadline of the walk in flight (0 = none). */
+    private var walkDeadlineMs: Long = 0L
+
+    /** True when the last full/progressive walk was cut by
+     * the budget before its natural end. */
+    var lastWalkTruncated: Boolean = false
+        private set
+
+    private fun beginWalk() {
+        walkDeadlineMs = System.currentTimeMillis() + walkBudgetMs
+        lastWalkTruncated = false
+    }
+
+    /** True once the walk's budget is spent — the walk stops
+     * at this page boundary and marks itself truncated. */
+    private fun walkBudgetSpent(): Boolean {
+        if (walkDeadlineMs > 0 &&
+            System.currentTimeMillis() > walkDeadlineMs
+        ) {
+            lastWalkTruncated = true
+            return true
+        }
+        return false
     }
 
     // ── listings ────────────────────────────────────────────────────
@@ -174,6 +211,22 @@ class DeclarativeSource(
             throw SourceException(
                 "the site's page never finished loading — try again"
             )
+        }
+        // v1.3.3 (V132-CHECK 1, scope S1): WALL-EMPTY = CHECK
+        // NEEDED. A gated source whose page extracted ZERO rows
+        // while carrying a challenge's shape is not an empty
+        // catalogue — the wall ate the list (BrightNovel: the
+        // rendered road received Cloudflare's "Attention
+        // Required" block page, which extracts to nothing and
+        // was reported as "catalogue came back empty" with no
+        // solve offered). Fail with the challenge detail so the
+        // catalogue classifies Check needed and offers the
+        // one-time solve screen. An ungated source, or a gated
+        // page with no challenge shape, keeps the honest empty.
+        if (listing.books.isEmpty() && config.needsRendering &&
+            SiteCheck.hasChallengeMarkers(doc)
+        ) {
+            throw SourceException(SiteCheck.challengeDetail())
         }
         return listing
     }
@@ -334,8 +387,28 @@ class DeclarativeSource(
             author = spec.author?.let { readDocSpec(doc, it) }?.ifBlank { null } ?: book.author,
             description = readDescription(doc, spec) ?: book.description,
             coverUrl = spec.cover?.let { readDocSpec(doc, it) }?.ifBlank { null }
-                ?.let { absolute(it, bookPageUrl(book)) } ?: book.coverUrl
+                ?.let { absolute(it, bookPageUrl(book)) }
+                ?: metaCoverUrl(doc, bookPageUrl(book))
+                ?: book.coverUrl
         )
+    }
+
+    /**
+     * v1.3.3 (V132-CHECK 14, scope S6): the book page's own
+     * declared cover — og:image / twitter:image — read when
+     * the spec names no cover field (or its read came back
+     * blank). Plenty of configs take their covers from the
+     * LISTING payload and declare no details cover at all
+     * (NovelBuddy among them); a book whose stored cover was
+     * lost could then never heal from its book page, even
+     * though the page declares the cover in its meta for
+     * exactly this purpose.
+     */
+    private fun metaCoverUrl(doc: Document, base: String): String? {
+        val raw = doc.selectFirst(
+            "meta[property=og:image], meta[name=twitter:image]"
+        )?.attr("content")?.trim()?.ifEmpty { null } ?: return null
+        return absolute(raw, base)
     }
 
     override fun chapters(book: SourceBook): List<SourceChapter> {
@@ -444,7 +517,9 @@ class DeclarativeSource(
             author = spec.author?.let { readDocSpec(doc, it) }?.ifBlank { null } ?: book.author,
             description = readDescription(doc, spec) ?: book.description,
             coverUrl = spec.cover?.let { readDocSpec(doc, it) }?.ifBlank { null }
-                ?.let { absolute(it, url) } ?: book.coverUrl
+                ?.let { absolute(it, url) }
+                ?: metaCoverUrl(doc, url)
+                ?: book.coverUrl
         )
     }
 
@@ -510,6 +585,7 @@ class DeclarativeSource(
      * unit — slicing a fetched page's rows would not save
      * a single request). */
     fun chaptersFirst(book: SourceBook, minCount: Int): ChapterChunk {
+        beginWalk()
         val url = bookPageUrl(book)
         val doc = fetchDoc(url)
         val filled = readDetails(book, doc, url)
@@ -534,6 +610,12 @@ class DeclarativeSource(
         val session = WalkSession(doc, url)
         session.startFresh()
         session.growTo(minCount)
+        // v1.3.3 (scope S3): the progressive road's proof —
+        // a first chunk that starts past chapter 1 follows
+        // the TOC's own first-page link before it paints
+        // (the NovelFire window disease, on the road the
+        // book actually opens through).
+        session.proveFirstPage()
         return ChapterChunk(
             filled, session.readingRows(), session.walk(), session.complete
         )
@@ -548,6 +630,7 @@ class DeclarativeSource(
         minTotal: Int,
         walk: ChapterWalk
     ): ChapterChunk {
+        beginWalk()
         val url = bookPageUrl(book)
         if (config.details.chapters.pagination?.isSingleShot() == true &&
             walk.pageSize > 0
@@ -604,6 +687,20 @@ class DeclarativeSource(
         private var failed = false
         var complete = false
             private set
+
+        /** v1.3.3 (scope S5): prefetched pages of a JSON
+         * list endpoint, fetched in one bounded parallel
+         * batch and consumed in page order by [fetchListPage]
+         * — page/offset endpoints are independent, so the
+         * walk stops paying full serial latency per page. */
+        private val prefetched =
+            ArrayDeque<Pair<Int, PageFetch?>>()
+
+        /** v1.3.3 (scope S3): the book page's own first-page
+         * link, captured before any walking (the proof's
+         * target). */
+        private val tocFirstUrl: String? =
+            tocFirstPageUrl(bookDoc, pageUrl)
 
         fun startFresh() {
             val p = pagination
@@ -732,8 +829,38 @@ class DeclarativeSource(
         /** Fetch exactly one more page in the walk's
          * direction. False = no progress was possible (the
          * walk ended, or the page failed). */
+        /** v1.3.3 (scope S3): the progressive proof — when
+         * the accumulated rows still start past chapter 1,
+         * fetch the TOC's own first page and prepend its
+         * rows, so the chunk the book opens with begins at
+         * the book's first chapter. Ascending roads only:
+         * a descending walk starts from the declared last
+         * page, which is its own proof. */
+        fun proveFirstPage() {
+            if (reversed) return
+            val current = readingRows()
+            if (current.isEmpty()) return
+            val earliest = earliestChapterNumber(current) ?: return
+            if (earliest <= 1.0f) return
+            val candidate = tocFirstUrl ?: return
+            val firstDoc = runCatching { fetchDoc(candidate) }
+                .getOrNull() ?: return
+            val firstRows = parseChapterRows(firstDoc, candidate)
+                .filter { it.id !in seen }
+            if (firstRows.isEmpty()) return
+            rows.addAll(0, firstRows)
+            seen += firstRows.map { it.id }
+        }
+
         private fun step(): Boolean {
             if (complete || failed) return false
+            // v1.3.3 (V132-CHECK 21): the walk's budget — a
+            // spent budget ends the chunk resumable, never
+            // complete, never a hang.
+            if (walkBudgetSpent()) {
+                failed = true
+                return false
+            }
             val p = pagination ?: run {
                 complete = true
                 return false
@@ -816,6 +943,10 @@ class DeclarativeSource(
             p: ChapterListPagination,
             id: String
         ): Boolean {
+            if (walkBudgetSpent()) {
+                failed = true
+                return false
+            }
             if (nextPage <= 0) {
                 complete = true
                 return false
@@ -859,8 +990,71 @@ class DeclarativeSource(
         /** One pagination-endpoint page, or null when the
          * fetch failed (HTTP error, unparseable body) — the
          * resumable walk's failure signal, distinct from an
-         * empty page's end-of-list. */
+         * empty page's end-of-list.
+         *
+         * v1.3.3 (scope S5): on a JSON endpoint road the page
+         * may already be in hand — pages are fetched in small
+         * parallel batches ([prefetchJsonBatch]) and consumed
+         * strictly in page order, so every stop condition the
+         * serial walk enforced still fires on the same page. */
         private fun fetchListPage(
+            p: ChapterListPagination,
+            id: String,
+            page: Int
+        ): PageFetch? {
+            if (prefetched.isNotEmpty() &&
+                prefetched.first().first == page
+            ) {
+                return prefetched.removeFirst().second
+            }
+            // Never batch the FIRST page: until a page has
+            // landed, nothing proves the list continues past
+            // it — a 3-chapter book must never cost a page-2
+            // fetch (the v1.3.1 pin). Batching starts once the
+            // walk is under way, and never reaches past the
+            // endpoint's own stated total.
+            if (p.jsonArrayPath != null && !reversed && page > 1) {
+                prefetchJsonBatch(p, id)
+                if (prefetched.isNotEmpty() &&
+                    prefetched.first().first == page
+                ) {
+                    return prefetched.removeFirst().second
+                }
+            }
+            return fetchListPageDirect(p, id, page)
+        }
+
+        /** Fill the prefetch queue with the next
+         * [LIST_BATCH_PAGES] pages of a JSON endpoint, fetched
+         * concurrently (the fetches are independent; the
+         * per-extension rate limiter still paces their starts,
+         * and the batch is capped for the 2 GB tier). */
+        private fun prefetchJsonBatch(
+            p: ChapterListPagination,
+            id: String
+        ) {
+            if (prefetched.isNotEmpty()) return
+            val maxPage = if (knownTotal > 0 && p.pageSize > 0) {
+                (knownTotal + p.pageSize - 1) / p.pageSize
+            } else {
+                Int.MAX_VALUE
+            }
+            val pages = (0 until LIST_BATCH_PAGES)
+                .map { nextPage + it }
+                .filter { it >= 1 && it <= maxPage }
+            if (pages.isEmpty()) return
+            val results = kotlinx.coroutines.runBlocking {
+                pages.map { page ->
+                    async(kotlinx.coroutines.Dispatchers.IO) {
+                        page to fetchListPageDirect(p, id, page)
+                    }
+                }.awaitAll()
+            }
+            prefetched.addAll(results)
+        }
+
+        /** The serial page fetch the prefetch queue wraps. */
+        private fun fetchListPageDirect(
             p: ChapterListPagination,
             id: String,
             page: Int
@@ -1036,6 +1230,7 @@ class DeclarativeSource(
      * order. Dedupe + reading-order finishing happen ONCE, over
      * the merged set, exactly as the single-page parse did. */
     private fun parseAllChapters(doc: Document, pageUrl: String): List<SourceChapter> {
+        beginWalk()
         val spec = config.details.chapters
         // v1.3.2 (item 85): when the spec declares a JSON
         // chapters ENDPOINT (pagination.jsonArrayPath), that
@@ -1090,12 +1285,132 @@ class DeclarativeSource(
         if (endpointIsTheRoad && rows.isEmpty()) {
             rows += domRows
         }
+        // v1.3.3 (V132-CHECK 3, scope S3): FIRST-CHAPTER
+        // PROOF. A list whose earliest chapter is later than
+        // chapter 1 has not proven it begins at the book's
+        // first chapter — the landing page's embedded window
+        // is not page 1 just because it arrived first (the
+        // NovelFire family kept opening at chapter ~101: the
+        // walk's page-1 answer WAS the window again). Follow
+        // the table of contents' own first-page link and
+        // merge what it serves before the list is accepted.
+        proveFirstChapter(doc, pageUrl, rows)?.let { proven ->
+            rows.clear()
+            rows += proven
+        }
         // v1.0.8.1: a pattern-completed list is already in
         // reading order — it must NOT pass through the reverse
         // finishing the parsed-rows path uses.
         val patterned = patternCompletedRows(doc, pageUrl, rows)
         if (patterned != null) return ChapterIdentity.merge(patterned)
         return finishChapterRows(rows, pageUrl)
+    }
+
+    /** The earliest chapter number a row set carries, or
+     * null when no row's number parses anywhere. */
+    private fun earliestChapterNumber(
+        rows: List<SourceChapter>
+    ): Float? = rows.mapNotNull {
+        ChapterNumbers.parseAny(it.name, it.id)
+    }.minOrNull()
+
+    /**
+     * v1.3.3 (scope S3): the first-chapter proof. When [rows]'
+     * earliest parsed number is past chapter 1, fetch the
+     * table of contents' own first page — the link the BOOK
+     * PAGE itself offers ([tocFirstPageUrl]) or, failing that,
+     * the pagination template's page 1 — and merge its rows.
+     * Returns the re-settled list when the proof brought
+     * earlier chapters, else null (the list stands as it is:
+     * the proof is an attempt with evidence, never a second
+     * failure stacked on a working list). One extra fetch at
+     * most, and only when the list hasn't already proven
+     * itself.
+     */
+    private fun proveFirstChapter(
+        doc: Document,
+        pageUrl: String,
+        rows: List<SourceChapter>
+    ): List<SourceChapter>? {
+        if (rows.isEmpty()) return null
+        val earliest = earliestChapterNumber(rows) ?: return null
+        if (earliest <= 1.0f) return null
+        // ONLY the table of contents' own first-page link is
+        // followed — never a speculative template page-1
+        // fetch. The walk itself already starts at page 1 on
+        // every road (v1.3.2 A4); re-asking the endpoint for
+        // its first page from here would duplicate the walk's
+        // own requests (and break its pinned request shape),
+        // while the disease this proof treats — a landing
+        // window that starts late — is a site that DOES link
+        // its first page in its pager.
+        val candidate = tocFirstPageUrl(doc, pageUrl)
+            ?: return null
+        val firstDoc = runCatching { fetchDoc(candidate) }
+            .getOrElse { error ->
+                if (error is kotlinx.coroutines.CancellationException) {
+                    throw error
+                }
+                return null
+            }
+        val firstRows = parseChapterRows(firstDoc, candidate)
+        if (firstRows.isEmpty()) return null
+        val merged = finishChapterRows(firstRows + rows, pageUrl)
+        val newEarliest = earliestChapterNumber(merged) ?: return null
+        return if (newEarliest < earliest) merged else null
+    }
+
+    /**
+     * The table of contents' own first-page link, read off
+     * the book page: a pager anchor that points at the
+     * chapters road with the first/oldest page — labelled
+     * ("First", "Oldest", "1") or carrying the smallest page
+     * number the pager offers. The site's own link is
+     * followed rather than a guessed URL: families differ in
+     * where page 1 lives (a /chapters endpoint, the book URL
+     * with ?page=1, an /oldest path), and the pager is the
+     * one witness that knows.
+     */
+    private fun tocFirstPageUrl(
+        doc: Document,
+        pageUrl: String
+    ): String? {
+        val bookSlug = ChapterListPagination.bookSlugOf(pageUrl)
+        var labelled: String? = null
+        var smallest: Pair<Int, String>? = null
+        for (anchor in doc.select("a[href]")) {
+            val href = anchor.absUrl("href").ifBlank { null } ?: continue
+            if (href == pageUrl) continue
+            if (!LinkInference.isSameSiteHost(pageUrl, href)) continue
+            val path = runCatching { java.net.URI(href).path }
+                .getOrNull() ?: continue
+            // The chapters road only: the link must stay on
+            // the book's own subtree (its slug in the path) —
+            // site nav never qualifies.
+            if (bookSlug.isNotBlank() && !path.contains(bookSlug)) {
+                continue
+            }
+            val text = anchor.text().trim().lowercase()
+            val rel = anchor.attr("rel").lowercase()
+            val pageParam = Regex("[?&]page=(\\d+)")
+                .find(href)?.groupValues?.get(1)?.toIntOrNull()
+            val isFirstLabel = text in FIRST_PAGE_LABELS ||
+                "first" in rel || "oldest" in rel
+            val looksLikeToc = pageParam != null ||
+                path.endsWith("/chapters") || isFirstLabel
+            if (!looksLikeToc) continue
+            if (isFirstLabel) {
+                if (labelled == null) labelled = href
+            } else if (pageParam != null) {
+                val current = smallest
+                if (current == null || pageParam < current.first) {
+                    smallest = pageParam to href
+                }
+            } else if (labelled == null && smallest == null) {
+                labelled = href
+            }
+        }
+        return labelled ?: smallest?.second
     }
 
     /**
@@ -1509,6 +1824,11 @@ class DeclarativeSource(
         // one, the list is already whole: stop before fetching.
         var prevRequest: Pair<String, String?>? = null
         while (fetched < MAX_LIST_PAGES) {
+            // v1.3.3 (V132-CHECK 21): the walk's hard budget —
+            // a stalling road ends the walk here with the
+            // rows gathered so far (and the truncated mark)
+            // instead of chaining page renders forever.
+            if (walkBudgetSpent()) return
             val url = resolveUrl(
                 pagination.endpointFor(bookId, page, slug, pageUrl)
             )
@@ -1676,7 +1996,29 @@ class DeclarativeSource(
     private fun readDescription(doc: Document, spec: DetailsSpec): String? {
         val extracted = spec.description
             ?.let { readDocSpec(doc, it) }?.ifBlank { null }
-            ?: return null
+        // v1.3.3 (V132-CHECK 18/20, scope S-add3): the DETAILS-
+        // LEG COMPLETENESS PASS. When the configured read finds
+        // nothing, "no synopsis" may only be declared after the
+        // full carrier ladder has been tried — the synopsis
+        // often lives in a carrier the spec never named:
+        //  1. the page's own synopsis block (below — the same
+        //     scan the snippet-heal uses, hoisted);
+        //  2. the meta description / og:description tags;
+        //  3. JSON-LD structured data's description field;
+        //  4. the family's own payload field — the description
+        //     inside an embedded JSON/RSC record (the WoopRead /
+        //     WTR road: the book's record rides the page's data
+        //     stream while the named container never renders),
+        //     or inside an API record served AS the book page
+        //     (FenrirRealm / WeTriedTLS: the book URL is the
+        //     series record, whose description field the
+        //     details leg never read — the carried-in gap).
+        if (extracted == null) {
+            return synopsisBlockText(doc)
+                ?: metaDescriptionText(doc)
+                ?: jsonLdDescriptionText(doc)
+                ?: payloadDescriptionText(doc)
+        }
         // v1.3.2 (item 76): the page's own synopsis body vs
         // the configured read. A META description is an SEO
         // snippet by construction — boilerplate lead, cut
@@ -1688,14 +2030,7 @@ class DeclarativeSource(
         // behaviour. Boilerplate is stripped either way.
         val cleaned =
             app.xreader.domain.reader.SynopsisText.stripBoilerplate(extracted)
-        val block = doc.select(
-            "[class*=synopsis], [class*=description], [class*=summary]"
-        ).map {
-            app.xreader.domain.reader.SynopsisText
-                .stripBoilerplate(it.text().trim())
-        }
-            .filter { it.length >= 40 }
-            .maxByOrNull { it.length }
+        val block = synopsisBlockText(doc)
         val snippetShaped =
             LinkInference.isTruncatedSnippet(cleaned) ||
                 app.xreader.domain.reader.SynopsisText
@@ -1710,6 +2045,141 @@ class DeclarativeSource(
         } else {
             cleaned
         }
+    }
+
+    /** Ladder rung 1: the page's longest synopsis-shaped
+     * block (the v1.3.2 snippet-heal scan, factored out so the
+     * completeness ladder reuses it verbatim). */
+    private fun synopsisBlockText(doc: Document): String? =
+        doc.select(
+            "[class*=synopsis], [class*=description], [class*=summary]"
+        ).map {
+            app.xreader.domain.reader.SynopsisText
+                .stripBoilerplate(it.text().trim())
+        }
+            .filter { it.length >= 40 }
+            .maxByOrNull { it.length }
+
+    /** Ladder rung 2: the meta description tags — the SEO
+     * snippet, boilerplate-stripped, better than no synopsis
+     * at all (the v1.3.2 rule only let it WIN against a
+     * configured read; here it is the fallback carrier). */
+    private fun metaDescriptionText(doc: Document): String? {
+        for (selector in listOf(
+            "meta[name=description]", "meta[property=og:description]",
+            "meta[name=twitter:description]"
+        )) {
+            val raw = doc.selectFirst(selector)?.attr("content")
+                ?.trim()?.ifEmpty { null } ?: continue
+            val cleaned = app.xreader.domain.reader.SynopsisText
+                .stripBoilerplate(raw)
+            if (cleaned.length >= 40) return cleaned
+        }
+        return null
+    }
+
+    /** Ladder rung 3: JSON-LD structured data — many book
+     * pages carry the full synopsis only in their ld+json
+     * block (top-level, in an @graph, or as the mainEntity). */
+    private fun jsonLdDescriptionText(doc: Document): String? {
+        for (script in doc.select("script[type=application/ld+json]")) {
+            val root = runCatching {
+                ajaxJson.parseToJsonElement(script.data())
+            }.getOrNull() ?: continue
+            val found = jsonLdDescription(root)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun jsonLdDescription(
+        element: kotlinx.serialization.json.JsonElement
+    ): String? {
+        when (element) {
+            is kotlinx.serialization.json.JsonObject -> {
+                (element["description"]
+                    as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.contentOrNull?.trim()
+                    ?.let { raw ->
+                        val cleaned = app.xreader.domain.reader
+                            .SynopsisText.stripBoilerplate(raw)
+                        if (cleaned.length >= 40) return cleaned
+                    }
+                for (key in listOf("@graph", "mainEntity", "itemListElement")) {
+                    element[key]?.let { child ->
+                        jsonLdDescription(child)?.let { return it }
+                    }
+                }
+            }
+            is kotlinx.serialization.json.JsonArray ->
+                for (child in element) {
+                    jsonLdDescription(child)?.let { return it }
+                }
+            else -> Unit
+        }
+        return null
+    }
+
+    /** Ladder rung 4: the family's own payload field — a
+     * "description"/"synopsis" string inside the page's data
+     * payloads: embedded JSON and RSC streams in script tags
+     * (WoopRead/WTR), or an API record served AS the book
+     * page (FenrirRealm / WeTriedTLS — the doc's body text IS
+     * the record). Escaped (RSC) and plain (API) forms are
+     * both read; the value is JSON-decoded, never regex-
+     * trusted; the longest real candidate wins so navigation
+     * chrome can never outbid the book's own record. */
+    private fun payloadDescriptionText(doc: Document): String? {
+        val candidates = mutableListOf<String>()
+        val bodyText = doc.body()?.text()?.trim().orEmpty()
+        if (bodyText.startsWith("{") || bodyText.startsWith("[")) {
+            candidates += bodyText
+        }
+        for (script in doc.select("script")) {
+            val data = script.data()
+            if (data.contains("description") || data.contains("synopsis")) {
+                candidates += data
+            }
+        }
+        var best: String? = null
+        for (text in candidates) {
+            for (key in listOf("description", "synopsis")) {
+                for (match in PAYLOAD_FIELD_PLAIN.findAll(text)) {
+                    if (match.groupValues[1] != key) continue
+                    decodePayloadString(match.groupValues[2])
+                        ?.let { value ->
+                            if (value.length > (best?.length ?: 0)) {
+                                best = value
+                            }
+                        }
+                }
+                for (match in PAYLOAD_FIELD_ESCAPED.findAll(text)) {
+                    if (match.groupValues[1] != key) continue
+                    decodePayloadString(match.groupValues[2])
+                        ?.let { value ->
+                            if (value.length > (best?.length ?: 0)) {
+                                best = value
+                            }
+                        }
+                }
+            }
+        }
+        return best?.let {
+            app.xreader.domain.reader.SynopsisText.stripBoilerplate(it)
+        }?.takeIf { it.length >= 40 }
+    }
+
+    /** JSON-decode one extracted payload string value; null
+     * when it isn't a plausible synopsis (too short, or the
+     * extraction wasn't a clean string at all). */
+    private fun decodePayloadString(raw: String): String? {
+        val decoded = runCatching {
+            (ajaxJson.parseToJsonElement("\"$raw\"")
+                as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull
+        }.getOrNull() ?: return null
+        val cleaned = decoded.trim()
+        return cleaned.takeIf { it.length >= 40 }
     }
 
     private fun readTitle(doc: Document, rawSpec: String?): String? {
@@ -2096,10 +2566,69 @@ class DeclarativeSource(
             "href", "src" -> element.absUrl(attr)
             else -> element.attr(attr)
         }
-        return value.ifBlank { element.attr(attr).ifBlank { null } }
+        val resolved = value.ifBlank { element.attr(attr).ifBlank { null } }
+        if (resolved != null) return resolved
+        // v1.3.3 (V132-CHECK 2, scope S2): LAZY COVERS. Image
+        // hosts in the NovelFire family ship the cover in a
+        // lazy attribute (data-src and kin) with an empty or
+        // placeholder src until the page's scripts run — the
+        // rendered DOM the extractor reads still carries the
+        // lazy form, so an img@src read came back blank and
+        // the catalogue painted coverless boxes for books that
+        // DO have covers. The lazy attributes carry the same
+        // real URL, resolved against the page exactly like src.
+        if (attr.equals("src", ignoreCase = true) &&
+            element.tagName().equals("img", ignoreCase = true)
+        ) {
+            for (lazy in LAZY_IMAGE_ATTRS) {
+                val raw = element.attr(lazy).ifBlank { null } ?: continue
+                return element.absUrl(lazy).ifBlank { raw }
+            }
+            val srcset = element.attr("srcset").ifBlank { null }
+            if (srcset != null) {
+                val first = srcset.substringBefore(',')
+                    .trim().substringBefore(' ').ifBlank { null }
+                if (first != null) return absolute(first, element.baseUri())
+            }
+        }
+        return null
     }
 
     companion object {
+        /** v1.3.3 (scope S2): the lazy-image attributes a
+         * cover read falls through when src itself is blank —
+         * the order sites actually populate them. */
+        private val LAZY_IMAGE_ATTRS = listOf(
+            "data-src", "data-original", "data-lazy-src", "data-url"
+        )
+
+        /** v1.3.3 (scope S3): the labels a table of contents
+         * gives its first-page link. */
+        private val FIRST_PAGE_LABELS = setOf(
+            "1", "first", "oldest", "«", "« first", "first page"
+        )
+
+        /** v1.3.3 (V132-CHECK 21): one chapter walk's hard
+         * wall-clock budget (see [walkBudgetMs]). */
+        const val WALK_BUDGET_MS: Long = 150_000L
+
+        /** v1.3.3 (scope S5): pages of a JSON list endpoint
+         * fetched in one parallel batch — page/offset
+         * endpoints are independent by construction, and 3
+         * in flight is the 2 GB-tier-safe cap. */
+        const val LIST_BATCH_PAGES: Int = 3
+
+        /** v1.3.3 (synopsis ladder): a JSON string field in a
+         * plain payload — `"description": "…"`, value captured
+         * with its escapes intact for the JSON decoder. */
+        private val PAYLOAD_FIELD_PLAIN =
+            Regex(""""(description|synopsis)"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+
+        /** The same field inside an escaped payload (an RSC
+         * stream is a JS string: its quotes arrive as \"). */
+        private val PAYLOAD_FIELD_ESCAPED =
+            Regex("""\\"(description|synopsis)\\"\s*:\s*\\"((?:[^\\]|\\.)*?)\\"""")
+
         /** v1.3.2 (item 71): a row label that repeats its own
          * chapter number as a glued prefix — "101Chapter 101
          * – …" (the site's row index concatenated onto the

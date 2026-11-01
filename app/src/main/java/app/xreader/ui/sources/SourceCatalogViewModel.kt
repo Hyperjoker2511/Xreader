@@ -84,6 +84,20 @@ class SourceCatalogViewModel(
                 }
             }
         }
+        // v1.3.3 (scope S4): when the user finishes the
+        // one-time solve/sign-in screen for THIS source, the
+        // catalogue retries itself — the hand-off is a
+        // round trip, not a dead end with homework.
+        viewModelScope.launch {
+            container.sessionSavedEvents.collect { key ->
+                if (key ==
+                    app.xreader.data.extension.ExtensionHttpClient
+                        .sessionKeyFor(extensionId)
+                ) {
+                    if (handle != null) load(reset = true)
+                }
+            }
+        }
     }
 
     fun setMode(mode: CatalogMode) {
@@ -184,13 +198,38 @@ class SourceCatalogViewModel(
                     val newBooks = result.value.books
                         .distinctBy { it.id }
                         .filter { it.id !in knownIds }
+                    val merged = existing + newBooks
                     _state.value.copy(
                         loading = false,
                         loadCompleted = true,
-                        books = existing + newBooks,
+                        books = merged,
                         page = page,
                         hasNext = (result.value.hasNextPage || newBooks.isNotEmpty()) &&
-                            page < MAX_CATALOG_PAGE
+                            page < MAX_CATALOG_PAGE,
+                        // v1.3.3 (scope S1): an EMPTY catalogue
+                        // on a gated source is a suspected wall,
+                        // not an empty shelf — the empty state
+                        // itself carries the hand-off (BrightNovel:
+                        // the rendered road got the "Attention
+                        // Required" page and extracted nothing).
+                        sessionNeed = if (
+                            reset && merged.isEmpty() &&
+                            snapshot.mode != CatalogMode.SEARCH
+                        ) {
+                            val config = container.extensionService
+                                .declarativeConfigOf(current)
+                            val hasSession = withContext(Dispatchers.IO) {
+                                container.sessionStore.has(
+                                    app.xreader.data.extension
+                                        .ExtensionHttpClient
+                                        .sessionKeyFor(extensionId)
+                                )
+                            }
+                            app.xreader.data.extension.SessionNeed
+                                .forEmptyCatalogue(config, hasSession)
+                        } else {
+                            _state.value.sessionNeed
+                        }
                     )
                 }
             }

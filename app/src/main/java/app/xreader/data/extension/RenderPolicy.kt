@@ -85,7 +85,14 @@ object SiteCheck {
         "just a moment",
         "checking your browser",
         "verify you are human",
-        "are you a robot"
+        "are you a robot",
+        // v1.3.3 (V132-CHECK 1): Cloudflare's BLOCK page title —
+        // "Attention Required! | Cloudflare". BrightNovel's wall
+        // is this page (a hard block, not a JS challenge), and
+        // the phrase list missing it is why the rendered road's
+        // answer read as an "empty catalogue" on device instead
+        // of a check to solve.
+        "attention required"
     )
 
     /** v1.3.2 (scope A2): the marker a challenge failure

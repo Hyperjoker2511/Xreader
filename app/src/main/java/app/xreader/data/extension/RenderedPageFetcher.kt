@@ -78,6 +78,21 @@ object RenderSettle {
     fun hardTimeoutMs(tier: PerfTier): Long =
         if (tier == PerfTier.MINIMAL) 45_000L else 30_000L
 
+    /** v1.3.3 (V132-CHECK 21): the WHOLE escalation's budget —
+     * one static attempt, one render, its one settled retry,
+     * and slack. A single rendered fetch already caps itself
+     * at [hardTimeoutMs]; what was unbounded was the SUM of
+     * the road (static wait + render + retry render + …),
+     * which on a stalling site read as an endless spinner
+     * (Ranovel). Every leg that travels the escalating road —
+     * catalogue, book, list, text — inherits this cap from
+     * the one shared fetcher, and expiry degrades to the
+     * honest retryable "couldn't load in time" failure (which
+     * the session-need classifier already maps to the solve
+     * hand-off for gated sources). */
+    fun fetchBudgetMs(tier: PerfTier): Long =
+        hardTimeoutMs(tier) * 2 + 15_000L
+
     fun isSettled(samples: List<RenderSettleSample>): Boolean {
         val last = samples.lastOrNull() ?: return false
         val selectorCount = last.selectorCount

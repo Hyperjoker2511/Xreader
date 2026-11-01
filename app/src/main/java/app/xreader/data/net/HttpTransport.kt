@@ -94,11 +94,18 @@ interface HttpTransport {
 }
 
 class OkHttpTransport(
-    private val client: OkHttpClient = defaultClient()
+    private val client: OkHttpClient = defaultClient(),
+    /** v1.3.3 (V132-CHECK 24): the dispatcher this
+     * transport's blocking calls park on. The extension
+     * transport runs on [FetchLanes.static] — its own lane,
+     * isolated from rendered fetches and the rest of the
+     * app's IO (see FetchLanes). */
+    private val dispatcher: kotlinx.coroutines.CoroutineDispatcher =
+        Dispatchers.IO
 ) : HttpTransport {
 
     override suspend fun execute(request: HttpTransport.Request): AppResult<HttpTransport.Response> {
-        return withContext(Dispatchers.IO) {
+        return withContext(dispatcher) {
             // v1.3.1 (item 44): build the call BEFORE the try so
             // coroutine cancellation can cancel it — a blocking
             // execute() otherwise ignores cancellation until a

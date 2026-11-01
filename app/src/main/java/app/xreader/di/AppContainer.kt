@@ -317,7 +317,14 @@ class AppContainer(context: Context) {
     /** Extensions NEVER use [httpTransport]: their client must not
      * auto-follow redirects (whitelist re-check per hop, §9.1). */
     val extensionTransport: HttpTransport by lazy {
-        OkHttpTransport(OkHttpTransport.extensionClient())
+        // v1.3.3 (V132-CHECK 24): extension static fetches
+        // run on their own lane — a walled or stalling
+        // source can never starve a healthy source's
+        // catalogue by exhausting the shared IO pool.
+        OkHttpTransport(
+            OkHttpTransport.extensionClient(),
+            app.xreader.data.net.FetchLanes.static
+        )
     }
 
     val extensionStore: app.xreader.data.extension.ExtensionStore by lazy {
@@ -407,6 +414,13 @@ class AppContainer(context: Context) {
                 appScope.launch {
                     runCatching { sourceBookSync.buildFailoverMapsNow(book) }
                 }
+            },
+            // v1.3.3 (scope S6): a stored book opened with
+            // repair symptoms is re-synced in the background.
+            repairScheduler = { book ->
+                appScope.launch {
+                    runCatching { storedBookRepair.repairBook(book) }
+                }
             }
         )
     }
@@ -482,6 +496,38 @@ class AppContainer(context: Context) {
         kotlinx.coroutines.CoroutineScope(
             kotlinx.coroutines.SupervisorJob() + Dispatchers.IO
         )
+
+    /** v1.3.3 (scope S4): the session-saved bus. When the user
+     * completes the one-time sign-in / site-check screen, the
+     * surfaces that were waiting on that session (catalogue,
+     * book page, reader) hear it here and retry the action
+     * that was blocked — the sign-in completion is a RETURN,
+     * not a dead end. Carries the session key ("ext-<id>"). */
+    val sessionSavedEvents =
+        kotlinx.coroutines.flow.MutableSharedFlow<String>(
+            extraBufferCapacity = 8
+        )
+
+    fun notifySessionSaved(sessionKey: String) {
+        sessionSavedEvents.tryEmit(sessionKey)
+    }
+
+    /** v1.3.3 (scope S6): the stored-book repair runner —
+     * canonical re-syncs for Library books whose stored
+     * chapter lists or covers predate the merge (see
+     * StoredBookRepair). Wired into the shell's startup
+     * sweep and into SourceBookSync's open-book trigger. */
+    val storedBookRepair:
+        app.xreader.data.extension.StoredBookRepair by lazy {
+        app.xreader.data.extension.StoredBookRepair(
+            bookDao = database.bookDao(),
+            chapterDao = database.chapterDao(),
+            sourceBookSync = sourceBookSync,
+            sourcePrefs = sourcePrefs,
+            storage = bookStorage,
+            hasNetwork = { networkGate.hasNetwork() }
+        )
+    }
 
     val aiPrefs: app.xreader.data.prefs.AiPrefs =
         app.xreader.data.prefs.AiPrefs(appContext.settingsDataStore)

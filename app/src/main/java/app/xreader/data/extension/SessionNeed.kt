@@ -61,6 +61,30 @@ object SessionNeed {
         return null
     }
 
+    /**
+     * v1.3.3 (V132-CHECK 1, scope S1): WALL-EMPTY. An EMPTY
+     * catalogue is an Ok result, so [classify] never ran on
+     * it — and on a gated source, "empty" is exactly what a
+     * wall looks like when the rendered road got a challenge
+     * page with nothing extractable on it (BrightNovel's
+     * Cloudflare "Attention Required" 403, live-verified).
+     * The catalogue's empty state therefore asks this: on a
+     * source that rides the session road and has NO stored
+     * session yet, an empty shelf is a suspected wall and
+     * the empty state itself offers the hand-off. A source
+     * that already HAS a session, or isn't gated at all,
+     * keeps the honest empty shelf.
+     */
+    fun forEmptyCatalogue(
+        config: DeclarativeConfig?,
+        hasSession: Boolean
+    ): Kind? {
+        if (config == null || hasSession) return null
+        if (config.needsRendering) return Kind.SITE_CHECK
+        if (config.signInNeeded) return Kind.SIGN_IN
+        return null
+    }
+
     /** The plain-words state of a session-road source
      * (recommendation R1): shown on its row and its page so
      * the reader knows BEFORE tapping into a book. Null for

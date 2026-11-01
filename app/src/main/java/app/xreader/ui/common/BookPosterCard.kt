@@ -102,15 +102,36 @@ fun BookPosterCard(
                 coverModel, coverWidthDp.value
             )
             if (coverModel != null) {
-                AsyncImage(
+                // v1.3.3 (V132-CHECK 2, scope S2): a cover that
+                // FAILS to load (a guarded host, a dead URL) used
+                // to paint NOTHING — an invisible box in the
+                // grid. The loading and error slots now render
+                // the designed title cover, so a failed cover is
+                // a visible cover, never a hole.
+                coil.compose.SubcomposeAsyncImage(
                     model = coverRequest ?: coverModel,
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    loading = {
+                        PlaceholderCover(
+                            title = title,
+                            author = author,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    },
+                    error = {
+                        PlaceholderCover(
+                            title = title,
+                            author = author,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 )
             } else {
                 PlaceholderCover(
                     title = title,
+                    author = author,
                     modifier = Modifier.fillMaxSize()
                 )
             }

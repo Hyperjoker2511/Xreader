@@ -313,19 +313,49 @@ class RepoManager(
     /** Re-read a foreign repo's index and refresh its sidecar. */
     suspend fun refreshForeignRepo(
         repo: ExtensionRepo
+    ): AppResult<RepoFormat.ForeignRepo> = reconstructForeignRepo(repo)
+
+    /**
+     * v1.3.3 (V132-CHECK 6a, scope S7): RECONSTRUCTION — give
+     * an EXISTING repo row its foreign site list, for repos
+     * added before v1.3.2 persisted one (his Keiyoushi among
+     * them: the row existed, the sidecar didn't, so the
+     * Repositories view had no page for it and he faced a
+     * re-add). The index is re-read from the repo's own
+     * recorded address — binary (.pb) indexes included, the
+     * same detection the add path runs — and the format is
+     * persisted against the row that's already there. No new
+     * row, no re-add, nothing about the user's sources
+     * changes.
+     */
+    suspend fun reconstructForeignRepo(
+        repo: ExtensionRepo
     ): AppResult<RepoFormat.ForeignRepo> {
-        val text = when (val fetched = fetchText(repo.indexUrl)) {
-            is AppResult.Err -> return fetched
-            is AppResult.Ok -> fetched.value
-        }
-        val format = RepoFormatDetector.detect(text)
-        if (format !is RepoFormat.ForeignRepo) {
-            return AppResult.Err(
-                AppError.ExtensionFailed(
-                    repo.name,
-                    "the list no longer reads as a ${repo.name} list"
+        val format = if (repo.indexUrl.endsWith(".pb")) {
+            val bytes = when (val raw = downloadBytes(repo.indexUrl)) {
+                is AppResult.Err -> return raw
+                is AppResult.Ok -> raw.value
+            }
+            RepoFormatDetector.detectPb(bytes)
+                ?: return AppResult.Err(
+                    AppError.ParseFailed(
+                        "repository",
+                        "the binary index (index.pb) couldn't be read"
+                    )
                 )
-            )
+        } else {
+            val text = when (val fetched = fetchText(repo.indexUrl)) {
+                is AppResult.Err -> return fetched
+                is AppResult.Ok -> fetched.value
+            }
+            RepoFormatDetector.detect(text)
+                as? RepoFormat.ForeignRepo
+                ?: return AppResult.Err(
+                    AppError.ExtensionFailed(
+                        repo.name,
+                        "the list no longer reads as a ${repo.name} list"
+                    )
+                )
         }
         repoDao.update(repo.copy(lastFetchedAt = nowMs()))
         store.writeText(

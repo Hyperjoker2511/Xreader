@@ -78,6 +78,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.data.db.Chapter
@@ -441,6 +442,7 @@ fun BookDetailScreen(
                                 } else {
                                     app.xreader.ui.library.PlaceholderCover(
                                         title = book.title,
+                                        author = book.author,
                                         modifier = Modifier
                                             .size(width = 144.dp, height = 208.dp)
                                             .clip(coverShape)
@@ -512,6 +514,26 @@ fun BookDetailScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.padding(top = 14.dp)
                         ) {
+                            // v1.3.3 (V132-CHECK 12, scope S8): the
+                            // PROVIDER stays visible on the opened
+                            // book — its name rides the badge row,
+                            // so a book found through grouped
+                            // search keeps its origin on its page.
+                            // (User-ordered exception to the book
+                            // page's frozen look: one chip, same
+                            // family as its neighbours.)
+                            if (state.providerName.isNotBlank() &&
+                                book.sourceType ==
+                                app.xreader.data.db.SourceType.EXTENSION
+                            ) {
+                                NocturneChip(
+                                    text = state.providerName,
+                                    dotColor =
+                                        MaterialTheme.colorScheme.primary,
+                                    textColor =
+                                        MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                             NocturneChip(
                                 text = book.localFormat.name,
                                 textColor = MaterialTheme.colorScheme.onSurface
@@ -2292,8 +2314,16 @@ private fun ChapterRow(
         shape = RoundedCornerShape(12.dp),
         color = container
     ) {
+        // v1.3.2 (item 89 — the user's own freeze override, ROW
+        // SIZE ONLY): the rows read "somewhat big" on device, so
+        // the row is a fifth tighter — vertical padding 12 → 8,
+        // the title a step smaller (13sp/17sp against
+        // titleSmall's 14/20), and the download buttons
+        // visually 36dp (their Material 3 touch target stays
+        // 48dp, so they remain comfortably tappable). Colours,
+        // shape and layout are exactly as they were.
         Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -2304,7 +2334,9 @@ private fun ChapterRow(
                 ) {
                     Text(
                         chapter.title,
-                        style = MaterialTheme.typography.titleSmall,
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontSize = 13.sp, lineHeight = 17.sp
+                        ),
                         color = when {
                             isCurrent -> primaryTextColor()
                             chapter.read -> MaterialTheme.colorScheme
@@ -2400,7 +2432,10 @@ private fun ChapterRow(
                     contentDescription = "Queued",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                DownloadState.FAILED -> IconButton(onClick = onDownload) {
+                DownloadState.FAILED -> IconButton(
+                    onClick = onDownload,
+                    modifier = Modifier.size(36.dp)
+                ) {
                     Icon(
                         Icons.Filled.ErrorOutline,
                         contentDescription = "Download failed — retry",
@@ -2427,7 +2462,10 @@ private fun ChapterRow(
                             )
                         }
                     } else if (!chapter.remoteId.isNullOrBlank()) {
-                        IconButton(onClick = onDownload) {
+                        IconButton(
+                            onClick = onDownload,
+                            modifier = Modifier.size(36.dp)
+                        ) {
                             Icon(
                                 Icons.Filled.Download,
                                 contentDescription = "Download chapter"
@@ -2547,15 +2585,33 @@ private fun EnrichmentSections(
                                 )
                         ) {
                             if (!other.coverUrl.isNullOrBlank()) {
-                                AsyncImage(
+                                // v1.3.3 (scope S2): a failed cover
+                                // renders the designed title cover,
+                                // never an invisible box.
+                                coil.compose.SubcomposeAsyncImage(
                                     model = other.coverUrl,
                                     contentDescription = null,
                                     contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
+                                    modifier = Modifier.fillMaxSize(),
+                                    loading = {
+                                        app.xreader.ui.library.PlaceholderCover(
+                                            title = other.title,
+                                            author = other.author,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    },
+                                    error = {
+                                        app.xreader.ui.library.PlaceholderCover(
+                                            title = other.title,
+                                            author = other.author,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
                                 )
                             } else {
                                 app.xreader.ui.library.PlaceholderCover(
                                     title = other.title,
+                                    author = other.author,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }

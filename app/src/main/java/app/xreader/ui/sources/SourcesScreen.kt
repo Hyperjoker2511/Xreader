@@ -98,18 +98,26 @@ fun SourcesScreen(
     ) {
         // v1.0.4 (D11): the header action bounces like the mock's.
         val checkUpdatesInteraction = remember { MutableInteractionSource() }
+        // v1.3.3 (addition 7): the update check scopes to real
+        // added repositories only — with none to check, the
+        // button hides rather than checking the built-ins
+        // (which update with the app) and reporting nonsense.
+        val hasCheckableRepos =
+            RepoCheckPolicy.checkable(state.repos).isNotEmpty()
         ScreenHeader(
             title = "Browse",
             eyebrow = "Sources",
             action = {
-                TextButton(
-                    onClick = { viewModel.refreshAll() },
-                    enabled = !state.busy,
-                    interactionSource = checkUpdatesInteraction,
-                    modifier = Modifier.pressBounce(
-                        checkUpdatesInteraction, enabled = !state.busy
-                    )
-                ) { Text("Check for updates") }
+                if (hasCheckableRepos) {
+                    TextButton(
+                        onClick = { viewModel.refreshAll() },
+                        enabled = !state.busy,
+                        interactionSource = checkUpdatesInteraction,
+                        modifier = Modifier.pressBounce(
+                            checkUpdatesInteraction, enabled = !state.busy
+                        )
+                    ) { Text("Check for updates") }
+                }
             }
         )
         if (state.busy) {
@@ -291,7 +299,21 @@ fun SourcesScreen(
                 }
                 for (group in searchState.groups) {
                     item(key = "gs-head-${group.sourceId}") {
-                        SectionHeader(title = group.sourceName)
+                        // v1.3.3 (V132-CHECK 12, scope S8): the
+                        // Mihon shape, unmistakable — every
+                        // result group is headed by its PROVIDER,
+                        // eyebrowed as a source with its count,
+                        // so a result's origin is never a guess.
+                        SectionHeader(
+                            title = group.sourceName,
+                            eyebrow = "Source · " +
+                                "${group.books.size} " +
+                                if (group.books.size == 1) {
+                                    "result"
+                                } else {
+                                    "results"
+                                }
+                        )
                     }
                     items(
                         group.books.chunked(3),
@@ -542,7 +564,10 @@ fun SourcesScreen(
                 ) {
                     QuickActionTile(
                         icon = Icons.Filled.Storefront,
-                        label = "Source store",
+                        // v1.3.3 (scope S7b): the door says what
+                        // it opens, in the user's own words —
+                        // "Repositories", one tap from here.
+                        label = "Repositories",
                         modifier = Modifier.weight(1f),
                         active = false,
                         onClick = onOpenStore

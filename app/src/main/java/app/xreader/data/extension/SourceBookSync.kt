@@ -61,6 +61,12 @@ class SourceBookSync(
      * the reader's resolver works primary-only until maps
      * exist. */
     private val failoverScheduler: (Book) -> Unit = {},
+    /** v1.3.3 (scope S6): a stored book opened with repair
+     * symptoms (see [StoredRepairPolicy]) is handed to the
+     * container's background repair runner through here —
+     * the open itself still returns instantly from the
+     * device, exactly as the v1.0.8 rule demands. */
+    private val repairScheduler: (Book) -> Unit = {},
     private val nowMs: () -> Long = { System.currentTimeMillis() }
 ) {
 
@@ -123,7 +129,20 @@ class SourceBookSync(
         val stored = bookDao.getById(book.id) ?: book
         // A book that already has chapters opens from the
         // device — no network at all (the v1.0.8 rule, kept).
-        if (chapterDao.forBook(stored.id).isNotEmpty()) {
+        val storedChapters = chapterDao.forBook(stored.id)
+        if (storedChapters.isNotEmpty()) {
+            // v1.3.3 (scope S6): …but a stored book showing
+            // repair symptoms (its rows disagree with its own
+            // stated total; its cover is missing) is scheduled
+            // for the background canonical re-sync, so a
+            // legacy store heals itself instead of being
+            // carried forever (V132-CHECK 11/14).
+            if (StoredRepairPolicy.needsRepair(
+                    stored, storedChapters.size
+                )
+            ) {
+                repairScheduler(stored)
+            }
             return AppResult.Ok(stored)
         }
         // Details-only: ONE fetch, merged like a refresh's
@@ -269,11 +288,20 @@ class SourceBookSync(
         }
         val now = nowMs()
         val withDetails = applyDetails(book, details)
+        // v1.3.3 (V132-CHECK 21): a refresh whose walk was
+        // cut by the time budget gathered a PARTIAL list —
+        // it lands (reading beats nothing), but the book
+        // must not claim completeness it didn't reach: the
+        // flag stays false and a later demand resumes the
+        // list instead of trusting the truncated count.
+        val walkTruncated =
+            (resolved.source as? DeclarativeSource)
+                ?.lastWalkTruncated == true
         // v1.0.8: a full refresh IS the complete list — the
         // progressive walk state resets.
         val updated = withDetails.copy(
             totalChapters = chapters.size,
-            chapterListComplete = true,
+            chapterListComplete = !walkTruncated,
             chapterWalkNextPage = 0,
             chapterWalkTotalPages = 0,
             chapterWalkPageSize = 0

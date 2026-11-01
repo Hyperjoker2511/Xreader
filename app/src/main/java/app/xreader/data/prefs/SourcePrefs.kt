@@ -228,6 +228,19 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         store.edit { it[KEY_HEAL_DONE_FOR] = versionCode }
     }
 
+    // ── Stored-book repair (v1.3.3, V132-CHECK 11/14) ───────
+    // The same versioned one-time flag shape: the repair
+    // sweep re-syncs Library books whose stored chapter
+    // lists predate the canonical merge (the 3,253-row
+    // NovelBuddy store) once per app version.
+
+    val storedRepairDoneForCode: Flow<Int> =
+        store.data.map { it[KEY_STORED_REPAIR_DONE_FOR] ?: 0 }
+
+    suspend fun setStoredRepairDoneForCode(versionCode: Int) {
+        store.edit { it[KEY_STORED_REPAIR_DONE_FOR] = versionCode }
+    }
+
     val healNote: Flow<String?> = store.data.map { it[KEY_HEAL_NOTE] }
 
     suspend fun setHealNote(note: String?) {
@@ -360,6 +373,8 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         val KEY_REPAIR_LOG = stringPreferencesKey("source.repair_log_map")
         val KEY_HEAL_DONE_FOR =
             androidx.datastore.preferences.core.intPreferencesKey("heal.sweep_done_for_code")
+        val KEY_STORED_REPAIR_DONE_FOR =
+            androidx.datastore.preferences.core.intPreferencesKey("repair.stored_done_for_code")
         val KEY_HEAL_NOTE = stringPreferencesKey("heal.note")
         val KEY_BROWSER_VIEW = booleanPreferencesKey("sources.browser_view_enabled")
         val KEY_BROWSER_VIEW_NEEDED = stringPreferencesKey("sources.browser_view_needed")

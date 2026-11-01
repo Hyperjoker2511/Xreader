@@ -63,16 +63,25 @@ fun SourceStoreScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     var pendingRepoRemoval by remember { mutableStateOf<ExtensionRepo?>(null) }
 
-    val orderedRepos = state.repos.sortedWith(
-        compareBy<ExtensionRepo>(
-            { if (it.id in state.pinnedRepoIds) 0 else 1 },
-            {
-                val idx = state.recentRepoIds.indexOf(it.id)
-                if (idx < 0) Int.MAX_VALUE else idx
-            },
-            { it.name.lowercase() }
+    // v1.3.3 (V132-CHECK 9, scope S7e): the built-in sources
+    // appear ONCE — as the friendly card below — never ALSO
+    // as a raw repository row carrying Pin / Check for
+    // updates / Remove and an internal xreader:// address.
+    // Built-ins are not a user repo: they update with the
+    // app, full stop, and no one should be one tap from
+    // removing the default shelf.
+    val orderedRepos = state.repos
+        .filter { it.indexUrl != RepoManager.BUNDLED_REPO_URL }
+        .sortedWith(
+            compareBy<ExtensionRepo>(
+                { if (it.id in state.pinnedRepoIds) 0 else 1 },
+                {
+                    val idx = state.recentRepoIds.indexOf(it.id)
+                    if (idx < 0) Int.MAX_VALUE else idx
+                },
+                { it.name.lowercase() }
+            )
         )
-    )
     val builtInCount = state.extensions.count {
         it.packageId.startsWith("bundled.")
     }
@@ -222,8 +231,15 @@ fun SourceStoreScreen(
                                 color = primaryTextColor()
                             )
                             Text(
-                                "${sourceCount(repo)} sources · " +
-                                    checkedLine(repo.lastFetchedAt),
+                                // v1.3.3 (scope S7e): no
+                                // "Not checked yet" jargon — a
+                                // repo that was never refreshed
+                                // simply shows its count.
+                                listOfNotNull(
+                                    "${sourceCount(repo)} sources",
+                                    checkedLine(repo.lastFetchedAt)
+                                        .takeIf { it.isNotBlank() }
+                                ).joinToString(" · "),
                                 style = MaterialTheme.typography
                                     .bodySmall,
                                 color = MaterialTheme.colorScheme
@@ -328,9 +344,10 @@ fun SourceStoreScreen(
 }
 
 /** "Checked 3 days ago" for a repo card — quiet, human, and
- * never a fabricated time. */
+ * never a fabricated time. A repo never refreshed shows
+ * nothing here (v1.3.3: no "Not checked yet" jargon). */
 private fun checkedLine(lastFetchedAt: Long?): String {
-    if (lastFetchedAt == null) return "Not checked yet"
+    if (lastFetchedAt == null) return ""
     val ageMs = System.currentTimeMillis() - lastFetchedAt
     val minutes = ageMs / 60_000
     val hours = minutes / 60

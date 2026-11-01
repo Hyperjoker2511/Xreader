@@ -96,6 +96,10 @@ data class SourcesUiState(
     /** The repo row created by the most recent foreign add —
      * the Add screen's "See all N sites" door target. */
     val lastForeignRepoId: Long? = null,
+    /** v1.3.3 (scope S7c): the repo row created by the most
+     * recent NATIVE add — a successful add navigates straight
+     * to the new repo's own page. */
+    val lastAddedRepoId: Long? = null,
     /** R1: the plain session word per source ("extId:sourceId"):
      * "Working" / "Check needed" / "Sign in needed" / "Signed in". */
     val sessionWords: Map<String, String> = emptyMap(),
@@ -127,6 +131,7 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         Map<Long, app.xreader.data.extension.RepoFormat.ForeignRepo>
     >(emptyMap())
     private val _lastForeignRepoId = MutableStateFlow<Long?>(null)
+    private val _lastAddedRepoId = MutableStateFlow<Long?>(null)
     private val _sessionWords = MutableStateFlow<Map<String, String>>(emptyMap())
 
     val state: StateFlow<SourcesUiState> = combine(
@@ -139,7 +144,8 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         container.sourcePrefs.recentRepoIds,
         _repoStage, _repoOutcome,
         _foreignRepos, _lastForeignRepoId, _sessionWords,
-        container.sourcePrefs.sourceRestoreCardDone
+        container.sourcePrefs.sourceRestoreCardDone,
+        _lastAddedRepoId
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val rawExtensions = values[1] as List<InstalledExtension>
@@ -166,7 +172,8 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                 values[13] as Map<Long, app.xreader.data.extension.RepoFormat.ForeignRepo>,
             lastForeignRepoId = values[14] as Long?,
             sessionWords = values[15] as Map<String, String>,
-            restoreCardDone = values[16] as Boolean
+            restoreCardDone = values[16] as Boolean,
+            lastAddedRepoId = values[17] as Long?
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SourcesUiState())
 
@@ -179,6 +186,11 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
 
     private val _loginRequest = MutableStateFlow<LoginRequest?>(null)
     val loginRequest: StateFlow<LoginRequest?> = _loginRequest
+
+    /** v1.3.3 (scope S7a): repos whose sidecar reconstruction
+     * this process has already attempted (success or not —
+     * a dead repo must not be re-fetched on every emission). */
+    private val reconstructionTried = mutableSetOf<Long>()
 
     init {
         // Offline catalogue from the last fetch, so the surface is
@@ -199,6 +211,28 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                         ?.let { repo.id to it }
                 }.toMap()
                 _foreignRepos.value = foreign
+                // v1.3.3 (scope S7a): RECONSTRUCTION — a repo
+                // added before v1.3.2 has a row but no sidecar,
+                // so it never got its own page. Rebuild its
+                // list from its own recorded address, once per
+                // repo per process, quietly in the background.
+                val missing = repos.filter { repo ->
+                    repo.id !in foreign && repo.id !in cached &&
+                        repo.indexUrl != RepoManager.LINK_REPO_URL &&
+                        repo.indexUrl != RepoManager.BUNDLED_REPO_URL &&
+                        reconstructionTried.add(repo.id)
+                }
+                missing.forEach { repo ->
+                    viewModelScope.launch {
+                        val rebuilt =
+                            manager.reconstructForeignRepo(repo)
+                        if (rebuilt is AppResult.Ok) {
+                            _foreignRepos.value =
+                                _foreignRepos.value +
+                                    (repo.id to rebuilt.value)
+                        }
+                    }
+                }
             }
         }
         // v1.3.2 (R1): the plain session word per source row,
@@ -342,6 +376,10 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                         _repoOutcome.value =
                             "“${result.repo.name}” added · " +
                                 "${result.sourceCount} sources" to false
+                        // v1.3.3 (scope S7c): the Add screen
+                        // navigates straight to the new repo's
+                        // own page off this id.
+                        _lastAddedRepoId.value = result.repo.id
                         refreshRepo(result.repo)
                     }
                     is RepoManager.AddRepoOutcome.Foreign -> {
@@ -607,6 +645,13 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun refreshRepo(repo: ExtensionRepo) {
+        // v1.3.3 (addition 7): synthetic rows (built-ins,
+        // link sources) are NEVER update-checked — they are
+        // app furniture, and checking one fetched its
+        // internal address as if it were a web URL. Any
+        // caller, any path: a synthetic repo is a silent
+        // no-op here, by construction.
+        if (RepoCheckPolicy.isSynthetic(repo)) return
         viewModelScope.launch {
             _busy.value = true
             try {
@@ -617,8 +662,9 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                     when (val result = manager.refreshForeignRepo(repo)) {
                         is AppResult.Err ->
                             say(
-                                "Couldn't check “${repo.name}”. " +
-                                    ErrorText.displayText(result.error)
+                                RepoCheckCopy.failureLine(
+                                    repo.name, result.error
+                                )
                             )
                         is AppResult.Ok -> {
                             _foreignRepos.value =
@@ -634,7 +680,11 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                 }
                 when (val result = manager.refresh(repo)) {
                     is AppResult.Err ->
-                        say("Couldn't check “${repo.name}”. ${ErrorText.displayText(result.error)}")
+                        say(
+                            RepoCheckCopy.failureLine(
+                                repo.name, result.error
+                            )
+                        )
                     is AppResult.Ok -> when (val fetch = result.value) {
                         is RepoManager.IndexFetch.Fetched -> {
                             _catalogues.value =
@@ -659,7 +709,17 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
 
     fun refreshAll() {
         viewModelScope.launch {
-            val repos = state.value.repos.filter { it.indexUrl != RepoManager.LINK_REPO_URL }
+            // v1.3.3 (addition 7): only REAL added repos are
+            // checked — built-ins update with the app and the
+            // synthetic rows never reach a fetch.
+            val repos = RepoCheckPolicy.checkable(state.value.repos)
+            if (repos.isEmpty()) {
+                say(
+                    "Built-in sources update with the app — " +
+                        "there's nothing to check here."
+                )
+                return@launch
+            }
             repos.forEach { refreshRepo(it) }
         }
     }
@@ -802,6 +862,11 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             container.sessionStore.mergeCookies(sessionKey, host, cookies, userAgent)
             _sessionSaved.tryEmit(sessionKey)
+            // v1.3.3 (scope S4): the waiting surfaces (the
+            // catalogue, book page or reader that sent the
+            // user here) retry their blocked action off the
+            // container's bus.
+            container.notifySessionSaved(sessionKey)
             say("Sign-in saved for this source")
         }
     }

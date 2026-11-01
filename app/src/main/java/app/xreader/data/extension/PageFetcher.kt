@@ -121,7 +121,14 @@ class EscalatingPageFetcher(
      * escalate-on-shell mode, without a static re-probe. A
      * private default keeps standalone constructions (tests,
      * one-off probes) behaving exactly as before. */
-    private val shellHosts: ShellHostMemory = ShellHostMemory()
+    private val shellHosts: ShellHostMemory = ShellHostMemory(),
+    /** v1.3.3 (V132-CHECK 21): the whole-escalation time
+     * budget — see [RenderSettle.fetchBudgetMs]. Injectable
+     * so the gate can pin the degraded state with a short
+     * budget instead of waiting out the real one. */
+    private val budgetMs: () -> Long = {
+        RenderSettle.fetchBudgetMs(gate.tier())
+    }
 ) : PageFetcher {
 
     private val rendered = AtomicBoolean(false)
@@ -139,6 +146,31 @@ class EscalatingPageFetcher(
     )
 
     override suspend fun get(
+        url: String,
+        headers: Map<String, String>
+    ): AppResult<HostResponse> {
+        // v1.3.3 (V132-CHECK 21): the hard time budget over
+        // the WHOLE escalation. Whatever the road below is
+        // doing — a stalled static read, a render that never
+        // settles, its retry — the caller is owed a terminal
+        // answer inside the budget: the retryable timeout
+        // failure, which gated sources classify as Check
+        // needed (solve action) and every other surface shows
+        // as a plain failure with Retry. An endless spinner
+        // is the one forbidden outcome.
+        val budgeted = kotlinx.coroutines.withTimeoutOrNull(budgetMs()) {
+            getEscalated(url, headers)
+        }
+        return budgeted ?: AppResult.Err(
+            AppError.ProviderDown(
+                "source",
+                retryable = true,
+                detail = "couldn't load that page in time"
+            )
+        )
+    }
+
+    private suspend fun getEscalated(
         url: String,
         headers: Map<String, String>
     ): AppResult<HostResponse> {

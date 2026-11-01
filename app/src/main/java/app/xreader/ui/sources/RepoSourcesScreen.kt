@@ -230,11 +230,21 @@ fun RepoSourcesScreen(
                 val langs = RepoSourceFilter.languages(allRows)
                 if (langs.size > 1 || showNovelToggle) {
                     Spacer(Modifier.height(8.dp))
-                    androidx.compose.foundation.layout.FlowRow(
+                    // v1.3.3 (V132-CHECK 8, scope S7d): the
+                    // language CHIP WALL (~35 chips on a big
+                    // repo) collapses into ONE compact picker;
+                    // Novels-only stays a single toggle beside
+                    // it, and the search field above leads.
+                    var languageMenuOpen by remember {
+                        mutableStateOf(false)
+                    }
+                    androidx.compose.foundation.layout.Row(
                         horizontalArrangement =
                             Arrangement.spacedBy(8.dp),
-                        verticalArrangement =
-                            Arrangement.spacedBy(8.dp)
+                        verticalAlignment =
+                            androidx.compose.ui.Alignment
+                                .CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         if (showNovelToggle) {
                             NocturneChip(
@@ -243,15 +253,50 @@ fun RepoSourcesScreen(
                                 onClick = { novelsOnly = !novelsOnly }
                             )
                         }
-                        langs.forEach { lang ->
-                            NocturneChip(
-                                label = lang.uppercase(),
-                                selected = language == lang,
-                                onClick = {
-                                    language =
-                                        if (language == lang) null else lang
-                                }
-                            )
+                        if (langs.size > 1) {
+                            androidx.compose.foundation.layout.Box {
+                                NocturneChip(
+                                    label = "Language: " +
+                                        (language?.uppercase()
+                                            ?: "All") + " ▾",
+                                    selected = language != null,
+                                    onClick = { languageMenuOpen = true }
+                                )
+                                androidx.compose.material3
+                                    .DropdownMenu(
+                                        expanded = languageMenuOpen,
+                                        onDismissRequest = {
+                                            languageMenuOpen = false
+                                        }
+                                    ) {
+                                        androidx.compose.material3
+                                            .DropdownMenuItem(
+                                                text = {
+                                                    Text("All languages")
+                                                },
+                                                onClick = {
+                                                    language = null
+                                                    languageMenuOpen =
+                                                        false
+                                                }
+                                            )
+                                        langs.forEach { lang ->
+                                            androidx.compose.material3
+                                                .DropdownMenuItem(
+                                                    text = {
+                                                        Text(
+                                                            lang.uppercase()
+                                                        )
+                                                    },
+                                                    onClick = {
+                                                        language = lang
+                                                        languageMenuOpen =
+                                                            false
+                                                    }
+                                                )
+                                        }
+                                    }
+                            }
                         }
                     }
                 }

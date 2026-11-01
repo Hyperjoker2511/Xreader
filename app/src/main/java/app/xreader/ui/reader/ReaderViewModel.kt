@@ -323,7 +323,21 @@ class ReaderViewModel(
                                 .declarativeConfigOf(handle)
                         }
                 }
-            val chapters = container.database.chapterDao().forBook(bookId)
+            var chapters = container.database.chapterDao().forBook(bookId)
+            // v1.3.3 (scope S6): the reader opened on an EMPTY
+            // stored list (a pre-sign-in preview, a store the
+            // repair hasn't reached) must FETCH before it
+            // judges anything missing — an empty snapshot is
+            // not evidence about the book.
+            if (chapters.isEmpty() && book != null &&
+                book.sourceType ==
+                app.xreader.data.db.SourceType.EXTENSION
+            ) {
+                runCatching {
+                    container.sourceBookSync.refresh(book)
+                }
+                chapters = container.database.chapterDao().forBook(bookId)
+            }
             val saved = container.database.readingProgressDao().getForBook(bookId)
             // v1.0.6 (W3.4): a browser-view source gets ONE plain
             // note per source per session, so slower chapter turns
@@ -353,6 +367,74 @@ class ReaderViewModel(
                         null
                     }
                 )
+            }
+        }
+        // v1.3.3 (scope S4): SIGN-IN COMPLETION — the one-time
+        // solve/sign-in screen finished for this book's source:
+        // refresh the book against the new session, re-resolve
+        // the intended chapter BY IDENTITY against the
+        // post-login list, and — when the reader is sitting on
+        // the failure the gate caused — retry it automatically.
+        // The user lands back on their chapter, not on a blank
+        // screen or a false "isn't in the book anymore".
+        viewModelScope.launch {
+            container.sessionSavedEvents.collect { key ->
+                val bookRow = container.database.bookDao()
+                    .getById(bookId) ?: return@collect
+                val extId = bookRow.extensionId ?: return@collect
+                if (key !=
+                    app.xreader.data.extension.ExtensionHttpClient
+                        .sessionKeyFor(extId)
+                ) {
+                    return@collect
+                }
+                val intended = _state.value.chapters
+                    .getOrNull(_state.value.chapterIndex)
+                val intendedKey = intended?.let {
+                    app.xreader.data.extension.ChapterIdentity
+                        .canonicalKey(it.remoteId ?: "")
+                }
+                val intendedNumber = intended?.let {
+                    app.xreader.domain.reader.ChapterDisplayOrder
+                        .numberOf(it)
+                }
+                if (bookRow.sourceType ==
+                    app.xreader.data.db.SourceType.EXTENSION
+                ) {
+                    runCatching {
+                        container.sourceBookSync.refresh(bookRow)
+                    }
+                }
+                val rows = container.database.chapterDao()
+                    .forBook(bookId)
+                if (rows.isNotEmpty()) {
+                    _state.value = _state.value.copy(
+                        chapters = chaptersUpdated(rows)
+                    )
+                }
+                val sittingOnFailure =
+                    _state.value.chapterFetchFailed ||
+                        _state.value.errorMessage != null ||
+                        _state.value.chapterText == null
+                if (sittingOnFailure && rows.isNotEmpty()) {
+                    val newIndex = rows.indexOfFirst { row ->
+                        (intendedKey != null &&
+                            app.xreader.data.extension
+                                .ChapterIdentity.canonicalKey(
+                                    row.remoteId ?: ""
+                                ) == intendedKey) ||
+                            (intendedNumber != null &&
+                                app.xreader.domain.reader
+                                    .ChapterDisplayOrder
+                                    .numberOf(row) == intendedNumber)
+                    }
+                    val target = when {
+                        newIndex >= 0 -> newIndex
+                        else -> _state.value.chapterIndex
+                            .coerceIn(0, rows.lastIndex)
+                    }
+                    launchLoad { loadChapter(target, 0, 0f) }
+                }
             }
         }
     }
@@ -448,11 +530,28 @@ class ReaderViewModel(
         val chapters = _state.value.chapters
         var chapter = chapters.getOrNull(index)
         if (chapter == null) {
-            _state.value = _state.value.copy(
-                loading = false,
-                errorMessage = "This chapter isn't in the book anymore."
-            )
-            return
+            // v1.3.3 (scopes S4/S6): the snapshot may be STALE —
+            // a sign-in completion or a stored-list repair can
+            // replace the rows under the reader (FenrirRealm:
+            // the pre-sign-in chapter was declared "isn't in
+            // the book anymore" while sitting right there in
+            // the post-login list). Re-read the stored list
+            // once and retry the index before that copy may
+            // appear; only a genuinely absent chapter earns it.
+            val fresh = container.database.chapterDao().forBook(bookId)
+            if (fresh.isNotEmpty()) {
+                _state.value = _state.value.copy(
+                    chapters = chaptersUpdated(fresh)
+                )
+                chapter = fresh.getOrNull(index)
+            }
+            if (chapter == null) {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    errorMessage = "This chapter isn't in the book anymore."
+                )
+                return
+            }
         }
         maybeGrowChapterList(index, chapters.size)
         readAloudStopIfLoaded()
@@ -578,6 +677,23 @@ class ReaderViewModel(
                 fresh
             }
             is app.xreader.data.download.ChapterTextLoader.Outcome.Failed -> {
+                // v1.3.3 (scope S6): an EXTRACTION failure ("the
+                // text wasn't found on the page") against a
+                // possibly stale stored row is re-resolved
+                // ONCE against a fresh list fetch before any
+                // failure is shown — his Shadow Slave Ch.1 was
+                // a phantom row pointing at a dead address
+                // while the real chapter sat in the source's
+                // list all along.
+                if (isExtractionFailure(outcome.detail) &&
+                    extractionRetriedFor.add(chapter.id)
+                ) {
+                    val resolved = reresolveChapter(chapter)
+                    if (resolved != null) {
+                        extractionRetriedFor.add(resolved.id)
+                        return fetchChapterLive(resolved)
+                    }
+                }
                 // v1.3.2 (A2/F): the wording names the TRUE cause.
                 // A site check or sign-in gate offers the one-time
                 // hand-off; a block says the site blocked it; the
@@ -654,6 +770,60 @@ class ReaderViewModel(
      * chapter's load; its fetch resumes through the queue. */
     fun retryCurrentChapter() {
         launchLoad { loadChapter(_state.value.chapterIndex, 0, 0f) }
+    }
+
+    /** v1.3.3 (scope S6): chapters whose extraction failure
+     * already earned its one re-resolution this session. */
+    private val extractionRetriedFor = mutableSetOf<Long>()
+
+    private fun isExtractionFailure(detail: String): Boolean =
+        detail.contains("wasn't found on the page", ignoreCase = true) ||
+            detail.contains("no readable text", ignoreCase = true)
+
+    /**
+     * v1.3.3 (scopes S4/S6): re-resolve a chapter against a
+     * FRESH list fetch — the stored rows may have been
+     * written before a sign-in, or by an older buggy sync.
+     * Matching is by identity, never by position: same row
+     * id, then canonical address, then the chapter's own
+     * number. Returns the fresh row, or null when the book
+     * isn't a source book or the refresh itself failed.
+     */
+    private suspend fun reresolveChapter(chapter: Chapter): Chapter? {
+        val book = container.database.bookDao().getById(bookId)
+            ?: return null
+        if (book.sourceType !=
+            app.xreader.data.db.SourceType.EXTENSION
+        ) {
+            return null
+        }
+        if (container.sourceBookSync.refresh(book)
+                !is AppResult.Ok
+        ) {
+            return null
+        }
+        val rows = container.database.chapterDao().forBook(bookId)
+        if (rows.isNotEmpty()) {
+            _state.value = _state.value.copy(
+                chapters = chaptersUpdated(rows)
+            )
+        }
+        rows.firstOrNull { it.id == chapter.id }?.let { return it }
+        val key = app.xreader.data.extension.ChapterIdentity
+            .canonicalKey(chapter.remoteId ?: "")
+        rows.firstOrNull {
+            app.xreader.data.extension.ChapterIdentity
+                .canonicalKey(it.remoteId ?: "") == key
+        }?.let { return it }
+        val number = app.xreader.domain.reader.ChapterDisplayOrder
+            .numberOf(chapter)
+        if (number != null) {
+            rows.firstOrNull {
+                app.xreader.domain.reader.ChapterDisplayOrder
+                    .numberOf(it) == number
+            }?.let { return it }
+        }
+        return null
     }
 
     /** Revision 2 (P1): is this device on the MINIMAL

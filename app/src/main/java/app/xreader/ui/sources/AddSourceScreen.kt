@@ -68,6 +68,18 @@ fun AddSourceScreen(
             repoUrl = ""
         }
     }
+    // v1.3.3 (scope S7c): a successful add OPENS the new
+    // repo's own page — the user's rule, for native and
+    // foreign adds alike. Each id navigates once.
+    val navigatedRepoIds = remember { mutableSetOf<Long>() }
+    androidx.compose.runtime.LaunchedEffect(
+        state.lastAddedRepoId, state.lastForeignRepoId
+    ) {
+        val target = state.lastAddedRepoId ?: state.lastForeignRepoId
+        if (target != null && navigatedRepoIds.add(target)) {
+            onOpenRepo(target)
+        }
+    }
     val context = androidx.compose.ui.platform.LocalContext.current
     val legadoFileLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()

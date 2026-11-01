@@ -20,12 +20,13 @@ import app.xreader.data.extension.ChapterNumbers
  * position alone.
  *
  *  - [ordered] sorts by the chapters' own numbers whenever
- *    the numbers can carry the order (unique, near-complete
- *    — the same bar as the engine's merge); "Oldest" is
+ *    the numbers can carry the order (near-complete; equal
+ *    numbers keep stored relative order); "Oldest" is
  *    ascending identity, "Newest" its mirror, whatever the
  *    stored order is. When numbers can't carry it, the
- *    display falls back to stored order, flipped when the
- *    stored trend itself runs descending under "Oldest".
+ *    fallback chain runs the stored trend, then the source
+ *    sequence itself mirrored — never a silent no-op
+ *    (v1.3.3, V132-CHECK 16/20).
  *  - [firstChapter] is the identity-earliest chapter — the
  *    Start Reading target — regardless of stored order.
  *  - [displayNumber] is the number a label may print for a
@@ -63,7 +64,27 @@ object ChapterDisplayOrder {
 
     /** [chapters] in display order for the sort chip:
      * ascending identity for Oldest, descending for Newest,
-     * against ANY stored order. */
+     * against ANY stored order.
+     *
+     * v1.3.3 (V132-CHECK 16/20): THE FALLBACK CHAIN, in order —
+     * a toggle that changes nothing is a broken toggle, and
+     * WoopRead's road proved the old chain could silently
+     * no-op: its stored rows defeated BOTH old guards (the
+     * identity sort demanded perfectly distinct numbers; the
+     * trend test demanded a parse quorum), so "Oldest" and
+     * "Newest" both returned the stored list untouched and a
+     * newest-first list wore the "Oldest" chip. The chain
+     * now is:
+     *  1. the chapters' own parsed numbers (the record's
+     *     number, the title's, the URL's) — a stable sort,
+     *     duplicates tolerated: equal numbers keep their
+     *     stored relative order instead of vetoing the sort;
+     *  2. the stored trend, when any numbers parse at all;
+     *  3. the source sequence itself: the stored order IS
+     *     one direction (ingest settles lists into reading
+     *     order), the other chip is its exact reverse.
+     * Every rung visibly reorders (or honestly mirrors), so
+     * the two chips can never show the same list again. */
     fun ordered(
         chapters: List<Chapter>,
         newestFirst: Boolean
@@ -73,28 +94,37 @@ object ChapterDisplayOrder {
         if (ascending != null) {
             return if (newestFirst) ascending.asReversed() else ascending
         }
-        // Numbers can't carry the order: stored order is the
-        // truth, flipped only when the stored trend itself
-        // runs against the chip.
+        // Some numbers parse but can't carry the order: the
+        // stored trend still says which way the source's
+        // sequence runs.
         val descending = storedRunsDescending(chapters)
-        return when {
-            newestFirst && !descending -> chapters.asReversed()
-            !newestFirst && descending -> chapters.asReversed()
-            else -> chapters
+        if (descending) {
+            return if (newestFirst) chapters else chapters.asReversed()
         }
+        if (chapters.any { numberOf(it) != null }) {
+            // Numbers exist and the trend runs ascending (or
+            // flat): stored order is the reading sequence.
+            return if (newestFirst) chapters.asReversed() else chapters
+        }
+        // No numbers anywhere: the source sequence is the
+        // only truth — Oldest reads it as stored (ingest
+        // settles lists into reading order), Newest mirrors
+        // it. Never a silent no-op.
+        return if (newestFirst) chapters.asReversed() else chapters
     }
 
     /** Ascending by own number when the numbers can carry
-     * the order (at least 3/4 of rows numbered, no repeats);
-     * unnumbered rows ride just after the numbered row they
-     * followed. Null when they can't. */
+     * the order (at least 3/4 of rows numbered); unnumbered
+     * rows ride just after the numbered row they followed,
+     * and rows sharing a number keep their stored relative
+     * order (a stable sort — v1.3.3: duplicate numbers from
+     * a dual-carrier list no longer veto the whole sort). */
     private fun ascendingByIdentity(
         chapters: List<Chapter>
     ): List<Chapter>? {
         val numbers = chapters.map { numberOf(it) }
         val numbered = numbers.filterNotNull()
         if (numbered.size < (chapters.size * 3 + 3) / 4) return null
-        if (numbered.distinct().size != numbered.size) return null
         val keyed = ArrayList<Pair<Float, Chapter>>(chapters.size)
         var last = 0f
         var run = 0

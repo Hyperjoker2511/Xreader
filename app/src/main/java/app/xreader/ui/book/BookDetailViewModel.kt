@@ -43,6 +43,11 @@ data class BookDetailUiState(
      * browser view and its last health verdict is NEEDS_SETUP —
      * the Chapters recovery doors offer the site check. */
     val sourceNeedsSiteCheck: Boolean = false,
+    /** v1.3.3 (scope S8): the provider's name — it stays
+     * visible on the opened book (its badge row), so a book
+     * found through provider-grouped search keeps its
+     * origin on its page. Resolved once from the source. */
+    val providerName: String = "",
     /** v1.0.5 (B1/E2): the Re-check door's honest-drive outcome —
      * busy while the source's test-drive runs, then the verdict
      * in plain words (or null when no check has run). */
@@ -231,6 +236,7 @@ class BookDetailViewModel(
             storyBusy = story.storyBusy,
             storyError = story.storyError,
             storyOpen = story.storyOpen,
+            providerName = story.providerName,
             bookMeta = metas[bookId] ?: app.xreader.data.library.BookMeta(),
             chaptersLoading = story.chaptersLoading,
             chaptersError = story.chaptersError,
@@ -593,6 +599,41 @@ class BookDetailViewModel(
         viewModelScope.launch {
             state.first { it.book != null }
             primeAiSuggestionsState(state.value.book!!)
+        }
+        // v1.3.3 (scope S8): resolve the provider's name once —
+        // it stays visible on the book's page.
+        viewModelScope.launch {
+            val book = container.database.bookDao().getById(bookId)
+                ?: return@launch
+            val extId = book.extensionId ?: return@launch
+            val sourceId = app.xreader.data.extension.SourceBookIds
+                .decode(book.remoteId)?.first
+            val handles = container.extensionService
+                .sourcesOf(extId).getOrNull().orEmpty()
+            val name = handles
+                .firstOrNull { it.source.id == sourceId }
+                ?.source?.name
+                ?: handles.firstOrNull()?.source?.name
+                ?: return@launch
+            storyLocal.value = storyLocal.value.copy(providerName = name)
+        }
+        // v1.3.3 (scope S4): the one-time solve/sign-in screen
+        // completed for THIS book's source → reload the book's
+        // chapters against the fresh session, automatically.
+        // The hand-off returns the user to a working page, not
+        // to the same wall they left.
+        viewModelScope.launch {
+            container.sessionSavedEvents.collect { key ->
+                val book = container.database.bookDao()
+                    .getById(bookId) ?: return@collect
+                val extId = book.extensionId ?: return@collect
+                if (key ==
+                    app.xreader.data.extension.ExtensionHttpClient
+                        .sessionKeyFor(extId)
+                ) {
+                    refreshChapters()
+                }
+            }
         }
         // v1.0.5 (B1): resolve once whether this book's source is
         // a link source — it decides the Chapters section's

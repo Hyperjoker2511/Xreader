@@ -216,17 +216,47 @@ fun SourceCatalogScreen(
                 }
             }
             !state.loading && state.books.isEmpty() -> {
+                val emptyNeed = state.sessionNeed
                 KitEmptyState(
                     icon = Icons.Filled.AutoStories,
-                    message = if (state.mode == CatalogMode.SEARCH) {
-                        "No matches in this source — try a different title."
+                    message = when {
+                        state.mode == CatalogMode.SEARCH ->
+                            "No matches in this source — try a different title."
+                        // v1.3.3 (scope S1): on a gated source an
+                        // empty shelf is a suspected WALL — say
+                        // so, and let the empty state itself
+                        // carry the solve/sign-in action instead
+                        // of dead-ending at "came back empty".
+                        emptyNeed ==
+                            app.xreader.data.extension.SessionNeed
+                                .Kind.SITE_CHECK ->
+                            "This site is likely showing a human " +
+                                "check — its catalogue can't be read " +
+                                "until the check is solved once."
+                        emptyNeed ==
+                            app.xreader.data.extension.SessionNeed
+                                .Kind.SIGN_IN ->
+                            "This source needs you signed in " +
+                                "before it will show its books."
+                        else ->
+                            // v1.3.2 (scope A6): a SUCCESSFUL load
+                            // that came back empty is a source-shape
+                            // fact, not "nothing here yet".
+                            "This source's catalogue came back empty — " +
+                                "the site may have changed how it lists " +
+                                "its books."
+                    },
+                    actionText = when (emptyNeed) {
+                        app.xreader.data.extension.SessionNeed
+                            .Kind.SITE_CHECK -> "Solve the check"
+                        app.xreader.data.extension.SessionNeed
+                            .Kind.SIGN_IN -> "Sign in"
+                        else -> null
+                    },
+                    onAction = if (emptyNeed != null) {
+                        { onSessionHandoff(emptyNeed) }
                     } else {
-                        // v1.3.2 (scope A6): a SUCCESSFUL load
-                        // that came back empty is a source-shape
-                        // fact, not "nothing here yet".
-                        "This source's catalogue came back empty — " +
-                            "the site may have changed how it lists " +
-                            "its books."
+                        null
                     },
                     modifier = Modifier.weight(1f)
                 )

@@ -249,6 +249,17 @@ fun MainScaffold(
                     container.renderRuntime.asBackgroundWork {
                         container.healSweep.runIfNeeded(installedCode)
                     }
+                    // v1.3.3 (scope S6): the stored-book repair
+                    // sweep — once per version, Library books
+                    // whose stored chapter lists/covers predate
+                    // the canonical merge are re-synced against
+                    // their sources (the 3,253-row store heals
+                    // to the source's own 3,229). Background
+                    // work likewise: its fetches never render.
+                    container.renderRuntime.asBackgroundWork {
+                        container.storedBookRepair
+                            .runUpgradeSweep(installedCode)
+                    }
                 }
             }
         }
@@ -1016,21 +1027,35 @@ private fun XreaderNavHost(
             val request by sourcesViewModel.loginRequest
                 .collectAsStateWithLifecycle()
             val current = request
-            if (current == null) {
-                androidx.compose.runtime.LaunchedEffect(Unit) {
+            // v1.3.3 (scope S4): EXACTLY ONE pop. v1.3.2 popped
+            // in onDone AND again from this null branch when
+            // clearing the request recomposed the destination —
+            // the double pop landed the user past the book page
+            // on a blank screen after a successful sign-in.
+            // Now the buttons only clear the request; this
+            // branch owns the single pop, and only when a
+            // request was actually shown (a stray navigation
+            // to "login" with nothing pending must not eat a
+            // back-stack entry either).
+            var sawRequest by androidx.compose.runtime.remember {
+                androidx.compose.runtime.mutableStateOf(false)
+            }
+            if (current != null) sawRequest = true
+            androidx.compose.runtime.LaunchedEffect(current == null) {
+                if (current == null && sawRequest) {
+                    sawRequest = false
                     navController.popBackStack()
                 }
-            } else {
+            }
+            if (current != null) {
                 LoginScreen(
                     request = current,
                     viewModel = sourcesViewModel,
                     onDone = {
                         sourcesViewModel.clearLoginRequest()
-                        navController.popBackStack()
                     },
                     onCancel = {
                         sourcesViewModel.clearLoginRequest()
-                        navController.popBackStack()
                     }
                 )
             }

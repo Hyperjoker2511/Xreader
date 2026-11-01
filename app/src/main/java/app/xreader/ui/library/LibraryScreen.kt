@@ -1163,27 +1163,73 @@ private fun sortLabel(sort: app.xreader.data.library.LibrarySort): String = when
     app.xreader.data.library.LibrarySort.RECENTLY_ADDED -> "Recently added"
 }
 
-/** R19: a cover is never a blank rectangle — a book without cover
- * art gets a typographic placeholder in its own deterministic
- * palette colour with its initials. */
+/** R19: a cover is never a blank rectangle.
+ * v1.3.3 (addition 4): a book without cover art gets a
+ * DESIGNED TITLE COVER — its full title set as cover
+ * typography (headline face, multi-line, cover-style
+ * composition: accent rule, title block, author at the
+ * foot) over its own deterministic violet-family gradient
+ * ([TitleCoverDesign] — the same book wears the same
+ * colour everywhere). It stays honest typography, never
+ * imitation art; a real cover always wins over it. */
 @Composable
-internal fun PlaceholderCover(title: String, modifier: Modifier = Modifier) {
-    val palette = remember(title) {
-        app.xreader.ui.theme.CoverPaletteExtractor.placeholderPalette(title)
-    }
-    val base = palette.darkVibrant ?: palette.dominant
-        ?: MaterialTheme.colorScheme.surfaceVariant
-    Box(
-        modifier
-            .background(base),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            title.split(" ").mapNotNull { it.firstOrNull()?.uppercase() }
-                .take(2).joinToString(""),
-            style = MaterialTheme.typography.headlineMedium,
-            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.9f)
+internal fun PlaceholderCover(
+    title: String,
+    modifier: Modifier = Modifier,
+    author: String? = null
+) {
+    val colors = remember(title) { TitleCoverDesign.gradientColors(title) }
+    val accent = remember(title) { TitleCoverDesign.accentColor(title) }
+    androidx.compose.foundation.layout.BoxWithConstraints(
+        modifier.background(
+            androidx.compose.ui.graphics.Brush.verticalGradient(colors)
         )
+    ) {
+        // Tiny tiles (recent-row thumbnails) set the title
+        // smaller and skip the foot line; poster sizes get
+        // the full cover composition.
+        val compact = maxWidth < 76.dp
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(
+                    horizontal = if (compact) 7.dp else 12.dp,
+                    vertical = if (compact) 7.dp else 12.dp
+                ),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Box(
+                Modifier
+                    .width(if (compact) 14.dp else 24.dp)
+                    .height(3.dp)
+                    .background(accent)
+            )
+            Text(
+                title,
+                style = if (compact) {
+                    MaterialTheme.typography.labelLarge
+                } else {
+                    MaterialTheme.typography.titleMedium
+                },
+                color = androidx.compose.ui.graphics.Color.White
+                    .copy(alpha = 0.96f),
+                maxLines = if (compact) 4 else 6,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+            if (!author.isNullOrBlank() && !compact) {
+                Text(
+                    author,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = androidx.compose.ui.graphics.Color.White
+                        .copy(alpha = 0.72f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            } else {
+                Spacer(Modifier.height(2.dp))
+            }
+        }
     }
 }
 
