@@ -128,9 +128,13 @@ fun ReaderScreen(
     /** v1.0.6.2 (F9b): Ask AI is a full page, not a sheet. */
     onOpenAiPage: () -> Unit = {},
     /** v1.3.2 (A2): the one-time check / sign-in hand-off for
-     * this book's source, when a chapter fetch hits the gate. */
-    onSessionHandoff: (app.xreader.data.extension.SessionNeed.Kind) -> Unit =
-        {}
+     * this book's source, when a chapter fetch hits the gate.
+     * v1.3.4 (U3): the second value is the sanctioned screen's
+     * target page (the source's reader page for the failed
+     * chapter) when the config declares one, else null. */
+    onSessionHandoff: (
+        app.xreader.data.extension.SessionNeed.Kind, String?
+    ) -> Unit = { _, _ -> }
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val config by viewModel.config.collectAsStateWithLifecycle()
@@ -495,7 +499,8 @@ fun ReaderScreen(
                             onSessionHandoff(
                                 state.sessionNeed
                                     ?: app.xreader.data.extension
-                                        .SessionNeed.Kind.SITE_CHECK
+                                        .SessionNeed.Kind.SITE_CHECK,
+                                state.sessionTargetUrl
                             )
                         },
                         modifier = Modifier

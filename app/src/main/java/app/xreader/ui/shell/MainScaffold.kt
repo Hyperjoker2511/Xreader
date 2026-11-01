@@ -706,8 +706,8 @@ private fun XreaderNavHost(
     // called for. The screen keeps only the session's cookies;
     // the app never sees a password.
     val openSessionHandoff: (
-        Long, app.xreader.data.extension.SessionNeed.Kind
-    ) -> Unit = { extId, kind ->
+        Long, app.xreader.data.extension.SessionNeed.Kind, String?
+    ) -> Unit = { extId, kind, targetUrl ->
         scope.launch {
             val ext = container.database
                 .installedExtensionDao().getById(extId)
@@ -728,7 +728,11 @@ private fun XreaderNavHost(
                         app.xreader.data.extension
                             .SessionNeed.Kind.SIGN_IN ->
                             app.xreader.ui.sources.LoginMode.SIGN_IN
-                    }
+                    },
+                    // v1.3.4 (U3): the failure's own page (e.g.
+                    // the reader page where the check widget
+                    // lives) when the caller named one.
+                    targetUrl = targetUrl
                 )
                 navController.navigate("login")
             } else {
@@ -964,7 +968,7 @@ private fun XreaderNavHost(
                 onOpenBook = { bookId -> navController.navigate("book/$bookId") },
                 // v1.3.2 (scope A2): the catalogue's hand-off.
                 onSessionHandoff = { kind ->
-                    openSessionHandoff(extId, kind)
+                    openSessionHandoff(extId, kind, null)
                 }
             )
         }
@@ -1365,7 +1369,9 @@ private fun XreaderNavHost(
                     }
                 },
                 // v1.3.2 (scope A2): the session hand-off.
-                onSessionHandoff = openSessionHandoff
+                onSessionHandoff = { extId, kind ->
+                    openSessionHandoff(extId, kind, null)
+                }
             )
             }
         }
@@ -1430,15 +1436,17 @@ private fun XreaderNavHost(
                 onOpenAiPage = {
                     navController.navigate("ai/$bookId/$chapterIndex")
                 },
-                onSessionHandoff = { kind ->
+                onSessionHandoff = { kind, targetUrl ->
                     // The book's source owns the session; resolve
                     // its extension row from the book itself.
+                    // v1.3.4 (U3): the reader page target (when
+                    // the source declares one) rides along.
                     scope.launch {
                         val bookRow = container.database.bookDao()
                             .getById(bookId)
                         val extId = bookRow?.extensionId
                         if (extId != null) {
-                            openSessionHandoff(extId, kind)
+                            openSessionHandoff(extId, kind, targetUrl)
                         } else {
                             onPhaseNote("This book's source can't be " +
                                 "opened for sign-in.")

@@ -91,7 +91,24 @@ internal object BundledSingles {
      * site's root — hence the cover template. The chapter
      * row's id IS the API chapter URL, so the text ajax
      * derives the series slug as {seg-3} and the chapter
-     * number as {seg-1}. */
+     * number as {seg-1}.
+     *
+     * v1.3.4 (T1, session v2 — TOKEN-SESSION-RESEARCH §1):
+     * the v1.3.2 comment above was HALF the truth, and the
+     * missing half was the v1.3.3 sign-in loop: the account
+     * cookie alone never unlocks a chapter. The site runs
+     * TWO credentials — the account session (a cookie) and a
+     * short-lived READ TOKEN (~5 min) its client mints from
+     * that session (`POST /api/read-token`) and replays as
+     * `Authorization: Bearer` on chapter calls. The contract
+     * is declared below ([CredentialSpec.operationToken]);
+     * the coordinator (ReadTokenCoordinator) mints
+     * single-flight on a locked answer, retries once with
+     * the token, and maps a mint refusal by its own shape
+     * (challenge_required → the check, run on the site's
+     * READER page per [OperationTokenSpec.checkUrlTemplate];
+     * auth-shaped → sign in again). The encrypted-content
+     * opt-in is never sent and nothing is ever decrypted. */
     fun fenrirRealm(id: String, name: String): DeclarativeConfig {
         val listing = ListSpec(
             url = "https://fenrirealm.com/api/new/v2/series" +
@@ -147,6 +164,22 @@ internal object BundledSingles {
                     urlTemplate = "https://fenrirealm.com/api/new/v2" +
                         "/series/{seg-3}/chapters/{seg-1}",
                     jsonContentField = "content"
+                )
+            ),
+            // v1.3.4 (T1): the read-token contract — mint on
+            // the site origin with the account session, token
+            // rides Bearer to the same host only, and the
+            // human check (when the mint demands one) runs on
+            // the site's own READER page ({seg-3} = the series
+            // slug and {seg-1} = the chapter number of the API
+            // chapter URL — the web reader's own route shape,
+            // live-verified: /series/<slug>/<n>).
+            credentials = CredentialSpec(
+                operationToken = OperationTokenSpec(
+                    mintUrl = "https://fenrirealm.com/api/read-token",
+                    mintBodyTemplate = "{\"chapter_id\":\"{chapter_id}\"}",
+                    checkUrlTemplate =
+                        "https://fenrirealm.com/series/{seg-3}/{seg-1}"
                 )
             )
         )

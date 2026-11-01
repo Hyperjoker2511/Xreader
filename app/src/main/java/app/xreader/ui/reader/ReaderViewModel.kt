@@ -61,6 +61,16 @@ data class ReaderUiState(
      * gate — the error block offers the one-time hand-off screen
      * for this kind instead of only "Try again". */
     val sessionNeed: app.xreader.data.extension.SessionNeed.Kind? = null,
+    /** v1.3.4 (U3): the sanctioned screen's target page for the
+     * current [sessionNeed] — the source's READER page for the
+     * failed chapter, when its config declares one (its check
+     * widget lives there). Null = the site root, as before. */
+    val sessionTargetUrl: String? = null,
+    /** v1.3.4 (U3): the v2 classification of the current fetch
+     * failure. TEMPORARILY_UNAVAILABLE and DNS_FAILURE carry
+     * NO session action by construction ([sessionNeed] stays
+     * null for them) — the error block offers Retry only. */
+    val fetchKind: app.xreader.data.extension.FetchClassification.Kind? = null,
     /** Live position (char offset in the current chapter). */
     val positionOffset: Int = 0,
     val bookFraction: Float = 0f,
@@ -577,7 +587,12 @@ class ReaderViewModel(
             chapterIndex = index,
             loading = _state.value.chapterText == null,
             errorMessage = null,
-            chapterFetchFailed = false
+            chapterFetchFailed = false,
+            // v1.3.4 (U3): a new load clears the old failure's
+            // classification and hand-off with its message.
+            sessionNeed = null,
+            sessionTargetUrl = null,
+            fetchKind = null
         )
         if (chapter.contentPath == null) {
             // v1.0.6.2 (F3): read live — fetch the chapter
@@ -702,6 +717,30 @@ class ReaderViewModel(
                 val need = app.xreader.data.extension.SessionNeed.classify(
                     bookConfig, outcome.detail, null
                 )
+                // v1.3.4 (U3): classification v2 ALSO runs here.
+                // An availability (503/429) or DNS failure gets
+                // its honest state and NO sign-in/check action —
+                // neither can be solved by signing in. A mint
+                // challenge (SESSION_CHECK) offers the check on
+                // the source's READER page for this chapter when
+                // the config declares one.
+                val classification =
+                    app.xreader.data.extension.FetchClassification
+                        .classifyDetail(bookConfig, outcome.detail)
+                val effectiveNeed = need ?: when (classification.kind) {
+                    app.xreader.data.extension.FetchClassification
+                        .Kind.SESSION_CHECK ->
+                        app.xreader.data.extension.SessionNeed
+                            .Kind.SITE_CHECK
+                    app.xreader.data.extension.FetchClassification
+                        .Kind.SIGN_IN ->
+                        app.xreader.data.extension.SessionNeed
+                            .Kind.SIGN_IN
+                    else -> null
+                }
+                val checkTargetUrl = bookConfig?.credentials
+                    ?.operationToken
+                    ?.checkUrlFor(chapter.remoteId ?: "")
                 when {
                     outcome.detail.contains("paid or locked", ignoreCase = true) &&
                         !signInConfig -> {
@@ -709,26 +748,75 @@ class ReaderViewModel(
                             loading = false,
                             errorMessage = "This chapter is paid or locked " +
                                 "on the site, so it can't be read here.",
-                            chapterFetchFailed = true
+                            chapterFetchFailed = true,
+                            fetchKind = classification.kind
                         )
                     }
-                    need == app.xreader.data.extension.SessionNeed.Kind.SITE_CHECK -> {
+                    classification.kind ==
+                        app.xreader.data.extension.FetchClassification
+                            .Kind.TEMPORARILY_UNAVAILABLE -> {
+                        // The ErrorText words for a RateLimited:
+                        // 503-flavoured "temporarily unavailable"
+                        // vs 429-flavoured "too many requests",
+                        // with the wait the site named. Retry only.
+                        val words = app.xreader.core.error.ErrorText.of(
+                            app.xreader.core.error.AppError.RateLimited(
+                                serviceId = "site",
+                                retryAfterSeconds =
+                                    classification.retryAfterSeconds,
+                                detail = if (classification.rateLimited) {
+                                    "429"
+                                } else {
+                                    "503"
+                                }
+                            )
+                        ).message
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            errorMessage = words,
+                            chapterFetchFailed = true,
+                            sessionNeed = null,
+                            sessionTargetUrl = null,
+                            fetchKind = classification.kind
+                        )
+                    }
+                    classification.kind ==
+                        app.xreader.data.extension.FetchClassification
+                            .Kind.DNS_FAILURE -> {
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            errorMessage = "This chapter couldn't be " +
+                                "read: " +
+                                app.xreader.data.extension
+                                    .FetchClassification.DNS_MARKER +
+                                ". Try again in a little while.",
+                            chapterFetchFailed = true,
+                            sessionNeed = null,
+                            sessionTargetUrl = null,
+                            fetchKind = classification.kind
+                        )
+                    }
+                    effectiveNeed == app.xreader.data.extension.SessionNeed.Kind.SITE_CHECK -> {
                         _state.value = _state.value.copy(
                             loading = false,
                             errorMessage = "This site is asking for a quick " +
                                 "human check before it shows the chapter.",
                             chapterFetchFailed = true,
-                            sessionNeed = need
+                            sessionNeed = effectiveNeed,
+                            sessionTargetUrl = checkTargetUrl,
+                            fetchKind = classification.kind
                         )
                     }
-                    need == app.xreader.data.extension.SessionNeed.Kind.SIGN_IN -> {
+                    effectiveNeed == app.xreader.data.extension.SessionNeed.Kind.SIGN_IN -> {
                         _state.value = _state.value.copy(
                             loading = false,
                             errorMessage = "This chapter needs you to sign " +
                                 "in on the site first — sign in once and " +
                                 "it opens here like any other chapter.",
                             chapterFetchFailed = true,
-                            sessionNeed = need
+                            sessionNeed = effectiveNeed,
+                            sessionTargetUrl = checkTargetUrl,
+                            fetchKind = classification.kind
                         )
                     }
                     outcome.detail.contains("HTTP 401") ||
@@ -740,7 +828,8 @@ class ReaderViewModel(
                                 "load. Trying again in a moment sometimes " +
                                 "helps; if it keeps happening, the site " +
                                 "may be limiting readers right now.",
-                            chapterFetchFailed = true
+                            chapterFetchFailed = true,
+                            fetchKind = classification.kind
                         )
                     }
                     else -> {
@@ -748,7 +837,8 @@ class ReaderViewModel(
                             loading = false,
                             errorMessage = "This chapter couldn't be read: " +
                                 outcome.detail,
-                            chapterFetchFailed = true
+                            chapterFetchFailed = true,
+                            fetchKind = classification.kind
                         )
                     }
                 }

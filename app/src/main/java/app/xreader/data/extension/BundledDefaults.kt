@@ -50,6 +50,10 @@ object BundledDefaults {
      * stamped here so no builder can forget it). */
     fun configs(): List<DeclarativeConfig> = SPECS.map { spec ->
         val config = spec.build("bundled-${spec.configId}", spec.name)
+        // v1.3.4 (T6): mirror identity registers whenever the
+        // defaults are instantiated, so chapter identity is
+        // host-canonical before any repair or merge can run.
+        MirrorHosts.register(config.baseUrl, config.backupHosts)
         if (config.maintainerVerified) config
         else config.copy(maintainerVerified = true)
     }

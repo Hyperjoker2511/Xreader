@@ -74,7 +74,12 @@ data class ExtensionDetailUiState(
     val parserEditorOpen: Boolean = false,
     val parserSaving: Boolean = false,
     /** Why an edited candidate was NOT saved (test read failed…). */
-    val parserMessage: String? = null
+    val parserMessage: String? = null,
+    /** v1.3.4 (U5): the last page-shape record for this
+     * source's session ("Last page received: …"), redacted by
+     * construction — shape only, no bodies or credentials.
+     * Null when no fetch has been recorded this session. */
+    val pageShapeSummary: String? = null
 ) {
     val permissions: ExtensionPermissions
         get() = ExtensionPermissions.parse(extension?.permissionsJson)
@@ -226,7 +231,16 @@ class ExtensionDetailViewModel(
             rebuildKind = rowShape.first,
             parserEditorOpen = parser.open,
             parserSaving = parser.saving,
-            parserMessage = parser.message
+            parserMessage = parser.message,
+            // v1.3.4 (U5): read live from the in-memory log at
+            // combine time — it refreshes whenever any other
+            // state flow emits (including on-resume's session
+            // refresh), with no extra plumbing.
+            pageShapeSummary = app.xreader.data.extension.PageShapeLog
+                .lastFor(
+                    app.xreader.data.extension.ExtensionHttpClient
+                        .sessionKeyFor(extensionId)
+                )?.summary()
         )
     }.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000),

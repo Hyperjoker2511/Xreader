@@ -196,7 +196,13 @@ class HostContextFactory(
          * chrome-only intermediate page (header/footer clear the
          * shell band) and Browse showed an empty catalogue for a
          * source that had added perfectly. */
-        waitForSelector: () -> String? = { null }
+        waitForSelector: () -> String? = { null },
+        /** v1.3.4 (T1): live read of the source's declared
+         * header bindings (see [CredentialSpec]). */
+        credentialBindings: () -> List<HeaderBinding> = { emptyList() },
+        /** v1.3.4 (T6): live read of the source's declared
+         * backup hosts (mirror failover). */
+        backupHosts: () -> List<String> = { emptyList() }
     ): SourceContext {
         val limiter = synchronized(rateLimiters) {
             rateLimiters.getOrPut(extensionRowId) { RateLimiter() }
@@ -208,7 +214,9 @@ class HostContextFactory(
             label = label,
             whitelist = permissions,
             rateLimiter = limiter,
-            byteRateLimiter = byteLimiterFor(extensionRowId)
+            byteRateLimiter = byteLimiterFor(extensionRowId),
+            credentialBindings = credentialBindings,
+            backupHosts = backupHosts
         )
         val fetcher: PageFetcher = escalatingFetcherOrNull(
             client = client,

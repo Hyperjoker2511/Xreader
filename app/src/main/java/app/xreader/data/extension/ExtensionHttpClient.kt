@@ -64,7 +64,16 @@ class ExtensionHttpClient(
      * this client makes its own (unshared) byte limiter; the
      * host factory passes a per-extension shared one so the
      * context client and the byte-fetch twin pace together. */
-    byteRateLimiter: RateLimiter? = null
+    byteRateLimiter: RateLimiter? = null,
+    /** v1.3.4 (T1): the source's declared header bindings
+     * (cookie → header, exact hosts) — attached per attempt
+     * host below. Empty for every source that declares none. */
+    private val credentialBindings: () -> List<HeaderBinding> = { emptyList() },
+    /** v1.3.4 (T6): the source's declared backup hosts, in
+     * order — the failover list for transport failures. */
+    private val backupHosts: () -> List<String> = { emptyList() },
+    /** v1.3.4 (T3): the shared Retry-After scheduler. */
+    private val cooldowns: AvailabilityCooldowns = SharedAvailability.cooldowns
 ) : PageFetcher {
 
     private val byteLimiter: RateLimiter = byteRateLimiter
@@ -163,6 +172,183 @@ class ExtensionHttpClient(
         tooLargeMessage: String,
         limiter: RateLimiter
     ): AppResult<RawResponse<T>> {
+        // v1.3.4 (T3): the site's own Retry-After park is
+        // honoured BEFORE the network is touched — every leg
+        // fails fast with the same honest availability error
+        // instead of each caller hammering on its own clock.
+        val parkedMs = cooldowns.remainingMs(sessionKey)
+        if (parkedMs > 0) {
+            val origin = cooldowns.originStatus(sessionKey)
+            return AppResult.Err(
+                AppError.RateLimited(
+                    label,
+                    retryAfterSeconds = (parkedMs / 1000).coerceAtLeast(1),
+                    detail = "the site is ${FetchClassification.AVAILABILITY_MARKER} " +
+                        "and asked for a pause" +
+                        (origin?.let { " (HTTP $it)" } ?: "")
+                )
+            )
+        }
+        // v1.3.4 (T6): the attempt hosts — the request's own
+        // host first, then the source's declared backups in
+        // order (whitelist-filtered: an undeclared mirror is
+        // never touched).
+        val originalHost = CookieParsing.hostOf(url)
+        val attemptHosts = buildList {
+            originalHost?.let { add(it) }
+            for (raw in backupHosts()) {
+                val host = CookieParsing.hostOf(raw) ?: raw.normaliseHost()
+                if (host.isNotBlank() && host !in this &&
+                    whitelist().allows(host)
+                ) {
+                    add(host)
+                }
+            }
+        }
+        var lastResult: AppResult<RawResponse<T>>? = null
+        for ((attemptIndex, attemptHost) in attemptHosts.withIndex()) {
+            val attemptUrl = if (attemptIndex == 0) url
+                else swapHost(url, attemptHost) ?: continue
+            // A caller-supplied credential header (the read
+            // token's Bearer) belongs to the ORIGINAL host's
+            // contract: on a mirror attempt it is dropped
+            // unless the mirror is itself a declared host for
+            // that header (a binding then supplies its own).
+            val attemptHeaders = if (attemptIndex == 0) headers
+                else stripUndeclaredAuthHeaders(headers, attemptHost)
+            val result = requestOnHost(
+                method, attemptUrl, body, contentType, attemptHeaders,
+                readBody, tooLargeMessage, limiter,
+                recordShape = limiter === rateLimiter
+            )
+            lastResult = result
+            val moreHosts = attemptIndex < attemptHosts.lastIndex
+            if (!moreHosts || !shouldFailOver(result)) return finishResult(result)
+        }
+        return finishResult(
+            lastResult ?: AppResult.Err(
+                AppError.ExtensionFailed(label, "the request couldn't be made")
+            )
+        )
+    }
+
+    /** v1.3.4 (T3/T6): the terminal bookkeeping for a request —
+     * a 429 (or a Retry-After-carrying 503) parks the source
+     * on the shared scheduler; a DNS death is translated to
+     * its plain-words state — raw transport identity never
+     * reaches the UI. */
+    private fun <T> finishResult(
+        result: AppResult<RawResponse<T>>
+    ): AppResult<RawResponse<T>> {
+        when (result) {
+            is AppResult.Ok -> {
+                val status = result.value.status
+                val retryAfter = retryAfterOf(result.value.headers)
+                if (status == 429) {
+                    cooldowns.record(
+                        sessionKey,
+                        retryAfter ?: DEFAULT_429_COOLDOWN_SECONDS,
+                        status = 429
+                    )
+                } else if (status == 503 && retryAfter != null) {
+                    cooldowns.record(sessionKey, retryAfter, status = 503)
+                }
+            }
+            is AppResult.Err -> {
+                val error = result.error
+                if (error is AppError.NoNetwork) {
+                    PageShapeLog.record(
+                        PageShape(
+                            sessionKey = sessionKey,
+                            host = "",
+                            errorMarker = FetchClassification.DNS_MARKER,
+                            atMs = System.currentTimeMillis()
+                        )
+                    )
+                    return AppResult.Err(
+                        AppError.ExtensionFailed(
+                            label,
+                            "${FetchClassification.DNS_MARKER} — the name " +
+                                "didn't resolve; check the address, or " +
+                                "your connection if other sites fail too"
+                        )
+                    )
+                }
+            }
+        }
+        return result
+    }
+
+    /** v1.3.4 (T6): failover is for TRANSPORT silence only —
+     * a host that ANSWERED (wall, lock, auth state, 404, a
+     * 5xx WITH a usable body) owns its answer. */
+    private fun <T> shouldFailOver(result: AppResult<RawResponse<T>>): Boolean =
+        when (result) {
+            is AppResult.Err -> isTransportFailure(result.error)
+            is AppResult.Ok -> result.value.status in 500..599 &&
+                !hasUsableBody(result.value.body)
+        }
+
+    private fun isTransportFailure(error: AppError): Boolean = when (error) {
+        is AppError.NoNetwork -> true
+        is AppError.ProviderDown -> error.detail
+            ?.contains(HttpTransport.TIMEOUT_DETAIL) == true
+        is AppError.Unknown -> error.detail
+            ?.contains("ConnectException") == true
+        else -> false
+    }
+
+    private fun hasUsableBody(body: Any?): Boolean = when (body) {
+        is String -> body.isNotBlank()
+        is ByteArray -> body.isNotEmpty()
+        else -> body != null
+    }
+
+    /** The same URL on another host (scheme, path, query kept). */
+    private fun swapHost(url: String, newHost: String): String? =
+        runCatching {
+            val uri = URI(url)
+            URI(
+                uri.scheme, uri.userInfo, newHost, -1,
+                uri.rawPath, uri.rawQuery, uri.rawFragment
+            ).toString()
+        }.getOrNull()
+
+    /** Drop caller credential headers a mirror attempt must
+     * not carry: any Authorization the source's bindings do
+     * not declare for [attemptHost]. */
+    private fun stripUndeclaredAuthHeaders(
+        headers: Map<String, String>,
+        attemptHost: String
+    ): Map<String, String> {
+        val declared = credentialBindings().any { binding ->
+            binding.headerName.equals("Authorization", ignoreCase = true) &&
+                binding.appliesTo(attemptHost)
+        }
+        if (declared) return headers
+        return headers.filterKeys {
+            !it.equals("Authorization", ignoreCase = true)
+        }
+    }
+
+    private fun retryAfterOf(headers: Map<String, String>): Long? =
+        headers.entries.firstOrNull {
+            it.key.equals("Retry-After", ignoreCase = true)
+        }?.value?.trim()?.toLongOrNull()
+
+    /** One host attempt: the redirect loop the client has
+     * always run, unchanged inside. */
+    private suspend fun <T> requestOnHost(
+        method: String,
+        url: String,
+        body: String?,
+        contentType: String?,
+        headers: Map<String, String>,
+        readBody: (HttpTransport.Response) -> T?,
+        tooLargeMessage: String,
+        limiter: RateLimiter,
+        recordShape: Boolean
+    ): AppResult<RawResponse<T>> {
         var currentUrl = url
         var currentMethod = method
         var currentBody = body
@@ -194,6 +380,25 @@ class ExtensionHttpClient(
                 if (requestHeaders.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
                     requestHeaders["User-Agent"] = ua
                 }
+            }
+            // v1.3.4 (T1): the declared header bindings for
+            // THIS host — a session cookie replayed as a
+            // header to exactly the hosts its contract names
+            // (BOTI's userToken → api.mystorywave.com), never
+            // anywhere else. The cookie is looked up by name
+            // across the session's jars: the site may set it
+            // on its web host while the API host must receive
+            // it. The binding's value replaces any caller
+            // header of the same name on its hosts.
+            for (binding in credentialBindings()) {
+                if (!binding.appliesTo(host)) continue
+                val value = binding.headerValue(
+                    sessionStore.cookieValueByName(sessionKey, binding.cookieName)
+                ) ?: continue
+                requestHeaders.keys
+                    .firstOrNull { it.equals(binding.headerName, ignoreCase = true) }
+                    ?.let { requestHeaders.remove(it) }
+                requestHeaders[binding.headerName] = value
             }
             if (contentType != null && currentMethod == "POST") {
                 requestHeaders.putIfAbsent("Content-Type", contentType)
@@ -257,6 +462,23 @@ class ExtensionHttpClient(
                         ?: return AppResult.Err(
                             AppError.ExtensionFailed(label, tooLargeMessage)
                         )
+                    // v1.3.4 (T4): record the page's SHAPE for
+                    // the source's diagnostics — status, title,
+                    // wall markers, the host that answered
+                    // (a mirror shows itself here). Page
+                    // fetches only; bodies are never stored.
+                    if (recordShape && parsed is String) {
+                        PageShapeLog.record(
+                            PageShape(
+                                sessionKey = sessionKey,
+                                status = resp.code,
+                                title = PageShapeLog.titleOf(parsed),
+                                markers = PageShapeLog.markersIn(parsed),
+                                host = CookieParsing.hostOf(currentUrl) ?: host,
+                                atMs = System.currentTimeMillis()
+                            )
+                        )
+                    }
                     return AppResult.Ok(
                         RawResponse(
                             status = resp.code,
@@ -315,6 +537,11 @@ class ExtensionHttpClient(
         const val MAX_REDIRECTS = 5
         const val PAGE_TOO_LARGE_MESSAGE = "the page was too large to load (over 8 MB)"
         const val FILE_TOO_LARGE_MESSAGE = "the file was too large to load (over 8 MB)"
+
+        /** v1.3.4 (T3): a 429 that names no Retry-After still
+         * parks the source briefly — the site asked for a
+         * pause in as many words. */
+        const val DEFAULT_429_COOLDOWN_SECONDS = 30L
         private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
 
         /** Session key for an installed extension row. */

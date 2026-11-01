@@ -45,8 +45,116 @@ data class CatalogUiState(
     /** v1.3.2 (item 77): the failure is simply "this source is
      * switched off" — the card offers to turn it back on and
      * retry in one tap. */
-    val sourceOff: Boolean = false
+    val sourceOff: Boolean = false,
+    /** v1.3.4 (U4): the v2 classification of the current load
+     * failure — TEMPORARILY_UNAVAILABLE / DNS_FAILURE get
+     * their honest words and a Retry; a session action rides
+     * along only under [CatalogueCopy.offersSessionAction]'s
+     * rules. Raw codes never reach the screen. */
+    val fetchClassification:
+        app.xreader.data.extension.FetchClassification.Result? = null
 )
+
+/**
+ * v1.3.4 (U4): the catalogue's failure/empty copy decisions,
+ * pure so a JVM test can pin them.
+ *
+ * Rules: an availability failure (503 "temporarily
+ * unavailable" / 429 "too many requests") and a DNS failure
+ * ("couldn't find the site's address") are stated honestly
+ * and lead with Retry — a sign-in/check action may ride
+ * along ONLY when the classification itself is a session
+ * kind, or (DNS on a gated source) as a secondary action;
+ * it never replaces the truth. An empty listing on a gated
+ * source states the reason as UNKNOWN.
+ */
+object CatalogueCopy {
+
+    fun emptyMessage(
+        need: app.xreader.data.extension.SessionNeed.Kind?,
+        isSearch: Boolean
+    ): String = when {
+        isSearch ->
+            "No matches in this source — try a different title."
+        need != null ->
+            "Nothing came back from this source. It may be " +
+                "asking for its one-time check or sign-in."
+        else ->
+            "This source's catalogue came back empty — " +
+                "the site may have changed how it lists " +
+                "its books."
+    }
+
+    /** The honest failure words for a classified load
+     * failure, or null when the classification carries no
+     * special words (the caller falls back to its ordinary
+     * copy). Never contains a raw transport code. */
+    fun failureMessage(
+        classification:
+            app.xreader.data.extension.FetchClassification.Result?
+    ): String? = when (classification?.kind) {
+        app.xreader.data.extension.FetchClassification
+            .Kind.TEMPORARILY_UNAVAILABLE -> {
+            val wait = retryWaitSuffix(
+                classification.retryAfterSeconds
+            )
+            if (classification.rateLimited) {
+                "Too many requests — the site asked us to " +
+                    "slow down.$wait"
+            } else {
+                "The site is temporarily unavailable — it's " +
+                    "having trouble right now.$wait"
+            }
+        }
+        app.xreader.data.extension.FetchClassification
+            .Kind.DNS_FAILURE ->
+            "This source didn't answer: " +
+                app.xreader.data.extension.FetchClassification
+                    .DNS_MARKER +
+                " — the name didn't resolve. Try again in a " +
+                "little while."
+        else -> null
+    }
+
+    private fun retryWaitSuffix(seconds: Long?): String {
+        val waitSeconds = seconds ?: return ""
+        return when {
+            waitSeconds >= 90 ->
+                " Try again in about ${(waitSeconds + 59) / 60} minutes."
+            waitSeconds >= 2 ->
+                " Try again in about $waitSeconds seconds."
+            else -> ""
+        }
+    }
+
+    /** Whether a sign-in/check action may appear ALONGSIDE
+     * the honest failure state: yes for a session-kind
+     * classification, yes (secondary only) for DNS on a
+     * gated source, never for an availability failure. */
+    fun offersSessionAction(
+        classification:
+            app.xreader.data.extension.FetchClassification.Result?,
+        sessionNeed: app.xreader.data.extension.SessionNeed.Kind?
+    ): Boolean = when (classification?.kind) {
+        app.xreader.data.extension.FetchClassification
+            .Kind.SESSION_CHECK,
+        app.xreader.data.extension.FetchClassification
+            .Kind.SIGN_IN -> true
+        app.xreader.data.extension.FetchClassification
+            .Kind.DNS_FAILURE -> sessionNeed != null
+        app.xreader.data.extension.FetchClassification
+            .Kind.TEMPORARILY_UNAVAILABLE -> false
+        else -> sessionNeed != null
+    }
+
+    fun sessionActionLabel(
+        need: app.xreader.data.extension.SessionNeed.Kind?
+    ): String = when (need) {
+        app.xreader.data.extension.SessionNeed.Kind.SIGN_IN ->
+            "Sign in"
+        else -> "Solve the check"
+    }
+}
 
 /** One source's catalogue: popular / latest / search, paged. Tapping a
  * book syncs it into the library and opens its page. */
@@ -145,7 +253,12 @@ class SourceCatalogViewModel(
         val page = if (reset) 1 else snapshot.page + 1
         _state.value = snapshot.copy(
             loading = true, errorMessage = null,
-            sessionNeed = if (reset) null else snapshot.sessionNeed
+            sessionNeed = if (reset) null else snapshot.sessionNeed,
+            fetchClassification = if (reset) {
+                null
+            } else {
+                snapshot.fetchClassification
+            }
         )
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -161,6 +274,20 @@ class SourceCatalogViewModel(
                 is AppResult.Err -> _state.value.copy(
                     loading = false,
                     errorMessage = if (reset) ErrorText.displayText(result.error) else null,
+                    // v1.3.4 (U4): classification v2 for the
+                    // failure — availability/DNS get honest
+                    // words on the card (CatalogueCopy), raw
+                    // codes never reach the screen.
+                    fetchClassification = if (reset) {
+                        app.xreader.data.extension.FetchClassification
+                            .classify(
+                                container.extensionService
+                                    .declarativeConfigOf(current),
+                                result.error
+                            )
+                    } else {
+                        _state.value.fetchClassification
+                    },
                     // v1.3.2 (scope A2): classify the failure
                     // against this source's config — bundled
                     // and user-added sources alike.
@@ -199,6 +326,15 @@ class SourceCatalogViewModel(
                         .distinctBy { it.id }
                         .filter { it.id !in knownIds }
                     val merged = existing + newBooks
+                    // v1.3.4 (U4/T4): record the extracted-row
+                    // count against this source's last page
+                    // shape — an empty listing's 0 is exactly
+                    // the evidence the diagnostics screen needs.
+                    app.xreader.data.extension.PageShapeLog.noteRows(
+                        app.xreader.data.extension.ExtensionHttpClient
+                            .sessionKeyFor(extensionId),
+                        merged.size
+                    )
                     _state.value.copy(
                         loading = false,
                         loadCompleted = true,

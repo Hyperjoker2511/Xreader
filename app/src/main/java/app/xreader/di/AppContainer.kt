@@ -368,7 +368,10 @@ class AppContainer(context: Context) {
             store = extensionStore,
             contextFactory = hostContextFactory,
             dexLoader = app.xreader.data.extension.AndroidDexLoader(appContext),
-            jsRuntimeFactory = { app.xreader.data.extension.QuickJsRuntime() }
+            jsRuntimeFactory = { app.xreader.data.extension.QuickJsRuntime() },
+            // v1.3.4 (T1): read-token persistence rides the
+            // app's encrypted session store.
+            sessionStore = sessionStore
         )
     }
 

@@ -23,8 +23,33 @@ object ErrorText {
         is AppError.ProviderDown ->
             ErrorUi("That service isn't answering right now.", "Try again")
 
-        is AppError.RateLimited ->
-            ErrorUi("That service is busy right now — give it a moment.", "Try again")
+        is AppError.RateLimited -> {
+            // v1.3.4 (T3 refinement): 429 ≠ 503 in the user's
+            // words. A 503 is the SITE having trouble
+            // ("temporarily unavailable"); a 429 is the site
+            // asking US to slow down ("too many requests") —
+            // with the wait it named, when it named one.
+            val waitSeconds = error.retryAfterSeconds ?: 0
+            val wait = when {
+                waitSeconds >= 90 ->
+                    " Try again in about ${(waitSeconds + 59) / 60} minutes."
+                waitSeconds >= 2 ->
+                    " Try again in about $waitSeconds seconds."
+                else -> ""
+            }
+            if ("503" in (error.detail ?: "")) {
+                ErrorUi(
+                    "The site is temporarily unavailable — it's having " +
+                        "trouble right now.$wait",
+                    "Try again"
+                )
+            } else {
+                ErrorUi(
+                    "Too many requests — the site asked us to slow down.$wait",
+                    "Try again"
+                )
+            }
+        }
 
         is AppError.AuthFailed ->
             ErrorUi("A saved key or password didn't work — check it and try again.", "Check settings")

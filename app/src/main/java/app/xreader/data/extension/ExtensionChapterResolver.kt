@@ -98,7 +98,22 @@ class ExtensionChapterFetcher(
             is app.xreader.core.error.AppResult.Err -> FetchOutcome.Failure(fetched.error)
             is app.xreader.core.error.AppResult.Ok -> {
                 val content = contentOf(handle, candidate, fetched.value.html)
-                if (content.blocks.isEmpty()) {
+                // v1.3.4 (T2): the not-prose gate — text that
+                // is overwhelmingly base64-shaped blob (the
+                // FenrirRealm encoded-shell scrape) is NOT a
+                // chapter: it fails honestly here, so it is
+                // never stored and never rendered as prose,
+                // on ANY extension road that reaches this
+                // fetcher.
+                val plainText = content.blocks
+                    .filterIsInstance<app.xreader.domain.content.ChapterBlock.Paragraph>()
+                    .joinToString("\n") { it.text }
+                val refusal = ChapterServeGate.refusalFor(plainText)
+                if (refusal != null) {
+                    FetchOutcome.Failure(
+                        AppError.ParseFailed("chapter", refusal)
+                    )
+                } else if (content.blocks.isEmpty()) {
                     FetchOutcome.Failure(
                         AppError.ParseFailed("chapter", "the page had no readable text")
                     )

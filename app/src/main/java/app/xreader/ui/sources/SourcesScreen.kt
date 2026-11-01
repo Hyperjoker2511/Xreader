@@ -490,11 +490,27 @@ fun SourcesScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(10.dp))
-                    PrimaryPill(
-                        text = "Add a source",
-                        onClick = onAddSource,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    // v1.3.4 (U1/T5): Repositories is a FIRST-CLASS
+                    // door at the TOP of the sources area — same
+                    // visual weight as "Add a source", beside it,
+                    // plain label, no menus. (The QuickActionTile
+                    // at the bottom of the list stays too.)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement =
+                            Arrangement.spacedBy(8.dp)
+                    ) {
+                        PrimaryPill(
+                            text = "Repositories",
+                            onClick = onOpenStore,
+                            modifier = Modifier.weight(1f)
+                        )
+                        PrimaryPill(
+                            text = "Add a source",
+                            onClick = onAddSource,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
 

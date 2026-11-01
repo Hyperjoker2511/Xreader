@@ -49,8 +49,19 @@ class ExtensionService(
     private val store: ExtensionStore,
     private val contextFactory: HostContextFactory,
     private val dexLoader: DexLoader,
+    /** v1.3.4 (T1): the session store read-token
+     * coordinators persist through (optional so test
+     * constructions stay as they were; production wires the
+     * app store). Declared BEFORE [jsRuntimeFactory] on
+     * purpose: tests pass the runtime factory as a trailing
+     * lambda, which binds to the LAST parameter. */
+    private val sessionStore: SessionStore? = null,
     private val jsRuntimeFactory: () -> JsRuntime
 ) {
+
+    /** The read-token store for declarative sources (see the
+     * DeclarativeSource construction in [source]). */
+    private fun sessionStoreOrNull(): SessionStore? = sessionStore
 
     private val cache = ConcurrentHashMap<Long, List<SourceHandle>>()
     private val jsRuntimes = ConcurrentHashMap<Long, JsRuntime>()
@@ -152,8 +163,26 @@ class ExtensionService(
                 declarativeConfigs.firstOrNull {
                     it.renderWaitSelector != null
                 }?.renderWaitSelector
+            },
+            // v1.3.4 (T1): the row's declared header bindings
+            // ride its client (exact-host replay only).
+            credentialBindings = {
+                declarativeConfigs.mapNotNull {
+                    it.credentials?.headerBinding
+                }
+            },
+            // v1.3.4 (T6): the row's declared backup hosts —
+            // the client's failover list (identity registers
+            // below, where the configs are in hand).
+            backupHosts = {
+                declarativeConfigs.flatMap { it.backupHosts }
             }
         )
+        // v1.3.4 (T6): mirror identity — a chapter URL on a
+        // backup host IS the primary host's chapter.
+        for (config in declarativeConfigs) {
+            MirrorHosts.register(config.baseUrl, config.backupHosts)
+        }
         val sources: List<Source> = try {
             when (row.kind) {
                 app.xreader.data.db.ExtensionKind.DECLARATIVE -> {
@@ -163,7 +192,10 @@ class ExtensionService(
                         )
                     }
                     declarativeConfigs.map { config ->
-                        DeclarativeSource(config, context)
+                        DeclarativeSource(
+                            config, context,
+                            readTokenStore = sessionStoreOrNull()
+                        )
                     }
                 }
                 app.xreader.data.db.ExtensionKind.JS -> loadJs(row, context)

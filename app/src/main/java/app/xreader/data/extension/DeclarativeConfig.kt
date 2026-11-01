@@ -94,8 +94,156 @@ data class DeclarativeConfig(
      * unchanged. */
     val signInNeeded: Boolean = false,
     /** Source-shipped cleaner rules (origin "source", not editable). */
-    val cleaners: List<CleanerRuleData> = emptyList()
+    val cleaners: List<CleanerRuleData> = emptyList(),
+    /** v1.3.4 (session v2, T1): this source's CREDENTIAL
+     * CONTRACT — the explicitly declared session artefacts
+     * beyond plain cookies that its fetches may carry (a
+     * cookie replayed as a header to one exact API host; a
+     * short-lived operation token minted from the account
+     * session). Null (every config written before v1.3.4) =
+     * cookies only, exactly as before. Declarations are
+     * EXACT: a credential is only ever sent to the hosts its
+     * declaration names — never harvested generically, never
+     * replayed anywhere else. See [CredentialSpec]. */
+    val credentials: CredentialSpec? = null,
+    /** v1.3.4 (T6, mirror failover): BACKUP HOSTS for this
+     * source, in order — the same site answering under other
+     * domains (a mirror the maintainer verified serves the
+     * same shapes). On TRANSPORT failure only (DNS, connect,
+     * timeout, host-level 5xx with no usable body) the fetch
+     * road retries the same path on the next host; a host
+     * that ANSWERED (wall, lock, auth state, 404) is never
+     * failed over — its answer stands. Book/chapter identity
+     * stays canonical to the primary host (see MirrorHosts).
+     * Seeded ONLY from sweep-verified mirrors. Defaulted
+     * empty so every older config decodes unchanged. */
+    val backupHosts: List<String> = emptyList()
 )
+
+/**
+ * v1.3.4 (session v2, T1): a source's declared credential
+ * contract. Two shapes exist because two real sites proved
+ * them (TOKEN-SESSION-RESEARCH): a login token a site's own
+ * client replays as a header to a DIFFERENT host (BOTI), and
+ * a short-lived operation token minted per reading session
+ * from the account cookie (FenrirRealm). Nothing else is
+ * declared, and nothing undeclared is ever captured or sent.
+ */
+@Serializable
+data class CredentialSpec(
+    /** Replay a named session cookie as a header to exact hosts. */
+    val headerBinding: HeaderBinding? = null,
+    /** Mint + carry a short-lived operation (read) token. */
+    val operationToken: OperationTokenSpec? = null
+)
+
+/**
+ * Replay the session cookie named [cookieName] as the header
+ * [headerName] (with [prefix] — empty = the cookie value
+ * verbatim) on requests to [hosts] ONLY (exact host match,
+ * normalised). The cookie is looked up across the source's
+ * own session jars — the site may set it on its web host
+ * while the API host is the one that must receive it (BOTI:
+ * `userToken` set on .botitranslation.com, replayed to
+ * api.mystorywave.com). It is never sent to any other host,
+ * and a caller's own header of the same name is dropped on
+ * hosts this binding doesn't declare.
+ */
+@Serializable
+data class HeaderBinding(
+    val cookieName: String,
+    val headerName: String = "Authorization",
+    val prefix: String = "",
+    val hosts: List<String> = emptyList()
+) {
+    fun appliesTo(host: String): Boolean {
+        val h = host.normaliseHost()
+        return hosts.any { it.normaliseHost() == h }
+    }
+
+    /** The header value for [cookieValue], or null when the
+     * value is unusable (blank values are never sent). */
+    fun headerValue(cookieValue: String?): String? {
+        val value = cookieValue?.takeIf { it.isNotBlank() } ?: return null
+        return prefix + value
+    }
+}
+
+/**
+ * A short-lived OPERATION TOKEN (FenrirRealm's read token):
+ * minted by POSTing [mintUrl] with the account session's
+ * cookies (the fetch road attaches them), answered by
+ * `{active, token, expires_at}` or by a refusal that names
+ * its own kind (403 + `challenge_required` = the site wants
+ * its human check, run on [checkUrlTemplate]'s page; an
+ * auth-shaped refusal = the account session itself is dead).
+ * The token rides as [headerName]: [prefix]<token> on the
+ * source's API fetches to [tokenHosts] (default: the mint
+ * URL's own host — origin-exact, never a mirror unless the
+ * mirror is named here). [defaultLifetimeSeconds] applies
+ * when a mint answer omits the expiry (the site's own
+ * client assumes 300 s); renewal happens
+ * [renewalMarginSeconds] before expiry. A mint response may
+ * also re-issue the token through the [issuedHeader] /
+ * [issuedExpiresHeader] response headers on ANY answer —
+ * the engine harvests those opportunistically, like the
+ * site's own client. The encrypted-content opt-in header
+ * is never sent and no decryption is ever attempted.
+ */
+@Serializable
+data class OperationTokenSpec(
+    val mintUrl: String,
+    /** JSON body template for the mint POST; `{chapter_id}`
+     * expands to the locked record's remint hint (or the
+     * chapter's own number). Null = an empty JSON object. */
+    val mintBodyTemplate: String? = null,
+    val headerName: String = "Authorization",
+    val prefix: String = "Bearer ",
+    val defaultLifetimeSeconds: Long = 300,
+    val renewalMarginSeconds: Long = 60,
+    val issuedHeader: String = "x-read-token-issued",
+    val issuedExpiresHeader: String = "x-read-token-expires-at",
+    /** Hosts the token may be sent to; empty = the mint
+     * URL's host only. */
+    val tokenHosts: List<String> = emptyList(),
+    /** The site's own page where its human check runs for
+     * this credential (FenrirRealm: the reader page — its
+     * widget lives there). `{seg-N}` placeholders expand
+     * against the chapter URL exactly as in
+     * [ChapterTextAjax]. Null = the site root is the check
+     * page. */
+    val checkUrlTemplate: String? = null
+) {
+    /** The hosts the minted token may ride to. */
+    fun hosts(): List<String> {
+        if (tokenHosts.isNotEmpty()) return tokenHosts
+        val host = CookieParsing.hostOf(mintUrl) ?: return emptyList()
+        return listOf(host)
+    }
+
+    fun appliesTo(host: String): Boolean {
+        val h = host.normaliseHost()
+        return hosts().any { it.normaliseHost() == h }
+    }
+
+    /** The mint request body for [chapterId] (JSON). */
+    fun mintBody(chapterId: String?): String {
+        val template = mintBodyTemplate ?: return "{}"
+        return template.replace(
+            "{chapter_id}", chapterId?.let { jsonEscape(it) } ?: ""
+        )
+    }
+
+    /** The sanctioned check page for a chapter URL, or null
+     * when no template is declared. */
+    fun checkUrlFor(chapterUrl: String): String? {
+        val template = checkUrlTemplate ?: return null
+        return ChapterTextAjax(urlTemplate = template).endpointFor(chapterUrl)
+    }
+
+    private fun jsonEscape(raw: String): String =
+        raw.replace("\\", "\\\\").replace("\"", "\\\"")
+}
 
 /** A listing page (search results / popular / latest). [url] may use
  * {query} (URL-encoded), {page} and {page0} placeholders. */

@@ -772,10 +772,28 @@ class BookDetailViewModel(
      * source config (cached at init; user-added lanes and
      * bundled defaults alike). */
     private fun noteChaptersError(error: app.xreader.core.error.AppError) {
+        // v1.3.4 (U4-style honesty, minimal): an availability
+        // (503/429) or DNS chapters failure shows its honest
+        // words — never the raw detail, and never a session
+        // action (SessionNeed already returns null for both).
+        val classification = app.xreader.data.extension
+            .FetchClassification.classify(bookConfig, error)
+        val honestChaptersError = when (classification.kind) {
+            app.xreader.data.extension.FetchClassification
+                .Kind.TEMPORARILY_UNAVAILABLE ->
+                app.xreader.ui.sources.CatalogueCopy
+                    .failureMessage(classification)
+            app.xreader.data.extension.FetchClassification
+                .Kind.DNS_FAILURE ->
+                app.xreader.ui.sources.CatalogueCopy
+                    .failureMessage(classification)
+            else -> null
+        }
         storyLocal.value = storyLocal.value.copy(
             chaptersLoading = false,
-            chaptersError = app.xreader.core.error.ErrorText
-                .displayText(error),
+            chaptersError = honestChaptersError
+                ?: app.xreader.core.error.ErrorText
+                    .displayText(error),
             sessionNeed = app.xreader.data.extension.SessionNeed
                 .classify(bookConfig, error),
             sourceOff = error.detail?.contains("switched off") == true

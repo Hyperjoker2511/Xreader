@@ -93,6 +93,71 @@ class SessionStore(private val vault: KeyVault) {
                 .let { if (userAgent != null) it.copy(userAgent = userAgent) else it }
         )
     }
+
+    // ── v1.3.4 (session v2, T1): operation-token persistence ──
+    //
+    // Read tokens ride the SAME encrypted vault as the
+    // sessions (KeyVault = AES-256/GCM, Keystore-wrapped) in a
+    // versioned record, so a still-valid token survives an app
+    // restart instead of re-minting on every cold open. A
+    // record that fails to decode (an older shape, corruption)
+    // reads as ABSENT — the source simply re-mints; the read
+    // path never crashes on stored credential data. Sign-out
+    // clears a source's record together with its cookies
+    // (the coordinator's store is this class, see
+    // ReadTokenCoordinator).
+
+    /** The stored read token for [tokenKey], or null. */
+    suspend fun loadReadToken(tokenKey: String): StoredReadToken? {
+        val raw = vault.get(KeyVault.readTokenKey(tokenKey)) ?: return null
+        return runCatching {
+            json.decodeFromString(StoredReadToken.serializer(), raw)
+        }.getOrNull()?.takeIf { it.version == StoredReadToken.CURRENT_VERSION }
+    }
+
+    suspend fun saveReadToken(tokenKey: String, token: StoredReadToken) {
+        vault.put(
+            KeyVault.readTokenKey(tokenKey),
+            json.encodeToString(StoredReadToken.serializer(), token)
+        )
+    }
+
+    suspend fun clearReadToken(tokenKey: String) {
+        vault.remove(KeyVault.readTokenKey(tokenKey))
+    }
+
+    /** v1.3.4 (T1): the value of a session cookie by NAME,
+     * searched across every host jar of the session — the
+     * declared header binding's capture half (a site may set
+     * its token cookie on the web host while the binding
+     * replays it to the API host). Null when absent. */
+    suspend fun cookieValueByName(sessionKey: String, cookieName: String): String? {
+        val data = load(sessionKey) ?: return null
+        for ((_, jar) in data.cookies) {
+            jar[cookieName]?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+        return null
+    }
+}
+
+/**
+ * v1.3.4 (T1): one stored operation token (FenrirRealm's
+ * read token). [generation] increments on every mint /
+ * re-issue: a failure may invalidate ONLY its own
+ * generation, so a stale answer can never revoke a newer
+ * token (the generation rule from the Prompt N reviews).
+ * [version] versions the RECORD format, not the token.
+ */
+@kotlinx.serialization.Serializable
+data class StoredReadToken(
+    val value: String,
+    val expiresAtMs: Long,
+    val generation: Long,
+    val version: Int = CURRENT_VERSION
+) {
+    companion object {
+        const val CURRENT_VERSION = 1
+    }
 }
 
 /** Cookie-string helpers — pure, so the login capture is testable

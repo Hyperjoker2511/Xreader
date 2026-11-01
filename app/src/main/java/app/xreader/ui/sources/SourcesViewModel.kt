@@ -41,7 +41,13 @@ data class LoginRequest(
     val sessionKey: String,
     val url: String,
     val title: String,
-    val mode: LoginMode = LoginMode.SIGN_IN
+    val mode: LoginMode = LoginMode.SIGN_IN,
+    /** v1.3.4 (U2/U3): the exact page the sanctioned screen
+     * should open when the failure happened somewhere specific
+     * — e.g. a source's READER page, where its human check
+     * widget lives (FenrirRealm's read-token check). Null =
+     * the site root ([url]), exactly as before. */
+    val targetUrl: String? = null
 )
 
 /** One row of the Legado import report (v1.0.1). */
@@ -267,8 +273,22 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                 .key(ext.id, handle.source.id)
             val hasSession = container.sessionStore
                 .has(sessionKeyFor(ext.id))
+            // v1.3.4 (T6): the backup-address suffix — the
+            // last recorded page shape names the host that
+            // actually answered; when it is one of the
+            // source's declared mirrors, the state word says
+            // so instead of implying the primary answered.
+            val lastShape = app.xreader.data.extension.PageShapeLog
+                .lastFor(sessionKeyFor(ext.id))
+            val viaBackup = lastShape != null &&
+                config.backupHosts.isNotEmpty() &&
+                app.xreader.data.extension.MirrorHosts.isMirrorOf(
+                    lastShape.host,
+                    app.xreader.data.extension.CookieParsing
+                        .hostOf(config.baseUrl) ?: ""
+                )
             var word = app.xreader.data.extension.SessionNeed
-                .stateWord(config, hasSession, null)
+                .stateWord(config, hasSession, null, viaBackup)
             if (word == "Working" &&
                 health[key]?.state ==
                 app.xreader.data.extension.SourceHealthState.BROKEN
@@ -843,9 +863,11 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         sessionKey: String,
         url: String,
         title: String,
-        mode: LoginMode = LoginMode.SIGN_IN
+        mode: LoginMode = LoginMode.SIGN_IN,
+        targetUrl: String? = null
     ) {
-        _loginRequest.value = LoginRequest(sessionKey, url, title, mode)
+        _loginRequest.value =
+            LoginRequest(sessionKey, url, title, mode, targetUrl)
     }
 
     fun clearLoginRequest() {

@@ -95,7 +95,10 @@ class WebViewRenderedFetcher(
             val timeoutMs = RenderSettle.hardTimeoutMs(tierProvider())
             val outcome = withTimeoutOrNull(timeoutMs + MAIN_SLACK_MS) {
                 withContext(Dispatchers.Main) {
-                    renderOnMain(url, session, permissions, waitForSelector, timeoutMs)
+                    renderOnMain(
+                        url, session, permissions, waitForSelector,
+                        timeoutMs, sessionKey
+                    )
                 }
             }
             when {
@@ -182,7 +185,8 @@ class WebViewRenderedFetcher(
         session: SessionData?,
         permissions: ExtensionPermissions,
         waitForSelector: String?,
-        timeoutMs: Long
+        timeoutMs: Long,
+        sessionKey: String
     ): RenderOutcome {
         cancelScheduledDestroy()
         val view = webView ?: createWebView().also { webView = it }
@@ -204,7 +208,17 @@ class WebViewRenderedFetcher(
                     if (targetHost.isNotEmpty() &&
                         !permissions.allows(targetHost)
                     ) {
-                        blocked = true
+                        // v1.3.4 (T3 refinement): only a
+                        // MAIN-FRAME navigation away fails the
+                        // page load. A subframe (an ad iframe, a
+                        // tracker redirect) reaching for an
+                        // unlisted host is simply refused —
+                        // a dead subresource must never
+                        // classify the page itself as failed
+                        // (the NovelFire/DNS honesty rule).
+                        if (request?.isForMainFrame == true) {
+                            blocked = true
+                        }
                         return true
                     }
                     return false
@@ -222,8 +236,19 @@ class WebViewRenderedFetcher(
                     error: WebResourceError?
                 ) {
                     if (request?.isForMainFrame == true && loadError == null) {
-                        loadError =
-                            "the page failed to load (error ${error?.errorCode})"
+                        // v1.3.4 (T3): plain words only — a
+                        // raw WebView code in the UI was the
+                        // NovelFire "(error -2)" leak. The
+                        // code itself goes to the diagnostics,
+                        // where codes belong.
+                        val code = error?.errorCode
+                        if (code != null) {
+                            DiagnosticLog.record(
+                                "render",
+                                "webview error $code for $url", sessionKey
+                            )
+                        }
+                        loadError = WebViewErrorWords.phrase(code)
                     }
                 }
             }
@@ -456,5 +481,34 @@ class WebViewRenderedFetcher(
     private companion object {
         /** Slack over the settle budget for main-thread scheduling. */
         const val MAIN_SLACK_MS: Long = 15_000L
+    }
+}
+
+/**
+ * v1.3.4 (T3): WebView load errors in PLAIN WORDS. The raw
+ * codes (WebViewClient.ERROR_* constants) are diagnostics —
+ * they go to the DiagnosticLog at the failure site and never
+ * into a user-facing string (the NovelFire catalogue card
+ * showed "(error -2)" in v1.3.3; -2 is ERR_NAME_NOT_RESOLVED,
+ * a DNS state with its own words and its own Retry).
+ */
+object WebViewErrorWords {
+
+    fun phrase(errorCode: Int?): String = when (errorCode) {
+        // ERROR_HOST_LOOKUP (-2): the name didn't resolve.
+        -2 -> "${FetchClassification.DNS_MARKER} — the name " +
+            "didn't resolve; check the address, or your " +
+            "connection if other sites fail too"
+        // ERROR_TIMEOUT (-8).
+        -8 -> "the page took too long to load"
+        // ERROR_CONNECT (-6) / ERROR_IO (-7): the host
+        // couldn't be reached at all.
+        -6, -7 -> "the site couldn't be reached — it may be " +
+            "down, or the connection dropped"
+        // ERROR_TOO_MANY_REDIRECTS (-9).
+        -9 -> "the page kept redirecting — giving up"
+        // ERROR_FAILED_SSL_HANDSHAKE (-11).
+        -11 -> "the secure connection to the site failed"
+        else -> "the page failed to load"
     }
 }

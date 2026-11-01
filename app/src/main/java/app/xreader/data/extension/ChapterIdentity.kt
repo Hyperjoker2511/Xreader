@@ -53,6 +53,11 @@ object ChapterIdentity {
         val scheme = (uri.scheme ?: "https").lowercase()
         var host = (uri.host ?: "").lowercase()
         if (host.startsWith("www.")) host = host.drop(4)
+        // v1.3.4 (T6): a registered MIRROR host folds to its
+        // primary — the same chapter served from a backup
+        // address is the same chapter, for the Library,
+        // progress, downloads and repairs alike.
+        host = MirrorHosts.canonicalHost(host)
         val port = uri.port
         val portPart = when {
             port <= 0 -> ""

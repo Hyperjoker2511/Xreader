@@ -117,8 +117,16 @@ class V133FixEngineTest {
             SessionNeed.Kind.SITE_CHECK,
             SessionNeed.forEmptyCatalogue(gated, hasSession = false)
         )
-        // A session already exists: the empty shelf is honest.
-        assertNull(SessionNeed.forEmptyCatalogue(gated, hasSession = true))
+        // v1.3.4 (T4) SUPERSEDES the v1.3.3 line below: on
+        // device the wall still extracted as an empty success
+        // WITH a session-shaped state (V133-CHECK 7), so the
+        // action is now keyed on the source's gated nature
+        // ALONE — a session's existence no longer suppresses
+        // it, and the copy states the reason as unknown.
+        assertEquals(
+            SessionNeed.Kind.SITE_CHECK,
+            SessionNeed.forEmptyCatalogue(gated, hasSession = true)
+        )
         // An ungated source's empty catalogue stays empty.
         assertNull(
             SessionNeed.forEmptyCatalogue(
@@ -129,6 +137,10 @@ class V133FixEngineTest {
         assertEquals(
             SessionNeed.Kind.SIGN_IN,
             SessionNeed.forEmptyCatalogue(signIn, hasSession = false)
+        )
+        assertEquals(
+            SessionNeed.Kind.SIGN_IN,
+            SessionNeed.forEmptyCatalogue(signIn, hasSession = true)
         )
     }
 

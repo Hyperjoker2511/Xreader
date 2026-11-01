@@ -107,5 +107,9 @@ class KeyVault(
         const val WEBDAV_PASSWORD = "webdav_password"
         fun opdsPassword(serverId: Long) = "opds_password_$serverId"
         fun sessionCookies(extensionId: String) = "session_cookies_$extensionId"
+
+        /** v1.3.4 (session v2): a source's stored operation
+         * (read) token record, by its source-scoped key. */
+        fun readTokenKey(tokenKey: String) = "read_token_$tokenKey"
     }
 }

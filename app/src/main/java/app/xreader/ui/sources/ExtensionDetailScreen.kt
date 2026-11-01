@@ -509,6 +509,20 @@ fun ExtensionDetailScreen(
                             )
                         }
                     }
+                    // v1.3.4 (U5): the last page this source
+                    // actually received — its shape only
+                    // (status/title/markers/rows/host), redacted
+                    // by construction. This is the evidence a
+                    // wall, a mirror answer or a DNS death
+                    // leaves behind.
+                    state.pageShapeSummary?.let { summary ->
+                        Text(
+                            summary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
                 }
             }
 

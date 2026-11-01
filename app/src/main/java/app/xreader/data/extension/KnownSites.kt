@@ -461,6 +461,29 @@ object KnownSites {
             chapter = ChapterSpec(
                 content = "article",
                 title = null
+            ),
+            // v1.3.4 (T1, session v2 — TOKEN-SESSION-RESEARCH
+            // §2): BOTI's own client keeps its login token in
+            // a JS-set cookie (userToken, on the parent
+            // domain) and replays it VERBATIM as the
+            // Authorization header to its API host,
+            // api.mystorywave.com. Cookie capture alone could
+            // never reach that host; the declared binding is
+            // the missing half. Origin-exact: the token goes
+            // to api.mystorywave.com ONLY (declared in
+            // extraDomains so the whitelist can reach it),
+            // never to any other host. The lane's rendered
+            // legs are unaffected — the browser view runs the
+            // site's own client, which authenticates itself;
+            // the binding serves the native fetches.
+            extraDomains = listOf("api.mystorywave.com"),
+            credentials = CredentialSpec(
+                headerBinding = HeaderBinding(
+                    cookieName = "userToken",
+                    headerName = "Authorization",
+                    prefix = "",
+                    hosts = listOf("api.mystorywave.com")
+                )
             )
         )
     }

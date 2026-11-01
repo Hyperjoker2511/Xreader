@@ -158,6 +158,22 @@ fun SourceCatalogScreen(
                 // cause is a check or a sign-in gate, the
                 // hand-off is its primary door — never a
                 // dead-end "check your connection".
+                // v1.3.4 (U4): an availability (503/429) or DNS
+                // failure leads with its honest words + Retry;
+                // a sign-in/check action rides along ONLY under
+                // CatalogueCopy's rules (a session-kind
+                // classification, or DNS on a gated source as a
+                // SECONDARY action) — never instead of the truth,
+                // and raw codes never appear.
+                val classification = state.fetchClassification
+                val honestWords = CatalogueCopy.failureMessage(
+                    classification
+                )
+                val need = state.sessionNeed
+                val sessionOffered = CatalogueCopy
+                    .offersSessionAction(classification, need)
+                val primaryIsSession = !state.sourceOff &&
+                    honestWords == null && need != null
                 Column(Modifier.weight(1f)) {
                     KitEmptyState(
                         icon = Icons.Filled.CloudOff,
@@ -165,14 +181,15 @@ fun SourceCatalogScreen(
                             state.sourceOff ->
                                 "This source is switched off, so it " +
                                     "can't load its books."
-                            state.sessionNeed ==
+                            honestWords != null -> honestWords
+                            need ==
                                 app.xreader.data.extension
                                     .SessionNeed.Kind.SITE_CHECK ->
                                 "This site is showing a human check. " +
                                     "Solve it once and Xreader keeps " +
                                     "the session — after that, reading " +
                                     "works as normal."
-                            state.sessionNeed ==
+                            need ==
                                 app.xreader.data.extension
                                     .SessionNeed.Kind.SIGN_IN ->
                                 "This site needs you to sign in before " +
@@ -184,34 +201,42 @@ fun SourceCatalogScreen(
                         },
                         actionText = when {
                             state.sourceOff -> "Turn back on and try again"
-                            state.sessionNeed ==
-                                app.xreader.data.extension
-                                    .SessionNeed.Kind.SITE_CHECK ->
-                                "Solve the check"
-                            state.sessionNeed ==
-                                app.xreader.data.extension
-                                    .SessionNeed.Kind.SIGN_IN ->
-                                "Sign in"
+                            primaryIsSession ->
+                                CatalogueCopy.sessionActionLabel(need)
                             else -> "Try again"
                         },
                         onAction = {
-                            val need = state.sessionNeed
                             when {
                                 state.sourceOff ->
                                     viewModel.turnBackOnAndRetry()
-                                need != null -> onSessionHandoff(need)
+                                primaryIsSession && need != null ->
+                                    onSessionHandoff(need)
                                 else -> viewModel.retry()
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    if (state.sessionNeed != null) {
+                    if (primaryIsSession) {
                         TextButton(
                             onClick = { viewModel.retry() },
                             modifier = Modifier.align(
                                 androidx.compose.ui.Alignment.CenterHorizontally
                             )
                         ) { Text("Try again without it") }
+                    } else if (sessionOffered && need != null) {
+                        // The session action as a SECONDARY door
+                        // beside the honest Retry (e.g. DNS on a
+                        // gated source) — never instead of it.
+                        TextButton(
+                            onClick = { onSessionHandoff(need) },
+                            modifier = Modifier.align(
+                                androidx.compose.ui.Alignment.CenterHorizontally
+                            )
+                        ) {
+                            Text(
+                                CatalogueCopy.sessionActionLabel(need)
+                            )
+                        }
                     }
                 }
             }
@@ -219,33 +244,15 @@ fun SourceCatalogScreen(
                 val emptyNeed = state.sessionNeed
                 KitEmptyState(
                     icon = Icons.Filled.AutoStories,
-                    message = when {
-                        state.mode == CatalogMode.SEARCH ->
-                            "No matches in this source — try a different title."
-                        // v1.3.3 (scope S1): on a gated source an
-                        // empty shelf is a suspected WALL — say
-                        // so, and let the empty state itself
-                        // carry the solve/sign-in action instead
-                        // of dead-ending at "came back empty".
-                        emptyNeed ==
-                            app.xreader.data.extension.SessionNeed
-                                .Kind.SITE_CHECK ->
-                            "This site is likely showing a human " +
-                                "check — its catalogue can't be read " +
-                                "until the check is solved once."
-                        emptyNeed ==
-                            app.xreader.data.extension.SessionNeed
-                                .Kind.SIGN_IN ->
-                            "This source needs you signed in " +
-                                "before it will show its books."
-                        else ->
-                            // v1.3.2 (scope A6): a SUCCESSFUL load
-                            // that came back empty is a source-shape
-                            // fact, not "nothing here yet".
-                            "This source's catalogue came back empty — " +
-                                "the site may have changed how it lists " +
-                                "its books."
-                    },
+                    // v1.3.4 (U4): on a gated source the empty
+                    // state's copy states the reason as UNKNOWN
+                    // (CatalogueCopy) — no claim a wall did it —
+                    // and the solve/sign-in action is offered
+                    // whenever the VM's sessionNeed is present.
+                    message = CatalogueCopy.emptyMessage(
+                        need = emptyNeed,
+                        isSearch = state.mode == CatalogMode.SEARCH
+                    ),
                     actionText = when (emptyNeed) {
                         app.xreader.data.extension.SessionNeed
                             .Kind.SITE_CHECK -> "Solve the check"

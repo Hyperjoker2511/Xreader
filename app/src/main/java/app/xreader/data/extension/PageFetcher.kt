@@ -208,6 +208,16 @@ class EscalatingPageFetcher(
         }
         val staticResult = staticFetcher.get(url, headers)
         if (staticResult !is AppResult.Ok) {
+            // v1.3.4 (T3): an availability park is a terminal,
+            // honest answer — the site asked the world to wait
+            // out its Retry-After. It NEVER escalates to a
+            // render (a render would just spend the budget
+            // re-asking a question the site already answered).
+            if ((staticResult as AppResult.Err).error
+                    is AppError.RateLimited
+            ) {
+                return staticResult
+            }
             // v1.3.2 (scope A1/A6): a block-shaped transport
             // failure — the site refused the plain request
             // (401/403/429/503 in the error detail) — escalates
@@ -236,12 +246,49 @@ class EscalatingPageFetcher(
             }
             return staticResult
         }
+        // v1.3.4 (T3): STATUS BEFORE BODY. A 429/503 that is
+        // NOT itself a challenge page is the site saying
+        // "temporarily unavailable" — a distinct, honest
+        // state (NovelBuddy's 503 JSON rendered into an
+        // empty catalogue in v1.3.3 is the failure this
+        // kills: the render of a JSON error payload parsed
+        // as zero rows). The answer never escalates and
+        // never becomes an empty success; the Retry-After,
+        // when the site named one, parks the source on the
+        // shared scheduler.
+        val response = staticResult.value
+        if ((response.status == 429 || response.status == 503) &&
+            !SiteCheck.isChallengePage(response.body)
+        ) {
+            val retryAfter = response.headers.entries
+                .firstOrNull {
+                    it.key.equals("Retry-After", ignoreCase = true)
+                }?.value?.trim()?.toLongOrNull()
+            if (retryAfter != null) {
+                SharedAvailability.cooldowns.record(
+                    sessionKey, retryAfter, status = response.status
+                )
+            } else if (response.status == 429) {
+                SharedAvailability.cooldowns.record(
+                    sessionKey, ExtensionHttpClient.DEFAULT_429_COOLDOWN_SECONDS,
+                    status = 429
+                )
+            }
+            return AppResult.Err(
+                AppError.RateLimited(
+                    "source",
+                    retryAfterSeconds = retryAfter,
+                    detail = "the site is " +
+                        "${FetchClassification.AVAILABILITY_MARKER} " +
+                        "(HTTP ${response.status})"
+                )
+            )
+        }
         // v1.3.2 (scope A1): an HTTP block status or a
         // challenge page that arrived AS a response (the
         // static client hands error statuses through as
         // responses) escalates the same way — the browser
         // view's session is the one road through a check.
-        val response = staticResult.value
         val blocked = response.status in BLOCK_STATUSES ||
             SiteCheck.isChallengePage(response.body)
         if (blocked && mode != RenderMode.STATIC_ONLY) {
@@ -306,6 +353,21 @@ class EscalatingPageFetcher(
         val result = renderSettled(url)
         if (result !is AppResult.Ok) return result
         val body = result.value.body
+        // v1.3.4 (T4): the rendered road's page shape joins
+        // the source's diagnostics too — for walled sources
+        // the render is often the ONLY road that sees the
+        // wall, and its markers are the evidence.
+        PageShapeLog.record(
+            PageShape(
+                sessionKey = sessionKey,
+                status = result.value.status,
+                title = PageShapeLog.titleOf(body),
+                markers = PageShapeLog.markersIn(body),
+                host = CookieParsing.hostOf(result.value.finalUrl)
+                    ?: CookieParsing.hostOf(url) ?: "",
+                atMs = System.currentTimeMillis()
+            )
+        )
         if (SiteCheck.isChallengePage(body)) {
             return AppResult.Err(
                 AppError.ProviderDown(

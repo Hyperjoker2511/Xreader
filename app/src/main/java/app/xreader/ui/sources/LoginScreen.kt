@@ -30,6 +30,38 @@ import app.xreader.ui.common.PrimaryPill
 import java.net.URI
 
 /**
+ * v1.3.4 (U2): the sanctioned screen's invariants, as pure
+ * constants a JVM test can pin.
+ *
+ * The user's phone (Galaxy M31) has a DEAD bottom screen
+ * strip, and check widgets (Turnstile & friends) anchor near
+ * the viewport bottom — so the web area must always be able
+ * to scroll its widget into view, and the viewport's bottom
+ * edge must sit well clear of the dead strip: the confirm
+ * bar already lifts ~88dp off the screen's bottom edge, and
+ * the web area carries ~40dp more of bottom inset on top of
+ * that (total lift ≥ ~128dp).
+ */
+object SanctionedScreenSpec {
+    /** Extra bottom inset inside the web area, in dp. */
+    const val WEB_AREA_BOTTOM_INSET_DP = 40
+
+    /** The confirm bar's existing lift off the screen's
+     * bottom edge (12dp column padding + 76dp spacer), in dp. */
+    const val CONFIRM_BAR_BOTTOM_LIFT_DP = 88
+
+    /** The web area must scroll — a check widget anchored
+     * low on the page is only reachable if it can be
+     * scrolled into view. Always true. */
+    const val REQUIRES_SCROLL = true
+
+    /** Total bottom lift for content at the web viewport's
+     * bottom edge, in dp. */
+    fun totalBottomLiftDp(): Int =
+        CONFIRM_BAR_BOTTOM_LIFT_DP + WEB_AREA_BOTTOM_INSET_DP
+}
+
+/**
  * The assisted login (PLAN §9.3): a plain built-in browser where the
  * USER signs in and passes any checks himself — there is deliberately
  * no automation here, no CAPTCHA solving, nothing that pretends to be
@@ -47,14 +79,25 @@ fun LoginScreen(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
-    val webView = remember(request.sessionKey, request.url) {
+    // v1.3.4 (U2/U3): open the failure's own page when one was
+    // named (e.g. the source's reader page, where its check
+    // widget lives); the site root otherwise, as before. The
+    // UA is whatever this WebView already uses — no per-screen
+    // override is introduced here, so the flow's UA stays
+    // consistent start to finish.
+    val effectiveUrl = request.targetUrl ?: request.url
+    val webView = remember(request.sessionKey, effectiveUrl) {
         WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            // The page must be able to scroll (SanctionedScreenSpec):
+            // scrolling stays enabled so a low-anchored check
+            // widget can always be brought into view.
+            isVerticalScrollBarEnabled = true
             webViewClient = WebViewClient()
             CookieManager.getInstance().setAcceptCookie(true)
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-            loadUrl(request.url)
+            loadUrl(effectiveUrl)
         }
     }
     DisposableEffect(webView) {
@@ -86,7 +129,7 @@ fun LoginScreen(
                     style = MaterialTheme.typography.titleMedium
                 )
                 Text(
-                    request.url,
+                    effectiveUrl,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
@@ -94,9 +137,19 @@ fun LoginScreen(
             }
         }
         Spacer(Modifier.height(8.dp))
+        // v1.3.4 (U2): the web area carries the spec's bottom
+        // inset INSIDE its own bounds — the viewport's bottom
+        // edge (where check widgets anchor) sits the inset
+        // higher, on top of the confirm bar's own lift, so the
+        // widget is always clear of the phone's dead bottom
+        // strip and scrollable into view.
         AndroidView(
             factory = { webView },
             modifier = Modifier.weight(1f).fillMaxWidth()
+                .padding(
+                    bottom = SanctionedScreenSpec
+                        .WEB_AREA_BOTTOM_INSET_DP.dp
+                )
         )
         Spacer(Modifier.height(8.dp))
         Text(
@@ -124,13 +177,13 @@ fun LoginScreen(
             },
             onClick = {
                 val cookieManager = CookieManager.getInstance()
-                val currentUrl = webView.url ?: request.url
+                val currentUrl = webView.url ?: effectiveUrl
                 val host = CookieParsing.hostOf(currentUrl)
                     ?: CookieParsing.hostOf(request.url) ?: ""
                 val cookies = LinkedHashMap<String, String>()
                 // Capture for the page's host and its parent domain —
                 // sites scatter session cookies across both.
-                for (candidate in cookieCandidateUrls(currentUrl, request.url)) {
+                for (candidate in cookieCandidateUrls(currentUrl, effectiveUrl)) {
                     cookieManager.getCookie(candidate)?.let { header ->
                         cookies.putAll(CookieParsing.parseCookieHeader(header))
                     }

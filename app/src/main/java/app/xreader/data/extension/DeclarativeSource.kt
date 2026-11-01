@@ -38,7 +38,11 @@ class DeclarativeSource(
     /** The rules this source runs on (exposed so the host can apply
      * the source's own cleaner rules in the fetch path). */
     val config: DeclarativeConfig,
-    private val context: SourceContext
+    private val context: SourceContext,
+    /** v1.3.4 (T1): the encrypted store the read-token
+     * coordinator persists through (the app's SessionStore in
+     * production; null in probes/tests that stay memory-only). */
+    private val readTokenStore: SessionStore? = null
 ) : Source {
 
     override val id: String get() = config.id
@@ -2311,19 +2315,166 @@ class DeclarativeSource(
         ajax: ChapterTextAjax,
         endpoint: String
     ): SourceChapterContent {
-        val spec = config.chapter
+        // v1.3.4 (T1/T2): the credential-aware entry. A source
+        // whose config declares an operation token
+        // (FenrirRealm) runs the read-token lifecycle around
+        // the fetch; every other source takes exactly the
+        // road it always did.
+        val tokenSpec = config.credentials?.operationToken
+        val coordinator = tokenSpec?.let {
+            ReadTokenCoordinators.forSource(config.id, it, readTokenStore)
+        }
+        // A comfortably valid held token rides proactively —
+        // the common case costs no extra round trip.
+        var authToken = coordinator?.currentToken()
+        var response = fetchAjax(chapter, ajax, endpoint, tokenSpec, authToken?.value)
+        if (response.status in 200..299) {
+            coordinator?.noteIssued(response.headers)
+        }
+        val root = runCatching {
+            ajaxJson.parseToJsonElement(response.body)
+        }.getOrNull() as? JsonObject
+        val format = (root?.get(FORMAT_FIELD) as? JsonPrimitive)?.contentOrNull
+        // T2: an encrypted-format record is TERMINAL — the
+        // app never opted into encrypted delivery and never
+        // decrypts; the honest state is a locked chapter,
+        // not a scrape and not a sign-in demand.
+        if (format.equals(FORMAT_ENCRYPTED, ignoreCase = true)) {
+            throw SourceException(ENCRYPTED_CHAPTER_MESSAGE)
+        }
+        val lockedByField = ajax.jsonLockField?.let { field ->
+            (root?.get(field) as? JsonPrimitive)?.booleanOrNull == true
+        } ?: false
+        val locked = lockedByField ||
+            format.equals(FORMAT_LOCKED, ignoreCase = true) ||
+            response.status == 401
+        if (response.status in 200..299 && !locked) {
+            return processAjaxResponse(chapter, ajax, response)
+        }
+        if (!locked && response.status !in 200..299) {
+            throw SourceException("the site answered HTTP ${response.status}")
+        }
+        // LOCKED (or an unauthenticated 401): terminal for
+        // the text leg. With no credential contract the
+        // typed locked failure stands — NEVER a body scrape.
+        if (coordinator == null || tokenSpec == null) {
+            if (response.status !in 200..299 && !lockedByField &&
+                !format.equals(FORMAT_LOCKED, ignoreCase = true)
+            ) {
+                throw SourceException("the site answered HTTP ${response.status}")
+            }
+            throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
+        }
+        // The mint road: ONE mint (single-flight, shared with
+        // every concurrent locked chapter), ONE retry. A
+        // proactive token that was already attached and STILL
+        // answered locked is revoked server-side whatever its
+        // clock says — invalidate its generation first so the
+        // mint below is a genuine fresh mint, not a replay.
+        if (authToken != null) coordinator.invalidate(authToken.generation)
+        val chapterHint = (root?.get(REMINT_ID_FIELD) as? JsonPrimitive)
+            ?.contentOrNull
+            ?: (root?.get(REMINT_UUID_FIELD) as? JsonPrimitive)?.contentOrNull
+            ?: chapter.id.substringAfterLast('/').takeIf { it.isNotBlank() }
+        when (val outcome = coordinator.token(context.http, chapterHint)) {
+            is ReadTokenCoordinator.MintOutcome.Ready -> {
+                response = fetchAjax(
+                    chapter, ajax, endpoint, tokenSpec, outcome.token
+                )
+                if (response.status in 200..299) {
+                    coordinator.noteIssued(response.headers)
+                }
+                val retryRoot = runCatching {
+                    ajaxJson.parseToJsonElement(response.body)
+                }.getOrNull() as? JsonObject
+                val retryFormat = (retryRoot?.get(FORMAT_FIELD)
+                    as? JsonPrimitive)?.contentOrNull
+                if (retryFormat.equals(FORMAT_ENCRYPTED, ignoreCase = true)) {
+                    throw SourceException(ENCRYPTED_CHAPTER_MESSAGE)
+                }
+                val stillLocked = (ajax.jsonLockField?.let { field ->
+                    (retryRoot?.get(field) as? JsonPrimitive)
+                        ?.booleanOrNull == true
+                } ?: false) ||
+                    retryFormat.equals(FORMAT_LOCKED, ignoreCase = true) ||
+                    response.status == 401
+                if (stillLocked) {
+                    // Only THIS generation may be invalidated
+                    // by this failure — a newer token minted
+                    // meanwhile is untouched.
+                    coordinator.invalidate(outcome.generation)
+                    throw SourceException(STAYED_LOCKED_MESSAGE)
+                }
+                if (response.status !in 200..299) {
+                    throw SourceException(
+                        "the site answered HTTP ${response.status}"
+                    )
+                }
+                return processAjaxResponse(chapter, ajax, response)
+            }
+            ReadTokenCoordinator.MintOutcome.ChallengeRequired ->
+                throw SourceException(
+                    "${FetchClassification.MINT_CHALLENGE_MARKER}: " +
+                        "the site wants its human check finished " +
+                        "before the reading pass is issued"
+                )
+            ReadTokenCoordinator.MintOutcome.SessionDead ->
+                throw SourceException(
+                    "${FetchClassification.SESSION_DEAD_MARKER}: " +
+                        "sign in again to keep reading"
+                )
+            is ReadTokenCoordinator.MintOutcome.RateLimited ->
+                throw SourceException(
+                    "the site is ${FetchClassification.AVAILABILITY_MARKER} " +
+                        "(HTTP 429) — it asked for a pause before " +
+                        "issuing more reading passes"
+                )
+            is ReadTokenCoordinator.MintOutcome.Unavailable ->
+                throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
+        }
+    }
+
+    /** One AJAX text fetch: the declared method/headers plus
+     * the operation token when one is held AND the endpoint's
+     * host is one the token's contract declares (origin-exact
+     * — a token never rides to an undeclared host). */
+    private fun fetchAjax(
+        chapter: SourceChapter,
+        ajax: ChapterTextAjax,
+        endpoint: String,
+        tokenSpec: OperationTokenSpec?,
+        tokenValue: String?
+    ): app.xreader.extensionapi.HostResponse {
+        val resolved = resolveUrl(endpoint)
+        val headers = LinkedHashMap(ajax.headers)
+        if (tokenSpec != null && tokenValue != null) {
+            val host = CookieParsing.hostOf(resolved)
+            if (host != null && tokenSpec.appliesTo(host)) {
+                headers[tokenSpec.headerName] = tokenSpec.prefix + tokenValue
+            }
+        }
         // v1.3.0 (E1): reader APIs that take the chapter
         // address in a POST body (WTR-LAB) ride the same seam —
         // headers, session, whitelist, rate limit unchanged.
-        val response = if (ajax.method.equals("POST", ignoreCase = true)) {
+        return if (ajax.method.equals("POST", ignoreCase = true)) {
             context.http.post(
-                resolveUrl(endpoint),
-                ajax.bodyFor(chapter.id) ?: "",
-                headers = ajax.headers
+                resolved, ajax.bodyFor(chapter.id) ?: "", headers = headers
             )
         } else {
-            context.http.get(resolveUrl(endpoint), ajax.headers)
+            context.http.get(resolved, headers)
         }
+    }
+
+    /** The payload half of the AJAX read (v1.3.4: split from
+     * the fetch so the credential road can re-enter it after
+     * a mint + retry). Behaviour unchanged from the original
+     * ajaxChapterContent body. */
+    private fun processAjaxResponse(
+        chapter: SourceChapter,
+        ajax: ChapterTextAjax,
+        response: app.xreader.extensionapi.HostResponse
+    ): SourceChapterContent {
+        val spec = config.chapter
         if (response.status !in 200..299) {
             throw SourceException("the site answered HTTP ${response.status}")
         }
@@ -2662,6 +2813,32 @@ class DeclarativeSource(
             "the chapter's text came back empty — the chapter is " +
                 "paid or locked, or the site changed how it serves " +
                 "chapter text"
+
+        /** v1.3.4 (T1/T2): the credential-gated record shape
+         * (FenrirRealm): the answer's own format field, its
+         * encrypted variant, and the remint hints a locked
+         * record carries for the mint body. */
+        const val FORMAT_FIELD = "content_format"
+        const val FORMAT_LOCKED = "locked"
+        const val FORMAT_ENCRYPTED = "encrypted"
+        const val REMINT_ID_FIELD = "remint_chapter_id"
+        const val REMINT_UUID_FIELD = "remint_chapter_uuid"
+
+        /** v1.3.4 (T2): an encrypted-format record is terminal
+         * and honest — the app never opted into encrypted
+         * delivery and never decrypts. Carries the
+         * classifier's protected-format marker. */
+        const val ENCRYPTED_CHAPTER_MESSAGE =
+            "the site served this chapter in a protected format " +
+                "the app can't open " +
+                "(${FetchClassification.ENCRYPTED_MARKER})"
+
+        /** v1.3.4 (T1): even a fresh token didn't unlock the
+         * chapter — a LOCKED state, not a sign-in demand. */
+        const val STAYED_LOCKED_MESSAGE =
+            "the chapter stayed locked even after the reading " +
+                "pass was renewed " +
+                "(${FetchClassification.STAYED_LOCKED_MARKER})"
 
         /** The AJAX mode's JSON reader: the tree's existing
          * kotlinx.serialization (no new dependency). */
