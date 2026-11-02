@@ -1,12 +1,19 @@
-# Xreader
+<p align="center">
+  <img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="160" alt="Xreader" />
+</p>
 
-**A beautiful reader for novels and manga** — pure-black AMOLED design, real frosted glass, and a source engine that learns new sites on its own.
+<h1 align="center">Xreader</h1>
+
+<p align="center"><strong>A beautiful reader for novels and manga</strong> — pure-black AMOLED design, real frosted glass, and a source engine that learns new sites on its own.</p>
+
+<p align="center">
 
 > **Where things stand:** novels are fully supported today. Manga — Keiyoushi sources and a dedicated image reader — is in development for the next major update; until it lands, manga sources added to the app will honestly say they need the manga update rather than pretend to work.
 
 [![Release](https://img.shields.io/github/v/release/Hyperjoker2511/Xreader)](https://github.com/Hyperjoker2511/Xreader/releases)
 [![Licence](https://img.shields.io/github/license/Hyperjoker2511/Xreader)](LICENSE)
 ![Android](https://img.shields.io/badge/Android-8.0%2B-green)
+</p>
 
 ## Download
 
