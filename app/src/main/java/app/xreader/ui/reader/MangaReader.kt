@@ -39,9 +39,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -59,6 +67,7 @@ import coil.request.ImageRequest
 import coil.size.Dimension
 import coil.size.Size
 import java.io.File
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -111,8 +120,12 @@ fun MangaReader(
     restoreScrollFraction: Float,
     restoreHint: PageHint,
     restoreGeneration: Int,
-    doubleTapToZoom: Boolean,
-    disableZoomOut: Boolean,
+    /** v1.5.0 (Part C): the resolved manga settings for
+     * this series (global defaults + its overrides). */
+    settings: MangaSettings,
+    /** v1.5.0 (Part C): hardware/volume-key turns, shared
+     * with the text readers (direction: +1 next, −1 prev). */
+    externalTurns: kotlinx.coroutines.flow.SharedFlow<Int>,
     assetFile: (String) -> File,
     onPosition: (pageIndex: Int, fraction: Float) -> Unit,
     onNextChapter: () -> Unit,
@@ -152,21 +165,33 @@ fun MangaReader(
     val screenWidthPx = remember(context) {
         context.resources.displayMetrics.widthPixels
     }
-    LaunchedEffect(currentPage, mode, lowRam, pages) {
+    LaunchedEffect(currentPage, mode, lowRam, pages, settings.cropBorders) {
         val loader = context.imageLoader
         for (index in MangaPreload.window(currentPage, pageCount, mode, lowRam)) {
             val page = pages.pages.getOrNull(index) ?: continue
             if (!MangaPageSources.needsNetwork(page)) continue
+            // v1.5.0 (steer B3): zero speculative prefetch
+            // for hostile-flagged hosts — pages load when
+            // the reader actually reaches them.
+            if (app.xreader.data.extension.HostPoliteness
+                    .isHostileUrl(page.url)
+            ) {
+                continue
+            }
             runCatching {
                 loader.enqueue(
                     mangaPageRequest(
                         context, page.url, lowRam, screenWidthPx,
-                        pages.referer
+                        pages.referer, settings.cropBorders
                     )
                 )
             }
         }
     }
+
+    // v1.5.0 (Part C): the chrome seekbar's jump request —
+    // consumed by whichever mode is on screen.
+    var jumpRequest by remember(chapterKey) { mutableStateOf<Int?>(null) }
 
     Box(
         Modifier
@@ -183,6 +208,9 @@ fun MangaReader(
                 screenWidthPx = screenWidthPx,
                 palette = palette,
                 hasNext = hasNext,
+                settings = settings,
+                externalTurns = externalTurns,
+                jumpRequest = jumpRequest,
                 assetFile = assetFile,
                 onPosition = { page, fraction ->
                     currentPage = page
@@ -192,7 +220,8 @@ fun MangaReader(
                 onNextChapter = onNextChapter,
                 onToggleChrome = onToggleChrome
             )
-            ImageReaderMode.PAGED -> PagedPages(
+            ImageReaderMode.PAGED, ImageReaderMode.PAGED_RTL,
+            ImageReaderMode.PAGED_VERTICAL -> PagedPages(
                 pages = pages,
                 chapterKey = chapterKey,
                 startPage = anchorPage,
@@ -201,8 +230,9 @@ fun MangaReader(
                 screenWidthPx = screenWidthPx,
                 palette = palette,
                 hasNext = hasNext,
-                doubleTapToZoom = doubleTapToZoom,
-                disableZoomOut = disableZoomOut,
+                settings = settings,
+                externalTurns = externalTurns,
+                jumpRequest = jumpRequest,
                 assetFile = assetFile,
                 onPosition = { page, fraction ->
                     currentPage = page
@@ -215,6 +245,22 @@ fun MangaReader(
             )
         }
 
+        // v1.5.0 (Part C): the donor's colour filter — one
+        // RGBA overlay above the pages, below the chrome
+        // (Komikku's ReaderContentOverlay, adapted). A plain
+        // non-interactive layer: touches fall through it.
+        if (settings.colorFilter && settings.colorFilterArgb != 0L) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        androidx.compose.ui.graphics.Color(
+                            settings.colorFilterArgb.toInt()
+                        )
+                    )
+            )
+        }
+
         MangaChrome(
             visible = chromeVisible,
             reduceMotion = reduceMotion,
@@ -224,6 +270,9 @@ fun MangaReader(
             chapterFooter = chapterFooter,
             pageLine = MangaProgress.pageLine(currentPage, pageCount),
             mode = mode,
+            currentPage = currentPage,
+            pageCount = pageCount,
+            onJumpPage = { target -> jumpRequest = target },
             hasPrevious = hasPrevious,
             hasNext = hasNext,
             onBack = onBack,
@@ -284,7 +333,8 @@ internal fun mangaPageRequest(
     model: Any,
     lowRam: Boolean,
     screenWidthPx: Int,
-    referer: String? = null
+    referer: String? = null,
+    cropBorders: Boolean = false
 ): ImageRequest =
     ImageRequest.Builder(context)
         .data(model)
@@ -296,6 +346,12 @@ internal fun mangaPageRequest(
         )
         .apply {
             if (referer != null) addHeader("Referer", referer)
+            // v1.5.0 (Part C): crop borders rides the request
+            // (display and preload share the shape, so a
+            // warmed page stays a cache hit).
+            if (cropBorders) {
+                transformations(CropBordersTransformation)
+            }
         }
         .build()
 
@@ -308,16 +364,89 @@ private fun mangaPageModel(
     lowRam: Boolean,
     screenWidthPx: Int,
     assetFile: (String) -> File,
-    referer: String? = null
+    referer: String? = null,
+    cropBorders: Boolean = false
 ): ImageRequest {
     val context = LocalContext.current
-    return remember(page, lowRam, screenWidthPx, referer) {
+    return remember(page, lowRam, screenWidthPx, referer, cropBorders) {
         val model: Any = when (val source = MangaPageSources.sourceFor(page)) {
             is MangaPageSource.Local -> assetFile(source.fileName)
             is MangaPageSource.Remote -> source.url
         }
-        mangaPageRequest(context, model, lowRam, screenWidthPx, referer)
+        mangaPageRequest(context, model, lowRam, screenWidthPx, referer, cropBorders)
     }
+}
+
+/**
+ * v1.5.0 (Part C): Komikku's crop-borders, Xreader-native —
+ * a Coil transformation that trims each page's uniform
+ * margins per [BorderTrim]'s sampled scan (the donor trims
+ * in its native decoder; the behaviour — uniform border
+ * lines removed, content untouched — is the same). A page
+ * whose scan finds nothing passes through unchanged.
+ */
+object CropBordersTransformation : coil.transform.Transformation {
+
+    override val cacheKey: String = "xreader-crop-borders-v1"
+
+    override suspend fun transform(
+        input: android.graphics.Bitmap,
+        size: coil.size.Size
+    ): android.graphics.Bitmap {
+        val insets = BorderTrim.scan(
+            width = input.width,
+            height = input.height,
+            pixelAt = { x, y -> input.getPixel(x, y) }
+        )
+        if (insets.isEmpty) return input
+        val width = input.width - insets.left - insets.right
+        val height = input.height - insets.top - insets.bottom
+        if (width <= 0 || height <= 0) return input
+        return android.graphics.Bitmap.createBitmap(
+            input, insets.left, insets.top, width, height
+        )
+    }
+}
+
+/** v1.5.0 (Part C): the page colour matrix for the
+ * greyscale / invert switches (the donor's combined-paint
+ * recipe): saturation 0 and/or the −1 invert matrix. Null
+ * when neither is in force (the common case costs nothing). */
+internal fun mangaColorFilter(
+    grayscale: Boolean,
+    invert: Boolean
+): androidx.compose.ui.graphics.ColorFilter? {
+    if (!grayscale && !invert) return null
+    // The luminance row Android's saturation-0 matrix uses;
+    // inversion after greyscale negates it and adds the
+    // 255 offset (the two matrices composed by hand, so the
+    // result is exact and allocation-free).
+    val lr = 0.213f
+    val lg = 0.715f
+    val lb = 0.072f
+    val values = when {
+        grayscale && invert -> floatArrayOf(
+            -lr, -lg, -lb, 0f, 255f,
+            -lr, -lg, -lb, 0f, 255f,
+            -lr, -lg, -lb, 0f, 255f,
+            0f, 0f, 0f, 1f, 0f
+        )
+        grayscale -> floatArrayOf(
+            lr, lg, lb, 0f, 0f,
+            lr, lg, lb, 0f, 0f,
+            lr, lg, lb, 0f, 0f,
+            0f, 0f, 0f, 1f, 0f
+        )
+        else -> floatArrayOf(
+            -1f, 0f, 0f, 0f, 255f,
+            0f, -1f, 0f, 0f, 255f,
+            0f, 0f, -1f, 0f, 255f,
+            0f, 0f, 0f, 1f, 0f
+        )
+    }
+    return androidx.compose.ui.graphics.ColorFilter.colorMatrix(
+        androidx.compose.ui.graphics.ColorMatrix(values)
+    )
 }
 
 // ── Webtoon (vertical scroll) ────────────────────────────────
@@ -332,6 +461,9 @@ private fun WebtoonPages(
     screenWidthPx: Int,
     palette: ReaderPalette,
     hasNext: Boolean,
+    settings: MangaSettings,
+    externalTurns: kotlinx.coroutines.flow.SharedFlow<Int>,
+    jumpRequest: Int?,
     assetFile: (String) -> File,
     onPosition: (pageIndex: Int, fraction: Float) -> Unit,
     onReachedEnd: () -> Unit,
@@ -344,6 +476,11 @@ private fun WebtoonPages(
             firstVisibleItemIndex = startPage.coerceIn(0, maxOf(0, pageCount - 1)),
             firstVisibleItemScrollOffset = 0
         )
+    }
+    val scope = rememberCoroutineScope()
+    var currentPage by remember(chapterKey) { mutableStateOf(startPage) }
+    val colorFilter = remember(settings.grayscale, settings.invertColors) {
+        mangaColorFilter(settings.grayscale, settings.invertColors)
     }
 
     // The reading position: the page occupying the largest
@@ -364,6 +501,7 @@ private fun WebtoonPages(
             }
             .distinctUntilChanged()
             .collect { (page, pagePosition) ->
+                currentPage = page
                 onPosition(
                     page,
                     MangaProgress.fractionForPagePosition(pagePosition, pageCount)
@@ -380,36 +518,218 @@ private fun WebtoonPages(
             .collect { onReachedEnd() }
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize()
+    fun scrollByViewport(direction: Int) {
+        val height = listState.layoutInfo.viewportSize.height
+        if (height <= 0) return
+        scope.launch {
+            listState.animateScrollBy(direction * height * 0.9f)
+        }
+    }
+
+    // Volume-key / hardware turns scroll the strip a screen.
+    LaunchedEffect(chapterKey) {
+        externalTurns.collect { direction ->
+            scrollByViewport(if (direction >= 0) 1 else -1)
+        }
+    }
+    // The chrome seekbar's jump.
+    LaunchedEffect(jumpRequest) {
+        jumpRequest?.let { target ->
+            listState.animateScrollToItem(
+                target.coerceIn(0, maxOf(0, pageCount - 1))
+            )
+        }
+    }
+    // Auto-scroll (the reader's shared auto-scroll settings).
+    LaunchedEffect(
+        settings.autoScrollEnabled, settings.autoScrollSpeed, chapterKey
     ) {
-        items(pageCount, key = { index -> "page-$index" }) { index ->
-            val page = pages.pages[index]
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .readerTapToggle("manga-$chapterKey-$index") { _, _ ->
-                        onToggleChrome()
-                    }
-            ) {
-                AsyncImage(
-                    model = mangaPageModel(
-                        page, lowRam, screenWidthPx, assetFile,
-                        pages.referer
-                    ),
-                    contentDescription = "Page ${index + 1}",
-                    contentScale = ContentScale.FillWidth,
-                    modifier = Modifier.fillMaxWidth()
-                )
+        if (settings.autoScrollEnabled) {
+            val step = 1f + settings.autoScrollSpeed.coerceIn(1f, 10f)
+            while (true) {
+                listState.scrollBy(step)
+                delay(16)
             }
         }
-        item(key = "end-card") {
-            MangaEndCard(
-                palette = palette,
-                hasNext = hasNext,
-                onNextChapter = onNextChapter
+    }
+
+    // ── Strip zoom (v1.5.0 Part C — the donor webtoon
+    // viewer's double-tap / pinch zoom, Compose-native): a
+    // graphicsLayer over the whole strip; double-tap toggles
+    // 1× ↔ 2× about the tap point, two-finger pinch zooms,
+    // and a mostly-horizontal drag pans while zoomed. The
+    // list's own one-finger vertical scroll is untouched:
+    // the gesture layer only consumes what it uses.
+    var zoomScale by remember(chapterKey) { mutableStateOf(1f) }
+    var zoomPanX by remember(chapterKey) { mutableStateOf(0f) }
+    var zoomOrigin by remember(chapterKey) {
+        mutableStateOf(androidx.compose.ui.unit.IntOffset(0, 0))
+    }
+    var viewportSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+    val minZoom = if (settings.webtoonDisableZoomOut) 1f else 0.5f
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onSizeChanged { viewportSize = it }
+            .then(
+                if (settings.webtoonDoubleTapZoom) {
+                    Modifier.pointerInput(chapterKey) {
+                        detectTapGestures(
+                            onDoubleTap = { offset ->
+                                if (zoomScale > 1.01f) {
+                                    zoomScale = 1f
+                                    zoomPanX = 0f
+                                } else {
+                                    zoomOrigin = androidx.compose.ui.unit.IntOffset(
+                                        offset.x.toInt(), offset.y.toInt()
+                                    )
+                                    zoomScale = 2f
+                                }
+                            }
+                        )
+                    }
+                } else {
+                    Modifier
+                }
             )
+            .then(
+                if (settings.webtoonPinchZoom) {
+                    Modifier.pointerInput(chapterKey) {
+                        awaitPointerEventScope {
+                            var previousDistance = 0f
+                            while (true) {
+                                val event = awaitPointerEvent(
+                                    androidx.compose.ui.input.pointer.PointerEventPass.Initial
+                                )
+                                val pressed = event.changes.filter { it.pressed }
+                                if (pressed.size >= 2) {
+                                    val a = pressed[0].position
+                                    val b = pressed[1].position
+                                    val distance =
+                                        kotlin.math.hypot(
+                                            (a.x - b.x).toDouble(),
+                                            (a.y - b.y).toDouble()
+                                        ).toFloat()
+                                    if (previousDistance > 0f) {
+                                        val ratio = distance / previousDistance
+                                        zoomScale = (zoomScale * ratio)
+                                            .coerceIn(minZoom, 5f)
+                                        if (zoomScale <= 1.001f) zoomPanX = 0f
+                                    }
+                                    previousDistance = distance
+                                    event.changes.forEach { it.consume() }
+                                } else {
+                                    previousDistance = 0f
+                                    // Pan while zoomed: a clearly
+                                    // horizontal one-finger drag.
+                                    val change = pressed.singleOrNull()
+                                    if (change != null && zoomScale > 1.01f) {
+                                        val delta = change.positionChange()
+                                        if (kotlin.math.abs(delta.x) >
+                                            kotlin.math.abs(delta.y) * 1.5f
+                                        ) {
+                                            zoomPanX += delta.x
+                                            change.consume()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Modifier
+                }
+            )
+    ) {
+        val sidePadding = with(
+            androidx.compose.ui.platform.LocalDensity.current
+        ) {
+            (viewportSize.width * settings.webtoonSidePadding / 100)
+                .toDp()
+        }
+        LazyColumn(
+            state = listState,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                horizontal = sidePadding
+            ),
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = zoomScale
+                    scaleY = zoomScale
+                    translationX = zoomPanX
+                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
+                        if (viewportSize.width > 0) {
+                            zoomOrigin.x.toFloat() / viewportSize.width
+                        } else {
+                            0.5f
+                        },
+                        if (viewportSize.height > 0) {
+                            zoomOrigin.y.toFloat() / viewportSize.height
+                        } else {
+                            0.5f
+                        }
+                    )
+                }
+        ) {
+            items(pageCount, key = { index -> "page-$index" }) { index ->
+                val page = pages.pages[index]
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .readerTapToggle("manga-$chapterKey-$index") { xFraction, yFraction ->
+                            // Tap zones are viewport-relative:
+                            // the callback's fractions are of the
+                            // PAGE box, so translate the vertical
+                            // one into the viewport first.
+                            val info = listState.layoutInfo
+                            val item = info.visibleItemsInfo
+                                .firstOrNull { it.index == index }
+                            val viewH = info.viewportSize.height
+                                .coerceAtLeast(1)
+                            val fractionY = if (item != null) {
+                                (item.offset + yFraction * item.size) / viewH
+                            } else {
+                                yFraction
+                            }
+                            when (
+                                MangaTapZones.action(
+                                    layout = settings.tapLayout,
+                                    invert = settings.tapInvert,
+                                    smaller = settings.smallerTapZones,
+                                    mode = settings.mode,
+                                    x = xFraction,
+                                    y = fractionY
+                                )
+                            ) {
+                                MangaTapAction.MENU -> onToggleChrome()
+                                MangaTapAction.NEXT,
+                                MangaTapAction.RIGHT -> scrollByViewport(1)
+                                MangaTapAction.PREV,
+                                MangaTapAction.LEFT -> scrollByViewport(-1)
+                            }
+                        }
+                ) {
+                    AsyncImage(
+                        model = mangaPageModel(
+                            page, lowRam, screenWidthPx, assetFile,
+                            pages.referer, settings.cropBorders
+                        ),
+                        contentDescription = "Page ${index + 1}",
+                        contentScale = ContentScale.FillWidth,
+                        colorFilter = colorFilter,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+            item(key = "end-card") {
+                MangaEndCard(
+                    palette = palette,
+                    hasNext = hasNext,
+                    onNextChapter = onNextChapter
+                )
+            }
         }
     }
 }
@@ -471,8 +791,9 @@ private fun PagedPages(
     screenWidthPx: Int,
     palette: ReaderPalette,
     hasNext: Boolean,
-    doubleTapToZoom: Boolean,
-    disableZoomOut: Boolean,
+    settings: MangaSettings,
+    externalTurns: kotlinx.coroutines.flow.SharedFlow<Int>,
+    jumpRequest: Int?,
     assetFile: (String) -> File,
     onPosition: (pageIndex: Int, fraction: Float) -> Unit,
     onReachedEnd: () -> Unit,
@@ -492,8 +813,9 @@ private fun PagedPages(
             screenWidthPx = screenWidthPx,
             palette = palette,
             hasNext = hasNext,
-            doubleTapToZoom = doubleTapToZoom,
-            disableZoomOut = disableZoomOut,
+            settings = settings,
+            externalTurns = externalTurns,
+            jumpRequest = jumpRequest,
             assetFile = assetFile,
             onPosition = onPosition,
             onReachedEnd = onReachedEnd,
@@ -514,8 +836,9 @@ private fun PagedPager(
     screenWidthPx: Int,
     palette: ReaderPalette,
     hasNext: Boolean,
-    doubleTapToZoom: Boolean,
-    disableZoomOut: Boolean,
+    settings: MangaSettings,
+    externalTurns: kotlinx.coroutines.flow.SharedFlow<Int>,
+    jumpRequest: Int?,
     assetFile: (String) -> File,
     onPosition: (pageIndex: Int, fraction: Float) -> Unit,
     onReachedEnd: () -> Unit,
@@ -524,6 +847,10 @@ private fun PagedPager(
     onToggleChrome: () -> Unit
 ) {
     val pageCount = pages.size
+    val rtl = settings.mode ==
+        app.xreader.domain.reader.ImageReaderMode.PAGED_RTL
+    val vertical = settings.mode ==
+        app.xreader.domain.reader.ImageReaderMode.PAGED_VERTICAL
     // One extra pager page: the end card, so turning past the
     // last page lands somewhere honest (and the chapter is
     // finished by arriving there, like the text paged
@@ -534,6 +861,18 @@ private fun PagedPager(
     )
     var zoomActive by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val colorFilter = remember(settings.grayscale, settings.invertColors) {
+        mangaColorFilter(settings.grayscale, settings.invertColors)
+    }
+    val contentScale = when (settings.scaleType) {
+        app.xreader.domain.reader.MangaScaleType.FIT -> ContentScale.Fit
+        app.xreader.domain.reader.MangaScaleType.FIT_WIDTH ->
+            ContentScale.FillWidth
+        app.xreader.domain.reader.MangaScaleType.FIT_HEIGHT ->
+            ContentScale.FillHeight
+        app.xreader.domain.reader.MangaScaleType.STRETCH ->
+            ContentScale.FillBounds
+    }
 
     LaunchedEffect(pagerState, chapterKey) {
         snapshotFlow { pagerState.settledPage }
@@ -550,11 +889,32 @@ private fun PagedPager(
             }
     }
 
-    HorizontalPager(
-        state = pagerState,
-        userScrollEnabled = !zoomActive,
-        modifier = Modifier.fillMaxSize()
-    ) { index ->
+    fun turnBy(delta: Int) {
+        val target = (pagerState.currentPage + delta)
+            .coerceIn(0, pageCount)
+        if (delta < 0 && pagerState.currentPage == 0) {
+            onPreviousChapter()
+        } else if (target != pagerState.currentPage) {
+            scope.launch { pagerState.animateScrollToPage(target) }
+        }
+    }
+
+    // Volume-key / hardware turns.
+    LaunchedEffect(chapterKey) {
+        externalTurns.collect { direction ->
+            turnBy(if (direction >= 0) 1 else -1)
+        }
+    }
+    // The chrome seekbar's jump.
+    LaunchedEffect(jumpRequest) {
+        jumpRequest?.let { target ->
+            pagerState.animateScrollToPage(
+                target.coerceIn(0, maxOf(0, pageCount - 1))
+            )
+        }
+    }
+
+    val pageContent: @Composable (Int) -> Unit = { index ->
         if (index >= pageCount) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 MangaEndCard(
@@ -568,53 +928,68 @@ private fun PagedPager(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .readerTapToggle("manga-paged-$chapterKey-$index") { xFraction, _ ->
-                        when {
-                            zoomActive -> Unit
-                            xFraction < EDGE_TAP_FRACTION -> {
-                                if (pagerState.currentPage > 0) {
-                                    scope.launch {
-                                        pagerState.animateScrollToPage(
-                                            pagerState.currentPage - 1
-                                        )
-                                    }
-                                } else {
-                                    onPreviousChapter()
-                                }
+                    .readerTapToggle("manga-paged-$chapterKey-$index") { xFraction, yFraction ->
+                        if (!zoomActive) {
+                            // v1.5.0 (Part C): the donor's tap
+                            // zones (L-shape / right-and-left /
+                            // Kindle-style / edges / off), the
+                            // policy already mirrored for RTL.
+                            // LEFT/RIGHT are screen moves; the
+                            // policy's RTL swap keeps them
+                            // reading-correct in both directions.
+                            when (
+                                MangaTapZones.action(
+                                    layout = settings.tapLayout,
+                                    invert = settings.tapInvert,
+                                    smaller = settings.smallerTapZones,
+                                    mode = settings.mode,
+                                    x = xFraction,
+                                    y = yFraction,
+                                    rtl = rtl
+                                )
+                            ) {
+                                MangaTapAction.MENU -> onToggleChrome()
+                                MangaTapAction.PREV,
+                                MangaTapAction.LEFT -> turnBy(-1)
+                                MangaTapAction.NEXT,
+                                MangaTapAction.RIGHT -> turnBy(1)
                             }
-                            xFraction > 1f - EDGE_TAP_FRACTION -> {
-                                scope.launch {
-                                    pagerState.animateScrollToPage(
-                                        pagerState.currentPage + 1
-                                    )
-                                }
-                            }
-                            else -> onToggleChrome()
                         }
                     }
             ) {
                 ZoomableImage(
                     model = mangaPageModel(
                         page, lowRam, screenWidthPx, assetFile,
-                        pages.referer
+                        pages.referer, settings.cropBorders
                     ),
                     contentDescription = "Page ${index + 1}",
-                    contentScale = ContentScale.Fit,
+                    contentScale = contentScale,
                     imageModifier = Modifier.fillMaxSize(),
-                    doubleTapToZoom = doubleTapToZoom,
-                    disableZoomOut = disableZoomOut,
+                    doubleTapToZoom = settings.doubleTapToZoomPaged,
+                    disableZoomOut = settings.disableZoomOut,
                     onZoomActiveChanged = { active -> zoomActive = active },
+                    colorFilter = colorFilter,
                     modifier = Modifier.fillMaxSize()
                 )
             }
         }
     }
-}
 
-/** The tap-zone split for paged mode: the outer thirds turn,
- * the middle toggles the chrome (the text readers' tap
- * language). */
-private const val EDGE_TAP_FRACTION = 1f / 3f
+    if (vertical) {
+        androidx.compose.foundation.pager.VerticalPager(
+            state = pagerState,
+            userScrollEnabled = !zoomActive,
+            modifier = Modifier.fillMaxSize()
+        ) { index -> pageContent(index) }
+    } else {
+        HorizontalPager(
+            state = pagerState,
+            reverseLayout = rtl,
+            userScrollEnabled = !zoomActive,
+            modifier = Modifier.fillMaxSize()
+        ) { index -> pageContent(index) }
+    }
+}
 
 // ── Shared pieces ────────────────────────────────────────────
 
@@ -677,6 +1052,9 @@ private fun MangaChrome(
     chapterFooter: String,
     pageLine: String,
     mode: ImageReaderMode,
+    currentPage: Int,
+    pageCount: Int,
+    onJumpPage: (Int) -> Unit,
     hasPrevious: Boolean,
     hasNext: Boolean,
     onBack: () -> Unit,
@@ -802,13 +1180,41 @@ private fun MangaChrome(
                                 Icon(Icons.Filled.SkipNext, "Next chapter")
                             }
                         }
-                        // The reading-mode switch: two labelled
+                        // v1.5.0 (Part C): the page seekbar —
+                        // drag to any page in the chapter
+                        // (the donor's reader slider).
+                        if (pageCount > 1) {
+                            androidx.compose.material3.Slider(
+                                value = currentPage.toFloat(),
+                                onValueChange = { value ->
+                                    onJumpPage(value.toInt())
+                                },
+                                valueRange = 0f..(pageCount - 1).toFloat(),
+                                colors = androidx.compose.material3
+                                    .SliderDefaults.colors(
+                                        thumbColor = palette.text,
+                                        activeTrackColor = palette.text
+                                            .copy(alpha = 0.85f),
+                                        inactiveTrackColor = palette.text
+                                            .copy(alpha = 0.25f)
+                                    ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        // The reading-mode switch: labelled
                         // choices, always visible with the
-                        // chrome. Changing it here rewrites
-                        // THIS series only (the ViewModel
-                        // stores the per-book override).
+                        // chrome (the row scrolls sideways now
+                        // that there are four modes). Changing
+                        // it here rewrites THIS series only
+                        // (the ViewModel stores the per-book
+                        // override).
                         Row(
-                            Modifier.fillMaxWidth(),
+                            Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(
+                                    androidx.compose.foundation
+                                        .rememberScrollState()
+                                ),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             for (option in ImageReaderMode.entries) {

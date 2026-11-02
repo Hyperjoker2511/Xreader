@@ -196,6 +196,11 @@ fun LoginScreen(
             },
             onClick = {
                 val cookieManager = CookieManager.getInstance()
+                // v1.5.0 (steer A4): flush before reading —
+                // the jar's newest cookies (the solve's own)
+                // must be durable before they are harvested
+                // into the session store.
+                cookieManager.flush()
                 val currentUrl = webView.url ?: effectiveUrl
                 val fallbackHost = CookieParsing.hostOf(currentUrl)
                     ?: CookieParsing.hostOf(request.url) ?: ""

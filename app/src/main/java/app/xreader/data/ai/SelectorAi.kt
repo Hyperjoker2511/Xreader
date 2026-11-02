@@ -105,8 +105,14 @@ class SelectorAi(
         }
         val bookUrl = bookResponse.finalUrl.ifBlank { url }
         val bookDoc = Jsoup.parse(bookResponse.body, bookUrl)
-        if (bookResponse.status in setOf(401, 403) ||
-            LinkInference.needsLogin(bookDoc, bookUrl)
+        // v1.5.0 (ANONYMOUS-FIRST, user rule 2026-11-02):
+        // same evidence rule as the heuristic prober — a
+        // login ask needs a login wall on the page itself or
+        // a whole-page check interstitial, never a bare
+        // 401/403 (which falls to the honest failure below).
+        if (LinkInference.needsLogin(bookDoc, bookUrl) ||
+            app.xreader.data.extension.SiteCheck
+                .isChallengePage(bookResponse.body)
         ) {
             return Outcome.LoginRequired(bookUrl, host)
         }

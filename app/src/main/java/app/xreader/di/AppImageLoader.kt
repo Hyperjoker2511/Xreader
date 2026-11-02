@@ -61,6 +61,13 @@ object AppImageLoader {
             .apply {
                 if (callFactory != null) callFactory(callFactory)
             }
+            // v1.5.0 (steer B1): Keiyoushi player pages are
+            // served through their own source's image
+            // request (registered URLs only — see
+            // PlayerImageBridge).
+            .components {
+                add(PlayerImageFetcher.Factory())
+            }
             .memoryCache {
                 MemoryCache.Builder(context)
                     .maxSizePercent(memoryCacheFraction(totalRamMb))

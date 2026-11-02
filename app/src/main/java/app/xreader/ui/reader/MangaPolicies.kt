@@ -1,7 +1,13 @@
 package app.xreader.ui.reader
 
+import app.xreader.data.prefs.BookReaderOverride
 import app.xreader.domain.content.ChapterPage
 import app.xreader.domain.reader.ImageReaderMode
+import app.xreader.domain.reader.MangaOrientation
+import app.xreader.domain.reader.MangaScaleType
+import app.xreader.domain.reader.MangaTapLayout
+import app.xreader.domain.reader.ReaderConfig
+import app.xreader.domain.reader.TapInvert
 import kotlin.math.roundToInt
 
 /**
@@ -200,7 +206,8 @@ object MangaPreload {
                     if (i < pageCount) indices += i
                 }
             }
-            ImageReaderMode.PAGED -> {
+            ImageReaderMode.PAGED, ImageReaderMode.PAGED_RTL,
+            ImageReaderMode.PAGED_VERTICAL -> {
                 if (current + 1 < pageCount) indices += current + 1
                 if (!lowRam && current - 1 >= 0) indices += current - 1
             }
@@ -228,4 +235,287 @@ object MangaDecode {
         } else {
             ReaderImageDecode.MAX_WIDTH_PX
         }
+}
+
+// ── v1.5.0 (Part C — the Komikku transplant) ────────────────
+
+/**
+ * The manga reader's resolved settings for ONE series: the
+ * global defaults from [ReaderConfig] with the series' own
+ * overrides ([BookReaderOverride]) laid over the fields a
+ * series may carry (the option-scope rule: Settings = the
+ * default for all; in-reader changes = that series only).
+ * Pure data — the reader composables consume this, the
+ * ViewModel builds it.
+ */
+data class MangaSettings(
+    val mode: ImageReaderMode,
+    val tapLayout: MangaTapLayout,
+    val tapInvert: TapInvert,
+    val smallerTapZones: Boolean,
+    val doubleTapToZoomPaged: Boolean,
+    val disableZoomOut: Boolean,
+    val webtoonDoubleTapZoom: Boolean,
+    val webtoonPinchZoom: Boolean,
+    val webtoonDisableZoomOut: Boolean,
+    val cropBorders: Boolean,
+    val grayscale: Boolean,
+    val invertColors: Boolean,
+    val colorFilter: Boolean,
+    val colorFilterArgb: Long,
+    val webtoonSidePadding: Int,
+    val scaleType: MangaScaleType,
+    val orientation: MangaOrientation,
+    val volumeKeyTurn: Boolean,
+    val autoScrollEnabled: Boolean,
+    val autoScrollSpeed: Float
+) {
+    companion object {
+        /** The donor's per-family crop defaults differ
+         * (paged vs webtoon toggles); the series override is
+         * a single switch over whichever family is active. */
+        fun resolve(
+            global: ReaderConfig,
+            override: BookReaderOverride,
+            mode: ImageReaderMode
+        ): MangaSettings {
+            val cropGlobal = if (mode == ImageReaderMode.WEBTOON) {
+                global.cropBordersWebtoon
+            } else {
+                global.cropBordersPaged
+            }
+            return MangaSettings(
+                mode = mode,
+                tapLayout = override.mangaTapLayout ?: global.mangaTapLayout,
+                tapInvert = global.mangaTapInvert,
+                smallerTapZones = global.mangaSmallerTapZones,
+                doubleTapToZoomPaged = global.doubleTapToZoom,
+                disableZoomOut = global.disableZoomOut,
+                webtoonDoubleTapZoom = global.webtoonDoubleTapZoom,
+                webtoonPinchZoom = global.webtoonPinchZoom,
+                webtoonDisableZoomOut = global.webtoonDisableZoomOut,
+                cropBorders = override.mangaCropBorders ?: cropGlobal,
+                grayscale = global.mangaGrayscale,
+                invertColors = global.mangaInvertColors,
+                colorFilter = global.mangaColorFilter,
+                colorFilterArgb = global.mangaColorFilterArgb,
+                webtoonSidePadding = global.webtoonSidePadding,
+                scaleType = global.mangaScaleType,
+                orientation = override.mangaOrientation
+                    ?: global.mangaOrientation,
+                volumeKeyTurn = global.volumeKeyTurn,
+                autoScrollEnabled = global.autoScrollEnabled,
+                autoScrollSpeed = global.autoScrollSpeed
+            )
+        }
+    }
+}
+
+/** What one tap in the image reader means. LEFT/RIGHT are
+ * the Right-and-left layout's directional moves — the
+ * caller maps them to page turns in its reading direction. */
+enum class MangaTapAction { PREV, NEXT, MENU, LEFT, RIGHT }
+
+/**
+ * Tap-zone geometry, adapted from Komikku's
+ * ViewerNavigation + its five navigation layouts
+ * (Apache-2.0): normalised regions over the page, the
+ * constant top-5% menu strip, inversion applied to the tap
+ * point (equivalent to the donor inverting each rect), and
+ * the smaller-zones variant (25% regions instead of 33%).
+ * A point in no region is the menu — the donor's own
+ * default. Pure, so the gate pins every layout's map.
+ */
+object MangaTapZones {
+
+    private data class Region(
+        val left: Float,
+        val top: Float,
+        val right: Float,
+        val bottom: Float,
+        val action: MangaTapAction
+    ) {
+        fun contains(x: Float, y: Float): Boolean =
+            x >= left && x < right && y >= top && y < bottom
+    }
+
+    private fun regions(
+        layout: MangaTapLayout,
+        smaller: Boolean
+    ): List<Region> {
+        val s1 = if (smaller) 0.25f else 1f / 3f
+        val s2 = 1f - s1
+        return when (layout) {
+            MangaTapLayout.L_SHAPE -> listOf(
+                Region(0f, s1, s1, s2, MangaTapAction.PREV),
+                Region(0f, 0f, 1f, s1, MangaTapAction.PREV),
+                Region(s2, s1, 1f, s2, MangaTapAction.NEXT),
+                Region(0f, s2, 1f, 1f, MangaTapAction.NEXT)
+            )
+            MangaTapLayout.RIGHT_AND_LEFT -> listOf(
+                Region(0f, 0f, s1, 1f, MangaTapAction.LEFT),
+                Region(s2, 0f, 1f, 1f, MangaTapAction.RIGHT)
+            )
+            MangaTapLayout.KINDLISH -> listOf(
+                Region(s1, s1, 1f, 1f, MangaTapAction.NEXT),
+                Region(0f, s1, s1, 1f, MangaTapAction.PREV)
+            )
+            MangaTapLayout.EDGE -> listOf(
+                Region(0f, 0f, s1, 1f, MangaTapAction.NEXT),
+                Region(s1, s2, s2, 1f, MangaTapAction.PREV),
+                Region(s2, 0f, 1f, 1f, MangaTapAction.NEXT)
+            )
+            MangaTapLayout.DISABLED,
+            MangaTapLayout.DEFAULT -> emptyList()
+        }
+    }
+
+    /** The layout in force: DEFAULT resolves the donor's
+     * way — right-and-left for paged modes, the L shape for
+     * the strip/vertical family. */
+    fun effectiveLayout(
+        layout: MangaTapLayout,
+        mode: ImageReaderMode
+    ): MangaTapLayout = when (layout) {
+        MangaTapLayout.DEFAULT -> when (mode) {
+            ImageReaderMode.WEBTOON, ImageReaderMode.PAGED_VERTICAL ->
+                MangaTapLayout.L_SHAPE
+            ImageReaderMode.PAGED, ImageReaderMode.PAGED_RTL ->
+                MangaTapLayout.RIGHT_AND_LEFT
+        }
+        else -> layout
+    }
+
+    /**
+     * The action for a tap at ([x], [y]) (fractions of the
+     * reader surface, 0..1). [rtl] mirrors the directional
+     * actions for a right-to-left pager (the donor's RTL
+     * viewer semantics: LEFT and RIGHT swap their page
+     * meaning; PREV/NEXT regions are unaffected).
+     */
+    fun action(
+        layout: MangaTapLayout,
+        invert: TapInvert,
+        smaller: Boolean,
+        mode: ImageReaderMode,
+        x: Float,
+        y: Float,
+        rtl: Boolean = false
+    ): MangaTapAction {
+        val px = if (invert == TapInvert.HORIZONTAL ||
+            invert == TapInvert.BOTH
+        ) {
+            1f - x
+        } else {
+            x
+        }
+        val py = if (invert == TapInvert.VERTICAL ||
+            invert == TapInvert.BOTH
+        ) {
+            1f - y
+        } else {
+            y
+        }
+        val hit = regions(effectiveLayout(layout, mode), smaller)
+            .firstOrNull { it.contains(px, py) }
+        val action = when {
+            hit != null -> hit.action
+            // The donor's constant menu strip.
+            py < 0.05f -> MangaTapAction.MENU
+            else -> MangaTapAction.MENU
+        }
+        return if (rtl) {
+            when (action) {
+                MangaTapAction.LEFT -> MangaTapAction.RIGHT
+                MangaTapAction.RIGHT -> MangaTapAction.LEFT
+                else -> action
+            }
+        } else {
+            action
+        }
+    }
+}
+
+/**
+ * Border trimming, the donor's crop-borders behaviour as a
+ * pure scan: from each edge, count the lines (rows/columns)
+ * that are uniformly the edge's colour (within [tolerance]
+ * per channel), stopping at the first line that isn't.
+ * Sampling: a line is judged on samples every [SAMPLE_STEP]
+ * pixels plus its ends — a page edge's margin is uniform by
+ * construction, and sampling keeps the scan O(lines ×
+ * samples) instead of O(pixels). The cap keeps a fully
+ * blank page from being trimmed to nothing.
+ */
+object BorderTrim {
+
+    data class Insets(
+        val left: Int,
+        val top: Int,
+        val right: Int,
+        val bottom: Int
+    ) {
+        val isEmpty: Boolean
+            get() = left == 0 && top == 0 && right == 0 && bottom == 0
+    }
+
+    const val SAMPLE_STEP = 16
+
+    /** Never trim more than this share of a dimension. */
+    const val MAX_TRIM_FRACTION = 0.45f
+
+    fun scan(
+        width: Int,
+        height: Int,
+        tolerance: Int = 24,
+        pixelAt: (Int, Int) -> Int
+    ): Insets {
+        if (width <= 2 || height <= 2) return Insets(0, 0, 0, 0)
+        fun similar(a: Int, b: Int): Boolean {
+            fun channel(v: Int, shift: Int) = (v shr shift) and 0xFF
+            return kotlin.math.abs(channel(a, 16) - channel(b, 16)) <= tolerance &&
+                kotlin.math.abs(channel(a, 8) - channel(b, 8)) <= tolerance &&
+                kotlin.math.abs(channel(a, 0) - channel(b, 0)) <= tolerance
+        }
+        fun rowIsBorder(y: Int, reference: Int): Boolean {
+            var x = 0
+            while (x < width) {
+                if (!similar(pixelAt(x, y), reference)) return false
+                x += SAMPLE_STEP
+            }
+            return similar(pixelAt(width - 1, y), reference)
+        }
+        fun columnIsBorder(x: Int, reference: Int): Boolean {
+            var y = 0
+            while (y < height) {
+                if (!similar(pixelAt(x, y), reference)) return false
+                y += SAMPLE_STEP
+            }
+            return similar(pixelAt(x, height - 1), reference)
+        }
+        val maxX = (width * MAX_TRIM_FRACTION).toInt()
+        val maxY = (height * MAX_TRIM_FRACTION).toInt()
+        var top = 0
+        val topRef = pixelAt(0, 0)
+        while (top < maxY && rowIsBorder(top, topRef)) top++
+        var bottom = 0
+        val bottomRef = pixelAt(0, height - 1)
+        while (bottom < maxY && rowIsBorder(height - 1 - bottom, bottomRef)) {
+            bottom++
+        }
+        var left = 0
+        val leftRef = pixelAt(0, 0)
+        while (left < maxX && columnIsBorder(left, leftRef)) left++
+        var right = 0
+        val rightRef = pixelAt(width - 1, 0)
+        while (right < maxX && columnIsBorder(width - 1 - right, rightRef)) {
+            right++
+        }
+        // A page that is ALL border (a blank scan) keeps a
+        // sane window instead of collapsing to zero size.
+        if (left + right >= width - 2 || top + bottom >= height - 2) {
+            return Insets(0, 0, 0, 0)
+        }
+        return Insets(left, top, right, bottom)
+    }
 }

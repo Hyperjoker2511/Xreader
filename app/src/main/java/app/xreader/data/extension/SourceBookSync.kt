@@ -256,38 +256,83 @@ class SourceBookSync(
             author = book.author.ifBlank { null },
             description = book.description.ifBlank { null }
         )
-        val pair = withContext(Dispatchers.IO) {
-            if (resolved.source is DeclarativeSource ||
-                resolved.source is LiveSource
-            ) {
-                // v1.2.0 (A2): Live sources take the ONE-fetch
-                // combined read too — they have had a
-                // detailsAndChapters all along; falling back to
-                // separate details() + chapters() calls fetched
-                // the book page once per call on top of the
-                // derivation fetch.
-                service.guarded(resolved) { source ->
-                    when (source) {
-                        is DeclarativeSource -> source.detailsAndChapters(ref)
-                        is LiveSource -> source.detailsAndChapters(ref)
-                        else -> error("unreachable: guarded source kind changed")
-                    }
+        val pair = fetchDetailsAndChapters(resolved, ref)
+        var effectiveBook = book
+        var details: SourceBook
+        var chapters: List<app.xreader.extensionapi.SourceChapter>
+        when (pair) {
+            is AppResult.Ok -> {
+                details = pair.value.first
+                chapters = pair.value.second
+            }
+            is AppResult.Err -> {
+                // v1.5.0 (steer A6): the re-link ladder's
+                // second rung — the bound BOOK address itself
+                // is dead (the series moved or was re-posted
+                // under a new release). Before the failure is
+                // allowed to stand, title-search re-bind to a
+                // same-title release that actually has
+                // chapters (the winner must at least cover
+                // the chapters this book already holds). Only
+                // a dead-book-shaped error climbs the ladder —
+                // a rate limit or a network failure is not a
+                // moved book and keeps its honest error.
+                val detail = pair.error.detail?.lowercase().orEmpty()
+                val deadBook = "wasn't found" in detail ||
+                    "not found" in detail ||
+                    "http 404" in detail ||
+                    "no longer" in detail
+                val rebound = if (deadBook) {
+                    rebindToFullerRelease(
+                        resolved, book, sourceId, remoteId,
+                        minChapters = maxOf(
+                            1, chapterDao.forBook(book.id).size
+                        )
+                    )
+                } else {
+                    null
                 }
-            } else {
-                val details = service.guarded(resolved) { it.details(ref) }
-                when (details) {
-                    is AppResult.Err -> details
-                    is AppResult.Ok -> service.guarded(resolved) { it.chapters(ref) }
-                        .map { chapters -> details.value to chapters }
-                }
+                if (rebound == null) return pair
+                effectiveBook = rebound.first
+                details = rebound.second.first
+                chapters = rebound.second.second
             }
         }
-        val (details, chapters) = when (pair) {
-            is AppResult.Err -> return pair
-            is AppResult.Ok -> pair.value
+        // v1.5.0 (A5): MULTI-RELEASE BINDING. Some sites carry
+        // one series in several releases (multiple publishers
+        // — the Comix exhibit: the opened release had 0
+        // chapters while a sibling release carried the full
+        // run). A book whose bound release resolves to ZERO
+        // chapters while the book has no stored chapters is
+        // bound to the wrong release: search the source for
+        // the same title ONCE, and if a sibling release
+        // actually has chapters, rebind the book to the
+        // fullest one (same local row, same progress — only
+        // the release address changes) and read on that
+        // release. A 0-chapter resolution while a sibling has
+        // chapters is a failed binding, never a success.
+        if (chapters.isEmpty() && chapterDao.forBook(book.id).isEmpty()) {
+            val rebound = rebindToFullerRelease(resolved, book, sourceId, remoteId)
+            if (rebound != null) {
+                effectiveBook = rebound.first
+                details = rebound.second.first
+                chapters = rebound.second.second
+            }
+        }
+        // v1.5.0 (steer A7): zero chapters is never stored
+        // as success — and never as destruction either. A
+        // refresh that came back with an EMPTY list while
+        // the book already holds chapters keeps the stored
+        // list and its totals exactly as they are (a walled
+        // or drifted fetch must not erase a library); only
+        // the details half lands.
+        val storedChapters = chapterDao.forBook(book.id)
+        if (chapters.isEmpty() && storedChapters.isNotEmpty()) {
+            val detailsOnly = applyDetails(effectiveBook, details)
+            return AppResult.Ok(detailsOnly)
         }
         val now = nowMs()
-        val withDetails = applyDetails(book, details)
+        val withDetails = applyDetails(effectiveBook, details)
         // v1.3.3 (V132-CHECK 21): a refresh whose walk was
         // cut by the time budget gathered a PARTIAL list —
         // it lands (reading beats nothing), but the book
@@ -322,6 +367,95 @@ class SourceBookSync(
         failoverScheduler(updated)
         return AppResult.Ok(updated)
     }
+
+    /** The one details+chapters read [refresh] and the
+     * multi-release rebind share: the combined one-fetch read
+     * for declarative/live sources, the two-call read for
+     * every other source kind. */
+    private suspend fun fetchDetailsAndChapters(
+        resolved: SourceHandle,
+        ref: SourceBook
+    ): AppResult<Pair<SourceBook, List<app.xreader.extensionapi.SourceChapter>>> =
+        withContext(Dispatchers.IO) {
+            if (resolved.source is DeclarativeSource ||
+                resolved.source is LiveSource
+            ) {
+                // v1.2.0 (A2): Live sources take the ONE-fetch
+                // combined read too — they have had a
+                // detailsAndChapters all along; falling back to
+                // separate details() + chapters() calls fetched
+                // the book page once per call on top of the
+                // derivation fetch.
+                service.guarded(resolved) { source ->
+                    when (source) {
+                        is DeclarativeSource -> source.detailsAndChapters(ref)
+                        is LiveSource -> source.detailsAndChapters(ref)
+                        else -> error("unreachable: guarded source kind changed")
+                    }
+                }
+            } else {
+                val details = service.guarded(resolved) { it.details(ref) }
+                when (details) {
+                    is AppResult.Err -> details
+                    is AppResult.Ok -> service.guarded(resolved) { it.chapters(ref) }
+                        .map { chapters -> details.value to chapters }
+                }
+            }
+        }
+
+    /**
+     * v1.5.0 (A5): the multi-release rebind. Searches the
+     * source for the book's own title, tries up to two
+     * same-title candidates at OTHER addresses, and returns
+     * the rebound book row (new release address persisted,
+     * same local id) with the fullest candidate's
+     * details+chapters — or null when no sibling release has
+     * chapters either (the book then keeps its honest
+     * 0-chapter state on its original release).
+     */
+    private suspend fun rebindToFullerRelease(
+        resolved: SourceHandle,
+        book: Book,
+        sourceId: String,
+        failedRemoteId: String,
+        minChapters: Int = 1
+    ): Pair<Book, Pair<SourceBook, List<app.xreader.extensionapi.SourceChapter>>>? {
+        val search = withContext(Dispatchers.IO) {
+            service.guarded(resolved) { it.search(book.title, 1) }
+        }
+        val results = (search as? AppResult.Ok)?.value?.books
+            ?: return null
+        val wanted = releaseTitleKey(book.title)
+        val candidates = results.filter { candidate ->
+            candidate.id != failedRemoteId &&
+                releaseTitleKey(candidate.title) == wanted &&
+                wanted.isNotEmpty()
+        }.take(2)
+        var best: Triple<SourceBook, SourceBook,
+            List<app.xreader.extensionapi.SourceChapter>>? = null
+        for (candidate in candidates) {
+            val fetched = fetchDetailsAndChapters(resolved, candidate)
+            val (candidateDetails, candidateChapters) =
+                (fetched as? AppResult.Ok)?.value ?: continue
+            if (candidateChapters.size >= minChapters &&
+                (best == null || candidateChapters.size > best.third.size)
+            ) {
+                best = Triple(candidate, candidateDetails, candidateChapters)
+            }
+        }
+        val winner = best ?: return null
+        val rebound = book.copy(
+            remoteId = SourceBookIds.encode(sourceId, winner.first.id)
+        )
+        bookDao.update(rebound)
+        return rebound to (winner.second to winner.third)
+    }
+
+    /** Same-series releases share a title modulo case,
+     * spacing and punctuation ("The Greatest Estate
+     * Developer" from two publishers is one series). */
+    private fun releaseTitleKey(title: String): String =
+        title.lowercase().filter { it.isLetterOrDigit() }
 
     /** Merge fetched DETAILS onto the stored row and persist:
      * the details half of a refresh, shared with the decoupled

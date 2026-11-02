@@ -113,19 +113,30 @@ class V133FixEngineTest {
     @Test
     fun `empty catalogue on a gated source is a suspected wall`() {
         val gated = config(needsRendering = true)
-        assertEquals(
-            SessionNeed.Kind.SITE_CHECK,
+        // v1.5.0 (ANONYMOUS-FIRST, user rule 2026-11-02 —
+        // SUPERSEDES the v1.3.4 T4 rule): an empty catalogue
+        // alone is NOT evidence of a wall. Without challenge
+        // evidence from the page actually received, no solve
+        // is offered — public rendered sources were being
+        // asked for checks they never demanded.
+        assertNull(
             SessionNeed.forEmptyCatalogue(gated, hasSession = false)
         )
-        // v1.3.4 (T4) SUPERSEDES the v1.3.3 line below: on
-        // device the wall still extracted as an empty success
-        // WITH a session-shaped state (V133-CHECK 7), so the
-        // action is now keyed on the source's gated nature
-        // ALONE — a session's existence no longer suppresses
-        // it, and the copy states the reason as unknown.
+        // With the wall's own evidence (the received page
+        // carried the check's markers), the solve IS offered.
         assertEquals(
             SessionNeed.Kind.SITE_CHECK,
-            SessionNeed.forEmptyCatalogue(gated, hasSession = true)
+            SessionNeed.forEmptyCatalogue(
+                gated, hasSession = false, challengeSeen = true
+            )
+        )
+        // A session that exists is never re-asked — the
+        // catalogue states the signed-in-but-empty truth
+        // instead (A7ii).
+        assertNull(
+            SessionNeed.forEmptyCatalogue(
+                gated, hasSession = true, challengeSeen = true
+            )
         )
         // An ungated source's empty catalogue stays empty.
         assertNull(
@@ -138,9 +149,24 @@ class V133FixEngineTest {
             SessionNeed.Kind.SIGN_IN,
             SessionNeed.forEmptyCatalogue(signIn, hasSession = false)
         )
-        assertEquals(
-            SessionNeed.Kind.SIGN_IN,
+        assertNull(
             SessionNeed.forEmptyCatalogue(signIn, hasSession = true)
+        )
+        // The evidence helper: markers on the received page,
+        // or a challenge failure detail, are evidence; an
+        // ordinary failure detail is not.
+        assertTrue(
+            SessionNeed.challengeSeenIn(listOf("cf-turnstile"), null)
+        )
+        assertTrue(
+            SessionNeed.challengeSeenIn(
+                emptyList(), SiteCheck.challengeDetail()
+            )
+        )
+        assertTrue(
+            !SessionNeed.challengeSeenIn(
+                emptyList(), "the site answered HTTP 500"
+            )
         )
     }
 
@@ -625,10 +651,13 @@ class V133FixEngineTest {
                 "the budget must bind (took ${elapsedMs}ms)",
                 elapsedMs < 5_000
             )
-            // And on a needsRendering source that degraded
-            // state IS the check-needed hand-off.
-            assertEquals(
-                SessionNeed.Kind.SITE_CHECK,
+            // v1.5.0 (ANONYMOUS-FIRST, user rule 2026-11-02):
+            // the degraded state is an honest retryable
+            // failure — it is NOT a check hand-off anymore.
+            // A timeout proves nothing about a gate; only a
+            // received challenge page's own detail classifies
+            // as a check.
+            assertNull(
                 SessionNeed.classify(
                     config(needsRendering = true), result.error
                 )

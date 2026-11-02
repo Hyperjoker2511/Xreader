@@ -212,6 +212,11 @@ class OkHttpTransport(
             .callTimeout(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .followRedirects(false)
             .followSslRedirects(false)
+            // v1.5.0 (steer B3): burst-shaping for
+            // hostile-flagged hosts (see HostPoliteness).
+            .addInterceptor(
+                app.xreader.data.extension.HostPolitenessInterceptor()
+            )
             .build()
     }
 }

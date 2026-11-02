@@ -1244,42 +1244,229 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     label = { Text("Right to left") }
                 )
             }
-            // Manga programme (M2b): the GLOBAL manga reading
-            // mode (option-scope rule tier 1) — ReaderConfig
-            // .imageMode via ReaderPrefs, the same flow this
-            // screen already collects as `reader`. A series'
-            // own mode, set inside its reader, still wins for
-            // that series only.
+            // Manga programme (M2b) + v1.5.0 (Part C — the
+            // Komikku surface): the GLOBAL manga settings
+            // (option-scope rule tier 1) — ReaderConfig via
+            // ReaderPrefs, the same flow this screen already
+            // collects as `reader`. A series' own choices,
+            // made inside its reader, still win for that
+            // series only.
             Text("Manga reading:", style = MaterialTheme.typography.bodyLarge)
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
-                    selected = reader.imageMode == ImageReaderMode.WEBTOON,
-                    onClick = {
-                        viewModel.updateReader {
-                            it.copy(imageMode = ImageReaderMode.WEBTOON)
-                        }
-                    },
-                    label = { Text("Scrolling (webtoon)") }
-                )
-                FilterChip(
-                    selected = reader.imageMode == ImageReaderMode.PAGED,
-                    onClick = {
-                        viewModel.updateReader {
-                            it.copy(imageMode = ImageReaderMode.PAGED)
-                        }
-                    },
-                    label = { Text("Page by page") }
-                )
+                for (option in ImageReaderMode.entries) {
+                    FilterChip(
+                        selected = reader.imageMode == option,
+                        onClick = {
+                            viewModel.updateReader {
+                                it.copy(imageMode = option)
+                            }
+                        },
+                        label = { Text(option.label) }
+                    )
+                }
             }
             Text(
-                "How manga and comics open. You can change it " +
-                    "for a single series while reading that series.",
+                "How manga and comics open. You can change the " +
+                    "mode, tap zones, direction and borders for " +
+                    "a single series while reading that series.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Text("Manga tap zones", style = MaterialTheme.typography.bodyLarge)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                for (option in app.xreader.domain.reader.MangaTapLayout.entries) {
+                    FilterChip(
+                        selected = reader.mangaTapLayout == option,
+                        onClick = {
+                            viewModel.updateReader {
+                                it.copy(mangaTapLayout = option)
+                            }
+                        },
+                        label = { Text(option.label) }
+                    )
+                }
+            }
+            Text("Flip tap zones", style = MaterialTheme.typography.bodyLarge)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                for (option in app.xreader.domain.reader.TapInvert.entries) {
+                    FilterChip(
+                        selected = reader.mangaTapInvert == option,
+                        onClick = {
+                            viewModel.updateReader {
+                                it.copy(mangaTapInvert = option)
+                            }
+                        },
+                        label = { Text(option.label) }
+                    )
+                }
+            }
+            CustomiseSwitch(
+                label = "Smaller tap zones",
+                description = "The turn areas shrink to the outer quarters of the screen.",
+                checked = reader.mangaSmallerTapZones,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(mangaSmallerTapZones = value)
+                    }
+                }
+            )
+            CustomiseSwitch(
+                label = "Webtoon double-tap zoom",
+                description = "In scrolling mode, double-tap a strip to zoom in; double-tap again to fit.",
+                checked = reader.webtoonDoubleTapZoom,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(webtoonDoubleTapZoom = value)
+                    }
+                }
+            )
+            CustomiseSwitch(
+                label = "Webtoon pinch zoom",
+                description = "Two fingers spread or pinch to zoom the scrolling strip.",
+                checked = reader.webtoonPinchZoom,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(webtoonPinchZoom = value)
+                    }
+                }
+            )
+            CustomiseSwitch(
+                label = "Keep webtoon at reading size or larger",
+                description = "Pinching can zoom in but never out past the fitted width.",
+                checked = reader.webtoonDisableZoomOut,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(webtoonDisableZoomOut = value)
+                    }
+                }
+            )
+            CustomiseSwitch(
+                label = "Crop borders — paged",
+                description = "Trim the plain white/black margins off page-by-page pages.",
+                checked = reader.cropBordersPaged,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(cropBordersPaged = value)
+                    }
+                }
+            )
+            CustomiseSwitch(
+                label = "Crop borders — webtoon",
+                description = "Trim the plain white/black margins off scrolling strips.",
+                checked = reader.cropBordersWebtoon,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(cropBordersWebtoon = value)
+                    }
+                }
+            )
+            CustomiseSwitch(
+                label = "Greyscale pages",
+                description = "Read every manga page in black and white.",
+                checked = reader.mangaGrayscale,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(mangaGrayscale = value)
+                    }
+                }
+            )
+            CustomiseSwitch(
+                label = "Invert page colours",
+                description = "Black becomes white and white becomes black — kind on the eyes at night.",
+                checked = reader.mangaInvertColors,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(mangaInvertColors = value)
+                    }
+                }
+            )
+            CustomiseSwitch(
+                label = "Colour tint over pages",
+                description = "A soft colour wash over every page (sepia by default).",
+                checked = reader.mangaColorFilter,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(mangaColorFilter = value)
+                    }
+                }
+            )
+            if (reader.mangaColorFilter) {
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val tints = listOf(
+                        "Sepia" to 0x33FFCC99L,
+                        "Warm" to 0x26FFB37EL,
+                        "Cool" to 0x2699CCFFL,
+                        "Dim" to 0x40000000L
+                    )
+                    for ((name, argb) in tints) {
+                        FilterChip(
+                            selected = reader.mangaColorFilterArgb == argb,
+                            onClick = {
+                                viewModel.updateReader {
+                                    it.copy(mangaColorFilterArgb = argb)
+                                }
+                            },
+                            label = { Text(name) }
+                        )
+                    }
+                }
+            }
+            CustomiseSlider(
+                label = "Webtoon side padding: ${reader.webtoonSidePadding}%",
+                value = reader.webtoonSidePadding.toFloat(),
+                range = 0f..25f,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(webtoonSidePadding = value.toInt())
+                    }
+                }
+            )
+            Text("Page fit", style = MaterialTheme.typography.bodyLarge)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                for (option in app.xreader.domain.reader.MangaScaleType.entries) {
+                    FilterChip(
+                        selected = reader.mangaScaleType == option,
+                        onClick = {
+                            viewModel.updateReader {
+                                it.copy(mangaScaleType = option)
+                            }
+                        },
+                        label = { Text(option.label) }
+                    )
+                }
+            }
+            Text("Manga screen direction", style = MaterialTheme.typography.bodyLarge)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                for (option in app.xreader.domain.reader.MangaOrientation.entries) {
+                    FilterChip(
+                        selected = reader.mangaOrientation == option,
+                        onClick = {
+                            viewModel.updateReader {
+                                it.copy(mangaOrientation = option)
+                            }
+                        },
+                        label = { Text(option.label) }
+                    )
+                }
+            }
         }
 
         // ── Your themes: the full make-your-own editor (R04/R07) ──

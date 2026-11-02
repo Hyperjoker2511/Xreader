@@ -348,15 +348,24 @@ class LinkProber(
         }
         var bookUrl = firstResponse.finalUrl.ifBlank { url }
         var bookDoc: Document = Jsoup.parse(firstResponse.body, bookUrl)
-        // v1.0.6 (W4): a bot-check interstitial routes to the same
-        // sign-in screen in its SITE_CHECK mode — the person does
-        // the check once; the saved session carries it afterwards.
-        val siteCheck = SiteCheck.hasChallengeMarkers(bookDoc)
-        if (firstResponse.status in setOf(401, 403) ||
-            LinkInference.needsLogin(bookDoc, bookUrl) ||
-            siteCheck
-        ) {
-            return Outcome.LoginRequired(bookUrl, host, siteCheck = siteCheck)
+        // v1.0.6 (W4) → v1.5.0 (ANONYMOUS-FIRST, user rule
+        // 2026-11-02): the gate outcome needs EVIDENCE on the
+        // page itself — a login wall (a login signal AND no
+        // usable public structure, LinkInference's own rule)
+        // or a whole-page check interstitial. The old rule
+        // also fired on a bare 401/403 or on challenge
+        // MARKERS anywhere in the chrome (a Turnstile widget
+        // inside a login modal on an otherwise public page),
+        // which sent public sites into a sign-in the site
+        // never asked for and still didn't work. A bare
+        // refusal now falls through to the honest failure
+        // below; a real interstitial still routes to the
+        // sanctioned screen, exactly as before.
+        if (LinkInference.needsLogin(bookDoc, bookUrl)) {
+            return Outcome.LoginRequired(bookUrl, host, siteCheck = false)
+        }
+        if (SiteCheck.isChallengePage(firstResponse.body)) {
+            return Outcome.LoginRequired(bookUrl, host, siteCheck = true)
         }
         if (firstResponse.status !in 200..299) {
             return Outcome.Failed(
@@ -835,6 +844,116 @@ class LinkProber(
         // compete on rank (A4).
         bestDraft?.let {
             if (!tryAllProposers) return Outcome.Ready(it, outcomeLines())
+        }
+
+        // ── v1.5.0 (A2/A3): the API HARVEST proposer ────────
+        // The browser view scouted this site while it
+        // rendered: the calls its own scripts fired are in
+        // the HarvestLog. When they synthesise into an
+        // API-first recipe, drive THAT — the API road is
+        // tried before page scraping, and page rules stay
+        // the fallback below. When the direct API road
+        // fails its drive but the traffic proved the API
+        // exists, ONE more drive runs the same recipe
+        // through the browser view (A3: the site's own JS
+        // client answers — signed/token-gated APIs the
+        // plain road can't satisfy), which the saved config
+        // then carries as needsRendering.
+        run {
+            val harvested = HarvestLog.forSession(
+                ExtensionHttpClient.linkProbeSessionKey(host)
+            )
+            val synthesis = if (harvested.isEmpty()) {
+                null
+            } else {
+                runCatching {
+                    ApiRecipeSynthesizer.synthesize(
+                        harvested,
+                        webBaseUrl = baseOf(bookUrl),
+                        siteName = LinkInference.siteName(bookDoc) ?: host,
+                        bookUrlHint = bookUrl
+                    )
+                }.getOrNull()
+            }
+            if (synthesis != null) {
+                tried("API harvest")
+                val apiConfig = synthesis.config.copy(
+                    id = sourceIdFor(host, bookUrl),
+                    sampleBookUrl = bookUrl
+                )
+                val apiStack = probeStack(
+                    host,
+                    forceRender = forceRender,
+                    extraDomains = synthesis.apiHosts
+                )
+                val apiContext = probeContext(apiStack.fetcher, host)
+                val apiSource = DeclarativeSource(apiConfig, apiContext)
+                val firstBook = runCatching {
+                    apiSource.popular(1).books.firstOrNull()
+                }.getOrNull()
+                if (firstBook != null) {
+                    val directDrive = testDriveScored(
+                        apiConfig, firstBook.id, apiContext
+                    )
+                    consider("API harvest", apiConfig, firstBook.id, directDrive)
+                    var directWon = directDrive.result is AppResult.Ok &&
+                        bestDraft?.config?.popular?.url ==
+                            apiConfig.popular?.url
+                    if (directDrive.result !is AppResult.Ok) {
+                        // A3: the browser-client drive of the
+                        // same recipe — a force-render stack, so
+                        // every API call executes inside the
+                        // browser view where the site's own JS
+                        // client (its signing, its session)
+                        // answers; the rendered JSON is
+                        // unwrapped by the fetch layer as usual.
+                        val clientConfig = apiConfig.copy(
+                            needsRendering = true
+                        )
+                        val clientStack = probeStack(
+                            host,
+                            forceRender = true,
+                            extraDomains = synthesis.apiHosts
+                        )
+                        val clientContext = probeContext(
+                            clientStack.fetcher, host
+                        )
+                        val clientDrive = testDriveScored(
+                            clientConfig, firstBook.id, clientContext
+                        )
+                        consider(
+                            "API harvest (browser client)",
+                            clientConfig, firstBook.id, clientDrive
+                        )
+                        directWon = false
+                    }
+                    // consider() marks any winning draft
+                    // needsRendering when the probe rendered —
+                    // true for the browser-client recipe by
+                    // design, wrong for the direct API recipe
+                    // (its fetches must stay on the plain API
+                    // road). Correct this stage's own winner.
+                    val winner = bestDraft
+                    if (directWon && winner != null &&
+                        winner.config.popular?.url == apiConfig.popular?.url
+                    ) {
+                        bestDraft = winner.copy(
+                            config = winner.config.copy(needsRendering = false)
+                        )
+                    }
+                    bestDraft?.let {
+                        if (!tryAllProposers) {
+                            return Outcome.Ready(it, outcomeLines())
+                        }
+                    }
+                } else {
+                    stageLines += StageLine(
+                        "API harvest", "book list",
+                        "the site's own calls pointed at an API, " +
+                            "but its book list didn't answer"
+                    )
+                }
+            }
         }
 
         tried("inference")
@@ -2691,15 +2810,21 @@ class LinkProber(
         // v1.0.8.1: the wait-for-content hint for renders
         // through this stack (a lane's declared selector).
         waitForSelector: () -> String? = { null },
+        // v1.5.0 (A2): extra domains this stack may open —
+        // the API hosts a harvest synthesis proved the site
+        // itself calls (they join the source's declared
+        // domains when the recipe saves).
+        extraDomains: List<String> = emptyList(),
         // needsRendering stays LAST: three call sites pass it
         // as a trailing lambda.
         needsRendering: () -> Boolean = { false }
     ): ProbeStack {
         val limiter = RateLimiter(minIntervalMs = 0)
+        val domains = listOf(host) + extraDomains
         val client = contextFactory.clientFor(
             sessionKey = ExtensionHttpClient.linkProbeSessionKey(host),
             label = host,
-            permissions = ExtensionPermissions(domains = listOf(host)),
+            permissions = ExtensionPermissions(domains = domains),
             rateLimiter = limiter
         )
         val escalating = contextFactory.escalatingFetcherOrNull(
@@ -2707,7 +2832,7 @@ class LinkProber(
             sessionKey = ExtensionHttpClient.linkProbeSessionKey(host),
             purpose = RenderPurpose.PROBE,
             needsRendering = needsRendering,
-            permissions = { ExtensionPermissions(domains = listOf(host)) },
+            permissions = { ExtensionPermissions(domains = domains) },
             rateLimiter = limiter,
             forceRender = forceRender,
             waitForSelector = waitForSelector

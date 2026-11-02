@@ -328,6 +328,35 @@ fun ReaderScreen(
         }
     }
 
+    // v1.5.0 (Part C): the manga reader's orientation lock —
+    // applies only while an image chapter is open; leaving
+    // restores the system default. (The text reader keeps
+    // its own behaviour.)
+    val mangaOrientation = state.mangaSettings.orientation
+    DisposableEffect(state.mangaPages != null, mangaOrientation) {
+        val activity = context as? Activity
+        if (activity != null && state.mangaPages != null) {
+            activity.requestedOrientation = when (mangaOrientation) {
+                app.xreader.domain.reader.MangaOrientation.PORTRAIT ->
+                    android.content.pm.ActivityInfo
+                        .SCREEN_ORIENTATION_PORTRAIT
+                app.xreader.domain.reader.MangaOrientation.LANDSCAPE ->
+                    android.content.pm.ActivityInfo
+                        .SCREEN_ORIENTATION_LANDSCAPE
+                app.xreader.domain.reader.MangaOrientation.FREE ->
+                    android.content.pm.ActivityInfo
+                        .SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        }
+        onDispose {
+            if (state.mangaPages != null) {
+                activity?.requestedOrientation =
+                    android.content.pm.ActivityInfo
+                        .SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        }
+    }
+
     // -- Eye tracking (Labs): permission + pipeline -------------------------
     val eyeState by viewModel.eyeTracker.state.collectAsStateWithLifecycle()
     val eyeMessage by viewModel.eyeTracker.message.collectAsStateWithLifecycle()
@@ -555,8 +584,8 @@ fun ReaderScreen(
                     restoreScrollFraction = state.restoreScrollFraction,
                     restoreHint = state.restoreHint,
                     restoreGeneration = state.restoreGeneration,
-                    doubleTapToZoom = config.doubleTapToZoom,
-                    disableZoomOut = config.disableZoomOut,
+                    settings = state.mangaSettings,
+                    externalTurns = viewModel.externalTurns,
                     assetFile = { assetFile(bookId, it) },
                     onPosition = { page, fraction ->
                         viewModel.onPosition(page, fraction)
@@ -879,7 +908,24 @@ fun ReaderScreen(
                     onSaveWord = { word -> viewModel.saveWord(word) },
                     bookTerms = state.bookTerms,
                     onBookTermsChange = { pairs -> viewModel.setBookTerms(pairs) },
-                    previewFontFamily = fontFamily
+                    previewFontFamily = fontFamily,
+                    // v1.5.0 (Part C): the manga section rides
+                    // the same sheet for image chapters.
+                    mangaSettings = if (state.mangaPages != null) {
+                        state.mangaSettings
+                    } else {
+                        null
+                    },
+                    onMangaModeChange = { viewModel.setImageMode(it) },
+                    onMangaTapLayoutChange = {
+                        viewModel.setMangaTapLayout(it)
+                    },
+                    onMangaOrientationChange = {
+                        viewModel.setMangaOrientation(it)
+                    },
+                    onMangaCropChange = { viewModel.setMangaCropBorders(it) },
+                    mangaHasOverrides = state.mangaHasOverrides,
+                    onResetMangaOverrides = { viewModel.resetMangaOverrides() }
                 )
                 ActiveSheet.LISTEN -> ListenSheet(
                     ttsState = ttsState ?: app.xreader.data.reader.ReadAloudController.State(),

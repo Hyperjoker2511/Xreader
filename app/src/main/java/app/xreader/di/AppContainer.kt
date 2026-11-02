@@ -659,12 +659,20 @@ class AppContainer(context: Context) {
         )
     }
 
+    /** v1.5.0 (Part B): the player's network preferences —
+     * hoisted so the UA alignment and the helper share ONE
+     * instance (the alignment writes the device UA here;
+     * the helper reads it for every extension request). */
+    val playerNetworkPreferences: NetworkPreferences by lazy {
+        NetworkPreferences(AndroidPreferenceStore(appContext))
+    }
+
     /** K2: the NetworkHelper extensions resolve via Injekt — the
      * donor helper with our cookie jar and our Cloudflare path. */
     val playerNetworkHelper: PlayerNetworkHelper by lazy {
         PlayerNetworkHelper(
             appContext,
-            NetworkPreferences(AndroidPreferenceStore(appContext)),
+            playerNetworkPreferences,
             playerCookieJar,
             playerChallengeBridge
         )
@@ -702,6 +710,30 @@ class AppContainer(context: Context) {
                     "manga sources are unavailable this session.",
                 detail = "${error.javaClass.name}: ${error.message}"
             )
+        }
+        // v1.5.0 (Part B): the player's WebView bridges —
+        // the cookie sync extensions' own WebViews rely on
+        // (seed before a source call, harvest after), and
+        // the one-time UA alignment so the player's HTTP
+        // and WebView traffic present this device's one UA.
+        app.xreader.data.extension.player.PlayerWebViewSync.install(
+            appContext, sessionStore, keyVault
+        )
+        appScope.launch {
+            runCatching {
+                app.xreader.data.extension.player.PlayerWebViewSync
+                    .alignUserAgent(appContext, playerNetworkPreferences)
+            }
+        }
+        // v1.5.0 (steer A4): pin the device WebView's UA for
+        // the declarative engine's HTTP road (see
+        // PinnedUserAgent) — captured once, off the critical
+        // path.
+        appScope.launch {
+            runCatching {
+                app.xreader.data.extension.PinnedUserAgent
+                    .capture(appContext)
+            }
         }
         // Keiyoushi player (K6): the kill switch's live wire —
         // every flip of "Keiyoushi manga sources" (Customise →

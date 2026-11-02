@@ -334,7 +334,8 @@ class DeclarativeSource(
         val path = spec.jsonPath ?: return SourceBookPage(emptyList(), false)
         var array: kotlinx.serialization.json.JsonArray? = null
         var parent: kotlinx.serialization.json.JsonObject? = null
-        for (root in EmbeddedJson.rootsForRead(doc)) {
+        val roots = EmbeddedJson.rootsForRead(doc)
+        for (root in roots) {
             val found = EmbeddedJson.resolve(root, path)
                 as? kotlinx.serialization.json.JsonArray
             if (found != null) {
@@ -347,6 +348,22 @@ class DeclarativeSource(
                         as? kotlinx.serialization.json.JsonObject
                 }
                 break
+            }
+        }
+        if (array == null) {
+            // v1.5.0 (steer A2): the declared path missed —
+            // the envelope drifted (the Chikari class). The
+            // polymorphic scan finds the record array under
+            // whichever standard envelope key the payload
+            // actually used; pagination evidence then reads
+            // off the payload root as before.
+            for (root in roots) {
+                val scanned = EmbeddedJson.scanForArray(root)
+                if (scanned != null) {
+                    array = scanned
+                    parent = root as? kotlinx.serialization.json.JsonObject
+                    break
+                }
             }
         }
         val records = array ?: return SourceBookPage(emptyList(), false)
@@ -1096,18 +1113,41 @@ class DeclarativeSource(
         ): PageFetch? {
             val slug = ChapterListPagination.bookSlugOf(pageUrl)
             val url = resolveUrl(p.endpointFor(id, page, slug, pageUrl))
-            return runCatching {
+            // v1.5.0 (A1 audit, mechanism): a browser's XHR
+            // carries the page it was fired from as the
+            // Referer — and some endpoints refuse the call
+            // without it (Novelight's chapter pagination
+            // answers 403 to a referer-less request, 200
+            // with one; proven live 2026-11-02). The spec's
+            // own headers always win; the book page fills
+            // the gap, exactly as the site's own scripts
+            // experience it.
+            val headers = LinkedHashMap(p.headers)
+            if (headers.keys.none {
+                    it.equals("Referer", ignoreCase = true)
+                }
+            ) {
+                headers["Referer"] = pageUrl
+            }
+
+            // The last attempt's raw body — the hand-off
+            // below reads the shape off the answer already
+            // fetched, never off a second probe request.
+            var lastBody: String? = null
+
+            fun attempt(): PageFetch? = runCatching {
                 val response = if (
                     p.method.equals("POST", ignoreCase = true) &&
                     p.body != null
                 ) {
                     context.http.post(
                         url, p.bodyFor(id, page, slug, pageUrl) ?: "",
-                        headers = p.headers
+                        headers = headers
                     )
                 } else {
-                    context.http.get(url, p.headers)
+                    context.http.get(url, headers)
                 }
+                lastBody = response.body
                 if (response.status !in 200..299) return@runCatching null
                 if (p.jsonArrayPath != null) {
                     val root = runCatching {
@@ -1135,6 +1175,32 @@ class DeclarativeSource(
                 }
                 null
             }
+
+            val first = attempt()
+            // v1.5.0 (A7ii/A3 hand-off, mechanism): a POST
+            // endpoint can never itself be rendered — but on a
+            // render-backed source an interstitial-walled POST
+            // (Ranovel's "One moment, please…" answered its
+            // ajax/chapters with a check page holding zero
+            // chapter rows; live-proven 2026-11-02) passes once
+            // the hidden engine has rendered the BOOK page and
+            // deposited the check's cookies into the session
+            // (the render fetcher merges them back). So: empty
+            // page + challenge-shaped answer + render-backed
+            // source → render the book page once, retry once.
+            // Bounded (one render + one retry), invisible, and
+            // never a loop.
+            if (first != null && first.rows.isEmpty() &&
+                config.needsRendering &&
+                lastBody?.let { SiteCheck.isChallengePage(it) } == true
+            ) {
+                runCatching { context.http.get(pageUrl, headers) }
+                val second = attempt()
+                if (second != null && second.rows.isNotEmpty()) {
+                    return second
+                }
+            }
+            return first
         }
     }
 
@@ -1164,8 +1230,12 @@ class DeclarativeSource(
         val spec = config.details.chapters
         val pagination = spec.pagination ?: return emptyList()
         val path = pagination.jsonArrayPath ?: return emptyList()
-        val array = EmbeddedJson.resolve(root, path)
-            as? kotlinx.serialization.json.JsonArray
+        // v1.5.0 (steer A2): declared path first; on a miss,
+        // the envelope scan (a drifted envelope must not read
+        // as an empty chapter list).
+        val array = (EmbeddedJson.resolve(root, path)
+            as? kotlinx.serialization.json.JsonArray)
+            ?: EmbeddedJson.scanForArray(root)
             ?: return emptyList()
         return array.mapIndexedNotNull { index, element ->
             val record = element as? kotlinx.serialization.json.JsonObject
@@ -2333,6 +2403,8 @@ class DeclarativeSource(
         val fragments = mutableListOf<String>()
         var title: String? = null
         var pages = 0
+        var firstPageDoc: Document? = null
+        var firstPageUrl: String = chapter.id
         while (url != null && pages < MAX_CHAPTER_PAGES) {
             pages++
             val pageUrl: String = url!!
@@ -2342,11 +2414,31 @@ class DeclarativeSource(
             } else {
                 fetchDoc(pageUrl)
             }
+            if (firstPageDoc == null) {
+                firstPageDoc = doc
+                firstPageUrl = pageUrl
+            }
             if (title == null) {
                 title = spec.title?.let { readDocSpec(doc, it) }?.ifBlank { null }
             }
             val element = firstChainedMatch(doc, spec.content)?.first
-                ?: throw SourceException("the chapter text wasn't found on the page")
+                ?: run {
+                    // v1.5.0 (A6): AUTOMATIC KIND ROUTING —
+                    // the prose container isn't on this page.
+                    // On a both-kinds site (Chikari, Asura) a
+                    // manhwa chapter's page is a strip of page
+                    // images instead: when the page carries a
+                    // real page-image set, this chapter is an
+                    // IMAGE chapter whatever the source's kind
+                    // says, and it reads in the image reader.
+                    if (pages == 1) {
+                        imageChapterFrom(doc, chapter, pageUrl, title)
+                            ?.let { return it }
+                    }
+                    throw SourceException(
+                        "the chapter text wasn't found on the page"
+                    )
+                }
             val clone = element.clone()
             for (removeSel in spec.remove) {
                 for (candidate in SelectorChains.split(removeSel)) {
@@ -2378,11 +2470,90 @@ class DeclarativeSource(
             }
         }
         val combined = fragments.joinToString("\n")
+        // v1.5.0 (A6): the container existed but carried
+        // almost no prose — on a both-kinds site that is an
+        // image chapter wearing a prose container (the images
+        // sit inside it). Sniff the first page before serving
+        // a near-empty "chapter".
+        val proseChars = Jsoup.parseBodyFragment(combined, chapter.id)
+            .text().length
+        if (proseChars < MIN_PROSE_CHARS && firstPageDoc != null) {
+            imageChapterFrom(firstPageDoc, chapter, firstPageUrl, title)
+                ?.let { return it }
+        }
         // Convert once, on the concatenated fragment, so multi-page
         // chapters read as one continuous text.
         val doc = Jsoup.parseBodyFragment(combined, chapter.id)
         cacheChapter(chapter.id, doc)
         return SourceChapterContent(html = combined, title = title)
+    }
+
+    /**
+     * v1.5.0 (A6): build an IMAGE chapter from a page the
+     * prose road couldn't read — the per-book half of
+     * automatic kind routing. Uses the config's declared
+     * pages spec when it has one; otherwise sniffs the page
+     * for a page-image set (at least [MIN_SNIFFED_PAGES]
+     * plausible page images, preferring the ones inside the
+     * chapter container). Returns null when the page carries
+     * no such set — the prose road's own verdict then stands.
+     */
+    private fun imageChapterFrom(
+        doc: Document,
+        chapter: SourceChapter,
+        pageUrl: String,
+        title: String?
+    ): SourceChapterContent? {
+        val spec = config.chapter
+        val declared = spec.pages?.takeIf { it.isNotBlank() }
+        val pageUrls = if (declared != null) {
+            extractPageUrls(doc, declared, pageUrl)
+        } else {
+            sniffPageImageUrls(doc, spec, pageUrl)
+        }
+        if (pageUrls.size < MIN_SNIFFED_PAGES) return null
+        val pages = ChapterPages(pageUrls.map { ChapterPage(url = it) })
+        cacheChapter(chapter.id, ChapterContent(pages = pages), doc)
+        val html = pages.pages.joinToString("\n") { page ->
+            "<img src=\"" +
+                page.url.replace("&", "&amp;").replace("\"", "&quot;") +
+                "\"/>"
+        }
+        return SourceChapterContent(html = html, title = title)
+    }
+
+    /** The sniffed page-image set of one chapter page:
+     * http(s) images in document order, data-URIs and
+     * chrome-sized images excluded, duplicates collapsed.
+     * Images inside the chapter content container win when
+     * the container exists (a novel page's lone cover or
+     * author portrait never reaches the threshold anyway). */
+    private fun sniffPageImageUrls(
+        doc: Document,
+        spec: ChapterSpec,
+        pageUrl: String
+    ): List<String> {
+        val container = firstChainedMatch(doc, spec.content)?.first
+        val scope = container ?: doc
+        val found = LinkedHashSet<String>()
+        for (img in scope.select("img")) {
+            val raw = img.attr("data-src").ifBlank { img.attr("src") }
+            if (raw.isBlank() || raw.startsWith("data:")) continue
+            val width = img.attr("width").toIntOrNull()
+            val height = img.attr("height").toIntOrNull()
+            if ((width != null && width < 200) ||
+                (height != null && height < 200)
+            ) {
+                continue
+            }
+            val absoluteUrl = absolute(raw, pageUrl)
+            if (absoluteUrl.startsWith("http://") ||
+                absoluteUrl.startsWith("https://")
+            ) {
+                found += absoluteUrl
+            }
+        }
+        return found.toList()
     }
 
     /**
@@ -2453,6 +2624,24 @@ class DeclarativeSource(
             }
         }
         if (pageUrls.isEmpty()) {
+            // v1.5.0 (A6): the mirror direction — an
+            // image-kind source whose chapter page carries
+            // NO page images but real prose in its content
+            // container is a prose chapter of a both-kinds
+            // site; it reads in the text reader instead of
+            // failing.
+            val doc0 = firstDoc
+            if (doc0 != null) {
+                val element = firstChainedMatch(doc0, spec.content)?.first
+                if (element != null &&
+                    element.text().length >= MIN_FALLBACK_PROSE_CHARS
+                ) {
+                    val combined = element.html()
+                    val parsed = Jsoup.parseBodyFragment(combined, chapter.id)
+                    cacheChapter(chapter.id, parsed)
+                    return SourceChapterContent(html = combined, title = title)
+                }
+            }
             throw SourceException("the chapter pages weren't found on the page")
         }
         val pages = ChapterPages(pageUrls.map { ChapterPage(url = it) })
@@ -2603,11 +2792,33 @@ class DeclarativeSource(
         val lockedByField = ajax.jsonLockField?.let { field ->
             (root?.get(field) as? JsonPrimitive)?.booleanOrNull == true
         } ?: false
+        // v1.5.0 (A7i): a token-gated source can answer a
+        // tokenless (or stale-token) read with a THIRD state
+        // beyond locked/encrypted — an HTTP 200 whose format
+        // marker is neither the readable one nor a declared
+        // lock, with a protected payload in the content field
+        // (the FenrirRealm field shape: signed in, token
+        // missing/expired, "the text wasn't readable prose").
+        // The old triggers never fired, so the protected blob
+        // flowed to the prose gate as a dead end. When the
+        // config declares an operation token, ANY format
+        // marker that is not the readable one is the site
+        // withholding the prose — the mint road is the answer,
+        // exactly as for a declared lock. Encrypted stays
+        // terminal (handled above, never decrypted).
+        val formatWithholds = coordinator != null &&
+            response.status in 200..299 && format != null &&
+            !format.equals(FORMAT_HTML, ignoreCase = true) &&
+            !format.equals(FORMAT_ENCRYPTED, ignoreCase = true)
         val locked = lockedByField ||
             format.equals(FORMAT_LOCKED, ignoreCase = true) ||
-            response.status == 401
+            response.status == 401 ||
+            formatWithholds
         if (response.status in 200..299 && !locked) {
-            return processAjaxResponse(chapter, ajax, response)
+            return processWithTokenRecovery(
+                chapter, ajax, response, coordinator, tokenSpec,
+                endpoint, chapterScope, recovered = false
+            )
         }
         if (!locked && response.status !in 200..299) {
             throw SourceException("the site answered HTTP ${response.status}")
@@ -2653,12 +2864,21 @@ class DeclarativeSource(
                 if (retryFormat.equals(FORMAT_ENCRYPTED, ignoreCase = true)) {
                     throw SourceException(ENCRYPTED_CHAPTER_MESSAGE)
                 }
+                // v1.5.0 (A7i): the same withholding rule on
+                // the retry — a fresh token answered with a
+                // non-readable format marker is still locked,
+                // not prose.
+                val retryWithholds =
+                    response.status in 200..299 && retryFormat != null &&
+                    !retryFormat.equals(FORMAT_HTML, ignoreCase = true) &&
+                    !retryFormat.equals(FORMAT_ENCRYPTED, ignoreCase = true)
                 val stillLocked = (ajax.jsonLockField?.let { field ->
                     (retryRoot?.get(field) as? JsonPrimitive)
                         ?.booleanOrNull == true
                 } ?: false) ||
                     retryFormat.equals(FORMAT_LOCKED, ignoreCase = true) ||
-                    response.status == 401
+                    response.status == 401 ||
+                    retryWithholds
                 if (stillLocked) {
                     // Only THIS scope's generation may be
                     // invalidated by this failure — a newer
@@ -2672,7 +2892,10 @@ class DeclarativeSource(
                         "the site answered HTTP ${response.status}"
                     )
                 }
-                return processAjaxResponse(chapter, ajax, response)
+                return processWithTokenRecovery(
+                    chapter, ajax, response, coordinator, tokenSpec,
+                    endpoint, chapterScope, recovered = true
+                )
             }
             ReadTokenCoordinator.MintOutcome.ChallengeRequired ->
                 throw SourceException(
@@ -2696,6 +2919,93 @@ class DeclarativeSource(
         }
     }
 
+    /**
+     * v1.5.0 (steer A3): the scrambled-text recovery around
+     * [processAjaxResponse] for token-gated sources. A 200
+     * answer in the readable format can still carry the
+     * site's protected payload (the token was stale in a way
+     * the format marker didn't say — the FenrirRealm field
+     * shape). The prose gate's refusal is therefore not the
+     * end: the held token is EVICTED, ONE silent fresh mint
+     * runs, the read retries once — and only a second refusal
+     * surfaces (the resolver's own gate then refuses honestly
+     * downstream of any other road). Sources without an
+     * operation-token contract take exactly the old path.
+     */
+    private fun processWithTokenRecovery(
+        chapter: SourceChapter,
+        ajax: ChapterTextAjax,
+        response: app.xreader.extensionapi.HostResponse,
+        coordinator: ReadTokenCoordinator?,
+        tokenSpec: OperationTokenSpec?,
+        endpoint: String,
+        chapterScope: String,
+        recovered: Boolean
+    ): SourceChapterContent {
+        val content = processAjaxResponse(chapter, ajax, response)
+        if (coordinator == null || tokenSpec == null) return content
+        val plain = Jsoup.parseBodyFragment(content.html, chapter.id)
+            .text()
+        val refusal = ChapterServeGate.refusalFor(plain)
+            ?: return content
+        if (recovered) throw SourceException(refusal)
+        coordinator.currentToken(chapterScope)?.let { held ->
+            coordinator.invalidate(chapterScope, held.generation)
+        }
+        val chapterHint = chapter.id.substringAfterLast('/')
+            .takeIf { it.isNotBlank() }
+        return when (
+            val outcome = coordinator.token(
+                context.http, chapterScope, chapterHint
+            )
+        ) {
+            is ReadTokenCoordinator.MintOutcome.Ready -> {
+                val retry = fetchAjax(
+                    chapter, ajax, endpoint, tokenSpec, outcome.token
+                )
+                if (retry.status in 200..299) {
+                    coordinator.noteIssued(retry.headers, chapterScope)
+                }
+                if (retry.status !in 200..299) {
+                    throw SourceException(
+                        "the site answered HTTP ${retry.status}"
+                    )
+                }
+                val retryRoot = runCatching {
+                    ajaxJson.parseToJsonElement(retry.body)
+                }.getOrNull() as? JsonObject
+                val retryFormat = (retryRoot?.get(FORMAT_FIELD)
+                    as? JsonPrimitive)?.contentOrNull
+                if (retryFormat.equals(FORMAT_ENCRYPTED, ignoreCase = true)) {
+                    throw SourceException(ENCRYPTED_CHAPTER_MESSAGE)
+                }
+                processWithTokenRecovery(
+                    chapter, ajax, retry, coordinator, tokenSpec,
+                    endpoint, chapterScope, recovered = true
+                )
+            }
+            ReadTokenCoordinator.MintOutcome.ChallengeRequired ->
+                throw SourceException(
+                    "${FetchClassification.MINT_CHALLENGE_MARKER}: " +
+                        "the site wants its human check finished " +
+                        "before the reading pass is issued"
+                )
+            ReadTokenCoordinator.MintOutcome.SessionDead ->
+                throw SourceException(
+                    "${FetchClassification.SESSION_DEAD_MARKER}: " +
+                        "sign in again to keep reading"
+                )
+            is ReadTokenCoordinator.MintOutcome.RateLimited ->
+                throw SourceException(
+                    "the site is ${FetchClassification.AVAILABILITY_MARKER} " +
+                        "(HTTP 429) — it asked for a pause before " +
+                        "issuing more reading passes"
+                )
+            is ReadTokenCoordinator.MintOutcome.Unavailable ->
+                throw SourceException(refusal)
+        }
+    }
+
     /** One AJAX text fetch: the declared method/headers plus
      * the operation token when one is held AND the endpoint's
      * host is one the token's contract declares (origin-exact
@@ -2709,6 +3019,17 @@ class DeclarativeSource(
     ): app.xreader.extensionapi.HostResponse {
         val resolved = resolveUrl(endpoint)
         val headers = LinkedHashMap(ajax.headers)
+        // v1.5.0 (A1 audit, mechanism): the same Referer rule
+        // as the pagination road — the chapter's own page is
+        // where the site's reader fires this call from.
+        if (headers.keys.none {
+                it.equals("Referer", ignoreCase = true)
+            } &&
+            (chapter.id.startsWith("http://") ||
+                chapter.id.startsWith("https://"))
+        ) {
+            headers["Referer"] = chapter.id
+        }
         if (tokenSpec != null && tokenValue != null) {
             val host = CookieParsing.hostOf(resolved)
             if (host != null && tokenSpec.appliesTo(host)) {
@@ -3059,6 +3380,23 @@ class DeclarativeSource(
         /** Multi-page chapter chaining cap (§5: no runaway pagination). */
         const val MAX_CHAPTER_PAGES = 10
 
+        /** v1.5.0 (A6): below this much prose, a "text"
+         * chapter is treated as an image chapter wearing a
+         * prose container and sniffed for page images. */
+        const val MIN_PROSE_CHARS = 40
+
+        /** v1.5.0 (A6): a sniffed page-image set needs at
+         * least this many plausible page images before a
+         * chapter changes kind — a novel page's cover and
+         * portraits never reach it. */
+        const val MIN_SNIFFED_PAGES = 3
+
+        /** v1.5.0 (A6): an image-kind chapter page with no
+         * page images but at least this much prose in its
+         * content container is a prose chapter (the mirror
+         * direction of the kind sniff). */
+        const val MIN_FALLBACK_PROSE_CHARS = 200
+
         /** v1.0.6.2 (F1): chapter-LIST pagination walk cap — at
          * novelight's 50 rows a page this still covers 2,000
          * chapters past the book page's own slice. */
@@ -3083,6 +3421,9 @@ class DeclarativeSource(
         const val FORMAT_FIELD = "content_format"
         const val FORMAT_LOCKED = "locked"
         const val FORMAT_ENCRYPTED = "encrypted"
+        /** The format a readable answer carries (pinned by
+         * the v1.3.4 fixtures against the live site). */
+        const val FORMAT_HTML = "html"
         const val REMINT_ID_FIELD = "remint_chapter_id"
         const val REMINT_UUID_FIELD = "remint_chapter_uuid"
 

@@ -1,0 +1,1993 @@
+<!DOCTYPE html><html><head><title>fixture</title></head><body><div class="listing"><div class="page-item-detail text  ">
+				
+<style>
+.novel-card-horizontal,
+body .novel-card-horizontal,
+#loop-content .novel-card-horizontal,
+.page-content-listing .novel-card-horizontal,
+body.archive .novel-card-horizontal,
+body.post-type-archive .novel-card-horizontal{display:flex !important;flex-direction:row !important;background:#1a1a2e !important;border-radius:8px !important;overflow:hidden !important;border:1px solid rgba(255,255,255,0.08) !important;height:100% !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important}
+.novel-card-thumb,
+body .novel-card-thumb,
+#loop-content .novel-card-thumb,
+.page-content-listing .novel-card-thumb{flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;overflow:hidden !important;position:relative !important;height:auto !important}
+.novel-card-thumb a,
+body .novel-card-thumb a{display:block !important;height:100% !important;width:100% !important}
+.novel-card-thumb img,
+body .novel-card-thumb img,
+#loop-content .novel-card-thumb img{width:100px !important;height:100% !important;object-fit:cover !important;min-height:160px !important;max-width:100px !important}
+.novel-card-badge{position:absolute !important;bottom:8px !important;left:8px !important;background:rgba(74,0,84,0.7) !important;color:#fff !important;font-size:10px !important;font-weight:700 !important;padding:2px 6px !important;border-radius:3px !important;text-transform:uppercase !important;display:flex !important;align-items:center !important;gap:3px !important}
+.novel-card-badge.hot{background:rgb(255 0 0 / 70%) !important}
+.novel-card-badge.hot svg{width:12px !important;height:12px !important}
+.novel-card-content,
+body .novel-card-content,
+#loop-content .novel-card-content,
+.page-content-listing .novel-card-content,
+body.archive .novel-card-content,
+body.post-type-archive .novel-card-content{display:flex !important;flex-direction:column !important;flex-grow:1 !important;padding:10px 12px !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;width:calc(100% - 100px) !important;flex-basis:0 !important}
+.novel-card-title{margin:0 0 6px 0 !important;font-size:13px !important;font-weight:700 !important;line-height:1.3 !important;overflow:hidden !important;display:-webkit-box !important;-webkit-line-clamp:2 !important;-webkit-box-orient:vertical !important;white-space:normal !important;word-wrap:break-word !important;min-height:34px !important}
+.novel-card-title a{color:#fff !important;text-decoration:none !important;white-space:normal !important;word-wrap:break-word !important;display:inline !important}
+.novel-chapters-premium,.novel-chapters-free{display:flex !important;flex-direction:column !important;gap:2px !important}
+.novel-chapter-item{display:flex !important;justify-content:space-between !important;align-items:center !important;text-decoration:none !important;color:#bbb !important;font-size:11px !important;line-height:1.4 !important;gap:6px !important}
+.novel-chapter-item.free:hover{color:#fff !important}
+.novel-chapter-item.premium:hover{color:#f8b500 !important}
+.novel-chapter-item.premium:hover .chapter-name{color:#f8b500 !important}
+.novel-chapter-item .chapter-name{display:flex !important;align-items:center !important;gap:4px !important;font-weight:500 !important;white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important}
+.novel-chapter-item .chapter-date{font-size:10px !important;opacity:0.6 !important;white-space:nowrap !important;flex-shrink:0 !important}
+.novel-chapter-item .coin-icon{width:12px !important;height:12px !important;flex-shrink:0 !important}
+.novel-chapters-divider{height:1px !important;background:rgba(255,255,255,0.12) !important;margin:5px 0 !important}
+.novel-chapter-item.premium .chapter-name{color:#f8b500 !important}
+.novel-chapter-item.purchased .chapter-name{color:#fff !important}
+.novel-chapter-item.purchased .unlock-icon{color:#4CAF50 !important;font-size:11px !important}
+.c-blog__heading.style-1{border:none !important;padding:0 !important;margin-bottom:15px !important;text-align:left !important;display:flex !important;align-items:center !important}
+.c-blog__heading.style-1 .h4{font-size:18px !important;font-weight:700 !important;margin:0 !important;color:#fff !important;font-family:Poppins,sans-serif !important;padding:0 !important;border:none !important;display:inline-flex !important;align-items:center !important;gap:8px !important;text-transform:capitalize !important;min-width:240px !important}
+.c-blog__heading.style-1 .h4::before{content:'' !important;display:inline-block !important;width:20px !important;height:20px !important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' fill='%23ffffff'%3E%3Cpath d='M256 0a256 256 0 1 1 0 512A256 256 0 1 1 256 0zM232 120V256c0 8 4 15.5 10.7 20l96 64c11 7.4 25.9 4.4 33.3-6.7s4.4-25.9-6.7-33.3L280 243.2V120c0-13.3-10.7-24-24-24s-24 10.7-24 24z'/%3E%3C/svg%3E") !important;background-size:contain !important;background-repeat:no-repeat !important;flex-shrink:0 !important}
+.c-blog__heading.style-1 .h4::after{display:none !important}
+.main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+body .main-col-inner.c-page,
+body.archive .main-col-inner.c-page,
+body.post-type-archive .main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+#loop-content.item-novel_card,
+body #loop-content,
+body #loop-content.page-content-listing,
+body .page-content-listing.item-novel_card,
+body #loop-content.item-novel_card,
+body.archive #loop-content,
+body.post-type-archive #loop-content,
+.c-page #loop-content,
+.c-page #loop-content.page-content-listing,
+.main-col #loop-content,
+.main-col-inner #loop-content,
+.c-page__content #loop-content{
+display:grid !important;
+grid-template-columns:repeat(3,1fr) !important;
+gap:12px !important;
+max-width:100% !important;
+width:100% !important;
+box-sizing:border-box !important;
+-ms-grid-columns:(1fr)[3] !important
+}
+#loop-content .page-listing-item,
+#loop-content > .page-listing-item,
+.page-content-listing .page-listing-item,
+body .page-listing-item,
+.page-listing-item{display:contents !important}
+
+#loop-content .row,
+#loop-content .row-eq-height,
+#loop-content > .row,
+#loop-content > .row-eq-height,
+.page-content-listing .row,
+.page-content-listing .row-eq-height,
+body .page-content-listing .row,
+body #loop-content .row,
+.row-eq-height,
+.item-novel_card .row{display:contents !important;flex-wrap:unset !important;margin:0 !important;width:100% !important}
+#loop-content [class*="col-"],
+#loop-content [class^="col-"],
+#loop-content .col,
+#loop-content .col-12,
+#loop-content .col-6,
+#loop-content .col-md-6,
+#loop-content .col-lg-4,
+#loop-content .col-lg-6,
+#loop-content .col-sm-6,
+#loop-content .col-sm-12,
+.page-content-listing [class*="col-"],
+.page-content-listing .col-12,
+.page-content-listing .col-md-6,
+.page-content-listing .col-lg-4,
+body #loop-content [class*="col-"],
+body .page-content-listing [class*="col-"]{
+width:100% !important;
+max-width:100% !important;
+min-width:0 !important;
+padding:0 !important;
+margin:0 !important;
+display:block !important;
+flex:unset !important;
+flex-basis:unset !important;
+flex-grow:unset !important;
+flex-shrink:unset !important;
+-webkit-box-flex:unset !important;
+-ms-flex:unset !important
+}
+
+#loop-content [class*="badge-pos"],
+.page-content-listing [class*="badge-pos"]{padding:0 !important;margin:0 !important}
+
+#loop-content .page-item-detail,
+.page-content-listing .page-item-detail,
+body .page-item-detail{padding:0 !important;margin:0 !important;width:100% !important}
+@media screen and (max-width:991px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(2,1fr) !important;-ms-grid-columns:(1fr)[2] !important}
+}
+@media screen and (max-width:767px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(1,1fr) !important;-ms-grid-columns:1fr !important}
+}
+.premium-login-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:99999;justify-content:center;align-items:center}
+.premium-login-modal.active{display:flex}
+.premium-login-modal-content{background:#1a1a2e;border-radius:12px;padding:30px;text-align:center;max-width:350px;width:90%;border:1px solid rgba(255,255,255,0.1)}
+.premium-login-modal-icon{width:50px;height:50px;margin:0 auto 15px;background:#f8b500;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.premium-login-modal-icon svg{width:24px;height:24px;fill:#1a1a2e}
+.premium-login-modal-title{color:#fff;font-size:18px;font-weight:700;margin:0 0 10px}
+.premium-login-modal-text{color:#aaa;font-size:14px;margin:0 0 20px}
+.premium-login-modal-buttons{display:flex;gap:10px;justify-content:center}
+.premium-login-modal-btn{padding:10px 25px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all 0.3s}
+.premium-login-modal-btn.signup{background:#4a0054;color:#fff}
+.premium-login-modal-btn.signup:hover{background:#6a0074}
+.premium-login-modal-btn.cancel{background:transparent;color:#aaa;border:1px solid rgba(255,255,255,0.2)}
+.premium-login-modal-btn.cancel:hover{border-color:rgba(255,255,255,0.4);color:#fff}
+.premium-login-modal-btn.purchase{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.purchase:hover{background:#e5a600}
+.premium-login-modal-btn.unlock{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.unlock:hover{background:#e5a600}
+.premium-chapter-price{display:flex;align-items:center;justify-content:center;gap:6px;background:rgba(248,181,0,0.15);padding:10px 20px;border-radius:8px;margin-bottom:20px}
+.premium-chapter-price svg{width:20px;height:20px;fill:#f8b500}
+.premium-chapter-price span{color:#f8b500;font-size:18px;font-weight:700}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    if(window.releasesToggleInit) return;
+    window.releasesToggleInit = true;
+
+    function forceGridLayout() {
+        var loopContent = document.getElementById('loop-content');
+        if(!loopContent) return;
+        var cols = 3;
+        if(window.innerWidth <= 767) {
+            cols = 1;
+        } else if(window.innerWidth <= 991) {
+            cols = 2;
+        }
+        loopContent.setAttribute('style', 'display:grid !important;grid-template-columns:repeat(' + cols + ',1fr) !important;gap:12px !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;');
+        var wrappers = loopContent.querySelectorAll('.page-listing-item, .row, .row-eq-height');
+        wrappers.forEach(function(el) {
+            el.setAttribute('style', 'display:contents !important;');
+        });
+        var cols_el = loopContent.querySelectorAll('[class*="col"]');
+        cols_el.forEach(function(col) {
+            col.setAttribute('style', 'width:100% !important;max-width:100% !important;padding:0 !important;margin:0 !important;flex:unset !important;flex-basis:unset !important;display:block !important;');
+        });
+        var details = loopContent.querySelectorAll('.page-item-detail');
+        details.forEach(function(d) {
+            d.setAttribute('style', 'width:100% !important;padding:0 !important;margin:0 !important;');
+        });
+    }
+
+    forceGridLayout();
+    window.addEventListener('resize', forceGridLayout);
+
+    // Premium chapter click handling is done by modal-buy-coin.php
+});
+</script>
+
+<div class="novel-card-horizontal" style="display:flex !important;flex-direction:row !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;">
+		<div class="novel-card-thumb" style="flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;">
+		<a title="The Seven-Year-Old Village Chief in Exile" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/">
+			<img width="175" height="238"  src="https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-175x238.jpg" srcset="https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-175x238.jpg 175w, https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-110x150.jpg 110w, https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-350x476.jpg 350w" sizes="(max-width: 175px) 100vw, 175px" class="img-responsive" style=""  alt="The Seven-Year-Old Village Chief in Exile"/>		</a>
+			</div>
+	
+	<div class="novel-card-content" style="display:flex !important;flex-direction:column !important;flex-grow:1 !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;">
+		<h5 class="novel-card-title">
+			<a title="The Seven-Year-Old Village Chief in Exile" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/">
+				The Seven-Year-Old Village Chief in Exile			</a>
+		</h5>
+
+				<div class="novel-chapters-premium">
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 125 " data-chapter-id="129954">
+				<span class="chapter-name">
+					Chapter 125 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">08/10/2026</span>
+			</a>
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 124 " data-chapter-id="129953">
+				<span class="chapter-name">
+					Chapter 124 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">08/10/2026</span>
+			</a>
+					</div>
+		
+				<div class="novel-chapters-divider"></div>
+		
+				<div class="novel-chapters-free">
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-108/">
+				<span class="chapter-name">Chapter 108</span>
+				<span class="chapter-date">12 hours ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-107/">
+				<span class="chapter-name">Chapter 107</span>
+				<span class="chapter-date">1 day ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-106/">
+				<span class="chapter-name">Chapter 106</span>
+				<span class="chapter-date">2 days ago</span>
+			</a>
+					</div>
+			</div>
+</div>
+
+            </div><div class="page-item-detail text  ">
+				
+<style>
+.novel-card-horizontal,
+body .novel-card-horizontal,
+#loop-content .novel-card-horizontal,
+.page-content-listing .novel-card-horizontal,
+body.archive .novel-card-horizontal,
+body.post-type-archive .novel-card-horizontal{display:flex !important;flex-direction:row !important;background:#1a1a2e !important;border-radius:8px !important;overflow:hidden !important;border:1px solid rgba(255,255,255,0.08) !important;height:100% !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important}
+.novel-card-thumb,
+body .novel-card-thumb,
+#loop-content .novel-card-thumb,
+.page-content-listing .novel-card-thumb{flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;overflow:hidden !important;position:relative !important;height:auto !important}
+.novel-card-thumb a,
+body .novel-card-thumb a{display:block !important;height:100% !important;width:100% !important}
+.novel-card-thumb img,
+body .novel-card-thumb img,
+#loop-content .novel-card-thumb img{width:100px !important;height:100% !important;object-fit:cover !important;min-height:160px !important;max-width:100px !important}
+.novel-card-badge{position:absolute !important;bottom:8px !important;left:8px !important;background:rgba(74,0,84,0.7) !important;color:#fff !important;font-size:10px !important;font-weight:700 !important;padding:2px 6px !important;border-radius:3px !important;text-transform:uppercase !important;display:flex !important;align-items:center !important;gap:3px !important}
+.novel-card-badge.hot{background:rgb(255 0 0 / 70%) !important}
+.novel-card-badge.hot svg{width:12px !important;height:12px !important}
+.novel-card-content,
+body .novel-card-content,
+#loop-content .novel-card-content,
+.page-content-listing .novel-card-content,
+body.archive .novel-card-content,
+body.post-type-archive .novel-card-content{display:flex !important;flex-direction:column !important;flex-grow:1 !important;padding:10px 12px !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;width:calc(100% - 100px) !important;flex-basis:0 !important}
+.novel-card-title{margin:0 0 6px 0 !important;font-size:13px !important;font-weight:700 !important;line-height:1.3 !important;overflow:hidden !important;display:-webkit-box !important;-webkit-line-clamp:2 !important;-webkit-box-orient:vertical !important;white-space:normal !important;word-wrap:break-word !important;min-height:34px !important}
+.novel-card-title a{color:#fff !important;text-decoration:none !important;white-space:normal !important;word-wrap:break-word !important;display:inline !important}
+.novel-chapters-premium,.novel-chapters-free{display:flex !important;flex-direction:column !important;gap:2px !important}
+.novel-chapter-item{display:flex !important;justify-content:space-between !important;align-items:center !important;text-decoration:none !important;color:#bbb !important;font-size:11px !important;line-height:1.4 !important;gap:6px !important}
+.novel-chapter-item.free:hover{color:#fff !important}
+.novel-chapter-item.premium:hover{color:#f8b500 !important}
+.novel-chapter-item.premium:hover .chapter-name{color:#f8b500 !important}
+.novel-chapter-item .chapter-name{display:flex !important;align-items:center !important;gap:4px !important;font-weight:500 !important;white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important}
+.novel-chapter-item .chapter-date{font-size:10px !important;opacity:0.6 !important;white-space:nowrap !important;flex-shrink:0 !important}
+.novel-chapter-item .coin-icon{width:12px !important;height:12px !important;flex-shrink:0 !important}
+.novel-chapters-divider{height:1px !important;background:rgba(255,255,255,0.12) !important;margin:5px 0 !important}
+.novel-chapter-item.premium .chapter-name{color:#f8b500 !important}
+.novel-chapter-item.purchased .chapter-name{color:#fff !important}
+.novel-chapter-item.purchased .unlock-icon{color:#4CAF50 !important;font-size:11px !important}
+.c-blog__heading.style-1{border:none !important;padding:0 !important;margin-bottom:15px !important;text-align:left !important;display:flex !important;align-items:center !important}
+.c-blog__heading.style-1 .h4{font-size:18px !important;font-weight:700 !important;margin:0 !important;color:#fff !important;font-family:Poppins,sans-serif !important;padding:0 !important;border:none !important;display:inline-flex !important;align-items:center !important;gap:8px !important;text-transform:capitalize !important;min-width:240px !important}
+.c-blog__heading.style-1 .h4::before{content:'' !important;display:inline-block !important;width:20px !important;height:20px !important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' fill='%23ffffff'%3E%3Cpath d='M256 0a256 256 0 1 1 0 512A256 256 0 1 1 256 0zM232 120V256c0 8 4 15.5 10.7 20l96 64c11 7.4 25.9 4.4 33.3-6.7s4.4-25.9-6.7-33.3L280 243.2V120c0-13.3-10.7-24-24-24s-24 10.7-24 24z'/%3E%3C/svg%3E") !important;background-size:contain !important;background-repeat:no-repeat !important;flex-shrink:0 !important}
+.c-blog__heading.style-1 .h4::after{display:none !important}
+.main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+body .main-col-inner.c-page,
+body.archive .main-col-inner.c-page,
+body.post-type-archive .main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+#loop-content.item-novel_card,
+body #loop-content,
+body #loop-content.page-content-listing,
+body .page-content-listing.item-novel_card,
+body #loop-content.item-novel_card,
+body.archive #loop-content,
+body.post-type-archive #loop-content,
+.c-page #loop-content,
+.c-page #loop-content.page-content-listing,
+.main-col #loop-content,
+.main-col-inner #loop-content,
+.c-page__content #loop-content{
+display:grid !important;
+grid-template-columns:repeat(3,1fr) !important;
+gap:12px !important;
+max-width:100% !important;
+width:100% !important;
+box-sizing:border-box !important;
+-ms-grid-columns:(1fr)[3] !important
+}
+#loop-content .page-listing-item,
+#loop-content > .page-listing-item,
+.page-content-listing .page-listing-item,
+body .page-listing-item,
+.page-listing-item{display:contents !important}
+
+#loop-content .row,
+#loop-content .row-eq-height,
+#loop-content > .row,
+#loop-content > .row-eq-height,
+.page-content-listing .row,
+.page-content-listing .row-eq-height,
+body .page-content-listing .row,
+body #loop-content .row,
+.row-eq-height,
+.item-novel_card .row{display:contents !important;flex-wrap:unset !important;margin:0 !important;width:100% !important}
+#loop-content [class*="col-"],
+#loop-content [class^="col-"],
+#loop-content .col,
+#loop-content .col-12,
+#loop-content .col-6,
+#loop-content .col-md-6,
+#loop-content .col-lg-4,
+#loop-content .col-lg-6,
+#loop-content .col-sm-6,
+#loop-content .col-sm-12,
+.page-content-listing [class*="col-"],
+.page-content-listing .col-12,
+.page-content-listing .col-md-6,
+.page-content-listing .col-lg-4,
+body #loop-content [class*="col-"],
+body .page-content-listing [class*="col-"]{
+width:100% !important;
+max-width:100% !important;
+min-width:0 !important;
+padding:0 !important;
+margin:0 !important;
+display:block !important;
+flex:unset !important;
+flex-basis:unset !important;
+flex-grow:unset !important;
+flex-shrink:unset !important;
+-webkit-box-flex:unset !important;
+-ms-flex:unset !important
+}
+
+#loop-content [class*="badge-pos"],
+.page-content-listing [class*="badge-pos"]{padding:0 !important;margin:0 !important}
+
+#loop-content .page-item-detail,
+.page-content-listing .page-item-detail,
+body .page-item-detail{padding:0 !important;margin:0 !important;width:100% !important}
+@media screen and (max-width:991px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(2,1fr) !important;-ms-grid-columns:(1fr)[2] !important}
+}
+@media screen and (max-width:767px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(1,1fr) !important;-ms-grid-columns:1fr !important}
+}
+.premium-login-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:99999;justify-content:center;align-items:center}
+.premium-login-modal.active{display:flex}
+.premium-login-modal-content{background:#1a1a2e;border-radius:12px;padding:30px;text-align:center;max-width:350px;width:90%;border:1px solid rgba(255,255,255,0.1)}
+.premium-login-modal-icon{width:50px;height:50px;margin:0 auto 15px;background:#f8b500;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.premium-login-modal-icon svg{width:24px;height:24px;fill:#1a1a2e}
+.premium-login-modal-title{color:#fff;font-size:18px;font-weight:700;margin:0 0 10px}
+.premium-login-modal-text{color:#aaa;font-size:14px;margin:0 0 20px}
+.premium-login-modal-buttons{display:flex;gap:10px;justify-content:center}
+.premium-login-modal-btn{padding:10px 25px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all 0.3s}
+.premium-login-modal-btn.signup{background:#4a0054;color:#fff}
+.premium-login-modal-btn.signup:hover{background:#6a0074}
+.premium-login-modal-btn.cancel{background:transparent;color:#aaa;border:1px solid rgba(255,255,255,0.2)}
+.premium-login-modal-btn.cancel:hover{border-color:rgba(255,255,255,0.4);color:#fff}
+.premium-login-modal-btn.purchase{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.purchase:hover{background:#e5a600}
+.premium-login-modal-btn.unlock{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.unlock:hover{background:#e5a600}
+.premium-chapter-price{display:flex;align-items:center;justify-content:center;gap:6px;background:rgba(248,181,0,0.15);padding:10px 20px;border-radius:8px;margin-bottom:20px}
+.premium-chapter-price svg{width:20px;height:20px;fill:#f8b500}
+.premium-chapter-price span{color:#f8b500;font-size:18px;font-weight:700}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    if(window.releasesToggleInit) return;
+    window.releasesToggleInit = true;
+
+    function forceGridLayout() {
+        var loopContent = document.getElementById('loop-content');
+        if(!loopContent) return;
+        var cols = 3;
+        if(window.innerWidth <= 767) {
+            cols = 1;
+        } else if(window.innerWidth <= 991) {
+            cols = 2;
+        }
+        loopContent.setAttribute('style', 'display:grid !important;grid-template-columns:repeat(' + cols + ',1fr) !important;gap:12px !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;');
+        var wrappers = loopContent.querySelectorAll('.page-listing-item, .row, .row-eq-height');
+        wrappers.forEach(function(el) {
+            el.setAttribute('style', 'display:contents !important;');
+        });
+        var cols_el = loopContent.querySelectorAll('[class*="col"]');
+        cols_el.forEach(function(col) {
+            col.setAttribute('style', 'width:100% !important;max-width:100% !important;padding:0 !important;margin:0 !important;flex:unset !important;flex-basis:unset !important;display:block !important;');
+        });
+        var details = loopContent.querySelectorAll('.page-item-detail');
+        details.forEach(function(d) {
+            d.setAttribute('style', 'width:100% !important;padding:0 !important;margin:0 !important;');
+        });
+    }
+
+    forceGridLayout();
+    window.addEventListener('resize', forceGridLayout);
+
+    // Premium chapter click handling is done by modal-buy-coin.php
+});
+</script>
+
+<div class="novel-card-horizontal" style="display:flex !important;flex-direction:row !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;">
+		<div class="novel-card-thumb" style="flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;">
+		<a title="The Seven-Year-Old Village Chief in Exile" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/">
+			<img width="175" height="238"  src="https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-175x238.jpg" srcset="https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-175x238.jpg 175w, https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-110x150.jpg 110w, https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-350x476.jpg 350w" sizes="(max-width: 175px) 100vw, 175px" class="img-responsive" style=""  alt="The Seven-Year-Old Village Chief in Exile"/>		</a>
+			</div>
+	
+	<div class="novel-card-content" style="display:flex !important;flex-direction:column !important;flex-grow:1 !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;">
+		<h5 class="novel-card-title">
+			<a title="The Seven-Year-Old Village Chief in Exile" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/">
+				The Seven-Year-Old Village Chief in Exile			</a>
+		</h5>
+
+				<div class="novel-chapters-premium">
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 125 " data-chapter-id="129954">
+				<span class="chapter-name">
+					Chapter 125 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">08/10/2026</span>
+			</a>
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 124 " data-chapter-id="129953">
+				<span class="chapter-name">
+					Chapter 124 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">08/10/2026</span>
+			</a>
+					</div>
+		
+				<div class="novel-chapters-divider"></div>
+		
+				<div class="novel-chapters-free">
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-108/">
+				<span class="chapter-name">Chapter 108</span>
+				<span class="chapter-date">12 hours ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-107/">
+				<span class="chapter-name">Chapter 107</span>
+				<span class="chapter-date">1 day ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-106/">
+				<span class="chapter-name">Chapter 106</span>
+				<span class="chapter-date">2 days ago</span>
+			</a>
+					</div>
+			</div>
+</div>
+
+            </div><div class="page-item-detail text  ">
+				
+<style>
+.novel-card-horizontal,
+body .novel-card-horizontal,
+#loop-content .novel-card-horizontal,
+.page-content-listing .novel-card-horizontal,
+body.archive .novel-card-horizontal,
+body.post-type-archive .novel-card-horizontal{display:flex !important;flex-direction:row !important;background:#1a1a2e !important;border-radius:8px !important;overflow:hidden !important;border:1px solid rgba(255,255,255,0.08) !important;height:100% !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important}
+.novel-card-thumb,
+body .novel-card-thumb,
+#loop-content .novel-card-thumb,
+.page-content-listing .novel-card-thumb{flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;overflow:hidden !important;position:relative !important;height:auto !important}
+.novel-card-thumb a,
+body .novel-card-thumb a{display:block !important;height:100% !important;width:100% !important}
+.novel-card-thumb img,
+body .novel-card-thumb img,
+#loop-content .novel-card-thumb img{width:100px !important;height:100% !important;object-fit:cover !important;min-height:160px !important;max-width:100px !important}
+.novel-card-badge{position:absolute !important;bottom:8px !important;left:8px !important;background:rgba(74,0,84,0.7) !important;color:#fff !important;font-size:10px !important;font-weight:700 !important;padding:2px 6px !important;border-radius:3px !important;text-transform:uppercase !important;display:flex !important;align-items:center !important;gap:3px !important}
+.novel-card-badge.hot{background:rgb(255 0 0 / 70%) !important}
+.novel-card-badge.hot svg{width:12px !important;height:12px !important}
+.novel-card-content,
+body .novel-card-content,
+#loop-content .novel-card-content,
+.page-content-listing .novel-card-content,
+body.archive .novel-card-content,
+body.post-type-archive .novel-card-content{display:flex !important;flex-direction:column !important;flex-grow:1 !important;padding:10px 12px !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;width:calc(100% - 100px) !important;flex-basis:0 !important}
+.novel-card-title{margin:0 0 6px 0 !important;font-size:13px !important;font-weight:700 !important;line-height:1.3 !important;overflow:hidden !important;display:-webkit-box !important;-webkit-line-clamp:2 !important;-webkit-box-orient:vertical !important;white-space:normal !important;word-wrap:break-word !important;min-height:34px !important}
+.novel-card-title a{color:#fff !important;text-decoration:none !important;white-space:normal !important;word-wrap:break-word !important;display:inline !important}
+.novel-chapters-premium,.novel-chapters-free{display:flex !important;flex-direction:column !important;gap:2px !important}
+.novel-chapter-item{display:flex !important;justify-content:space-between !important;align-items:center !important;text-decoration:none !important;color:#bbb !important;font-size:11px !important;line-height:1.4 !important;gap:6px !important}
+.novel-chapter-item.free:hover{color:#fff !important}
+.novel-chapter-item.premium:hover{color:#f8b500 !important}
+.novel-chapter-item.premium:hover .chapter-name{color:#f8b500 !important}
+.novel-chapter-item .chapter-name{display:flex !important;align-items:center !important;gap:4px !important;font-weight:500 !important;white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important}
+.novel-chapter-item .chapter-date{font-size:10px !important;opacity:0.6 !important;white-space:nowrap !important;flex-shrink:0 !important}
+.novel-chapter-item .coin-icon{width:12px !important;height:12px !important;flex-shrink:0 !important}
+.novel-chapters-divider{height:1px !important;background:rgba(255,255,255,0.12) !important;margin:5px 0 !important}
+.novel-chapter-item.premium .chapter-name{color:#f8b500 !important}
+.novel-chapter-item.purchased .chapter-name{color:#fff !important}
+.novel-chapter-item.purchased .unlock-icon{color:#4CAF50 !important;font-size:11px !important}
+.c-blog__heading.style-1{border:none !important;padding:0 !important;margin-bottom:15px !important;text-align:left !important;display:flex !important;align-items:center !important}
+.c-blog__heading.style-1 .h4{font-size:18px !important;font-weight:700 !important;margin:0 !important;color:#fff !important;font-family:Poppins,sans-serif !important;padding:0 !important;border:none !important;display:inline-flex !important;align-items:center !important;gap:8px !important;text-transform:capitalize !important;min-width:240px !important}
+.c-blog__heading.style-1 .h4::before{content:'' !important;display:inline-block !important;width:20px !important;height:20px !important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' fill='%23ffffff'%3E%3Cpath d='M256 0a256 256 0 1 1 0 512A256 256 0 1 1 256 0zM232 120V256c0 8 4 15.5 10.7 20l96 64c11 7.4 25.9 4.4 33.3-6.7s4.4-25.9-6.7-33.3L280 243.2V120c0-13.3-10.7-24-24-24s-24 10.7-24 24z'/%3E%3C/svg%3E") !important;background-size:contain !important;background-repeat:no-repeat !important;flex-shrink:0 !important}
+.c-blog__heading.style-1 .h4::after{display:none !important}
+.main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+body .main-col-inner.c-page,
+body.archive .main-col-inner.c-page,
+body.post-type-archive .main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+#loop-content.item-novel_card,
+body #loop-content,
+body #loop-content.page-content-listing,
+body .page-content-listing.item-novel_card,
+body #loop-content.item-novel_card,
+body.archive #loop-content,
+body.post-type-archive #loop-content,
+.c-page #loop-content,
+.c-page #loop-content.page-content-listing,
+.main-col #loop-content,
+.main-col-inner #loop-content,
+.c-page__content #loop-content{
+display:grid !important;
+grid-template-columns:repeat(3,1fr) !important;
+gap:12px !important;
+max-width:100% !important;
+width:100% !important;
+box-sizing:border-box !important;
+-ms-grid-columns:(1fr)[3] !important
+}
+#loop-content .page-listing-item,
+#loop-content > .page-listing-item,
+.page-content-listing .page-listing-item,
+body .page-listing-item,
+.page-listing-item{display:contents !important}
+
+#loop-content .row,
+#loop-content .row-eq-height,
+#loop-content > .row,
+#loop-content > .row-eq-height,
+.page-content-listing .row,
+.page-content-listing .row-eq-height,
+body .page-content-listing .row,
+body #loop-content .row,
+.row-eq-height,
+.item-novel_card .row{display:contents !important;flex-wrap:unset !important;margin:0 !important;width:100% !important}
+#loop-content [class*="col-"],
+#loop-content [class^="col-"],
+#loop-content .col,
+#loop-content .col-12,
+#loop-content .col-6,
+#loop-content .col-md-6,
+#loop-content .col-lg-4,
+#loop-content .col-lg-6,
+#loop-content .col-sm-6,
+#loop-content .col-sm-12,
+.page-content-listing [class*="col-"],
+.page-content-listing .col-12,
+.page-content-listing .col-md-6,
+.page-content-listing .col-lg-4,
+body #loop-content [class*="col-"],
+body .page-content-listing [class*="col-"]{
+width:100% !important;
+max-width:100% !important;
+min-width:0 !important;
+padding:0 !important;
+margin:0 !important;
+display:block !important;
+flex:unset !important;
+flex-basis:unset !important;
+flex-grow:unset !important;
+flex-shrink:unset !important;
+-webkit-box-flex:unset !important;
+-ms-flex:unset !important
+}
+
+#loop-content [class*="badge-pos"],
+.page-content-listing [class*="badge-pos"]{padding:0 !important;margin:0 !important}
+
+#loop-content .page-item-detail,
+.page-content-listing .page-item-detail,
+body .page-item-detail{padding:0 !important;margin:0 !important;width:100% !important}
+@media screen and (max-width:991px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(2,1fr) !important;-ms-grid-columns:(1fr)[2] !important}
+}
+@media screen and (max-width:767px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(1,1fr) !important;-ms-grid-columns:1fr !important}
+}
+.premium-login-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:99999;justify-content:center;align-items:center}
+.premium-login-modal.active{display:flex}
+.premium-login-modal-content{background:#1a1a2e;border-radius:12px;padding:30px;text-align:center;max-width:350px;width:90%;border:1px solid rgba(255,255,255,0.1)}
+.premium-login-modal-icon{width:50px;height:50px;margin:0 auto 15px;background:#f8b500;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.premium-login-modal-icon svg{width:24px;height:24px;fill:#1a1a2e}
+.premium-login-modal-title{color:#fff;font-size:18px;font-weight:700;margin:0 0 10px}
+.premium-login-modal-text{color:#aaa;font-size:14px;margin:0 0 20px}
+.premium-login-modal-buttons{display:flex;gap:10px;justify-content:center}
+.premium-login-modal-btn{padding:10px 25px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all 0.3s}
+.premium-login-modal-btn.signup{background:#4a0054;color:#fff}
+.premium-login-modal-btn.signup:hover{background:#6a0074}
+.premium-login-modal-btn.cancel{background:transparent;color:#aaa;border:1px solid rgba(255,255,255,0.2)}
+.premium-login-modal-btn.cancel:hover{border-color:rgba(255,255,255,0.4);color:#fff}
+.premium-login-modal-btn.purchase{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.purchase:hover{background:#e5a600}
+.premium-login-modal-btn.unlock{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.unlock:hover{background:#e5a600}
+.premium-chapter-price{display:flex;align-items:center;justify-content:center;gap:6px;background:rgba(248,181,0,0.15);padding:10px 20px;border-radius:8px;margin-bottom:20px}
+.premium-chapter-price svg{width:20px;height:20px;fill:#f8b500}
+.premium-chapter-price span{color:#f8b500;font-size:18px;font-weight:700}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    if(window.releasesToggleInit) return;
+    window.releasesToggleInit = true;
+
+    function forceGridLayout() {
+        var loopContent = document.getElementById('loop-content');
+        if(!loopContent) return;
+        var cols = 3;
+        if(window.innerWidth <= 767) {
+            cols = 1;
+        } else if(window.innerWidth <= 991) {
+            cols = 2;
+        }
+        loopContent.setAttribute('style', 'display:grid !important;grid-template-columns:repeat(' + cols + ',1fr) !important;gap:12px !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;');
+        var wrappers = loopContent.querySelectorAll('.page-listing-item, .row, .row-eq-height');
+        wrappers.forEach(function(el) {
+            el.setAttribute('style', 'display:contents !important;');
+        });
+        var cols_el = loopContent.querySelectorAll('[class*="col"]');
+        cols_el.forEach(function(col) {
+            col.setAttribute('style', 'width:100% !important;max-width:100% !important;padding:0 !important;margin:0 !important;flex:unset !important;flex-basis:unset !important;display:block !important;');
+        });
+        var details = loopContent.querySelectorAll('.page-item-detail');
+        details.forEach(function(d) {
+            d.setAttribute('style', 'width:100% !important;padding:0 !important;margin:0 !important;');
+        });
+    }
+
+    forceGridLayout();
+    window.addEventListener('resize', forceGridLayout);
+
+    // Premium chapter click handling is done by modal-buy-coin.php
+});
+</script>
+
+<div class="novel-card-horizontal" style="display:flex !important;flex-direction:row !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;">
+		<div class="novel-card-thumb" style="flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;">
+		<a title="The Seven-Year-Old Village Chief in Exile" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/">
+			<img width="175" height="238"  src="https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-175x238.jpg" srcset="https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-175x238.jpg 175w, https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-110x150.jpg 110w, https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-350x476.jpg 350w" sizes="(max-width: 175px) 100vw, 175px" class="img-responsive" style=""  alt="The Seven-Year-Old Village Chief in Exile"/>		</a>
+			</div>
+	
+	<div class="novel-card-content" style="display:flex !important;flex-direction:column !important;flex-grow:1 !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;">
+		<h5 class="novel-card-title">
+			<a title="The Seven-Year-Old Village Chief in Exile" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/">
+				The Seven-Year-Old Village Chief in Exile			</a>
+		</h5>
+
+				<div class="novel-chapters-premium">
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 125 " data-chapter-id="129954">
+				<span class="chapter-name">
+					Chapter 125 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">08/10/2026</span>
+			</a>
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 124 " data-chapter-id="129953">
+				<span class="chapter-name">
+					Chapter 124 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">08/10/2026</span>
+			</a>
+					</div>
+		
+				<div class="novel-chapters-divider"></div>
+		
+				<div class="novel-chapters-free">
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-108/">
+				<span class="chapter-name">Chapter 108</span>
+				<span class="chapter-date">12 hours ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-107/">
+				<span class="chapter-name">Chapter 107</span>
+				<span class="chapter-date">1 day ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-106/">
+				<span class="chapter-name">Chapter 106</span>
+				<span class="chapter-date">2 days ago</span>
+			</a>
+					</div>
+			</div>
+</div>
+
+            </div><div class="page-item-detail text  ">
+				
+<style>
+.novel-card-horizontal,
+body .novel-card-horizontal,
+#loop-content .novel-card-horizontal,
+.page-content-listing .novel-card-horizontal,
+body.archive .novel-card-horizontal,
+body.post-type-archive .novel-card-horizontal{display:flex !important;flex-direction:row !important;background:#1a1a2e !important;border-radius:8px !important;overflow:hidden !important;border:1px solid rgba(255,255,255,0.08) !important;height:100% !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important}
+.novel-card-thumb,
+body .novel-card-thumb,
+#loop-content .novel-card-thumb,
+.page-content-listing .novel-card-thumb{flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;overflow:hidden !important;position:relative !important;height:auto !important}
+.novel-card-thumb a,
+body .novel-card-thumb a{display:block !important;height:100% !important;width:100% !important}
+.novel-card-thumb img,
+body .novel-card-thumb img,
+#loop-content .novel-card-thumb img{width:100px !important;height:100% !important;object-fit:cover !important;min-height:160px !important;max-width:100px !important}
+.novel-card-badge{position:absolute !important;bottom:8px !important;left:8px !important;background:rgba(74,0,84,0.7) !important;color:#fff !important;font-size:10px !important;font-weight:700 !important;padding:2px 6px !important;border-radius:3px !important;text-transform:uppercase !important;display:flex !important;align-items:center !important;gap:3px !important}
+.novel-card-badge.hot{background:rgb(255 0 0 / 70%) !important}
+.novel-card-badge.hot svg{width:12px !important;height:12px !important}
+.novel-card-content,
+body .novel-card-content,
+#loop-content .novel-card-content,
+.page-content-listing .novel-card-content,
+body.archive .novel-card-content,
+body.post-type-archive .novel-card-content{display:flex !important;flex-direction:column !important;flex-grow:1 !important;padding:10px 12px !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;width:calc(100% - 100px) !important;flex-basis:0 !important}
+.novel-card-title{margin:0 0 6px 0 !important;font-size:13px !important;font-weight:700 !important;line-height:1.3 !important;overflow:hidden !important;display:-webkit-box !important;-webkit-line-clamp:2 !important;-webkit-box-orient:vertical !important;white-space:normal !important;word-wrap:break-word !important;min-height:34px !important}
+.novel-card-title a{color:#fff !important;text-decoration:none !important;white-space:normal !important;word-wrap:break-word !important;display:inline !important}
+.novel-chapters-premium,.novel-chapters-free{display:flex !important;flex-direction:column !important;gap:2px !important}
+.novel-chapter-item{display:flex !important;justify-content:space-between !important;align-items:center !important;text-decoration:none !important;color:#bbb !important;font-size:11px !important;line-height:1.4 !important;gap:6px !important}
+.novel-chapter-item.free:hover{color:#fff !important}
+.novel-chapter-item.premium:hover{color:#f8b500 !important}
+.novel-chapter-item.premium:hover .chapter-name{color:#f8b500 !important}
+.novel-chapter-item .chapter-name{display:flex !important;align-items:center !important;gap:4px !important;font-weight:500 !important;white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important}
+.novel-chapter-item .chapter-date{font-size:10px !important;opacity:0.6 !important;white-space:nowrap !important;flex-shrink:0 !important}
+.novel-chapter-item .coin-icon{width:12px !important;height:12px !important;flex-shrink:0 !important}
+.novel-chapters-divider{height:1px !important;background:rgba(255,255,255,0.12) !important;margin:5px 0 !important}
+.novel-chapter-item.premium .chapter-name{color:#f8b500 !important}
+.novel-chapter-item.purchased .chapter-name{color:#fff !important}
+.novel-chapter-item.purchased .unlock-icon{color:#4CAF50 !important;font-size:11px !important}
+.c-blog__heading.style-1{border:none !important;padding:0 !important;margin-bottom:15px !important;text-align:left !important;display:flex !important;align-items:center !important}
+.c-blog__heading.style-1 .h4{font-size:18px !important;font-weight:700 !important;margin:0 !important;color:#fff !important;font-family:Poppins,sans-serif !important;padding:0 !important;border:none !important;display:inline-flex !important;align-items:center !important;gap:8px !important;text-transform:capitalize !important;min-width:240px !important}
+.c-blog__heading.style-1 .h4::before{content:'' !important;display:inline-block !important;width:20px !important;height:20px !important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' fill='%23ffffff'%3E%3Cpath d='M256 0a256 256 0 1 1 0 512A256 256 0 1 1 256 0zM232 120V256c0 8 4 15.5 10.7 20l96 64c11 7.4 25.9 4.4 33.3-6.7s4.4-25.9-6.7-33.3L280 243.2V120c0-13.3-10.7-24-24-24s-24 10.7-24 24z'/%3E%3C/svg%3E") !important;background-size:contain !important;background-repeat:no-repeat !important;flex-shrink:0 !important}
+.c-blog__heading.style-1 .h4::after{display:none !important}
+.main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+body .main-col-inner.c-page,
+body.archive .main-col-inner.c-page,
+body.post-type-archive .main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+#loop-content.item-novel_card,
+body #loop-content,
+body #loop-content.page-content-listing,
+body .page-content-listing.item-novel_card,
+body #loop-content.item-novel_card,
+body.archive #loop-content,
+body.post-type-archive #loop-content,
+.c-page #loop-content,
+.c-page #loop-content.page-content-listing,
+.main-col #loop-content,
+.main-col-inner #loop-content,
+.c-page__content #loop-content{
+display:grid !important;
+grid-template-columns:repeat(3,1fr) !important;
+gap:12px !important;
+max-width:100% !important;
+width:100% !important;
+box-sizing:border-box !important;
+-ms-grid-columns:(1fr)[3] !important
+}
+#loop-content .page-listing-item,
+#loop-content > .page-listing-item,
+.page-content-listing .page-listing-item,
+body .page-listing-item,
+.page-listing-item{display:contents !important}
+
+#loop-content .row,
+#loop-content .row-eq-height,
+#loop-content > .row,
+#loop-content > .row-eq-height,
+.page-content-listing .row,
+.page-content-listing .row-eq-height,
+body .page-content-listing .row,
+body #loop-content .row,
+.row-eq-height,
+.item-novel_card .row{display:contents !important;flex-wrap:unset !important;margin:0 !important;width:100% !important}
+#loop-content [class*="col-"],
+#loop-content [class^="col-"],
+#loop-content .col,
+#loop-content .col-12,
+#loop-content .col-6,
+#loop-content .col-md-6,
+#loop-content .col-lg-4,
+#loop-content .col-lg-6,
+#loop-content .col-sm-6,
+#loop-content .col-sm-12,
+.page-content-listing [class*="col-"],
+.page-content-listing .col-12,
+.page-content-listing .col-md-6,
+.page-content-listing .col-lg-4,
+body #loop-content [class*="col-"],
+body .page-content-listing [class*="col-"]{
+width:100% !important;
+max-width:100% !important;
+min-width:0 !important;
+padding:0 !important;
+margin:0 !important;
+display:block !important;
+flex:unset !important;
+flex-basis:unset !important;
+flex-grow:unset !important;
+flex-shrink:unset !important;
+-webkit-box-flex:unset !important;
+-ms-flex:unset !important
+}
+
+#loop-content [class*="badge-pos"],
+.page-content-listing [class*="badge-pos"]{padding:0 !important;margin:0 !important}
+
+#loop-content .page-item-detail,
+.page-content-listing .page-item-detail,
+body .page-item-detail{padding:0 !important;margin:0 !important;width:100% !important}
+@media screen and (max-width:991px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(2,1fr) !important;-ms-grid-columns:(1fr)[2] !important}
+}
+@media screen and (max-width:767px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(1,1fr) !important;-ms-grid-columns:1fr !important}
+}
+.premium-login-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:99999;justify-content:center;align-items:center}
+.premium-login-modal.active{display:flex}
+.premium-login-modal-content{background:#1a1a2e;border-radius:12px;padding:30px;text-align:center;max-width:350px;width:90%;border:1px solid rgba(255,255,255,0.1)}
+.premium-login-modal-icon{width:50px;height:50px;margin:0 auto 15px;background:#f8b500;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.premium-login-modal-icon svg{width:24px;height:24px;fill:#1a1a2e}
+.premium-login-modal-title{color:#fff;font-size:18px;font-weight:700;margin:0 0 10px}
+.premium-login-modal-text{color:#aaa;font-size:14px;margin:0 0 20px}
+.premium-login-modal-buttons{display:flex;gap:10px;justify-content:center}
+.premium-login-modal-btn{padding:10px 25px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all 0.3s}
+.premium-login-modal-btn.signup{background:#4a0054;color:#fff}
+.premium-login-modal-btn.signup:hover{background:#6a0074}
+.premium-login-modal-btn.cancel{background:transparent;color:#aaa;border:1px solid rgba(255,255,255,0.2)}
+.premium-login-modal-btn.cancel:hover{border-color:rgba(255,255,255,0.4);color:#fff}
+.premium-login-modal-btn.purchase{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.purchase:hover{background:#e5a600}
+.premium-login-modal-btn.unlock{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.unlock:hover{background:#e5a600}
+.premium-chapter-price{display:flex;align-items:center;justify-content:center;gap:6px;background:rgba(248,181,0,0.15);padding:10px 20px;border-radius:8px;margin-bottom:20px}
+.premium-chapter-price svg{width:20px;height:20px;fill:#f8b500}
+.premium-chapter-price span{color:#f8b500;font-size:18px;font-weight:700}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    if(window.releasesToggleInit) return;
+    window.releasesToggleInit = true;
+
+    function forceGridLayout() {
+        var loopContent = document.getElementById('loop-content');
+        if(!loopContent) return;
+        var cols = 3;
+        if(window.innerWidth <= 767) {
+            cols = 1;
+        } else if(window.innerWidth <= 991) {
+            cols = 2;
+        }
+        loopContent.setAttribute('style', 'display:grid !important;grid-template-columns:repeat(' + cols + ',1fr) !important;gap:12px !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;');
+        var wrappers = loopContent.querySelectorAll('.page-listing-item, .row, .row-eq-height');
+        wrappers.forEach(function(el) {
+            el.setAttribute('style', 'display:contents !important;');
+        });
+        var cols_el = loopContent.querySelectorAll('[class*="col"]');
+        cols_el.forEach(function(col) {
+            col.setAttribute('style', 'width:100% !important;max-width:100% !important;padding:0 !important;margin:0 !important;flex:unset !important;flex-basis:unset !important;display:block !important;');
+        });
+        var details = loopContent.querySelectorAll('.page-item-detail');
+        details.forEach(function(d) {
+            d.setAttribute('style', 'width:100% !important;padding:0 !important;margin:0 !important;');
+        });
+    }
+
+    forceGridLayout();
+    window.addEventListener('resize', forceGridLayout);
+
+    // Premium chapter click handling is done by modal-buy-coin.php
+});
+</script>
+
+<div class="novel-card-horizontal" style="display:flex !important;flex-direction:row !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;">
+		<div class="novel-card-thumb" style="flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;">
+		<a title="The Seven-Year-Old Village Chief in Exile" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/">
+			<img width="175" height="238"  src="https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-175x238.jpg" srcset="https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-175x238.jpg 175w, https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-110x150.jpg 110w, https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-350x476.jpg 350w" sizes="(max-width: 175px) 100vw, 175px" class="img-responsive" style=""  alt="The Seven-Year-Old Village Chief in Exile"/>		</a>
+			</div>
+	
+	<div class="novel-card-content" style="display:flex !important;flex-direction:column !important;flex-grow:1 !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;">
+		<h5 class="novel-card-title">
+			<a title="The Seven-Year-Old Village Chief in Exile" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/">
+				The Seven-Year-Old Village Chief in Exile			</a>
+		</h5>
+
+				<div class="novel-chapters-premium">
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 125 " data-chapter-id="129954">
+				<span class="chapter-name">
+					Chapter 125 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">08/10/2026</span>
+			</a>
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 124 " data-chapter-id="129953">
+				<span class="chapter-name">
+					Chapter 124 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">08/10/2026</span>
+			</a>
+					</div>
+		
+				<div class="novel-chapters-divider"></div>
+		
+				<div class="novel-chapters-free">
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-108/">
+				<span class="chapter-name">Chapter 108</span>
+				<span class="chapter-date">12 hours ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-107/">
+				<span class="chapter-name">Chapter 107</span>
+				<span class="chapter-date">1 day ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-106/">
+				<span class="chapter-name">Chapter 106</span>
+				<span class="chapter-date">2 days ago</span>
+			</a>
+					</div>
+			</div>
+</div>
+
+            </div><div class="page-item-detail text  ">
+				
+<style>
+.novel-card-horizontal,
+body .novel-card-horizontal,
+#loop-content .novel-card-horizontal,
+.page-content-listing .novel-card-horizontal,
+body.archive .novel-card-horizontal,
+body.post-type-archive .novel-card-horizontal{display:flex !important;flex-direction:row !important;background:#1a1a2e !important;border-radius:8px !important;overflow:hidden !important;border:1px solid rgba(255,255,255,0.08) !important;height:100% !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important}
+.novel-card-thumb,
+body .novel-card-thumb,
+#loop-content .novel-card-thumb,
+.page-content-listing .novel-card-thumb{flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;overflow:hidden !important;position:relative !important;height:auto !important}
+.novel-card-thumb a,
+body .novel-card-thumb a{display:block !important;height:100% !important;width:100% !important}
+.novel-card-thumb img,
+body .novel-card-thumb img,
+#loop-content .novel-card-thumb img{width:100px !important;height:100% !important;object-fit:cover !important;min-height:160px !important;max-width:100px !important}
+.novel-card-badge{position:absolute !important;bottom:8px !important;left:8px !important;background:rgba(74,0,84,0.7) !important;color:#fff !important;font-size:10px !important;font-weight:700 !important;padding:2px 6px !important;border-radius:3px !important;text-transform:uppercase !important;display:flex !important;align-items:center !important;gap:3px !important}
+.novel-card-badge.hot{background:rgb(255 0 0 / 70%) !important}
+.novel-card-badge.hot svg{width:12px !important;height:12px !important}
+.novel-card-content,
+body .novel-card-content,
+#loop-content .novel-card-content,
+.page-content-listing .novel-card-content,
+body.archive .novel-card-content,
+body.post-type-archive .novel-card-content{display:flex !important;flex-direction:column !important;flex-grow:1 !important;padding:10px 12px !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;width:calc(100% - 100px) !important;flex-basis:0 !important}
+.novel-card-title{margin:0 0 6px 0 !important;font-size:13px !important;font-weight:700 !important;line-height:1.3 !important;overflow:hidden !important;display:-webkit-box !important;-webkit-line-clamp:2 !important;-webkit-box-orient:vertical !important;white-space:normal !important;word-wrap:break-word !important;min-height:34px !important}
+.novel-card-title a{color:#fff !important;text-decoration:none !important;white-space:normal !important;word-wrap:break-word !important;display:inline !important}
+.novel-chapters-premium,.novel-chapters-free{display:flex !important;flex-direction:column !important;gap:2px !important}
+.novel-chapter-item{display:flex !important;justify-content:space-between !important;align-items:center !important;text-decoration:none !important;color:#bbb !important;font-size:11px !important;line-height:1.4 !important;gap:6px !important}
+.novel-chapter-item.free:hover{color:#fff !important}
+.novel-chapter-item.premium:hover{color:#f8b500 !important}
+.novel-chapter-item.premium:hover .chapter-name{color:#f8b500 !important}
+.novel-chapter-item .chapter-name{display:flex !important;align-items:center !important;gap:4px !important;font-weight:500 !important;white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important}
+.novel-chapter-item .chapter-date{font-size:10px !important;opacity:0.6 !important;white-space:nowrap !important;flex-shrink:0 !important}
+.novel-chapter-item .coin-icon{width:12px !important;height:12px !important;flex-shrink:0 !important}
+.novel-chapters-divider{height:1px !important;background:rgba(255,255,255,0.12) !important;margin:5px 0 !important}
+.novel-chapter-item.premium .chapter-name{color:#f8b500 !important}
+.novel-chapter-item.purchased .chapter-name{color:#fff !important}
+.novel-chapter-item.purchased .unlock-icon{color:#4CAF50 !important;font-size:11px !important}
+.c-blog__heading.style-1{border:none !important;padding:0 !important;margin-bottom:15px !important;text-align:left !important;display:flex !important;align-items:center !important}
+.c-blog__heading.style-1 .h4{font-size:18px !important;font-weight:700 !important;margin:0 !important;color:#fff !important;font-family:Poppins,sans-serif !important;padding:0 !important;border:none !important;display:inline-flex !important;align-items:center !important;gap:8px !important;text-transform:capitalize !important;min-width:240px !important}
+.c-blog__heading.style-1 .h4::before{content:'' !important;display:inline-block !important;width:20px !important;height:20px !important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' fill='%23ffffff'%3E%3Cpath d='M256 0a256 256 0 1 1 0 512A256 256 0 1 1 256 0zM232 120V256c0 8 4 15.5 10.7 20l96 64c11 7.4 25.9 4.4 33.3-6.7s4.4-25.9-6.7-33.3L280 243.2V120c0-13.3-10.7-24-24-24s-24 10.7-24 24z'/%3E%3C/svg%3E") !important;background-size:contain !important;background-repeat:no-repeat !important;flex-shrink:0 !important}
+.c-blog__heading.style-1 .h4::after{display:none !important}
+.main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+body .main-col-inner.c-page,
+body.archive .main-col-inner.c-page,
+body.post-type-archive .main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+#loop-content.item-novel_card,
+body #loop-content,
+body #loop-content.page-content-listing,
+body .page-content-listing.item-novel_card,
+body #loop-content.item-novel_card,
+body.archive #loop-content,
+body.post-type-archive #loop-content,
+.c-page #loop-content,
+.c-page #loop-content.page-content-listing,
+.main-col #loop-content,
+.main-col-inner #loop-content,
+.c-page__content #loop-content{
+display:grid !important;
+grid-template-columns:repeat(3,1fr) !important;
+gap:12px !important;
+max-width:100% !important;
+width:100% !important;
+box-sizing:border-box !important;
+-ms-grid-columns:(1fr)[3] !important
+}
+#loop-content .page-listing-item,
+#loop-content > .page-listing-item,
+.page-content-listing .page-listing-item,
+body .page-listing-item,
+.page-listing-item{display:contents !important}
+
+#loop-content .row,
+#loop-content .row-eq-height,
+#loop-content > .row,
+#loop-content > .row-eq-height,
+.page-content-listing .row,
+.page-content-listing .row-eq-height,
+body .page-content-listing .row,
+body #loop-content .row,
+.row-eq-height,
+.item-novel_card .row{display:contents !important;flex-wrap:unset !important;margin:0 !important;width:100% !important}
+#loop-content [class*="col-"],
+#loop-content [class^="col-"],
+#loop-content .col,
+#loop-content .col-12,
+#loop-content .col-6,
+#loop-content .col-md-6,
+#loop-content .col-lg-4,
+#loop-content .col-lg-6,
+#loop-content .col-sm-6,
+#loop-content .col-sm-12,
+.page-content-listing [class*="col-"],
+.page-content-listing .col-12,
+.page-content-listing .col-md-6,
+.page-content-listing .col-lg-4,
+body #loop-content [class*="col-"],
+body .page-content-listing [class*="col-"]{
+width:100% !important;
+max-width:100% !important;
+min-width:0 !important;
+padding:0 !important;
+margin:0 !important;
+display:block !important;
+flex:unset !important;
+flex-basis:unset !important;
+flex-grow:unset !important;
+flex-shrink:unset !important;
+-webkit-box-flex:unset !important;
+-ms-flex:unset !important
+}
+
+#loop-content [class*="badge-pos"],
+.page-content-listing [class*="badge-pos"]{padding:0 !important;margin:0 !important}
+
+#loop-content .page-item-detail,
+.page-content-listing .page-item-detail,
+body .page-item-detail{padding:0 !important;margin:0 !important;width:100% !important}
+@media screen and (max-width:991px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(2,1fr) !important;-ms-grid-columns:(1fr)[2] !important}
+}
+@media screen and (max-width:767px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(1,1fr) !important;-ms-grid-columns:1fr !important}
+}
+.premium-login-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:99999;justify-content:center;align-items:center}
+.premium-login-modal.active{display:flex}
+.premium-login-modal-content{background:#1a1a2e;border-radius:12px;padding:30px;text-align:center;max-width:350px;width:90%;border:1px solid rgba(255,255,255,0.1)}
+.premium-login-modal-icon{width:50px;height:50px;margin:0 auto 15px;background:#f8b500;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.premium-login-modal-icon svg{width:24px;height:24px;fill:#1a1a2e}
+.premium-login-modal-title{color:#fff;font-size:18px;font-weight:700;margin:0 0 10px}
+.premium-login-modal-text{color:#aaa;font-size:14px;margin:0 0 20px}
+.premium-login-modal-buttons{display:flex;gap:10px;justify-content:center}
+.premium-login-modal-btn{padding:10px 25px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all 0.3s}
+.premium-login-modal-btn.signup{background:#4a0054;color:#fff}
+.premium-login-modal-btn.signup:hover{background:#6a0074}
+.premium-login-modal-btn.cancel{background:transparent;color:#aaa;border:1px solid rgba(255,255,255,0.2)}
+.premium-login-modal-btn.cancel:hover{border-color:rgba(255,255,255,0.4);color:#fff}
+.premium-login-modal-btn.purchase{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.purchase:hover{background:#e5a600}
+.premium-login-modal-btn.unlock{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.unlock:hover{background:#e5a600}
+.premium-chapter-price{display:flex;align-items:center;justify-content:center;gap:6px;background:rgba(248,181,0,0.15);padding:10px 20px;border-radius:8px;margin-bottom:20px}
+.premium-chapter-price svg{width:20px;height:20px;fill:#f8b500}
+.premium-chapter-price span{color:#f8b500;font-size:18px;font-weight:700}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    if(window.releasesToggleInit) return;
+    window.releasesToggleInit = true;
+
+    function forceGridLayout() {
+        var loopContent = document.getElementById('loop-content');
+        if(!loopContent) return;
+        var cols = 3;
+        if(window.innerWidth <= 767) {
+            cols = 1;
+        } else if(window.innerWidth <= 991) {
+            cols = 2;
+        }
+        loopContent.setAttribute('style', 'display:grid !important;grid-template-columns:repeat(' + cols + ',1fr) !important;gap:12px !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;');
+        var wrappers = loopContent.querySelectorAll('.page-listing-item, .row, .row-eq-height');
+        wrappers.forEach(function(el) {
+            el.setAttribute('style', 'display:contents !important;');
+        });
+        var cols_el = loopContent.querySelectorAll('[class*="col"]');
+        cols_el.forEach(function(col) {
+            col.setAttribute('style', 'width:100% !important;max-width:100% !important;padding:0 !important;margin:0 !important;flex:unset !important;flex-basis:unset !important;display:block !important;');
+        });
+        var details = loopContent.querySelectorAll('.page-item-detail');
+        details.forEach(function(d) {
+            d.setAttribute('style', 'width:100% !important;padding:0 !important;margin:0 !important;');
+        });
+    }
+
+    forceGridLayout();
+    window.addEventListener('resize', forceGridLayout);
+
+    // Premium chapter click handling is done by modal-buy-coin.php
+});
+</script>
+
+<div class="novel-card-horizontal" style="display:flex !important;flex-direction:row !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;">
+		<div class="novel-card-thumb" style="flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;">
+		<a title="The Seven-Year-Old Village Chief in Exile" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/">
+			<img width="175" height="238"  src="https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-175x238.jpg" srcset="https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-175x238.jpg 175w, https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-110x150.jpg 110w, https://lunoxscans.com/wp-content/uploads/2026/08/The-Seven-Year-Old-Village-Chief-in-Exile-350x476.jpg 350w" sizes="(max-width: 175px) 100vw, 175px" class="img-responsive" style=""  alt="The Seven-Year-Old Village Chief in Exile"/>		</a>
+			</div>
+	
+	<div class="novel-card-content" style="display:flex !important;flex-direction:column !important;flex-grow:1 !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;">
+		<h5 class="novel-card-title">
+			<a title="The Seven-Year-Old Village Chief in Exile" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/">
+				The Seven-Year-Old Village Chief in Exile			</a>
+		</h5>
+
+				<div class="novel-chapters-premium">
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 125 " data-chapter-id="129954">
+				<span class="chapter-name">
+					Chapter 125 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">08/10/2026</span>
+			</a>
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 124 " data-chapter-id="129953">
+				<span class="chapter-name">
+					Chapter 124 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">08/10/2026</span>
+			</a>
+					</div>
+		
+				<div class="novel-chapters-divider"></div>
+		
+				<div class="novel-chapters-free">
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-108/">
+				<span class="chapter-name">Chapter 108</span>
+				<span class="chapter-date">12 hours ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-107/">
+				<span class="chapter-name">Chapter 107</span>
+				<span class="chapter-date">1 day ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-seven-year-old-village-chief-in-exile/chapter-106/">
+				<span class="chapter-name">Chapter 106</span>
+				<span class="chapter-date">2 days ago</span>
+			</a>
+					</div>
+			</div>
+</div>
+
+            </div><div class="page-item-detail text  ">
+				
+<style>
+.novel-card-horizontal,
+body .novel-card-horizontal,
+#loop-content .novel-card-horizontal,
+.page-content-listing .novel-card-horizontal,
+body.archive .novel-card-horizontal,
+body.post-type-archive .novel-card-horizontal{display:flex !important;flex-direction:row !important;background:#1a1a2e !important;border-radius:8px !important;overflow:hidden !important;border:1px solid rgba(255,255,255,0.08) !important;height:100% !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important}
+.novel-card-thumb,
+body .novel-card-thumb,
+#loop-content .novel-card-thumb,
+.page-content-listing .novel-card-thumb{flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;overflow:hidden !important;position:relative !important;height:auto !important}
+.novel-card-thumb a,
+body .novel-card-thumb a{display:block !important;height:100% !important;width:100% !important}
+.novel-card-thumb img,
+body .novel-card-thumb img,
+#loop-content .novel-card-thumb img{width:100px !important;height:100% !important;object-fit:cover !important;min-height:160px !important;max-width:100px !important}
+.novel-card-badge{position:absolute !important;bottom:8px !important;left:8px !important;background:rgba(74,0,84,0.7) !important;color:#fff !important;font-size:10px !important;font-weight:700 !important;padding:2px 6px !important;border-radius:3px !important;text-transform:uppercase !important;display:flex !important;align-items:center !important;gap:3px !important}
+.novel-card-badge.hot{background:rgb(255 0 0 / 70%) !important}
+.novel-card-badge.hot svg{width:12px !important;height:12px !important}
+.novel-card-content,
+body .novel-card-content,
+#loop-content .novel-card-content,
+.page-content-listing .novel-card-content,
+body.archive .novel-card-content,
+body.post-type-archive .novel-card-content{display:flex !important;flex-direction:column !important;flex-grow:1 !important;padding:10px 12px !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;width:calc(100% - 100px) !important;flex-basis:0 !important}
+.novel-card-title{margin:0 0 6px 0 !important;font-size:13px !important;font-weight:700 !important;line-height:1.3 !important;overflow:hidden !important;display:-webkit-box !important;-webkit-line-clamp:2 !important;-webkit-box-orient:vertical !important;white-space:normal !important;word-wrap:break-word !important;min-height:34px !important}
+.novel-card-title a{color:#fff !important;text-decoration:none !important;white-space:normal !important;word-wrap:break-word !important;display:inline !important}
+.novel-chapters-premium,.novel-chapters-free{display:flex !important;flex-direction:column !important;gap:2px !important}
+.novel-chapter-item{display:flex !important;justify-content:space-between !important;align-items:center !important;text-decoration:none !important;color:#bbb !important;font-size:11px !important;line-height:1.4 !important;gap:6px !important}
+.novel-chapter-item.free:hover{color:#fff !important}
+.novel-chapter-item.premium:hover{color:#f8b500 !important}
+.novel-chapter-item.premium:hover .chapter-name{color:#f8b500 !important}
+.novel-chapter-item .chapter-name{display:flex !important;align-items:center !important;gap:4px !important;font-weight:500 !important;white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important}
+.novel-chapter-item .chapter-date{font-size:10px !important;opacity:0.6 !important;white-space:nowrap !important;flex-shrink:0 !important}
+.novel-chapter-item .coin-icon{width:12px !important;height:12px !important;flex-shrink:0 !important}
+.novel-chapters-divider{height:1px !important;background:rgba(255,255,255,0.12) !important;margin:5px 0 !important}
+.novel-chapter-item.premium .chapter-name{color:#f8b500 !important}
+.novel-chapter-item.purchased .chapter-name{color:#fff !important}
+.novel-chapter-item.purchased .unlock-icon{color:#4CAF50 !important;font-size:11px !important}
+.c-blog__heading.style-1{border:none !important;padding:0 !important;margin-bottom:15px !important;text-align:left !important;display:flex !important;align-items:center !important}
+.c-blog__heading.style-1 .h4{font-size:18px !important;font-weight:700 !important;margin:0 !important;color:#fff !important;font-family:Poppins,sans-serif !important;padding:0 !important;border:none !important;display:inline-flex !important;align-items:center !important;gap:8px !important;text-transform:capitalize !important;min-width:240px !important}
+.c-blog__heading.style-1 .h4::before{content:'' !important;display:inline-block !important;width:20px !important;height:20px !important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' fill='%23ffffff'%3E%3Cpath d='M256 0a256 256 0 1 1 0 512A256 256 0 1 1 256 0zM232 120V256c0 8 4 15.5 10.7 20l96 64c11 7.4 25.9 4.4 33.3-6.7s4.4-25.9-6.7-33.3L280 243.2V120c0-13.3-10.7-24-24-24s-24 10.7-24 24z'/%3E%3C/svg%3E") !important;background-size:contain !important;background-repeat:no-repeat !important;flex-shrink:0 !important}
+.c-blog__heading.style-1 .h4::after{display:none !important}
+.main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+body .main-col-inner.c-page,
+body.archive .main-col-inner.c-page,
+body.post-type-archive .main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+#loop-content.item-novel_card,
+body #loop-content,
+body #loop-content.page-content-listing,
+body .page-content-listing.item-novel_card,
+body #loop-content.item-novel_card,
+body.archive #loop-content,
+body.post-type-archive #loop-content,
+.c-page #loop-content,
+.c-page #loop-content.page-content-listing,
+.main-col #loop-content,
+.main-col-inner #loop-content,
+.c-page__content #loop-content{
+display:grid !important;
+grid-template-columns:repeat(3,1fr) !important;
+gap:12px !important;
+max-width:100% !important;
+width:100% !important;
+box-sizing:border-box !important;
+-ms-grid-columns:(1fr)[3] !important
+}
+#loop-content .page-listing-item,
+#loop-content > .page-listing-item,
+.page-content-listing .page-listing-item,
+body .page-listing-item,
+.page-listing-item{display:contents !important}
+
+#loop-content .row,
+#loop-content .row-eq-height,
+#loop-content > .row,
+#loop-content > .row-eq-height,
+.page-content-listing .row,
+.page-content-listing .row-eq-height,
+body .page-content-listing .row,
+body #loop-content .row,
+.row-eq-height,
+.item-novel_card .row{display:contents !important;flex-wrap:unset !important;margin:0 !important;width:100% !important}
+#loop-content [class*="col-"],
+#loop-content [class^="col-"],
+#loop-content .col,
+#loop-content .col-12,
+#loop-content .col-6,
+#loop-content .col-md-6,
+#loop-content .col-lg-4,
+#loop-content .col-lg-6,
+#loop-content .col-sm-6,
+#loop-content .col-sm-12,
+.page-content-listing [class*="col-"],
+.page-content-listing .col-12,
+.page-content-listing .col-md-6,
+.page-content-listing .col-lg-4,
+body #loop-content [class*="col-"],
+body .page-content-listing [class*="col-"]{
+width:100% !important;
+max-width:100% !important;
+min-width:0 !important;
+padding:0 !important;
+margin:0 !important;
+display:block !important;
+flex:unset !important;
+flex-basis:unset !important;
+flex-grow:unset !important;
+flex-shrink:unset !important;
+-webkit-box-flex:unset !important;
+-ms-flex:unset !important
+}
+
+#loop-content [class*="badge-pos"],
+.page-content-listing [class*="badge-pos"]{padding:0 !important;margin:0 !important}
+
+#loop-content .page-item-detail,
+.page-content-listing .page-item-detail,
+body .page-item-detail{padding:0 !important;margin:0 !important;width:100% !important}
+@media screen and (max-width:991px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(2,1fr) !important;-ms-grid-columns:(1fr)[2] !important}
+}
+@media screen and (max-width:767px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(1,1fr) !important;-ms-grid-columns:1fr !important}
+}
+.premium-login-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:99999;justify-content:center;align-items:center}
+.premium-login-modal.active{display:flex}
+.premium-login-modal-content{background:#1a1a2e;border-radius:12px;padding:30px;text-align:center;max-width:350px;width:90%;border:1px solid rgba(255,255,255,0.1)}
+.premium-login-modal-icon{width:50px;height:50px;margin:0 auto 15px;background:#f8b500;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.premium-login-modal-icon svg{width:24px;height:24px;fill:#1a1a2e}
+.premium-login-modal-title{color:#fff;font-size:18px;font-weight:700;margin:0 0 10px}
+.premium-login-modal-text{color:#aaa;font-size:14px;margin:0 0 20px}
+.premium-login-modal-buttons{display:flex;gap:10px;justify-content:center}
+.premium-login-modal-btn{padding:10px 25px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all 0.3s}
+.premium-login-modal-btn.signup{background:#4a0054;color:#fff}
+.premium-login-modal-btn.signup:hover{background:#6a0074}
+.premium-login-modal-btn.cancel{background:transparent;color:#aaa;border:1px solid rgba(255,255,255,0.2)}
+.premium-login-modal-btn.cancel:hover{border-color:rgba(255,255,255,0.4);color:#fff}
+.premium-login-modal-btn.purchase{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.purchase:hover{background:#e5a600}
+.premium-login-modal-btn.unlock{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.unlock:hover{background:#e5a600}
+.premium-chapter-price{display:flex;align-items:center;justify-content:center;gap:6px;background:rgba(248,181,0,0.15);padding:10px 20px;border-radius:8px;margin-bottom:20px}
+.premium-chapter-price svg{width:20px;height:20px;fill:#f8b500}
+.premium-chapter-price span{color:#f8b500;font-size:18px;font-weight:700}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    if(window.releasesToggleInit) return;
+    window.releasesToggleInit = true;
+
+    function forceGridLayout() {
+        var loopContent = document.getElementById('loop-content');
+        if(!loopContent) return;
+        var cols = 3;
+        if(window.innerWidth <= 767) {
+            cols = 1;
+        } else if(window.innerWidth <= 991) {
+            cols = 2;
+        }
+        loopContent.setAttribute('style', 'display:grid !important;grid-template-columns:repeat(' + cols + ',1fr) !important;gap:12px !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;');
+        var wrappers = loopContent.querySelectorAll('.page-listing-item, .row, .row-eq-height');
+        wrappers.forEach(function(el) {
+            el.setAttribute('style', 'display:contents !important;');
+        });
+        var cols_el = loopContent.querySelectorAll('[class*="col"]');
+        cols_el.forEach(function(col) {
+            col.setAttribute('style', 'width:100% !important;max-width:100% !important;padding:0 !important;margin:0 !important;flex:unset !important;flex-basis:unset !important;display:block !important;');
+        });
+        var details = loopContent.querySelectorAll('.page-item-detail');
+        details.forEach(function(d) {
+            d.setAttribute('style', 'width:100% !important;padding:0 !important;margin:0 !important;');
+        });
+    }
+
+    forceGridLayout();
+    window.addEventListener('resize', forceGridLayout);
+
+    // Premium chapter click handling is done by modal-buy-coin.php
+});
+</script>
+
+<div class="novel-card-horizontal" style="display:flex !important;flex-direction:row !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;">
+		<div class="novel-card-thumb" style="flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;">
+		<a title="The Physician of Traditional Medicine Returns from Murim" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/">
+			<img width="175" height="238"  src="https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-175x238.jpg" srcset="https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-175x238.jpg 175w, https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-110x150.jpg 110w, https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-350x476.jpg 350w" sizes="(max-width: 175px) 100vw, 175px" class="img-responsive" style=""  alt="The Physician of Traditional Medicine Returns from Murim"/>		</a>
+			</div>
+	
+	<div class="novel-card-content" style="display:flex !important;flex-direction:column !important;flex-grow:1 !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;">
+		<h5 class="novel-card-title">
+			<a title="The Physician of Traditional Medicine Returns from Murim" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/">
+				The Physician of Traditional Medicine Returns from Murim			</a>
+		</h5>
+
+				<div class="novel-chapters-premium">
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 532 " data-chapter-id="42308">
+				<span class="chapter-name">
+					Chapter 532 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">02/28/2026</span>
+			</a>
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 531 " data-chapter-id="42307">
+				<span class="chapter-name">
+					Chapter 531 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">02/28/2026</span>
+			</a>
+					</div>
+		
+				<div class="novel-chapters-divider"></div>
+		
+				<div class="novel-chapters-free">
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/chapter-365/">
+				<span class="chapter-name">Chapter 365</span>
+				<span class="chapter-date">12 hours ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/chapter-364/">
+				<span class="chapter-name">Chapter 364</span>
+				<span class="chapter-date">1 day ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/chapter-363/">
+				<span class="chapter-name">Chapter 363</span>
+				<span class="chapter-date">2 days ago</span>
+			</a>
+					</div>
+			</div>
+</div>
+
+            </div><div class="page-item-detail text  ">
+				
+<style>
+.novel-card-horizontal,
+body .novel-card-horizontal,
+#loop-content .novel-card-horizontal,
+.page-content-listing .novel-card-horizontal,
+body.archive .novel-card-horizontal,
+body.post-type-archive .novel-card-horizontal{display:flex !important;flex-direction:row !important;background:#1a1a2e !important;border-radius:8px !important;overflow:hidden !important;border:1px solid rgba(255,255,255,0.08) !important;height:100% !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important}
+.novel-card-thumb,
+body .novel-card-thumb,
+#loop-content .novel-card-thumb,
+.page-content-listing .novel-card-thumb{flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;overflow:hidden !important;position:relative !important;height:auto !important}
+.novel-card-thumb a,
+body .novel-card-thumb a{display:block !important;height:100% !important;width:100% !important}
+.novel-card-thumb img,
+body .novel-card-thumb img,
+#loop-content .novel-card-thumb img{width:100px !important;height:100% !important;object-fit:cover !important;min-height:160px !important;max-width:100px !important}
+.novel-card-badge{position:absolute !important;bottom:8px !important;left:8px !important;background:rgba(74,0,84,0.7) !important;color:#fff !important;font-size:10px !important;font-weight:700 !important;padding:2px 6px !important;border-radius:3px !important;text-transform:uppercase !important;display:flex !important;align-items:center !important;gap:3px !important}
+.novel-card-badge.hot{background:rgb(255 0 0 / 70%) !important}
+.novel-card-badge.hot svg{width:12px !important;height:12px !important}
+.novel-card-content,
+body .novel-card-content,
+#loop-content .novel-card-content,
+.page-content-listing .novel-card-content,
+body.archive .novel-card-content,
+body.post-type-archive .novel-card-content{display:flex !important;flex-direction:column !important;flex-grow:1 !important;padding:10px 12px !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;width:calc(100% - 100px) !important;flex-basis:0 !important}
+.novel-card-title{margin:0 0 6px 0 !important;font-size:13px !important;font-weight:700 !important;line-height:1.3 !important;overflow:hidden !important;display:-webkit-box !important;-webkit-line-clamp:2 !important;-webkit-box-orient:vertical !important;white-space:normal !important;word-wrap:break-word !important;min-height:34px !important}
+.novel-card-title a{color:#fff !important;text-decoration:none !important;white-space:normal !important;word-wrap:break-word !important;display:inline !important}
+.novel-chapters-premium,.novel-chapters-free{display:flex !important;flex-direction:column !important;gap:2px !important}
+.novel-chapter-item{display:flex !important;justify-content:space-between !important;align-items:center !important;text-decoration:none !important;color:#bbb !important;font-size:11px !important;line-height:1.4 !important;gap:6px !important}
+.novel-chapter-item.free:hover{color:#fff !important}
+.novel-chapter-item.premium:hover{color:#f8b500 !important}
+.novel-chapter-item.premium:hover .chapter-name{color:#f8b500 !important}
+.novel-chapter-item .chapter-name{display:flex !important;align-items:center !important;gap:4px !important;font-weight:500 !important;white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important}
+.novel-chapter-item .chapter-date{font-size:10px !important;opacity:0.6 !important;white-space:nowrap !important;flex-shrink:0 !important}
+.novel-chapter-item .coin-icon{width:12px !important;height:12px !important;flex-shrink:0 !important}
+.novel-chapters-divider{height:1px !important;background:rgba(255,255,255,0.12) !important;margin:5px 0 !important}
+.novel-chapter-item.premium .chapter-name{color:#f8b500 !important}
+.novel-chapter-item.purchased .chapter-name{color:#fff !important}
+.novel-chapter-item.purchased .unlock-icon{color:#4CAF50 !important;font-size:11px !important}
+.c-blog__heading.style-1{border:none !important;padding:0 !important;margin-bottom:15px !important;text-align:left !important;display:flex !important;align-items:center !important}
+.c-blog__heading.style-1 .h4{font-size:18px !important;font-weight:700 !important;margin:0 !important;color:#fff !important;font-family:Poppins,sans-serif !important;padding:0 !important;border:none !important;display:inline-flex !important;align-items:center !important;gap:8px !important;text-transform:capitalize !important;min-width:240px !important}
+.c-blog__heading.style-1 .h4::before{content:'' !important;display:inline-block !important;width:20px !important;height:20px !important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' fill='%23ffffff'%3E%3Cpath d='M256 0a256 256 0 1 1 0 512A256 256 0 1 1 256 0zM232 120V256c0 8 4 15.5 10.7 20l96 64c11 7.4 25.9 4.4 33.3-6.7s4.4-25.9-6.7-33.3L280 243.2V120c0-13.3-10.7-24-24-24s-24 10.7-24 24z'/%3E%3C/svg%3E") !important;background-size:contain !important;background-repeat:no-repeat !important;flex-shrink:0 !important}
+.c-blog__heading.style-1 .h4::after{display:none !important}
+.main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+body .main-col-inner.c-page,
+body.archive .main-col-inner.c-page,
+body.post-type-archive .main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+#loop-content.item-novel_card,
+body #loop-content,
+body #loop-content.page-content-listing,
+body .page-content-listing.item-novel_card,
+body #loop-content.item-novel_card,
+body.archive #loop-content,
+body.post-type-archive #loop-content,
+.c-page #loop-content,
+.c-page #loop-content.page-content-listing,
+.main-col #loop-content,
+.main-col-inner #loop-content,
+.c-page__content #loop-content{
+display:grid !important;
+grid-template-columns:repeat(3,1fr) !important;
+gap:12px !important;
+max-width:100% !important;
+width:100% !important;
+box-sizing:border-box !important;
+-ms-grid-columns:(1fr)[3] !important
+}
+#loop-content .page-listing-item,
+#loop-content > .page-listing-item,
+.page-content-listing .page-listing-item,
+body .page-listing-item,
+.page-listing-item{display:contents !important}
+
+#loop-content .row,
+#loop-content .row-eq-height,
+#loop-content > .row,
+#loop-content > .row-eq-height,
+.page-content-listing .row,
+.page-content-listing .row-eq-height,
+body .page-content-listing .row,
+body #loop-content .row,
+.row-eq-height,
+.item-novel_card .row{display:contents !important;flex-wrap:unset !important;margin:0 !important;width:100% !important}
+#loop-content [class*="col-"],
+#loop-content [class^="col-"],
+#loop-content .col,
+#loop-content .col-12,
+#loop-content .col-6,
+#loop-content .col-md-6,
+#loop-content .col-lg-4,
+#loop-content .col-lg-6,
+#loop-content .col-sm-6,
+#loop-content .col-sm-12,
+.page-content-listing [class*="col-"],
+.page-content-listing .col-12,
+.page-content-listing .col-md-6,
+.page-content-listing .col-lg-4,
+body #loop-content [class*="col-"],
+body .page-content-listing [class*="col-"]{
+width:100% !important;
+max-width:100% !important;
+min-width:0 !important;
+padding:0 !important;
+margin:0 !important;
+display:block !important;
+flex:unset !important;
+flex-basis:unset !important;
+flex-grow:unset !important;
+flex-shrink:unset !important;
+-webkit-box-flex:unset !important;
+-ms-flex:unset !important
+}
+
+#loop-content [class*="badge-pos"],
+.page-content-listing [class*="badge-pos"]{padding:0 !important;margin:0 !important}
+
+#loop-content .page-item-detail,
+.page-content-listing .page-item-detail,
+body .page-item-detail{padding:0 !important;margin:0 !important;width:100% !important}
+@media screen and (max-width:991px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(2,1fr) !important;-ms-grid-columns:(1fr)[2] !important}
+}
+@media screen and (max-width:767px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(1,1fr) !important;-ms-grid-columns:1fr !important}
+}
+.premium-login-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:99999;justify-content:center;align-items:center}
+.premium-login-modal.active{display:flex}
+.premium-login-modal-content{background:#1a1a2e;border-radius:12px;padding:30px;text-align:center;max-width:350px;width:90%;border:1px solid rgba(255,255,255,0.1)}
+.premium-login-modal-icon{width:50px;height:50px;margin:0 auto 15px;background:#f8b500;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.premium-login-modal-icon svg{width:24px;height:24px;fill:#1a1a2e}
+.premium-login-modal-title{color:#fff;font-size:18px;font-weight:700;margin:0 0 10px}
+.premium-login-modal-text{color:#aaa;font-size:14px;margin:0 0 20px}
+.premium-login-modal-buttons{display:flex;gap:10px;justify-content:center}
+.premium-login-modal-btn{padding:10px 25px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all 0.3s}
+.premium-login-modal-btn.signup{background:#4a0054;color:#fff}
+.premium-login-modal-btn.signup:hover{background:#6a0074}
+.premium-login-modal-btn.cancel{background:transparent;color:#aaa;border:1px solid rgba(255,255,255,0.2)}
+.premium-login-modal-btn.cancel:hover{border-color:rgba(255,255,255,0.4);color:#fff}
+.premium-login-modal-btn.purchase{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.purchase:hover{background:#e5a600}
+.premium-login-modal-btn.unlock{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.unlock:hover{background:#e5a600}
+.premium-chapter-price{display:flex;align-items:center;justify-content:center;gap:6px;background:rgba(248,181,0,0.15);padding:10px 20px;border-radius:8px;margin-bottom:20px}
+.premium-chapter-price svg{width:20px;height:20px;fill:#f8b500}
+.premium-chapter-price span{color:#f8b500;font-size:18px;font-weight:700}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    if(window.releasesToggleInit) return;
+    window.releasesToggleInit = true;
+
+    function forceGridLayout() {
+        var loopContent = document.getElementById('loop-content');
+        if(!loopContent) return;
+        var cols = 3;
+        if(window.innerWidth <= 767) {
+            cols = 1;
+        } else if(window.innerWidth <= 991) {
+            cols = 2;
+        }
+        loopContent.setAttribute('style', 'display:grid !important;grid-template-columns:repeat(' + cols + ',1fr) !important;gap:12px !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;');
+        var wrappers = loopContent.querySelectorAll('.page-listing-item, .row, .row-eq-height');
+        wrappers.forEach(function(el) {
+            el.setAttribute('style', 'display:contents !important;');
+        });
+        var cols_el = loopContent.querySelectorAll('[class*="col"]');
+        cols_el.forEach(function(col) {
+            col.setAttribute('style', 'width:100% !important;max-width:100% !important;padding:0 !important;margin:0 !important;flex:unset !important;flex-basis:unset !important;display:block !important;');
+        });
+        var details = loopContent.querySelectorAll('.page-item-detail');
+        details.forEach(function(d) {
+            d.setAttribute('style', 'width:100% !important;padding:0 !important;margin:0 !important;');
+        });
+    }
+
+    forceGridLayout();
+    window.addEventListener('resize', forceGridLayout);
+
+    // Premium chapter click handling is done by modal-buy-coin.php
+});
+</script>
+
+<div class="novel-card-horizontal" style="display:flex !important;flex-direction:row !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;">
+		<div class="novel-card-thumb" style="flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;">
+		<a title="The Physician of Traditional Medicine Returns from Murim" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/">
+			<img width="175" height="238"  src="https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-175x238.jpg" srcset="https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-175x238.jpg 175w, https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-110x150.jpg 110w, https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-350x476.jpg 350w" sizes="(max-width: 175px) 100vw, 175px" class="img-responsive" style=""  alt="The Physician of Traditional Medicine Returns from Murim"/>		</a>
+			</div>
+	
+	<div class="novel-card-content" style="display:flex !important;flex-direction:column !important;flex-grow:1 !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;">
+		<h5 class="novel-card-title">
+			<a title="The Physician of Traditional Medicine Returns from Murim" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/">
+				The Physician of Traditional Medicine Returns from Murim			</a>
+		</h5>
+
+				<div class="novel-chapters-premium">
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 532 " data-chapter-id="42308">
+				<span class="chapter-name">
+					Chapter 532 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">02/28/2026</span>
+			</a>
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 531 " data-chapter-id="42307">
+				<span class="chapter-name">
+					Chapter 531 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">02/28/2026</span>
+			</a>
+					</div>
+		
+				<div class="novel-chapters-divider"></div>
+		
+				<div class="novel-chapters-free">
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/chapter-365/">
+				<span class="chapter-name">Chapter 365</span>
+				<span class="chapter-date">12 hours ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/chapter-364/">
+				<span class="chapter-name">Chapter 364</span>
+				<span class="chapter-date">1 day ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/chapter-363/">
+				<span class="chapter-name">Chapter 363</span>
+				<span class="chapter-date">2 days ago</span>
+			</a>
+					</div>
+			</div>
+</div>
+
+            </div><div class="page-item-detail text  ">
+				
+<style>
+.novel-card-horizontal,
+body .novel-card-horizontal,
+#loop-content .novel-card-horizontal,
+.page-content-listing .novel-card-horizontal,
+body.archive .novel-card-horizontal,
+body.post-type-archive .novel-card-horizontal{display:flex !important;flex-direction:row !important;background:#1a1a2e !important;border-radius:8px !important;overflow:hidden !important;border:1px solid rgba(255,255,255,0.08) !important;height:100% !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important}
+.novel-card-thumb,
+body .novel-card-thumb,
+#loop-content .novel-card-thumb,
+.page-content-listing .novel-card-thumb{flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;overflow:hidden !important;position:relative !important;height:auto !important}
+.novel-card-thumb a,
+body .novel-card-thumb a{display:block !important;height:100% !important;width:100% !important}
+.novel-card-thumb img,
+body .novel-card-thumb img,
+#loop-content .novel-card-thumb img{width:100px !important;height:100% !important;object-fit:cover !important;min-height:160px !important;max-width:100px !important}
+.novel-card-badge{position:absolute !important;bottom:8px !important;left:8px !important;background:rgba(74,0,84,0.7) !important;color:#fff !important;font-size:10px !important;font-weight:700 !important;padding:2px 6px !important;border-radius:3px !important;text-transform:uppercase !important;display:flex !important;align-items:center !important;gap:3px !important}
+.novel-card-badge.hot{background:rgb(255 0 0 / 70%) !important}
+.novel-card-badge.hot svg{width:12px !important;height:12px !important}
+.novel-card-content,
+body .novel-card-content,
+#loop-content .novel-card-content,
+.page-content-listing .novel-card-content,
+body.archive .novel-card-content,
+body.post-type-archive .novel-card-content{display:flex !important;flex-direction:column !important;flex-grow:1 !important;padding:10px 12px !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;width:calc(100% - 100px) !important;flex-basis:0 !important}
+.novel-card-title{margin:0 0 6px 0 !important;font-size:13px !important;font-weight:700 !important;line-height:1.3 !important;overflow:hidden !important;display:-webkit-box !important;-webkit-line-clamp:2 !important;-webkit-box-orient:vertical !important;white-space:normal !important;word-wrap:break-word !important;min-height:34px !important}
+.novel-card-title a{color:#fff !important;text-decoration:none !important;white-space:normal !important;word-wrap:break-word !important;display:inline !important}
+.novel-chapters-premium,.novel-chapters-free{display:flex !important;flex-direction:column !important;gap:2px !important}
+.novel-chapter-item{display:flex !important;justify-content:space-between !important;align-items:center !important;text-decoration:none !important;color:#bbb !important;font-size:11px !important;line-height:1.4 !important;gap:6px !important}
+.novel-chapter-item.free:hover{color:#fff !important}
+.novel-chapter-item.premium:hover{color:#f8b500 !important}
+.novel-chapter-item.premium:hover .chapter-name{color:#f8b500 !important}
+.novel-chapter-item .chapter-name{display:flex !important;align-items:center !important;gap:4px !important;font-weight:500 !important;white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important}
+.novel-chapter-item .chapter-date{font-size:10px !important;opacity:0.6 !important;white-space:nowrap !important;flex-shrink:0 !important}
+.novel-chapter-item .coin-icon{width:12px !important;height:12px !important;flex-shrink:0 !important}
+.novel-chapters-divider{height:1px !important;background:rgba(255,255,255,0.12) !important;margin:5px 0 !important}
+.novel-chapter-item.premium .chapter-name{color:#f8b500 !important}
+.novel-chapter-item.purchased .chapter-name{color:#fff !important}
+.novel-chapter-item.purchased .unlock-icon{color:#4CAF50 !important;font-size:11px !important}
+.c-blog__heading.style-1{border:none !important;padding:0 !important;margin-bottom:15px !important;text-align:left !important;display:flex !important;align-items:center !important}
+.c-blog__heading.style-1 .h4{font-size:18px !important;font-weight:700 !important;margin:0 !important;color:#fff !important;font-family:Poppins,sans-serif !important;padding:0 !important;border:none !important;display:inline-flex !important;align-items:center !important;gap:8px !important;text-transform:capitalize !important;min-width:240px !important}
+.c-blog__heading.style-1 .h4::before{content:'' !important;display:inline-block !important;width:20px !important;height:20px !important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' fill='%23ffffff'%3E%3Cpath d='M256 0a256 256 0 1 1 0 512A256 256 0 1 1 256 0zM232 120V256c0 8 4 15.5 10.7 20l96 64c11 7.4 25.9 4.4 33.3-6.7s4.4-25.9-6.7-33.3L280 243.2V120c0-13.3-10.7-24-24-24s-24 10.7-24 24z'/%3E%3C/svg%3E") !important;background-size:contain !important;background-repeat:no-repeat !important;flex-shrink:0 !important}
+.c-blog__heading.style-1 .h4::after{display:none !important}
+.main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+body .main-col-inner.c-page,
+body.archive .main-col-inner.c-page,
+body.post-type-archive .main-col-inner.c-page{overflow:hidden !important;max-width:100% !important;width:100% !important}
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+#loop-content.item-novel_card,
+body #loop-content,
+body #loop-content.page-content-listing,
+body .page-content-listing.item-novel_card,
+body #loop-content.item-novel_card,
+body.archive #loop-content,
+body.post-type-archive #loop-content,
+.c-page #loop-content,
+.c-page #loop-content.page-content-listing,
+.main-col #loop-content,
+.main-col-inner #loop-content,
+.c-page__content #loop-content{
+display:grid !important;
+grid-template-columns:repeat(3,1fr) !important;
+gap:12px !important;
+max-width:100% !important;
+width:100% !important;
+box-sizing:border-box !important;
+-ms-grid-columns:(1fr)[3] !important
+}
+#loop-content .page-listing-item,
+#loop-content > .page-listing-item,
+.page-content-listing .page-listing-item,
+body .page-listing-item,
+.page-listing-item{display:contents !important}
+
+#loop-content .row,
+#loop-content .row-eq-height,
+#loop-content > .row,
+#loop-content > .row-eq-height,
+.page-content-listing .row,
+.page-content-listing .row-eq-height,
+body .page-content-listing .row,
+body #loop-content .row,
+.row-eq-height,
+.item-novel_card .row{display:contents !important;flex-wrap:unset !important;margin:0 !important;width:100% !important}
+#loop-content [class*="col-"],
+#loop-content [class^="col-"],
+#loop-content .col,
+#loop-content .col-12,
+#loop-content .col-6,
+#loop-content .col-md-6,
+#loop-content .col-lg-4,
+#loop-content .col-lg-6,
+#loop-content .col-sm-6,
+#loop-content .col-sm-12,
+.page-content-listing [class*="col-"],
+.page-content-listing .col-12,
+.page-content-listing .col-md-6,
+.page-content-listing .col-lg-4,
+body #loop-content [class*="col-"],
+body .page-content-listing [class*="col-"]{
+width:100% !important;
+max-width:100% !important;
+min-width:0 !important;
+padding:0 !important;
+margin:0 !important;
+display:block !important;
+flex:unset !important;
+flex-basis:unset !important;
+flex-grow:unset !important;
+flex-shrink:unset !important;
+-webkit-box-flex:unset !important;
+-ms-flex:unset !important
+}
+
+#loop-content [class*="badge-pos"],
+.page-content-listing [class*="badge-pos"]{padding:0 !important;margin:0 !important}
+
+#loop-content .page-item-detail,
+.page-content-listing .page-item-detail,
+body .page-item-detail{padding:0 !important;margin:0 !important;width:100% !important}
+@media screen and (max-width:991px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(2,1fr) !important;-ms-grid-columns:(1fr)[2] !important}
+}
+@media screen and (max-width:767px){
+#loop-content,
+#loop-content.page-content-listing,
+#loop-content.page-content-listing.item-novel_card,
+.page-content-listing.item-novel_card,
+body #loop-content,
+body .page-content-listing.item-novel_card,
+.c-page #loop-content,
+.main-col #loop-content{grid-template-columns:repeat(1,1fr) !important;-ms-grid-columns:1fr !important}
+}
+.premium-login-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:99999;justify-content:center;align-items:center}
+.premium-login-modal.active{display:flex}
+.premium-login-modal-content{background:#1a1a2e;border-radius:12px;padding:30px;text-align:center;max-width:350px;width:90%;border:1px solid rgba(255,255,255,0.1)}
+.premium-login-modal-icon{width:50px;height:50px;margin:0 auto 15px;background:#f8b500;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.premium-login-modal-icon svg{width:24px;height:24px;fill:#1a1a2e}
+.premium-login-modal-title{color:#fff;font-size:18px;font-weight:700;margin:0 0 10px}
+.premium-login-modal-text{color:#aaa;font-size:14px;margin:0 0 20px}
+.premium-login-modal-buttons{display:flex;gap:10px;justify-content:center}
+.premium-login-modal-btn{padding:10px 25px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all 0.3s}
+.premium-login-modal-btn.signup{background:#4a0054;color:#fff}
+.premium-login-modal-btn.signup:hover{background:#6a0074}
+.premium-login-modal-btn.cancel{background:transparent;color:#aaa;border:1px solid rgba(255,255,255,0.2)}
+.premium-login-modal-btn.cancel:hover{border-color:rgba(255,255,255,0.4);color:#fff}
+.premium-login-modal-btn.purchase{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.purchase:hover{background:#e5a600}
+.premium-login-modal-btn.unlock{background:#f8b500;color:#1a1a2e}
+.premium-login-modal-btn.unlock:hover{background:#e5a600}
+.premium-chapter-price{display:flex;align-items:center;justify-content:center;gap:6px;background:rgba(248,181,0,0.15);padding:10px 20px;border-radius:8px;margin-bottom:20px}
+.premium-chapter-price svg{width:20px;height:20px;fill:#f8b500}
+.premium-chapter-price span{color:#f8b500;font-size:18px;font-weight:700}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    if(window.releasesToggleInit) return;
+    window.releasesToggleInit = true;
+
+    function forceGridLayout() {
+        var loopContent = document.getElementById('loop-content');
+        if(!loopContent) return;
+        var cols = 3;
+        if(window.innerWidth <= 767) {
+            cols = 1;
+        } else if(window.innerWidth <= 991) {
+            cols = 2;
+        }
+        loopContent.setAttribute('style', 'display:grid !important;grid-template-columns:repeat(' + cols + ',1fr) !important;gap:12px !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;');
+        var wrappers = loopContent.querySelectorAll('.page-listing-item, .row, .row-eq-height');
+        wrappers.forEach(function(el) {
+            el.setAttribute('style', 'display:contents !important;');
+        });
+        var cols_el = loopContent.querySelectorAll('[class*="col"]');
+        cols_el.forEach(function(col) {
+            col.setAttribute('style', 'width:100% !important;max-width:100% !important;padding:0 !important;margin:0 !important;flex:unset !important;flex-basis:unset !important;display:block !important;');
+        });
+        var details = loopContent.querySelectorAll('.page-item-detail');
+        details.forEach(function(d) {
+            d.setAttribute('style', 'width:100% !important;padding:0 !important;margin:0 !important;');
+        });
+    }
+
+    forceGridLayout();
+    window.addEventListener('resize', forceGridLayout);
+
+    // Premium chapter click handling is done by modal-buy-coin.php
+});
+</script>
+
+<div class="novel-card-horizontal" style="display:flex !important;flex-direction:row !important;width:100% !important;max-width:100% !important;box-sizing:border-box !important;">
+		<div class="novel-card-thumb" style="flex-shrink:0 !important;width:100px !important;min-width:100px !important;max-width:100px !important;">
+		<a title="The Physician of Traditional Medicine Returns from Murim" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/">
+			<img width="175" height="238"  src="https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-175x238.jpg" srcset="https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-175x238.jpg 175w, https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-110x150.jpg 110w, https://lunoxscans.com/wp-content/uploads/2026/02/The-Physician-of-Traditional-Medicine-Returns-from-Murim-350x476.jpg 350w" sizes="(max-width: 175px) 100vw, 175px" class="img-responsive" style=""  alt="The Physician of Traditional Medicine Returns from Murim"/>		</a>
+			</div>
+	
+	<div class="novel-card-content" style="display:flex !important;flex-direction:column !important;flex-grow:1 !important;min-width:0 !important;overflow:hidden !important;max-width:calc(100% - 100px) !important;">
+		<h5 class="novel-card-title">
+			<a title="The Physician of Traditional Medicine Returns from Murim" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/">
+				The Physician of Traditional Medicine Returns from Murim			</a>
+		</h5>
+
+				<div class="novel-chapters-premium">
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 532 " data-chapter-id="42308">
+				<span class="chapter-name">
+					Chapter 532 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">02/28/2026</span>
+			</a>
+						<a class="novel-chapter-item premium" href="#" data-coin="50" data-name="Chapter 531 " data-chapter-id="42307">
+				<span class="chapter-name">
+					Chapter 531 										<span class="coin-badge"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="12" height="12" class="coin-icon"><path fill="#ffbb00" d="M512 80c0 18-14.3 34.6-38.4 48c-29.1 16.1-72.5 27.5-122.3 30.9c-3.7-1.8-7.4-3.5-11.3-5C300.6 137.4 248.2 128 192 128c-8.3 0-16.4 .2-24.5 .6l-1.1-.6C142.3 114.6 128 98 128 80c0-44.2 86-80 192-80S512 35.8 512 80zM160.7 161.1c10.2-.7 20.7-1.1 31.3-1.1c62.2 0 117.4 12.3 152.5 31.4C369.3 204.9 384 221.7 384 240c0 4-.7 7.9-2.1 11.7c-4.6 13.2-17 25.3-35 35.5c0 0 0 0 0 0c-.1 .1-.3 .1-.4 .2c0 0 0 0 0 0s0 0 0 0c-.3 .2-.6 .3-.9 .5c-35 19.4-90.8 32-153.6 32c-59.6 0-112.9-11.3-148.2-29.1c-1.9-.9-3.7-1.9-5.5-2.9C14.3 274.6 0 258 0 240c0-34.8 53.4-64.5 128-75.4c10.5-1.5 21.4-2.7 32.7-3.5zM416 240c0-21.9-10.6-39.9-24.1-53.4c28.3-4.4 54.2-11.4 76.2-20.5c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 19.3-16.5 37.1-43.8 50.9c-14.6 7.4-32.4 13.7-52.4 18.5c.1-1.8 .2-3.5 .2-5.3zm-32 96c0 18-14.3 34.6-38.4 48c-1.8 1-3.6 1.9-5.5 2.9C304.9 404.7 251.6 416 192 416c-62.8 0-118.6-12.6-153.6-32C14.3 370.6 0 354 0 336l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 342.6 135.8 352 192 352s108.6-9.4 148.1-25.9c7.8-3.2 15.3-6.9 22.4-10.9c6.1-3.4 11.8-7.2 17.2-11.2c1.5-1.1 2.9-2.3 4.3-3.4l0 3.4 0 5.7 0 26.3zm32 0l0-32 0-25.9c19-4.2 36.5-9.5 52.1-16c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 10.5-5 21-14.9 30.9c-16.3 16.3-45 29.7-81.3 38.4c.1-1.7 .2-3.5 .2-5.3zM192 448c56.2 0 108.6-9.4 148.1-25.9c16.3-6.8 31.5-15.2 43.9-25.5l0 35.4c0 44.2-86 80-192 80S0 476.2 0 432l0-35.4c12.5 10.3 27.6 18.7 43.9 25.5C83.4 438.6 135.8 448 192 448z"/></svg></span>
+									</span>
+				<span class="chapter-date">02/28/2026</span>
+			</a>
+					</div>
+		
+				<div class="novel-chapters-divider"></div>
+		
+				<div class="novel-chapters-free">
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/chapter-365/">
+				<span class="chapter-name">Chapter 365</span>
+				<span class="chapter-date">12 hours ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/chapter-364/">
+				<span class="chapter-name">Chapter 364</span>
+				<span class="chapter-date">1 day ago</span>
+			</a>
+						<a class="novel-chapter-item free" href="https://lunoxscans.com/series/the-physician-of-traditional-medicine-returns-from-murim/chapter-363/">
+				<span class="chapter-name">Chapter 363</span>
+				<span class="chapter-date">2 days ago</span>
+			</a>
+					</div>
+			</div>
+</div>
+
+            </div></div></body></html>

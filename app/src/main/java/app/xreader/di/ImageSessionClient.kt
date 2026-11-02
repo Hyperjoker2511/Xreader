@@ -52,6 +52,11 @@ object ImageSessionClient {
         return OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
+            // v1.5.0 (steer B3): burst-shaping for
+            // hostile-flagged hosts (see HostPoliteness).
+            .addInterceptor(
+                app.xreader.data.extension.HostPolitenessInterceptor()
+            )
             .addInterceptor(Interceptor { chain ->
                 val request = chain.request()
                 val builder = request.newBuilder()

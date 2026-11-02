@@ -309,7 +309,10 @@ fun ZoomableImage(
     imageModifier: Modifier = Modifier.fillMaxWidth(),
     doubleTapToZoom: Boolean = true,
     disableZoomOut: Boolean = false,
-    onZoomActiveChanged: (Boolean) -> Unit = {}
+    onZoomActiveChanged: (Boolean) -> Unit = {},
+    /** v1.5.0 (Part C): the manga reader's colour matrix
+     * (greyscale / invert) when one is in force. */
+    colorFilter: androidx.compose.ui.graphics.ColorFilter? = null
 ) {
     val context = LocalContext.current
     val request = remember(context, model) { ReaderImageDecode.request(context, model) }
@@ -543,6 +546,7 @@ fun ZoomableImage(
             model = request,
             contentDescription = contentDescription,
             contentScale = contentScale,
+            colorFilter = colorFilter,
             modifier = imageModifier.graphicsLayer {
                 val zoom = zoomState.value
                 scaleX = zoom.scale

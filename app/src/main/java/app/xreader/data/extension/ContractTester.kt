@@ -306,58 +306,126 @@ class ContractTester(private val service: ExtensionService) {
                 limitOnly = true
             )
             else -> {
-                var sampledName = ""
-                var sampledPlain: String? = null
-                var sampledError: String? = null
-                var paywalled = false
-                // v1.3.0 (E5): the prose-density floor — a
-                // sample that is page furniture (navigation,
-                // ads, a protected site's chrome) must not pass
-                // the text step on character count alone. The
-                // sampler now keeps looking for a sample that
-                // reads as STORY PROSE; furniture is remembered
-                // (it proves the chapter opened) but can only
-                // pass if nothing better exists AND it clears
-                // the floor — which furniture by construction
-                // doesn't.
-                var proseName = ""
-                var prosePlain: String? = null
-                var furnitureVerdict: ProseDensity.Verdict? = null
-                for (candidate in unlockedChapters.take(3)) {
-                    val textResult = service.guarded(handle) {
-                        it.chapterContent(candidate)
+                // v1.5.0 (A4): the sampler is a function so the
+                // whole sampling can run TWICE — once over the
+                // list as fetched, and, when every sample died
+                // on a RESOLUTION-shaped failure (the saved
+                // chapter addresses went stale — the site moved
+                // its URLs, the link-Asura "Overgeared" /
+                // link-Comix exhibits), once more over a FRESH
+                // chapter list. A dangling reference must never
+                // dead-end the text leg while the book exists.
+                suspend fun sampleOnce(
+                    candidates: List<app.xreader.extensionapi.SourceChapter>
+                ): TextSample {
+                    var sampledName = ""
+                    var sampledPlain: String? = null
+                    var sampledError: String? = null
+                    var paywalled = false
+                    // v1.3.0 (E5): the prose-density floor — a
+                    // sample that is page furniture (navigation,
+                    // ads, a protected site's chrome) must not
+                    // pass the text step on character count
+                    // alone. The sampler keeps looking for a
+                    // sample that reads as STORY PROSE;
+                    // furniture is remembered (it proves the
+                    // chapter opened) but can only pass if
+                    // nothing better exists AND it clears the
+                    // floor — which furniture by construction
+                    // doesn't.
+                    var proseName = ""
+                    var prosePlain: String? = null
+                    var furnitureVerdict: ProseDensity.Verdict? = null
+                    var resolutionFailure = false
+                    for (candidate in candidates.take(3)) {
+                        val textResult = service.guarded(handle) {
+                            it.chapterContent(candidate)
+                        }
+                        val html = (textResult as? AppResult.Ok)?.value?.html
+                        val plain = html
+                            ?.replace(Regex("<[^>]+>"), " ")
+                            ?.replace(Regex("\\s+"), " ")
+                            ?.trim()
+                        if (plain != null &&
+                            (sampledPlain == null ||
+                                plain.length > sampledPlain.length)
+                        ) {
+                            sampledPlain = plain
+                            sampledName = candidate.name
+                        }
+                        if (plain != null && plain.isNotBlank() &&
+                            prosePlain == null
+                        ) {
+                            val verdict = proseVerdictOf(html, plain)
+                            if (verdict.isProse) {
+                                prosePlain = plain
+                                proseName = candidate.name
+                            } else if (furnitureVerdict == null) {
+                                furnitureVerdict = verdict
+                            }
+                        }
+                        if (textResult is AppResult.Err) {
+                            if (sampledError == null) {
+                                sampledError = textResult.error.detail
+                            }
+                            if (isResolutionFailure(textResult.error.detail)) {
+                                resolutionFailure = true
+                            }
+                        }
+                        if (ChapterLocks.pageSuggestsLocked(plain ?: "")) {
+                            paywalled = true
+                        }
+                        if (prosePlain != null) break
+                        if (!plain.isNullOrBlank() && furnitureVerdict == null) break
                     }
-                    val html = (textResult as? AppResult.Ok)?.value?.html
-                    val plain = html
-                        ?.replace(Regex("<[^>]+>"), " ")
-                        ?.replace(Regex("\\s+"), " ")
-                        ?.trim()
-                    if (plain != null &&
-                        (sampledPlain == null || plain.length > sampledPlain.length)
-                    ) {
-                        sampledPlain = plain
-                        sampledName = candidate.name
-                    }
-                    if (plain != null && plain.isNotBlank() &&
-                        prosePlain == null
-                    ) {
-                        val verdict = proseVerdictOf(html, plain)
-                        if (verdict.isProse) {
-                            prosePlain = plain
-                            proseName = candidate.name
-                        } else if (furnitureVerdict == null) {
-                            furnitureVerdict = verdict
+                    return TextSample(
+                        prosePlain = prosePlain,
+                        proseName = proseName,
+                        sampledPlain = sampledPlain,
+                        sampledName = sampledName,
+                        sampledError = sampledError,
+                        furnitureVerdict = furnitureVerdict,
+                        paywalled = paywalled,
+                        resolutionFailure = resolutionFailure
+                    )
+                }
+                var sample = sampleOnce(unlockedChapters)
+                var refreshedList = false
+                if (sample.prosePlain == null && sample.resolutionFailure) {
+                    // The saved addresses are stale: re-fetch
+                    // the chapter list ONCE and sample the
+                    // fresh list (its rows ARE the re-link —
+                    // same book, current addresses).
+                    val fresh = service.guarded(handle) { it.chapters(detailed) }
+                    val freshList = (fresh as? AppResult.Ok)?.value
+                    if (!freshList.isNullOrEmpty()) {
+                        val freshLocked = service.lockedChapterIds(handle, detailed)
+                        val freshUnlocked = freshList.filterNot {
+                            ChapterLocks.nameSuggestsLocked(it.name) ||
+                                it.id in freshLocked
+                        }
+                        if (freshUnlocked.isNotEmpty()) {
+                            val retry = sampleOnce(freshUnlocked)
+                            refreshedList = true
+                            if (retry.prosePlain != null ||
+                                sample.sampledError == null
+                            ) {
+                                sample = retry
+                            }
                         }
                     }
-                    if (textResult is AppResult.Err && sampledError == null) {
-                        sampledError = textResult.error.detail
-                    }
-                    if (ChapterLocks.pageSuggestsLocked(plain ?: "")) paywalled = true
-                    if (prosePlain != null) break
-                    if (!plain.isNullOrBlank() && furnitureVerdict == null) break
                 }
-                val chosenPlain = prosePlain ?: sampledPlain
-                val chosenName = if (prosePlain != null) proseName else sampledName
+                val prosePlain = sample.prosePlain
+                val proseName = sample.proseName
+                val furnitureVerdict = sample.furnitureVerdict
+                val paywalled = sample.paywalled
+                val sampledError = sample.sampledError
+                val chosenPlain = prosePlain ?: sample.sampledPlain
+                val chosenName = if (prosePlain != null) {
+                    proseName
+                } else {
+                    sample.sampledName
+                }
                 proofChapter = chosenName
                 proofFirstLine = chosenPlain?.take(120) ?: ""
                 results += CapabilityResult(
@@ -366,7 +434,13 @@ class ContractTester(private val service: ExtensionService) {
                     detail = when {
                         prosePlain != null ->
                             "${prosePlain.length} characters of story text " +
-                                "read from '${proseName.take(40)}'"
+                                "read from '${proseName.take(40)}'" +
+                                if (refreshedList) {
+                                    " — the saved chapter addresses were " +
+                                        "stale, so the list was refreshed first"
+                                } else {
+                                    ""
+                                }
                         furnitureVerdict != null ->
                             "the chapter opened, but what came back " +
                                 "isn't story text — ${furnitureVerdict.reason}"
@@ -455,6 +529,34 @@ class ContractTester(private val service: ExtensionService) {
             proofFirstLine = proofFirstLine,
             checkedAtMillis = now
         )
+    }
+
+    /** v1.5.0 (A4): one text-sampling pass's outcome. */
+    private data class TextSample(
+        val prosePlain: String?,
+        val proseName: String,
+        val sampledPlain: String?,
+        val sampledName: String,
+        val sampledError: String?,
+        val furnitureVerdict: ProseDensity.Verdict?,
+        val paywalled: Boolean,
+        /** Any sampled failure was RESOLUTION-shaped — the
+         * chapter address itself didn't resolve (a stale
+         * saved reference), as opposed to the chapter
+         * resolving and its content failing. */
+        val resolutionFailure: Boolean
+    )
+
+    /** v1.5.0 (A4): is this failure the shape of a chapter
+     * reference that no longer resolves — the trigger for
+     * the one fresh-list re-link in the text step (and the
+     * same shapes the reader's re-resolution keys on)? */
+    private fun isResolutionFailure(detail: String?): Boolean {
+        val text = detail?.lowercase() ?: return false
+        return "wasn't found" in text || "not found" in text ||
+            "http 404" in text || "no readable text" in text ||
+            "isn't in the book anymore" in text ||
+            "refresh chapter list" in text
     }
 
     /** v1.3.0 (E4): did this failed step die on the

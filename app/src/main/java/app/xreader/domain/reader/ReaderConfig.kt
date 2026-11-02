@@ -13,8 +13,58 @@ enum class ReaderMode { PAGED, SCROLL }
  * inside the reader wins for that series only.
  */
 enum class ImageReaderMode(val label: String) {
-    WEBTOON("Webtoon scroll"),
-    PAGED("Paged")
+    WEBTOON("Webtoon"),
+    PAGED("Paged"),
+    /** v1.5.0 (Part C — Komikku transplant): right-to-left
+     * paging (the donor's RTL viewer; stored names of the
+     * two original entries are unchanged). */
+    PAGED_RTL("Paged · RTL"),
+    /** v1.5.0 (Part C): one page per screen, vertical turns
+     * (the donor's vertical pager). */
+    PAGED_VERTICAL("Vertical")
+}
+
+/**
+ * v1.5.0 (Part C): the manga reader's tap-zone layouts —
+ * Komikku's five navigation geometries, ported as pure
+ * region maths (see MangaTapZones in the UI layer, adapted
+ * from Komikku's ViewerNavigation, Apache-2.0). DEFAULT
+ * keeps the donor's own defaults: right-and-left for paged
+ * modes, the L shape for webtoon/vertical.
+ */
+enum class MangaTapLayout(val label: String) {
+    DEFAULT("Default"),
+    L_SHAPE("L shape"),
+    RIGHT_AND_LEFT("Right and left"),
+    KINDLISH("Kindlish"),
+    EDGE("Edges"),
+    DISABLED("Off — menu only")
+}
+
+/** v1.5.0 (Part C): tap-zone inversion (the donor's
+ * TappingInvertMode). */
+enum class TapInvert(val label: String) {
+    NONE("Not inverted"),
+    HORIZONTAL("Inverted ↔"),
+    VERTICAL("Inverted ↕"),
+    BOTH("Inverted both")
+}
+
+/** v1.5.0 (Part C): how a paged page fits its screen (the
+ * donor's image scale types, the Compose-expressible set). */
+enum class MangaScaleType(val label: String) {
+    FIT("Fit screen"),
+    FIT_WIDTH("Fit width"),
+    FIT_HEIGHT("Fit height"),
+    STRETCH("Stretch")
+}
+
+/** v1.5.0 (Part C): the manga reader's orientation
+ * (the donor's per-manga second flag, generalised). */
+enum class MangaOrientation(val label: String) {
+    FREE("Free"),
+    PORTRAIT("Portrait"),
+    LANDSCAPE("Landscape")
 }
 
 /** The user's page-turn override; AUTO lets the device tier decide. */
@@ -123,7 +173,44 @@ data class ReaderConfig(
      * series' own override, set inside its reader, wins for
      * that series only and never writes back here. Appended
      * last so existing constructor call sites are untouched. */
-    val imageMode: ImageReaderMode = ImageReaderMode.WEBTOON
+    val imageMode: ImageReaderMode = ImageReaderMode.WEBTOON,
+    // ── v1.5.0 (Part C — Komikku reader transplant): the
+    // manga reader's own settings surface. Every field is a
+    // GLOBAL default here (Settings tier); the ones a series
+    // can override from inside its reader live in
+    // BookReaderOverride and resolve through MangaSettings.
+    // Keys/defaults mirror Komikku's ReaderPreferences.
+    /** Tap-zone layout for image chapters. */
+    val mangaTapLayout: MangaTapLayout = MangaTapLayout.DEFAULT,
+    /** Tap-zone inversion. */
+    val mangaTapInvert: TapInvert = TapInvert.NONE,
+    /** Komikku's smaller tap zones (25% regions, not 33%). */
+    val mangaSmallerTapZones: Boolean = false,
+    /** Double-tap zoom in WEBTOON mode (paged mode uses
+     * [doubleTapToZoom], as it always has). Donor default on. */
+    val webtoonDoubleTapZoom: Boolean = true,
+    /** Pinch zoom of the whole strip in webtoon mode. */
+    val webtoonPinchZoom: Boolean = true,
+    /** Webtoon zoom's floor: on = never below fit (1×). */
+    val webtoonDisableZoomOut: Boolean = false,
+    /** Trim uniform page borders — paged modes. */
+    val cropBordersPaged: Boolean = false,
+    /** Trim uniform page borders — webtoon mode. */
+    val cropBordersWebtoon: Boolean = false,
+    /** Greyscale pages (colour-matrix, the donor's recipe). */
+    val mangaGrayscale: Boolean = false,
+    /** Invert page colours. */
+    val mangaInvertColors: Boolean = false,
+    /** The RGBA colour overlay (the donor's colour filter). */
+    val mangaColorFilter: Boolean = false,
+    /** The overlay's colour, ARGB (stored as a Long). */
+    val mangaColorFilterArgb: Long = 0x00000000L,
+    /** Horizontal inset of the webtoon strip, percent 0–25. */
+    val webtoonSidePadding: Int = 0,
+    /** Paged pages' fit. */
+    val mangaScaleType: MangaScaleType = MangaScaleType.FIT,
+    /** Orientation while reading image chapters. */
+    val mangaOrientation: MangaOrientation = MangaOrientation.FREE
 )
 
 /** How the reader moves between chapters (v1.0.1). */
@@ -156,6 +243,9 @@ object ReaderValidation {
     // disableZoomOut) are plain booleans — every value is valid,
     // so validate() passes them through untouched by design.
     fun validate(config: ReaderConfig): ReaderConfig = config.copy(
+        // v1.5.0 (Part C): the webtoon side padding is a
+        // percent in the donor's 0–25 range.
+        webtoonSidePadding = config.webtoonSidePadding.coerceIn(0, 25),
         fontSizeSp = clamp(config.fontSizeSp, FONT_SIZE_RANGE, 19f),
         lineHeightMultiplier = clamp(config.lineHeightMultiplier, LINE_HEIGHT_RANGE, 1.55f),
         paragraphSpacingDp = clamp(config.paragraphSpacingDp, PARAGRAPH_SPACING_RANGE, 10f),

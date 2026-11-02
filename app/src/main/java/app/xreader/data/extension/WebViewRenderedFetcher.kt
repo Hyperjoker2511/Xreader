@@ -7,6 +7,7 @@ import android.content.res.Configuration
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -192,9 +193,13 @@ class WebViewRenderedFetcher(
         val view = webView ?: createWebView().also { webView = it }
         try {
             seedCookies(session)
-            session?.userAgent?.takeIf { it.isNotBlank() }?.let {
-                view.settings.userAgentString = it
-            }
+            // v1.5.0 (steer A4): the session's captured UA
+            // wins; without one, the pinned device UA (the
+            // same string the HTTP road sends) — never a
+            // third fingerprint.
+            val ua = session?.userAgent?.takeIf { it.isNotBlank() }
+                ?: PinnedUserAgent.current()
+            ua?.let { view.settings.userAgentString = it }
             var blocked = false
             var finishedAt = 0L
             var loadError: String? = null
@@ -224,7 +229,37 @@ class WebViewRenderedFetcher(
                     return false
                 }
 
+                override fun onPageStarted(
+                    view: WebView?,
+                    url: String?,
+                    favicon: android.graphics.Bitmap?
+                ) {
+                    // v1.5.0 (A2): the API-harvest observer —
+                    // installed as the page starts so the
+                    // page's own fetch/XHR traffic is recorded
+                    // for the learner (see HarvestLog). It only
+                    // OBSERVES: requests are never altered,
+                    // blocked or replayed from the log.
+                    view?.evaluateJavascript(HARVEST_HOOK, null)
+                }
+
                 override fun onPageFinished(view: WebView?, url: String?) {
+                    if (finishedAt == 0L) {
+                        finishedAt = SystemClock.uptimeMillis()
+                    }
+                }
+
+                // v1.5.0 (steer A5): settling may begin at
+                // first commit (the DOMContentLoaded-class
+                // moment) — a page whose load event hangs on
+                // a slow subresource must not stall the whole
+                // verdict budget waiting for onPageFinished.
+                // The content-aware settle still decides when
+                // the DOM is DONE; this only starts its clock.
+                override fun onPageCommitVisible(
+                    view: WebView?,
+                    url: String?
+                ) {
                     if (finishedAt == 0L) {
                         finishedAt = SystemClock.uptimeMillis()
                     }
@@ -300,6 +335,11 @@ class WebViewRenderedFetcher(
                 html = extractHtml(view)
                 if (html == null) {
                     pageError = "the built page was too large to read"
+                } else {
+                    // v1.5.0 (A2): collect what the page's own
+                    // scripts called while it built itself —
+                    // the learner's API evidence.
+                    depositHarvest(view, sessionKey)
                 }
             }
             return RenderOutcome(
@@ -327,6 +367,26 @@ class WebViewRenderedFetcher(
             javaScriptCanOpenWindowsAutomatically = false
             setSupportMultipleWindows(false)
             mediaPlaybackRequiresUserGesture = true
+        }
+        // v1.5.0 (steer B1): real layout bounds for the
+        // offscreen view. A never-measured WebView reports a
+        // 0×0 viewport — Chromium throttles its timers and
+        // requestAnimationFrame and can drop synthetic input,
+        // which stalls exactly the JS clients this engine
+        // exists to run. Measure/layout it once at the
+        // device's size; it stays offscreen and invisible.
+        runCatching {
+            val metrics = appContext.resources.displayMetrics
+            val width = metrics.widthPixels.coerceAtLeast(1)
+            val height = metrics.heightPixels.coerceAtLeast(1)
+            val widthSpec = View.MeasureSpec.makeMeasureSpec(
+                width, View.MeasureSpec.EXACTLY
+            )
+            val heightSpec = View.MeasureSpec.makeMeasureSpec(
+                height, View.MeasureSpec.EXACTLY
+            )
+            view.measure(widthSpec, heightSpec)
+            view.layout(0, 0, width, height)
         }
         return view
     }
@@ -421,6 +481,49 @@ class WebViewRenderedFetcher(
         return (decoded.toIntOrNull() ?: 0) > 0
     }
 
+    /** v1.5.0 (A2): read the harvest observer's record out
+     * of the page and deposit it in [HarvestLog] under this
+     * render's session key. Best-effort by design: a page
+     * whose scripts blocked the observer simply leaves no
+     * harvest, and the learner falls back to page rules. */
+    private suspend fun depositHarvest(view: WebView, sessionKey: String) {
+        val raw = evaluate(
+            view,
+            "JSON.stringify(window.__xrHarvest || [])"
+        ) ?: return
+        val decoded = decodeJsString(raw) ?: return
+        val array = runCatching { org.json.JSONArray(decoded) }.getOrNull()
+            ?: return
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val callUrl = item.optString("url")
+            if (callUrl.isBlank()) continue
+            val headers = mutableMapOf<String, String>()
+            val headerObj = item.optJSONObject("headers")
+            if (headerObj != null) {
+                val keys = headerObj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    headers[key] = headerObj.optString(key)
+                }
+            }
+            HarvestLog.record(
+                sessionKey,
+                HarvestedCall(
+                    url = callUrl,
+                    method = item.optString("method", "GET"),
+                    status = item.optInt("status", 0),
+                    contentType = item.optString("ct").ifBlank { null },
+                    requestHeaders = headers,
+                    bodySample = item.optString("body"),
+                    pageCookies = CookieParsing.parseCookieHeader(
+                        item.optString("cookies")
+                    )
+                )
+            )
+        }
+    }
+
     private suspend fun extractHtml(view: WebView): String? {
         val raw = evaluate(
             view,
@@ -488,6 +591,76 @@ class WebViewRenderedFetcher(
     private companion object {
         /** Slack over the settle budget for main-thread scheduling. */
         const val MAIN_SLACK_MS: Long = 15_000L
+
+        /** v1.5.0 (A2): the harvest observer — wraps the
+         * page's fetch and XMLHttpRequest, recording each
+         * call's URL, method, status, content type, the
+         * request headers the page's own client set, a
+         * bounded body sample, and the page-visible cookies
+         * into `window.__xrHarvest` for [depositHarvest].
+         * Observation only: the originals are always called
+         * through unchanged. */
+        const val HARVEST_HOOK: String =
+            "(function(){" +
+                "if(window.__xrHarvestInstalled)return;" +
+                "window.__xrHarvestInstalled=true;" +
+                "window.__xrHarvest=[];" +
+                "function rec(o){try{" +
+                "if(window.__xrHarvest.length<60)window.__xrHarvest.push(o);" +
+                "}catch(e){}}" +
+                "function hdrs(h){var out={};try{if(!h)return out;" +
+                "if(typeof Headers!=='undefined'&&h instanceof Headers){" +
+                "h.forEach(function(v,k){out[k]=v;});}" +
+                "else if(Array.isArray(h)){" +
+                "h.forEach(function(p){out[p[0]]=p[1];});}" +
+                "else if(typeof h==='object'){" +
+                "Object.keys(h).forEach(function(k){out[k]=String(h[k]);});}" +
+                "}catch(e){}return out;}" +
+                "var of=window.fetch;" +
+                "if(of){window.fetch=function(input,init){" +
+                "var url=(typeof input==='string')?input:" +
+                "((input&&input.url)||'');" +
+                "var method=(init&&init.method)||" +
+                "(input&&input.method)||'GET';" +
+                "var headers=hdrs((init&&init.headers)||" +
+                "(input&&input.headers));" +
+                "var p=of.apply(this,arguments);" +
+                "p.then(function(resp){try{" +
+                "var clone=resp.clone();" +
+                "clone.text().then(function(t){rec({" +
+                "url:resp.url||url,method:method,status:resp.status," +
+                "ct:resp.headers.get('content-type')||''," +
+                "headers:headers,body:(t||'').slice(0,4000)," +
+                "cookies:document.cookie||''});" +
+                "}).catch(function(){});}catch(e){}})" +
+                ".catch(function(){});" +
+                "return p;};}" +
+                "var oo=XMLHttpRequest.prototype.open," +
+                "os=XMLHttpRequest.prototype.send," +
+                "oh=XMLHttpRequest.prototype.setRequestHeader;" +
+                "XMLHttpRequest.prototype.open=function(m,u){" +
+                "this.__xr={method:m,url:u,headers:{}};" +
+                "return oo.apply(this,arguments);};" +
+                "XMLHttpRequest.prototype.setRequestHeader=" +
+                "function(k,v){try{if(this.__xr)this.__xr.headers[k]=v;" +
+                "}catch(e){}return oh.apply(this,arguments);};" +
+                "XMLHttpRequest.prototype.send=function(){" +
+                "var x=this;" +
+                "x.addEventListener('load',function(){try{" +
+                "var t='';" +
+                "if(x.responseType===''||x.responseType==='text')" +
+                "t=x.responseText||'';" +
+                "else if(x.responseType==='json'&&x.response)" +
+                "t=JSON.stringify(x.response);" +
+                "rec({url:x.responseURL||(x.__xr&&x.__xr.url)||''," +
+                "method:(x.__xr&&x.__xr.method)||'GET',status:x.status," +
+                "ct:x.getResponseHeader('content-type')||''," +
+                "headers:(x.__xr&&x.__xr.headers)||{}," +
+                "body:(t||'').slice(0,4000)," +
+                "cookies:document.cookie||''});" +
+                "}catch(e){}});" +
+                "return os.apply(this,arguments);};" +
+                "})()"
     }
 }
 

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FindReplace
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Science
@@ -127,7 +128,18 @@ fun ReaderSettingsSheet(
     /** v1.3.2 (item 86): the resolved family for the font shelf's
      * live preview (the screen resolves it so user fonts work). */
     previewFontFamily: androidx.compose.ui.text.font.FontFamily =
-        app.xreader.ui.theme.LiterataSerif
+        app.xreader.ui.theme.LiterataSerif,
+    /** v1.5.0 (Part C): the manga section — present only for
+     * image chapters. Every control writes THIS series'
+     * override (option-scope tier 2); the full global surface
+     * lives in Settings → Customise. */
+    mangaSettings: MangaSettings? = null,
+    onMangaModeChange: (app.xreader.domain.reader.ImageReaderMode) -> Unit = {},
+    onMangaTapLayoutChange: (app.xreader.domain.reader.MangaTapLayout?) -> Unit = {},
+    onMangaOrientationChange: (app.xreader.domain.reader.MangaOrientation?) -> Unit = {},
+    onMangaCropChange: (Boolean?) -> Unit = {},
+    mangaHasOverrides: Boolean = false,
+    onResetMangaOverrides: () -> Unit = {}
 ) {
     // v1.0.6.2 (F8c): the sheet is a short INDEX of plainly-named
     // groups now — not one long scroll. Each group is its own
@@ -160,6 +172,7 @@ fun ReaderSettingsSheet(
                         "reading" -> "Reading"
                         "page" -> "Page & text"
                         "terms" -> "Terms for this book"
+                        "manga" -> "Manga — this series"
                         else -> "Extras"
                     },
                     style = MaterialTheme.typography.titleMedium,
@@ -251,8 +264,102 @@ fun ReaderSettingsSheet(
                     badge = null,
 
                 )
+                if (mangaSettings != null) {
+                    RowItem(
+                        icon = Icons.Filled.Image,
+                        label = "Manga reading",
+                        value = mangaSettings.mode.label,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { page = "manga" },
+                        badge = null,
+
+                    )
+                }
                 TextButton(onClick = onOpenCustomise) {
                     Text("Open the Customise screen — colours, glass, layout and more")
+                }
+            }
+
+            "manga" -> {
+                val manga = mangaSettings
+                if (manga != null) {
+                    Text(
+                        "These apply to this series only. The " +
+                            "defaults for every series live in " +
+                            "Settings → Customise.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    SheetSection("Reading mode") {
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            for (option in app.xreader.domain.reader
+                                .ImageReaderMode.entries) {
+                                NocturneChip(
+                                    label = option.label,
+                                    selected = manga.mode == option,
+                                    onClick = { onMangaModeChange(option) },
+                                    modifier = Modifier,
+                                    dotColor = null,
+
+                                )
+                            }
+                        }
+                    }
+                    SheetSection("Tap zones") {
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            for (option in app.xreader.domain.reader
+                                .MangaTapLayout.entries) {
+                                NocturneChip(
+                                    label = option.label,
+                                    selected = manga.tapLayout == option,
+                                    onClick = {
+                                        onMangaTapLayoutChange(option)
+                                    },
+                                    modifier = Modifier,
+                                    dotColor = null,
+
+                                )
+                            }
+                        }
+                    }
+                    SheetSection("Screen direction") {
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            for (option in app.xreader.domain.reader
+                                .MangaOrientation.entries) {
+                                NocturneChip(
+                                    label = option.label,
+                                    selected = manga.orientation == option,
+                                    onClick = {
+                                        onMangaOrientationChange(option)
+                                    },
+                                    modifier = Modifier,
+                                    dotColor = null,
+
+                                )
+                            }
+                        }
+                    }
+                    SheetSection("Page edges") {
+                        SheetSwitch(
+                            label = "Crop white/black borders",
+                            checked = manga.cropBorders,
+                            onChange = { onMangaCropChange(it) }
+                        )
+                    }
+                    if (mangaHasOverrides) {
+                        TextButton(onClick = onResetMangaOverrides) {
+                            Text("Reset this series' manga settings")
+                        }
+                    }
                 }
             }
 

@@ -164,6 +164,17 @@ class ExtensionChapterFetcher(
                 val plainText = content.blocks
                     .filterIsInstance<app.xreader.domain.content.ChapterBlock.Paragraph>()
                     .joinToString("\n") { it.text }
+                // v1.5.0 (steer A8): the login wall first —
+                // a short text wearing sign-in phrasing is
+                // positive evidence this leg is gated, and
+                // its failure must classify as a sign-in
+                // need, not a parse failure.
+                val loginWall = ChapterServeGate.loginWallRefusal(plainText)
+                if (loginWall != null) {
+                    FetchOutcome.Failure(
+                        AppError.ParseFailed("chapter", loginWall)
+                    )
+                } else {
                 val refusal = ChapterServeGate.refusalFor(plainText)
                 if (refusal != null) {
                     FetchOutcome.Failure(
@@ -175,6 +186,7 @@ class ExtensionChapterFetcher(
                     )
                 } else {
                     FetchOutcome.Success(applyCleaners(handle, content))
+                }
                 }
             }
         }

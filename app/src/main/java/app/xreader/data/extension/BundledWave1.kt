@@ -137,9 +137,14 @@ object BundledWave1 {
                 chaptersViaAjaxPost = true
             )
         },
-        BundledDefaults.Spec("faqwiki", "FaqWiki") { id, name ->
-            BundledSingles.faqWiki(id, name)
-        },
+        // v1.5.0 (A1 audit): FaqWiki DEMOTED — its hosting
+        // account is suspended (faqwiki.us redirects every
+        // page to cgi-sys/suspendedpage.cgi "Account
+        // Suspended"; live-proven 2026-11-02). No leg can
+        // pass while the host is down; if the site returns,
+        // the provider-pack channel re-adds it without an
+        // app release. The BundledSingles.faqWiki recipe
+        // stays in the tree for that day.
         BundledDefaults.Spec("wntl", "Web Novel Translations") { id, name ->
             BundledSingles.wntl(id, name)
         },

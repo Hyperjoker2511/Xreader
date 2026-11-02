@@ -293,7 +293,8 @@ fun SourceCatalogScreen(
                     // whenever the VM's sessionNeed is present.
                     message = CatalogueCopy.emptyMessage(
                         need = emptyNeed,
-                        isSearch = state.mode == CatalogMode.SEARCH
+                        isSearch = state.mode == CatalogMode.SEARCH,
+                        hasSession = state.hasSession
                     ),
                     actionText = when (emptyNeed) {
                         app.xreader.data.extension.SessionNeed

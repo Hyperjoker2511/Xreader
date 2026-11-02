@@ -8,7 +8,7 @@
 
 <p align="center">
 
-> **Where things stand:** novels are fully supported today. Manga — Keiyoushi sources and a dedicated image reader — is in development for the next major update; until it lands, manga sources added to the app will honestly say they need the manga update rather than pretend to work.
+> **Where things stand:** novels and manga are both fully supported. Novels read through built-in sources, provider packs and any site you add by link; manga reads through Keiyoushi sources in a dedicated image reader with tap zones, reading modes and border cropping.
 
 [![Release](https://img.shields.io/github/v/release/Hyperjoker2511/Xreader)](https://github.com/Hyperjoker2511/Xreader/releases)
 [![Licence](https://img.shields.io/github/license/Hyperjoker2511/Xreader)](LICENSE)

@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.xreader.domain.reader.PageTurnOverride
 import app.xreader.domain.reader.ReaderAlignment
@@ -72,6 +73,22 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
             prefs[KEY_KEYBOARD_PRESET] = next.keyboardPreset.name
             prefs[KEY_CUSTOM_PAGE] = next.customPageArgb.toString()
             prefs[KEY_CUSTOM_TEXT] = next.customTextArgb.toString()
+            // v1.5.0 (Part C): the manga reader's surface.
+            prefs[KEY_MANGA_TAP_LAYOUT] = next.mangaTapLayout.name
+            prefs[KEY_MANGA_TAP_INVERT] = next.mangaTapInvert.name
+            prefs[KEY_MANGA_SMALLER_TAPS] = next.mangaSmallerTapZones
+            prefs[KEY_WEBTOON_DT_ZOOM] = next.webtoonDoubleTapZoom
+            prefs[KEY_WEBTOON_PINCH_ZOOM] = next.webtoonPinchZoom
+            prefs[KEY_WEBTOON_NO_ZOOM_OUT] = next.webtoonDisableZoomOut
+            prefs[KEY_CROP_PAGED] = next.cropBordersPaged
+            prefs[KEY_CROP_WEBTOON] = next.cropBordersWebtoon
+            prefs[KEY_MANGA_GRAYSCALE] = next.mangaGrayscale
+            prefs[KEY_MANGA_INVERT] = next.mangaInvertColors
+            prefs[KEY_MANGA_FILTER] = next.mangaColorFilter
+            prefs[KEY_MANGA_FILTER_ARGB] = next.mangaColorFilterArgb.toString()
+            prefs[KEY_WEBTOON_PADDING] = next.webtoonSidePadding
+            prefs[KEY_MANGA_SCALE] = next.mangaScaleType.name
+            prefs[KEY_MANGA_ORIENTATION] = next.mangaOrientation.name
         }
     }
 
@@ -138,7 +155,38 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
                 app.xreader.domain.reader.KeyboardPreset.STANDARD
             ),
             customPageArgb = this[KEY_CUSTOM_PAGE]?.toLongOrNull() ?: 0xFF000000L,
-            customTextArgb = this[KEY_CUSTOM_TEXT]?.toLongOrNull() ?: 0xFFE8DFD0L
+            customTextArgb = this[KEY_CUSTOM_TEXT]?.toLongOrNull() ?: 0xFFE8DFD0L,
+            mangaTapLayout = ReaderValidation.parseEnum(
+                this[KEY_MANGA_TAP_LAYOUT],
+                app.xreader.domain.reader.MangaTapLayout.entries.toTypedArray(),
+                app.xreader.domain.reader.MangaTapLayout.DEFAULT
+            ),
+            mangaTapInvert = ReaderValidation.parseEnum(
+                this[KEY_MANGA_TAP_INVERT],
+                app.xreader.domain.reader.TapInvert.entries.toTypedArray(),
+                app.xreader.domain.reader.TapInvert.NONE
+            ),
+            mangaSmallerTapZones = this[KEY_MANGA_SMALLER_TAPS] ?: false,
+            webtoonDoubleTapZoom = this[KEY_WEBTOON_DT_ZOOM] ?: true,
+            webtoonPinchZoom = this[KEY_WEBTOON_PINCH_ZOOM] ?: true,
+            webtoonDisableZoomOut = this[KEY_WEBTOON_NO_ZOOM_OUT] ?: false,
+            cropBordersPaged = this[KEY_CROP_PAGED] ?: false,
+            cropBordersWebtoon = this[KEY_CROP_WEBTOON] ?: false,
+            mangaGrayscale = this[KEY_MANGA_GRAYSCALE] ?: false,
+            mangaInvertColors = this[KEY_MANGA_INVERT] ?: false,
+            mangaColorFilter = this[KEY_MANGA_FILTER] ?: false,
+            mangaColorFilterArgb = this[KEY_MANGA_FILTER_ARGB]?.toLongOrNull() ?: 0L,
+            webtoonSidePadding = this[KEY_WEBTOON_PADDING] ?: 0,
+            mangaScaleType = ReaderValidation.parseEnum(
+                this[KEY_MANGA_SCALE],
+                app.xreader.domain.reader.MangaScaleType.entries.toTypedArray(),
+                app.xreader.domain.reader.MangaScaleType.FIT
+            ),
+            mangaOrientation = ReaderValidation.parseEnum(
+                this[KEY_MANGA_ORIENTATION],
+                app.xreader.domain.reader.MangaOrientation.entries.toTypedArray(),
+                app.xreader.domain.reader.MangaOrientation.FREE
+            )
         )
     )
 
@@ -177,5 +225,21 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
         val KEY_KEYBOARD_PRESET = stringPreferencesKey("reader.keyboard_preset")
         val KEY_CUSTOM_PAGE = stringPreferencesKey("reader.custom_page")
         val KEY_CUSTOM_TEXT = stringPreferencesKey("reader.custom_text")
+        // v1.5.0 (Part C): the manga reader's surface.
+        val KEY_MANGA_TAP_LAYOUT = stringPreferencesKey("reader.manga_tap_layout")
+        val KEY_MANGA_TAP_INVERT = stringPreferencesKey("reader.manga_tap_invert")
+        val KEY_MANGA_SMALLER_TAPS = booleanPreferencesKey("reader.manga_smaller_taps")
+        val KEY_WEBTOON_DT_ZOOM = booleanPreferencesKey("reader.webtoon_dt_zoom")
+        val KEY_WEBTOON_PINCH_ZOOM = booleanPreferencesKey("reader.webtoon_pinch_zoom")
+        val KEY_WEBTOON_NO_ZOOM_OUT = booleanPreferencesKey("reader.webtoon_no_zoom_out")
+        val KEY_CROP_PAGED = booleanPreferencesKey("reader.crop_borders_paged")
+        val KEY_CROP_WEBTOON = booleanPreferencesKey("reader.crop_borders_webtoon")
+        val KEY_MANGA_GRAYSCALE = booleanPreferencesKey("reader.manga_grayscale")
+        val KEY_MANGA_INVERT = booleanPreferencesKey("reader.manga_invert")
+        val KEY_MANGA_FILTER = booleanPreferencesKey("reader.manga_color_filter")
+        val KEY_MANGA_FILTER_ARGB = stringPreferencesKey("reader.manga_color_filter_argb")
+        val KEY_WEBTOON_PADDING = intPreferencesKey("reader.webtoon_side_padding")
+        val KEY_MANGA_SCALE = stringPreferencesKey("reader.manga_scale_type")
+        val KEY_MANGA_ORIENTATION = stringPreferencesKey("reader.manga_orientation")
     }
 }

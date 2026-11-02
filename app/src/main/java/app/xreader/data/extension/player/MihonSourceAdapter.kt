@@ -251,6 +251,14 @@ class MihonSourceAdapter(
             page.imageUrl = absolute
             out += ChapterPage(url = absolute)
             synchronized(retainedPages) { retainedPages[absolute] = page }
+            // v1.5.0 (steer B1): register the page with the
+            // image bridge, so the reader's online path
+            // serves it through THIS source's own image
+            // request (headers + client interceptors), not
+            // just the download road.
+            PlayerImageBridge.register(absolute) { url ->
+                (pageBytes(url) as? AppResult.Ok)?.value
+            }
         }
         // K6: stamp the record with the Referer the online
         // reader should present for these pages. Downloads
@@ -444,9 +452,22 @@ class MihonSourceAdapter(
 
     /** The namespace-bracketed suspend segment (also the
      * shape [pageBytes] uses directly — it is already in a
-     * coroutine when the service calls it). */
-    private suspend fun <T> bracketed(block: suspend () -> T): T =
-        withContext(PlayerNamespaceElement(packageName)) { block() }
+     * coroutine when the service calls it).
+     *
+     * v1.5.0 (Part B): the bracket also carries the WebView
+     * cookie sync ([PlayerWebViewSync]) for this source's
+     * host — an extension that runs the site's own JS client
+     * in its own WebView (the Comix technique) starts from
+     * the saved session and hands its earned cookies back
+     * to the player's jar, the donor's observable behaviour
+     * over Xreader's store-backed rule. */
+    private suspend fun <T> bracketed(block: suspend () -> T): T {
+        val host = baseUrl.takeIf { it.isNotBlank() }
+            ?.let { runCatching { URI(it).host }.getOrNull() }
+        return PlayerWebViewSync.around(listOfNotNull(host)) {
+            withContext(PlayerNamespaceElement(packageName)) { block() }
+        }
+    }
 
     /**
      * Plain words for anything a source can throw, in the

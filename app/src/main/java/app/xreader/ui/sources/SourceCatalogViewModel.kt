@@ -46,6 +46,11 @@ data class CatalogUiState(
      * failure calls for — the failure card offers the
      * one-time solve/sign-in screen as its primary door. */
     val sessionNeed: app.xreader.data.extension.SessionNeed.Kind? = null,
+    /** v1.5.0 (A7ii): a saved session EXISTS for this source
+     * — the empty catalogue state reads differently with one
+     * (signed-in-but-still-empty) than without (never a
+     * re-ask for a passed check either way). */
+    val hasSession: Boolean = false,
     /** v1.3.2 (item 77): the failure is simply "this source is
      * switched off" — the card offers to turn it back on and
      * retry in one tap. */
@@ -90,13 +95,25 @@ object CatalogueCopy {
 
     fun emptyMessage(
         need: app.xreader.data.extension.SessionNeed.Kind?,
-        isSearch: Boolean
+        isSearch: Boolean,
+        hasSession: Boolean = false
     ): String = when {
         isSearch ->
             "No matches in this source — try a different title."
         need != null ->
             "Nothing came back from this source. It may be " +
                 "asking for its one-time check or sign-in."
+        // v1.5.0 (A7ii): a session EXISTS and the catalogue
+        // still came back empty — a different state from
+        // "no session", with different words, and never a
+        // re-ask for a check already passed.
+        hasSession ->
+            "You're signed in for this source, but its " +
+                "catalogue still came back empty. The site " +
+                "may have changed how it lists its books, or " +
+                "the sign-in may have expired — try again, " +
+                "and if it keeps happening the source's page " +
+                "has the sign-in door."
         else ->
             "This source's catalogue came back empty — " +
                 "the site may have changed how it lists " +
@@ -470,27 +487,55 @@ class SourceCatalogViewModel(
                         page = page,
                         hasNext = (result.value.hasNextPage || newBooks.isNotEmpty()) &&
                             page < MAX_CATALOG_PAGE,
-                        // v1.3.3 (scope S1): an EMPTY catalogue
-                        // on a gated source is a suspected wall,
-                        // not an empty shelf — the empty state
-                        // itself carries the hand-off (BrightNovel:
-                        // the rendered road got the "Attention
-                        // Required" page and extracted nothing).
-                        sessionNeed = if (
+                        // v1.3.3 (scope S1) → v1.5.0
+                        // (ANONYMOUS-FIRST): an EMPTY catalogue
+                        // carries the hand-off only on EVIDENCE —
+                        // the page the fetch actually received
+                        // carried a check's markers (recorded in
+                        // the source's page shapes) — and never
+                        // when a session already exists (a passed
+                        // check is never re-asked; the empty
+                        // state then states the distinct
+                        // signed-in-but-empty truth, A7ii).
+                        hasSession = if (
                             reset && merged.isEmpty() &&
                             snapshot.mode != CatalogMode.SEARCH
                         ) {
-                            val config = container.extensionService
-                                .declarativeConfigOf(current)
-                            val hasSession = withContext(Dispatchers.IO) {
+                            withContext(Dispatchers.IO) {
                                 container.sessionStore.has(
                                     app.xreader.data.extension
                                         .ExtensionHttpClient
                                         .sessionKeyFor(extensionId)
                                 )
                             }
+                        } else {
+                            _state.value.hasSession
+                        },
+                        sessionNeed = if (
+                            reset && merged.isEmpty() &&
+                            snapshot.mode != CatalogMode.SEARCH
+                        ) {
+                            val config = container.extensionService
+                                .declarativeConfigOf(current)
+                            val sessionKey =
+                                app.xreader.data.extension
+                                    .ExtensionHttpClient
+                                    .sessionKeyFor(extensionId)
+                            val hasSession = withContext(Dispatchers.IO) {
+                                container.sessionStore.has(sessionKey)
+                            }
+                            val shape = app.xreader.data.extension
+                                .PageShapeLog.lastFor(sessionKey)
+                            val challengeSeen = app.xreader
+                                .data.extension.SessionNeed
+                                .challengeSeenIn(
+                                    shape?.markers.orEmpty(),
+                                    _state.value.errorMessage
+                                )
                             app.xreader.data.extension.SessionNeed
-                                .forEmptyCatalogue(config, hasSession)
+                                .forEmptyCatalogue(
+                                    config, hasSession, challengeSeen
+                                )
                         } else {
                             _state.value.sessionNeed
                         }

@@ -121,6 +121,18 @@ data class ReaderUiState(
      * (option-scope rule — see [MangaModeResolution]). */
     val imageMode: app.xreader.domain.reader.ImageReaderMode =
         app.xreader.domain.reader.ImageReaderMode.WEBTOON,
+    /** v1.5.0 (Part C): the manga reader's FULL resolved
+     * settings for this book (global defaults + this series'
+     * overrides — see [MangaSettings.resolve]). Republished
+     * with [imageMode] whenever either layer changes. */
+    val mangaSettings: MangaSettings = MangaSettings.resolve(
+        app.xreader.domain.reader.ReaderConfig(),
+        app.xreader.data.prefs.BookReaderOverride(),
+        app.xreader.domain.reader.ImageReaderMode.WEBTOON
+    ),
+    /** v1.5.0 (Part C): this series carries at least one
+     * manga override (the in-reader sheet's reset row). */
+    val mangaHasOverrides: Boolean = false,
     /** True on the low-RAM (MINIMAL) performance tier: manga
      * pages then decode downscaled to screen width. */
     val imageLowRam: Boolean = false
@@ -196,10 +208,19 @@ class ReaderViewModel(
      * default ([MangaModeResolution]). Republished whenever
      * either layer changes. */
     private fun publishImageMode() {
+        val resolved = MangaModeResolution.resolve(
+            bookOverride.imageMode, globalConfig.imageMode
+        )
         _state.value = _state.value.copy(
-            imageMode = MangaModeResolution.resolve(
-                bookOverride.imageMode, globalConfig.imageMode
-            )
+            imageMode = resolved,
+            // v1.5.0 (Part C): the whole manga surface
+            // resolves with the mode — one publication, so
+            // the reader never sees a half-updated settings
+            // mix.
+            mangaSettings = MangaSettings.resolve(
+                globalConfig, bookOverride, resolved
+            ),
+            mangaHasOverrides = bookOverride.hasMangaOverrides
         )
     }
 
@@ -214,6 +235,42 @@ class ReaderViewModel(
         _state.value = _state.value.copy(imageMode = mode)
         viewModelScope.launch {
             container.bookReaderPrefs.setImageMode(bookId, mode)
+        }
+    }
+
+    /** v1.5.0 (Part C): the in-reader manga sheet's other
+     * per-series writes — same option-scope tier as
+     * [setImageMode]: THIS series only, never the global
+     * default. The override collector republishes the
+     * resolved settings. */
+    fun setMangaTapLayout(
+        layout: app.xreader.domain.reader.MangaTapLayout?
+    ) {
+        viewModelScope.launch {
+            container.bookReaderPrefs.setMangaTapLayout(bookId, layout)
+        }
+    }
+
+    fun setMangaOrientation(
+        orientation: app.xreader.domain.reader.MangaOrientation?
+    ) {
+        viewModelScope.launch {
+            container.bookReaderPrefs.setMangaOrientation(bookId, orientation)
+        }
+    }
+
+    fun setMangaCropBorders(crop: Boolean?) {
+        viewModelScope.launch {
+            container.bookReaderPrefs.setMangaCropBorders(bookId, crop)
+        }
+    }
+
+    /** The sheet's reset: this series returns to the global
+     * defaults for every manga field (the donor's
+     * ResetViewerFlags shape). */
+    fun resetMangaOverrides() {
+        viewModelScope.launch {
+            container.bookReaderPrefs.clearManga(bookId)
         }
     }
 
@@ -1078,9 +1135,20 @@ class ReaderViewModel(
      * already earned its one re-resolution this session. */
     private val extractionRetriedFor = mutableSetOf<Long>()
 
+    /** v1.5.0 (A4): the failure shapes that mean "this
+     * chapter's saved reference no longer resolves" — the
+     * extraction shapes plus the resolution shapes (a moved
+     * chapter URL answering 404, a reference the source no
+     * longer lists). Any of them earns the ONE fresh-list
+     * re-resolution in [reresolveChapter]; a dangling
+     * reference never dead-ends while the book exists (the
+     * link-Asura "Overgeared" / link-Comix exhibits). */
     private fun isExtractionFailure(detail: String): Boolean =
         detail.contains("wasn't found on the page", ignoreCase = true) ||
-            detail.contains("no readable text", ignoreCase = true)
+            detail.contains("no readable text", ignoreCase = true) ||
+            detail.contains("the site answered HTTP 404", ignoreCase = true) ||
+            detail.contains("isn't in the book anymore", ignoreCase = true) ||
+            detail.contains("refresh chapter list", ignoreCase = true)
 
     /**
      * v1.3.3 (scopes S4/S6): re-resolve a chapter against a

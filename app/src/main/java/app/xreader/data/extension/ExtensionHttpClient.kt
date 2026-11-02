@@ -381,6 +381,18 @@ class ExtensionHttpClient(
                     requestHeaders["User-Agent"] = ua
                 }
             }
+            // v1.5.0 (steer A4): no session UA → the pinned
+            // device WebView UA, so the plain-HTTP road and
+            // the hidden browser present ONE fingerprint
+            // (OkHttp's own default agent never leaks).
+            if (requestHeaders.keys.none {
+                    it.equals("User-Agent", ignoreCase = true)
+                }
+            ) {
+                PinnedUserAgent.current()?.let { ua ->
+                    requestHeaders["User-Agent"] = ua
+                }
+            }
             // v1.3.4 (T1): the declared header bindings for
             // THIS host — a session cookie replayed as a
             // header to exactly the hosts its contract names

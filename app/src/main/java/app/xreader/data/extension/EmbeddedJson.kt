@@ -317,6 +317,46 @@ object EmbeddedJson {
         return element.contentOrNull?.ifBlank { null }
     }
 
+    /** The envelope keys list-shaped payloads travel under,
+     * in the order the scan prefers them. */
+    val ENVELOPE_KEYS = listOf(
+        "items", "data", "results", "chapters", "list", "rows",
+        "novels", "books"
+    )
+
+    /**
+     * v1.5.0 (steer A2): the polymorphic envelope unwrapper —
+     * the ONE place that finds the record array inside a JSON
+     * payload whose exact envelope wasn't (or no longer is)
+     * the declared one. Accepts a bare array, an object
+     * holding an array under any [ENVELOPE_KEYS] field, or a
+     * wrapper object (`data: { items: … }`) one level deep.
+     * Deterministic key order; returns the first non-empty
+     * array found, else null. Callers use it ONLY when the
+     * declared path missed — a declared path that resolves
+     * always wins, so a working recipe never changes shape
+     * under this fallback.
+     */
+    fun scanForArray(root: JsonElement): JsonArray? {
+        if (root is JsonArray) {
+            return root.takeIf { it.isNotEmpty() }
+        }
+        val obj = root as? JsonObject ?: return null
+        for (key in ENVELOPE_KEYS) {
+            val value = obj[key] ?: continue
+            if (value is JsonArray && value.isNotEmpty()) return value
+            if (value is JsonObject) {
+                for (innerKey in ENVELOPE_KEYS) {
+                    val inner = value[innerKey]
+                    if (inner is JsonArray && inner.isNotEmpty()) {
+                        return inner
+                    }
+                }
+            }
+        }
+        return null
+    }
+
     // ── discovery ───────────────────────────────────────────
 
     /** A discovered array of book records inside a payload:

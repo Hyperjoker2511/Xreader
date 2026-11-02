@@ -375,6 +375,13 @@ private val LICENCES = listOf(
     "Mangayomi source index (site-reading recipes for Wordrain69 and " +
         "Web Novel Translations, re-implemented natively and verified live)" to
         "Apache Licence 2.0 — Copyright the Mangayomi contributors",
+    "Komikku (manga reader behaviour, tap-zone geometry, reader " +
+        "settings and colour-filter recipes — adapted and " +
+        "re-implemented natively in Xreader's own reader)" to
+        "Apache Licence 2.0 — Copyright the Komikku contributors",
+    "Mihon (Keiyoushi extension host: the mihon-api surface, " +
+        "network stack and challenge handling — transplanted)" to
+        "Apache Licence 2.0 — Copyright the Mihon contributors",
     "Plus Jakarta Sans" to "SIL Open Font Licence 1.1",
     "Inter" to "SIL Open Font Licence 1.1",
     "Literata (TypeTogether)" to "SIL Open Font Licence 1.1"

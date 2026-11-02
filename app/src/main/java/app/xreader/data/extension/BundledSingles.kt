@@ -188,7 +188,11 @@ internal object BundledSingles {
                     mintUrl = "https://fenrirealm.com/api/read-token",
                     mintBodyTemplate = "{\"chapter_id\":\"{chapter_id}\"}",
                     checkUrlTemplate =
-                        "https://fenrirealm.com/series/{seg-3}/{seg-1}"
+                        "https://fenrirealm.com/series/{seg-3}/{seg-1}",
+                    // TOKEN-SESSION research: the token lives
+                    // ~300 s; renew ~120 s early so a chapter
+                    // fetch never rides a dying token.
+                    renewalMarginSeconds = 120
                 )
             )
         )

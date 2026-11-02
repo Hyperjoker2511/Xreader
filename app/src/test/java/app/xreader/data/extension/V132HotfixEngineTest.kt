@@ -652,11 +652,14 @@ class V132HotfixEngineTest {
                 )
             )
         )
-        // BOTI's shape (item 77): a user-added render lane whose
-        // read died in the browser view — the hand-off applies
-        // exactly as for a bundled source.
-        assertEquals(
-            SessionNeed.Kind.SITE_CHECK,
+        // BOTI's shape (item 77) → v1.5.0 (ANONYMOUS-FIRST,
+        // user rule 2026-11-02): a render that merely FAILED
+        // is no longer evidence of a check — public sites were
+        // asked for solves they never demanded. The hand-off
+        // fires when the render's failure carries the check's
+        // own detail (the fetch layer converts a real
+        // challenge page into exactly that, as asserted above).
+        assertNull(
             SessionNeed.classify(
                 renderConfig,
                 AppError.ExtensionFailed(

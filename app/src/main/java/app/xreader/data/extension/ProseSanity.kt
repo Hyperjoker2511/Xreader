@@ -125,4 +125,41 @@ object ChapterServeGate {
         return "the text that came back wasn't readable prose — " +
             "it looks like protected or scrambled data, not the chapter"
     }
+
+    /** v1.5.0 (steer A8): login-wall phrasing — the words a
+     * site shows INSTEAD of a chapter when the chapter is
+     * behind its sign-in/subscription wall. */
+    private val LOGIN_WALL_PHRASES = listOf(
+        "sign in to read", "log in to read", "login to read",
+        "sign in to continue", "log in to continue",
+        "please sign in", "please log in", "please login",
+        "subscribe to read", "subscribe to unlock",
+        "create an account to read", "sign up to read",
+        "members only", "member-only content"
+    )
+
+    /** A chapter counts as SHORT below this many words —
+     * a real chapter is never this small, so a short text
+     * wearing login phrasing is the wall, not the chapter. */
+    const val LOGIN_WALL_MAX_WORDS = 60
+
+    /**
+     * The login-wall verdict for [plainText], or null: the
+     * text is SHORT (< [LOGIN_WALL_MAX_WORDS] words) and
+     * carries login/subscribe phrasing — positive evidence
+     * from the content itself that this leg is gated (the
+     * anonymous-first rule's evidence standard). A long
+     * chapter that merely MENTIONS signing in is prose and
+     * passes untouched.
+     */
+    fun loginWallRefusal(plainText: String): String? {
+        val words = plainText.split(Regex("\\s+"))
+            .count { it.isNotBlank() }
+        if (words == 0 || words >= LOGIN_WALL_MAX_WORDS) return null
+        val lower = plainText.lowercase()
+        if (LOGIN_WALL_PHRASES.none { it in lower }) return null
+        return "this chapter asks you to sign in to read it — " +
+            "the site showed its sign-in wall instead of the " +
+            "chapter text"
+    }
 }
