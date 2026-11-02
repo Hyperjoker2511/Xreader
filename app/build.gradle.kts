@@ -24,8 +24,8 @@ android {
         applicationId = "app.xreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 37
-        versionName = "1.4.0"
+        versionCode = 38
+        versionName = "1.4.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -47,8 +47,23 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // v1.4.1 (user rule, 2026-11-02): NO shrinking, ever. The
+            // v1.4.0 release crashed on launch because R8 stripped the
+            // generic Signature that Injekt's TypeReference reads at
+            // runtime ("TypeReference constructed without actual type
+            // information" inside AppContainer.<init>) — and every
+            // other reflection/serializer surface in the app (Room,
+            // kotlinx.serialization models, QuickJS bindings, the
+            // extension API) carries the same latent risk. The user
+            // has ruled app size is not a constraint ("size doesn't
+            // matter if it's 1gb") and the source is public, so
+            // obfuscation bought nothing. Unminified by construction
+            // is the permanent fix; proguard-rules.pro is retained
+            // (and kept current) purely as documentation so that if
+            // minification is ever re-enabled deliberately, the keeps
+            // the runtime mechanisms need are already recorded.
+            isMinifyEnabled = false
+            isShrinkResources = false
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -112,6 +127,11 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    // v1.4.1: Room 2.8's driver is pinned EXPLICITLY (BundledSQLiteDriver)
+    // instead of relying on the runtime's default-driver resolution on a
+    // real device — the 2.7/2.8 migration path. Same database file, same
+    // schema: the bundled driver opens the existing library as-is.
+    implementation(libs.androidx.sqlite.bundled)
     implementation(libs.androidx.datastore.preferences)
 
     // Phase 2 document engine (PLAN §4): network (OPDS + downloads),

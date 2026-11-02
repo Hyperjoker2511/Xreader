@@ -21,6 +21,7 @@ import app.xreader.data.download.UrlChapterFetcher
 import app.xreader.data.download.WorkManagerEnqueuer
 import app.xreader.data.export.BookExporter
 import app.xreader.data.extension.CookieParsing
+import app.xreader.data.extension.DiagnosticLog
 import app.xreader.data.extension.player.PlayerApplicationContext
 import app.xreader.data.extension.player.PlayerChallengeBridge
 import app.xreader.data.extension.player.PlayerNetworkHelper
@@ -71,6 +72,13 @@ class AppContainer(context: Context) {
         appContext,
         XreaderDatabase::class.java,
         XreaderDatabase.NAME
+        // v1.4.1: the SQLite driver is pinned explicitly (Room 2.7/2.8
+        // migration path). v1.4.0 bumped Room 2.6.1 → 2.8.3 and left
+        // driver resolution to the runtime default, which is unproven
+        // on a real device; the bundled driver opens the SAME database
+        // file and schema (v7) as-is — no migration, no data change.
+    ).setDriver(
+        androidx.sqlite.driver.bundled.BundledSQLiteDriver()
     ).addMigrations(
         app.xreader.data.db.MIGRATION_1_2,
         app.xreader.data.db.MIGRATION_2_3,
@@ -657,7 +665,27 @@ class AppContainer(context: Context) {
         AppInfo.setVersionInfo(
             BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME
         )
-        PlayerRegistrar.register(playerApplication, playerNetworkHelper)
+        // v1.4.1 (defensive startup): registration is the Keiyoushi
+        // player's front door, and nothing else in the app may die
+        // with it. v1.4.0 crashed in this init because the release
+        // build's R8 pass broke Injekt's TypeReference under the
+        // registrar; release builds no longer minify, but the wrap
+        // stays: if registration ever throws again, startup
+        // CONTINUES (novels unaffected), the failure lands in the
+        // diagnostic log with its exception, and the player reads
+        // as not-started — PlayerRegistrar.isRegistered() stays
+        // false and extension loads fail honestly as source errors
+        // instead of taking the process down.
+        runCatching {
+            PlayerRegistrar.register(playerApplication, playerNetworkHelper)
+        }.onFailure { error ->
+            DiagnosticLog.record(
+                tag = "player-start",
+                message = "Keiyoushi player didn't start; " +
+                    "manga sources are unavailable this session.",
+                detail = "${error.javaClass.name}: ${error.message}"
+            )
+        }
         // Keiyoushi player (K6): the kill switch's live wire —
         // every flip of "Keiyoushi manga sources" (Customise →
         // Sources & repairs) is pushed into the player manager,

@@ -48,3 +48,23 @@
 -keep class app.cash.quickjs.** { *; }
 -keep interface app.xreader.data.extension.QuickJsHostBinding { *; }
 -keep interface app.xreader.data.extension.QuickJsInvoker { *; }
+
+# Keiyoushi player (v1.4.0): Injekt (uy.kohesive.injekt, mihon fork)
+# resolves types through TypeReference subclasses whose GENERIC
+# SUPERTYPE SIGNATURE is read reflectively at runtime. v1.4.0's R8
+# pass stripped that Signature and the app died in AppContainer.<init>
+# with "TypeReference constructed without actual type information".
+# Release builds no longer minify at all (see app/build.gradle.kts —
+# the user's standing rule), so these keeps are documentation: if
+# minification is ever re-enabled deliberately, ALL of the rules
+# below (copied from Komikku's app/proguard-rules.pro, which ships
+# the same mechanism in production) must stay with it.
+-keep,allowoptimization class uy.kohesive.injekt.** { public protected *; }
+-keep class uy.kohesive.injekt.** { *; }
+# R8 full mode (donor): the Signature attribute is the mechanism.
+-keepattributes Signature
+-keep,allowoptimization class * extends uy.kohesive.injekt.api.TypeReference
+# The mihon fork's registrar patch (dev.mihon.injekt.patchInjekt,
+# called first by PlayerRegistrar) swaps the default registrar
+# reflectively — keep its package beside the upstream one.
+-keep class dev.mihon.injekt.** { *; }
