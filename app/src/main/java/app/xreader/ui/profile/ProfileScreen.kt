@@ -589,14 +589,16 @@ fun ProfileScreen(
 private fun LevelRing(fraction: Float, level: Int) {
     val animated = animateProgressAsState(fraction, label = "levelRing")
     val track = MaterialTheme.colorScheme.surfaceVariant
-    // v1.0.4 (D12): the progress arc is the mock's sweep gradient —
-    // cyan → electric purple → cyan (the user's palette tokens),
-    // still animated to the real fraction by the progress adapter.
+    // v1.5.1 (UI audit F1): the progress arc sweep is scheme-driven
+    // — primary → tertiary → primary, exactly as the kit's
+    // ProgressPillBar — so the ring follows the active theme
+    // (Nocturne Violet by default) instead of the hardcoded
+    // v1.0.4 cyan/electric-purple palette that rendered BLUE.
     val sweep = androidx.compose.ui.graphics.Brush.sweepGradient(
         listOf(
-            app.xreader.ui.theme.VibrantCyan,
-            app.xreader.ui.theme.ElectricPurple,
-            app.xreader.ui.theme.VibrantCyan
+            MaterialTheme.colorScheme.primary,
+            MaterialTheme.colorScheme.tertiary,
+            MaterialTheme.colorScheme.primary
         )
     )
     Box(

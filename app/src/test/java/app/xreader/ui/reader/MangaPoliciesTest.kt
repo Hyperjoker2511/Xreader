@@ -301,4 +301,31 @@ class MangaPoliciesTest {
             webtoonReadingPosition(emptyList(), 0, 1000, pageCount = 5)
         )
     }
+
+    // ── v1.5.1 (item 6 rider): the tall-strip safeguard ────
+
+    @Test
+    fun tallStripGuardCapsOnlyStripsPastTheLimit() {
+        assertFalse(TallStripPolicy.needsGuard(3_072))
+        assertTrue(TallStripPolicy.needsGuard(3_073))
+        assertEquals(3_072, TallStripPolicy.guardedHeight(12_000))
+        assertEquals(2_000, TallStripPolicy.guardedHeight(2_000))
+        // Aspect preserved: a 1440×12000 strip lands at 368×3072.
+        assertEquals(368, TallStripPolicy.guardedWidth(1440, 12_000))
+        assertEquals(1440, TallStripPolicy.guardedWidth(1440, 2_000))
+    }
+
+    @Test
+    fun tallStripSliceBoundsCoverTheStripWithoutGaps() {
+        val bounds = TallStripPolicy.sliceBounds(10_000)
+        assertEquals(4, bounds.size)
+        assertEquals(0, bounds.first().first)
+        assertEquals(9_999, bounds.last().last)
+        for (i in 1 until bounds.size) {
+            assertEquals(bounds[i - 1].last + 1, bounds[i].first)
+        }
+        assertEquals(
+            listOf(0..99), TallStripPolicy.sliceBounds(100)
+        )
+    }
 }

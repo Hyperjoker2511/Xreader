@@ -162,6 +162,31 @@ fun MainScaffold(
     onLibraryReady: () -> Unit = {}
 ) {
     val navController = rememberNavController()
+    // v1.5.1 (item 7): the content-navigation guard. Book and
+    // reader routes were navigated bare — a double-tap (or a
+    // tap landing while the enter transition still ran) could
+    // push the same destination twice and stack/wedge the
+    // transition (the Asura catalogue freeze: catalogue and
+    // Book Details composited, input dead). Content routes
+    // now go through this one door: singleTop, and an
+    // identical route re-issued inside the debounce window
+    // is ignored. Bottom tabs keep their own navigateToTab.
+    var lastContentNavRoute by remember {
+        androidx.compose.runtime.mutableStateOf<String?>(null)
+    }
+    var lastContentNavAt by remember {
+        androidx.compose.runtime.mutableStateOf(0L)
+    }
+    val navigateContent: (String) -> Unit = { route ->
+        val now = android.os.SystemClock.uptimeMillis()
+        val duplicate = route == lastContentNavRoute &&
+            now - lastContentNavAt < 900L
+        if (!duplicate) {
+            lastContentNavRoute = route
+            lastContentNavAt = now
+            navController.navigate(route) { launchSingleTop = true }
+        }
+    }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val onPhaseNote: (String) -> Unit = { msg -> scope.launch { snackbar.showSnackbar(msg) } }
@@ -341,6 +366,23 @@ fun MainScaffold(
                         container.storedBookRepair
                             .runUpgradeSweep(installedCode)
                     }
+                    // v1.5.1 (item 1): the update-time source
+                    // migration — learned sources re-derived
+                    // with the current learner, duplicates of
+                    // shipped sites merged away (the user's
+                    // no-duplicates rule). NOT background work:
+                    // the re-derivation is owed the learner's
+                    // full escalation (the API road renders and
+                    // records), and it runs once per version
+                    // on this background scope, never blocking
+                    // first paint. Failure-isolated per source
+                    // inside; a failure here changes nothing.
+                    runCatching {
+                        container.sourceUpdateMigration
+                            .runIfNeeded(installedCode)
+                    }.getOrNull()?.forEach { line ->
+                        android.util.Log.i("XreaderMigrate", line)
+                    }
                 }
             }
         }
@@ -352,7 +394,7 @@ fun MainScaffold(
                 val progress = runCatching {
                     container.database.readingProgressDao().getForBook(bookId)
                 }.getOrNull()
-                navController.navigate("reader/$bookId/${progress?.chapterIndex ?: 0}")
+                navigateContent("reader/$bookId/${progress?.chapterIndex ?: 0}")
             }
         }
     }
@@ -362,7 +404,7 @@ fun MainScaffold(
         container.pendingOpenSource.collect { target ->
             if (target != null) {
                 container.pendingOpenSource.value = null
-                navController.navigate("source/${target.first}/${target.second}")
+                navigateContent("source/${target.first}/${target.second}")
             }
         }
     }
@@ -437,7 +479,7 @@ fun MainScaffold(
                         .maxByOrNull { it.updatedAt }
                 }.getOrNull()
                 if (recent != null) {
-                    navController.navigate("reader/${recent.bookId}/${recent.chapterIndex}")
+                    navigateContent("reader/${recent.bookId}/${recent.chapterIndex}")
                 }
             }
             app.xreader.data.library.StartScreen.LIBRARY -> Unit
@@ -841,6 +883,26 @@ private fun XreaderNavHost(
     packViewModel: app.xreader.ui.sources.ProviderPackViewModel
 ) {
     val scope = rememberCoroutineScope()
+    // v1.5.1 (item 7): the same content-navigation guard as in
+    // MainScaffold, scoped to this host (destinations live here):
+    // singleTop + identical-route debounce, so a double-tap can
+    // never stack a book/reader destination mid-transition.
+    var lastContentNavRoute by remember {
+        androidx.compose.runtime.mutableStateOf<String?>(null)
+    }
+    var lastContentNavAt by remember {
+        androidx.compose.runtime.mutableStateOf(0L)
+    }
+    val navigateContent: (String) -> Unit = { route ->
+        val now = android.os.SystemClock.uptimeMillis()
+        val duplicate = route == lastContentNavRoute &&
+            now - lastContentNavAt < 900L
+        if (!duplicate) {
+            lastContentNavRoute = route
+            lastContentNavAt = now
+            navController.navigate(route) { launchSingleTop = true }
+        }
+    }
     // v1.3.2 (scope D): the all-sources search VM, created at
     // nav-host level (the destinations that use it live here).
     val globalSearchViewModel = androidx.lifecycle.viewmodel.compose
@@ -849,7 +911,7 @@ private fun XreaderNavHost(
         )
     androidx.compose.runtime.LaunchedEffect(globalSearchViewModel) {
         globalSearchViewModel.openedBook.collect { bookId ->
-            navController.navigate("book/$bookId")
+            navigateContent("book/$bookId")
         }
     }
     // v1.3.2 (scope A2): THE session hand-off, shared by every
@@ -959,9 +1021,9 @@ private fun XreaderNavHost(
                 coverFile = coverFile,
                 reduceMotion = reduceMotion,
                 onAddBook = onAddBook,
-                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
+                onOpenBook = { bookId -> navigateContent("book/$bookId") },
                 onContinueReading = { bookId, chapterIndex ->
-                    navController.navigate("reader/$bookId/$chapterIndex")
+                    navigateContent("reader/$bookId/$chapterIndex")
                 },
                 onProfile = { navController.navigate("profile") },
                 onOpenAddList = { navController.navigate("addList") },
@@ -975,7 +1037,7 @@ private fun XreaderNavHost(
                 viewModel = libraryViewModel,
                 coverFile = coverFile,
                 onBack = { navController.popBackStack() },
-                onOpenBook = { bookId -> navController.navigate("book/$bookId") }
+                onOpenBook = { bookId -> navigateContent("book/$bookId") }
             )
         }
         composable("addList") {
@@ -1012,7 +1074,7 @@ private fun XreaderNavHost(
                 viewModel = sourcesViewModel,
                 searchViewModel = globalSearchViewModel,
                 onOpenSource = { extId, sourceId ->
-                    navController.navigate("source/$extId/${android.net.Uri.encode(sourceId)}")
+                    navigateContent("source/$extId/${android.net.Uri.encode(sourceId)}")
                 },
                 onOpenExtension = { extId -> navController.navigate("extensions/$extId") },
                 onOpenOpdsServers = { navController.navigate("opdsServers") },
@@ -1024,7 +1086,7 @@ private fun XreaderNavHost(
                     navController.navigate("opds/${server.id}")
                 },
                 onOpenBook = { bookId ->
-                    navController.navigate("book/$bookId")
+                    navigateContent("book/$bookId")
                 },
                 coverFile = coverFile
             )
@@ -1129,7 +1191,7 @@ private fun XreaderNavHost(
                 viewModel = viewModel,
                 extensionId = extId,
                 onBack = { navController.popBackStack() },
-                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
+                onOpenBook = { bookId -> navigateContent("book/$bookId") },
                 // v1.3.2 (scope A2): the catalogue's hand-off.
                 onSessionHandoff = { kind ->
                     openSessionHandoff(extId, kind, null)
@@ -1222,7 +1284,7 @@ private fun XreaderNavHost(
                     }
                 },
                 onOpenSource = { sourceId ->
-                    navController.navigate("source/$extId/${android.net.Uri.encode(sourceId)}")
+                    navigateContent("source/$extId/${android.net.Uri.encode(sourceId)}")
                 }
             )
         }
@@ -1276,7 +1338,7 @@ private fun XreaderNavHost(
                     )
                     navController.navigate("login")
                 },
-                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
+                onOpenBook = { bookId -> navigateContent("book/$bookId") },
                 onBack = { navController.popBackStack() }
             )
         }
@@ -1302,7 +1364,7 @@ private fun XreaderNavHost(
                 coverFile = coverFile,
                 reduceMotion = reduceMotion,
                 onMakeEpub = { group: BookDownloads -> onExport(group.book, "epub") },
-                onOpenBook = { bookId -> navController.navigate("book/$bookId") },
+                onOpenBook = { bookId -> navigateContent("book/$bookId") },
                 onOpenCustomise = { navController.navigate("customise") }
             )
         }
@@ -1393,7 +1455,7 @@ private fun XreaderNavHost(
                 reduceMotion = reduceMotion,
                 onBack = { navigateToTab(navController, Tab.Library) },
                 onOpenBook = { bookId, chapterIndex ->
-                    navController.navigate("reader/$bookId/$chapterIndex")
+                    navigateContent("reader/$bookId/$chapterIndex")
                 }
             )
         }
@@ -1516,9 +1578,9 @@ private fun XreaderNavHost(
                 assetFile = assetFile,
                 onBack = { navController.popBackStack() },
                 onOpenLore = { navController.navigate("lore/$bookId") },
-                onOpenRelated = { relatedId -> navController.navigate("book/$relatedId") },
+                onOpenRelated = { relatedId -> navigateContent("book/$relatedId") },
                 onReadChapter = { chapterIndex ->
-                    navController.navigate("reader/$bookId/$chapterIndex")
+                    navigateContent("reader/$bookId/$chapterIndex")
                 },
                 onExportEpub = {
                     val book = viewModel.state.value.book
@@ -1601,7 +1663,7 @@ private fun XreaderNavHost(
                 viewModel = viewModel,
                 coverFile = coverFile,
                 onBack = { navController.popBackStack() },
-                onOpenBook = { id -> navController.navigate("book/$id") }
+                onOpenBook = { id -> navigateContent("book/$id") }
             )
         }
         composable("vocab") {

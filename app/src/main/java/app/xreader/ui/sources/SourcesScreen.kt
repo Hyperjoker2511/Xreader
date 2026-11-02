@@ -192,9 +192,7 @@ fun SourcesScreen(
                     // Customise → Sources & repairs.
                     AdultVisibilityToggle(
                         visibility = state.contentVisibility,
-                        onSetVisibility = {
-                            viewModel.setContentVisibility(it)
-                        }
+                        onToggle = { viewModel.toggleAdultVisibility() }
                     )
                     if (hasCheckableRepos) {
                         TextButton(

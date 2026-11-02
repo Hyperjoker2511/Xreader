@@ -780,6 +780,53 @@ class ReaderViewModel(
         }
     }
 
+    /**
+     * v1.5.1 (item 4): the re-link ladder, run when a chapter
+     * open can't resolve against the stored list — INCLUDING
+     * when the stored list is empty. Steps: (1) the book's
+     * source state is re-checked by refreshing the book from
+     * its source (the refresh re-fetches details + chapters
+     * and rebinds to a fuller same-title release when the
+     * list comes back empty — the book-moved case); (2) the
+     * stored list is re-read; (3) the target resolves by
+     * position, then by canonical chapter number, then — for
+     * an open that was aimed at the book's start against an
+     * empty list — at the identity-first chapter. Returns
+     * null only when the refreshed list genuinely lacks the
+     * chapter; the caller then shows the honest message that
+     * says the list was refreshed.
+     */
+    private suspend fun runRelinkLadder(
+        index: Int,
+        stale: app.xreader.data.db.Chapter? = null
+    ): app.xreader.data.db.Chapter? {
+        val book = container.database.bookDao().getById(bookId)
+            ?: return null
+        if (book.sourceType !=
+            app.xreader.data.db.SourceType.EXTENSION
+        ) {
+            return null
+        }
+        runCatching { container.sourceBookSync.refresh(book) }
+        val rows = container.database.chapterDao().forBook(bookId)
+        if (rows.isEmpty()) return null
+        val display = chaptersUpdated(rows)
+        _state.value = _state.value.copy(chapters = display)
+        return RelinkResolution.pick(
+            display,
+            index,
+            intendedKey = stale?.let {
+                app.xreader.data.extension.ChapterIdentity
+                    .canonicalKey(it.remoteId ?: "")
+            },
+            intendedNumber = stale?.let {
+                app.xreader.domain.reader.ChapterDisplayOrder
+                    .numberOf(it)
+            },
+            intendedTitle = stale?.title
+        )
+    }
+
     private suspend fun loadChapter(
         index: Int,
         restoreOffset: Int,
@@ -812,9 +859,33 @@ class ReaderViewModel(
                 chapter = fresh.getOrNull(index)
             }
             if (chapter == null) {
+                // v1.5.1 (item 4): THE RE-LINK LADDER. The
+                // stored re-read above only helps when the
+                // rows exist under a stale snapshot — the
+                // field case (a learned source whose book sits
+                // at ZERO stored chapters while Start Reading
+                // stayed live) dead-ended here without ever
+                // asking the source again. Before any dead-end
+                // message, the ladder runs: refresh the book
+                // from its source (SourceBookSync.refresh —
+                // which itself rebinds to a fuller release
+                // when the list comes back empty, the
+                // title-move case), re-read the stored list,
+                // and resolve the target against it — by exact
+                // stable ID, then canonical number, then
+                // title (RelinkResolution). The stale row at
+                // the target position, when one exists, is
+                // the identity the ladder carries across the
+                // refresh.
+                val stale = fresh.getOrNull(index)
+                chapter = runRelinkLadder(index, stale)
+            }
+            if (chapter == null) {
                 _state.value = _state.value.copy(
                     loading = false,
-                    errorMessage = "This chapter isn't in the book anymore."
+                    errorMessage = "This chapter isn't in the book " +
+                        "anymore — the chapter list was refreshed " +
+                        "and it wasn't found."
                 )
                 return
             }
@@ -2383,6 +2454,52 @@ class ReaderViewModel(
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
                     ReaderViewModel(container, bookId, chapterIndex) as T
+            }
+    }
+}
+
+/**
+ * v1.5.1 (item 4): how the re-link ladder resolves its
+ * target against the REFRESHED chapter list — pure, so the
+ * resolution is pinned by tests. The order is the sifted
+ * rule (ChatGPT review, adopted): exact stable chapter ID
+ * first (the canonical key of the chapter's own remote id —
+ * position is NOT stable across a refresh: releases rebind
+ * and lists re-sort), then canonical chapter number, then
+ * an exact title match, then position, and only then the
+ * identity-first chapter (number 1) — the Start Reading
+ * target when the stored list was empty and neither
+ * identity nor number meant anything yet.
+ */
+internal object RelinkResolution {
+
+    fun pick(
+        display: List<Chapter>,
+        index: Int,
+        intendedKey: String? = null,
+        intendedNumber: Float? = null,
+        intendedTitle: String? = null
+    ): Chapter? {
+        if (intendedKey != null) {
+            display.firstOrNull { chapter ->
+                app.xreader.data.extension.ChapterIdentity
+                    .canonicalKey(chapter.remoteId ?: "") == intendedKey
+            }?.let { return it }
+        }
+        val number = intendedNumber ?: (index + 1).toFloat()
+        display.firstOrNull { chapter ->
+            app.xreader.domain.reader.ChapterDisplayOrder
+                .numberOf(chapter) == number
+        }?.let { return it }
+        if (intendedTitle != null) {
+            display.firstOrNull { chapter ->
+                chapter.title.equals(intendedTitle, ignoreCase = true)
+            }?.let { return it }
+        }
+        return display.getOrNull(index)
+            ?: display.firstOrNull { chapter ->
+                app.xreader.domain.reader.ChapterDisplayOrder
+                    .numberOf(chapter) == 1f
             }
     }
 }

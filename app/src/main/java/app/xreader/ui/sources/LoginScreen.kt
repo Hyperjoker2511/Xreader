@@ -113,7 +113,22 @@ fun LoginScreen(
             // scrolling stays enabled so a low-anchored check
             // widget can always be brought into view.
             isVerticalScrollBarEnabled = true
-            webViewClient = WebViewClient()
+            webViewClient = object : WebViewClient() {
+                // v1.5.1 (item 2, adopted steer): if the
+                // renderer process dies under the sanctioned
+                // screen, destroy the view and leave the
+                // screen honestly (the user can reopen the
+                // solve) — a dead renderer must never kill
+                // the app.
+                override fun onRenderProcessGone(
+                    view: WebView?,
+                    detail: android.webkit.RenderProcessGoneDetail?
+                ): Boolean {
+                    runCatching { view?.destroy() }
+                    onCancel()
+                    return true
+                }
+            }
             CookieManager.getInstance().setAcceptCookie(true)
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
             loadUrl(effectiveUrl)

@@ -1537,8 +1537,7 @@ private fun ContinueReadingHero(
                     text = "Continue · Ch. ${continueChapterIndex + 1}",
                     onClick = onContinue,
                     modifier = Modifier,
-                    enabled = true,
-                
+                    enabled = true
                 )
             }
         }
@@ -1920,8 +1919,11 @@ private fun ManageShelvesDialog(
                         }
                     },
                     modifier = Modifier,
-                    enabled = true,
-                
+                    // v1.5.1 (UI audit F7): enabled only with a name —
+                    // before, enabled=true was hardcoded and a tap on a
+                    // blank name silently no-oped while the pill
+                    // rendered full-strength violet.
+                    enabled = newName.isNotBlank()
                 )
 
                 Text("Built-in shelves", style = MaterialTheme.typography.titleSmall)

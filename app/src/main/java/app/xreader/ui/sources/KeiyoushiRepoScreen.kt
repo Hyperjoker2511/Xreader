@@ -155,7 +155,7 @@ fun KeiyoushiRepoScreen(
             )
             AdultVisibilityToggle(
                 visibility = state.contentVisibility,
-                onSetVisibility = { viewModel.setContentVisibility(it) }
+                onToggle = { viewModel.toggleAdultVisibility() }
             )
         }
         if (state.busy) {

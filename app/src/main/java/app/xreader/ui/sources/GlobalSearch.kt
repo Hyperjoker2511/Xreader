@@ -323,8 +323,16 @@ class GlobalSearchViewModel(private val container: AppContainer) : ViewModel() {
                 items = handles,
                 parallelism = 5,
                 search = { handle ->
-                    container.extensionService.guarded(handle) {
-                        it.search(query, 1)
+                    // v1.5.1 (item 2): a fan-out search NEVER
+                    // waits on a render tier — each source
+                    // answers statically (or not at all) inside
+                    // StreamingSearch's strict per-source slice.
+                    kotlinx.coroutines.withContext(
+                        app.xreader.data.extension.RenderSuppression
+                    ) {
+                        container.extensionService.guarded(handle) {
+                            it.search(query, 1)
+                        }
                     }
                 },
                 onResult = { handle, result ->

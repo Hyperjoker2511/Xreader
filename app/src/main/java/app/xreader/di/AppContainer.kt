@@ -442,10 +442,18 @@ class AppContainer(context: Context) {
                 keiyoushiPlayerManager.liveSourcesOf(packageName)
             },
             keiyoushiRatingProvider = { packageName ->
-                keiyoushiPlayerManager.catalog().getOrNull()
-                    ?.packages
-                    ?.firstOrNull { it.packageName == packageName }
-                    ?.rating
+                // v1.5.1 (item 6/7): NEVER a fetch — this read
+                // sits inside source lookups (catalogue, book
+                // open, search), and the old wiring called
+                // catalog() here, so a cold in-memory cache
+                // turned a lookup into a full-index network
+                // fetch on the navigation path and a miss
+                // failed the source closed to ADULT (installed
+                // Ready sources vanished from Browse → Manga
+                // after every restart). The manager now
+                // answers from the record's durable rating
+                // stamp or the warm cache only.
+                keiyoushiPlayerManager.ratingOf(packageName)
             },
             // Keiyoushi player (K6): the kill switch's live
             // state, read at lookup time from the manager.
@@ -505,9 +513,31 @@ class AppContainer(context: Context) {
             bookDao = database.bookDao(),
             sourceMapDao = database.chapterSourceMapDao(),
             store = extensionStore,
-            service = extensionService
+            service = extensionService,
+            // v1.5.1 (item 1): superseded rows hand their
+            // saved session to the survivor.
+            sessionStore = sessionStore
         )
     }
+
+    /** v1.5.1 (item 1): the update-time source migration —
+     * once per app version, learned/link-added sources are
+     * re-derived with the current learner and merged into
+     * shipped sources where the site now ships (the user's
+     * no-duplicates rule). Triggered from the shell's
+     * startup effect, after the bundled defaults install. */
+    val sourceUpdateMigration:
+        app.xreader.data.extension.SourceUpdateMigration by lazy {
+            app.xreader.data.extension.SourceUpdateMigration(
+                extensionDao = database.installedExtensionDao(),
+                repoDao = database.extensionRepoDao(),
+                store = extensionStore,
+                linkProber = linkProber,
+                repoManager = repoManager,
+                sourceDedupe = sourceDedupe,
+                sourcePrefs = sourcePrefs
+            )
+        }
 
     val sourceBookSync: app.xreader.data.extension.SourceBookSync by lazy {
         app.xreader.data.extension.SourceBookSync(
@@ -549,7 +579,7 @@ class AppContainer(context: Context) {
         app.xreader.data.library.LibraryRefresher(
             bookDao = database.bookDao(),
             bookMetaPrefs = bookMetaPrefs,
-            sourceBookSync = sourceBookSync,
+            refreshBook = { book -> sourceBookSync.refresh(book) },
             libraryPrefs = libraryPrefs,
             downloadController = downloadController
         )

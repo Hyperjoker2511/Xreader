@@ -361,13 +361,38 @@ class LinkProber(
         // refusal now falls through to the honest failure
         // below; a real interstitial still routes to the
         // sanctioned screen, exactly as before.
+        // v1.5.1 (item 3): a gate classification is NOT a
+        // verdict anymore. v1.5.0 returned LoginRequired /
+        // the shell refusal from here — before the walk-in,
+        // before the API harvest — so an API-driven site
+        // whose front page wears a check (BOTI: a Cloudflare
+        // page in front of an open api.* host) stopped at
+        // "site-check-needed" with manual road-picking
+        // buttons, and the automatic escalation never ran.
+        // The gate outcome is now RECORDED and held: the
+        // probe first escalates on its own (a forced
+        // render-and-record pass fills the harvest, the API
+        // harvest proposer below drives what it synthesises),
+        // and only when every automatic tier has failed does
+        // the held gate outcome surface — as the source's
+        // sanctioned-screen state, which is the spec's last
+        // tier, not its first.
+        var gateLogin: Outcome.LoginRequired? = null
+        var gateShellMessage: String? = null
         if (LinkInference.needsLogin(bookDoc, bookUrl)) {
-            return Outcome.LoginRequired(bookUrl, host, siteCheck = false)
+            gateLogin = Outcome.LoginRequired(
+                bookUrl, host, siteCheck = false
+            )
+        } else if (SiteCheck.isChallengePage(firstResponse.body)) {
+            gateLogin = Outcome.LoginRequired(
+                bookUrl, host, siteCheck = true
+            )
         }
-        if (SiteCheck.isChallengePage(firstResponse.body)) {
-            return Outcome.LoginRequired(bookUrl, host, siteCheck = true)
-        }
-        if (firstResponse.status !in 200..299) {
+        // v1.5.1 (item 3): a held gate outranks the status
+        // refusal — a check page served WITH an error status
+        // (Cloudflare's 403 shape) is still a check to
+        // escalate past, not a dead page.
+        if (firstResponse.status !in 200..299 && gateLogin == null) {
             return Outcome.Failed(
                 "The site answered with an error (HTTP ${firstResponse.status}), so Xreader couldn't look at the page."
             )
@@ -383,18 +408,21 @@ class LinkProber(
         // attempted (no renderer, master switch off, background),
         // the refusal is the pre-v1.0.6 one, word for word.
         if (LinkInference.isJsShell(bookDoc)) {
-            return Outcome.Failed(
-                if (escalating?.renderedAny == true) {
-                    "This site builds its pages with JavaScript, and even the " +
-                        "browser view couldn't get it to show its books — it may " +
-                        "need a sign-in or a quick human check first, or it may " +
-                        "have changed. No source was added."
-                } else {
-                    "This site loads its pages with JavaScript — Xreader can't read it yet, " +
-                        "so no source was added. The page only exists after the site's own " +
-                        "scripts run, which no automatic detector can follow."
-                }
-            )
+            // v1.5.1 (item 3): held, not returned — the API
+            // harvest below gets its chance first (an app
+            // shell's own calls are exactly what it reads);
+            // this refusal surfaces only if the harvest and
+            // every other automatic tier fail too.
+            gateShellMessage = if (escalating?.renderedAny == true) {
+                "This site builds its pages with JavaScript, and even the " +
+                    "browser view couldn't get it to show its books — it may " +
+                    "need a sign-in or a quick human check first, or it may " +
+                    "have changed. No source was added."
+            } else {
+                "This site loads its pages with JavaScript — Xreader can't read it yet, " +
+                    "so no source was added. The page only exists after the site's own " +
+                    "scripts run, which no automatic detector can follow."
+            }
         }
 
         // ── Candidate bookkeeping (A4) ──────────────────────────
@@ -722,7 +750,15 @@ class LinkProber(
         // driven first, full stop — the chapter-page analysis
         // below keeps its one legitimate job (rescuing a pasted
         // CHAPTER link for sites the lane doesn't know).
-        val entry = KnownSites.entryFor(host)
+        // v1.5.1 (item 3): with a gate held, the lane drive
+        // is skipped — there is no readable book page to
+        // drive it against; the harvest below is the tier
+        // that can still win.
+        val entry = if (gateLogin == null && gateShellMessage == null) {
+            KnownSites.entryFor(host)
+        } else {
+            null
+        }
         if (entry != null) {
             val laneConfig = KnownSites.fullConfig(
                 entry = entry,
@@ -846,6 +882,28 @@ class LinkProber(
             if (!tryAllProposers) return Outcome.Ready(it, outcomeLines())
         }
 
+        // ── v1.5.1 (item 3): the gate-held escalation ──────
+        // A held gate means the first fetch may never have
+        // rendered at all (a challenge page is not a "shell",
+        // so the fetch layer's own escalation never fired) —
+        // the harvest would read an empty log and the gate
+        // would win by default, which is the v1.5.0 failure
+        // wearing a new coat. So: one forced render-and-
+        // record pass FIRST (the render deposits the site's
+        // own calls in the harvest log), then the harvest
+        // proposer below runs on real evidence.
+        if (gateLogin != null || gateShellMessage != null) {
+            runCatching {
+                probeStack(host, forceRender = true).fetcher.get(url)
+            }
+            stageLines += StageLine(
+                "escalation", "render-and-record",
+                "the front page classified as a gate, so the " +
+                    "browser view rendered it and recorded the " +
+                    "site's own calls before any verdict"
+            )
+        }
+
         // ── v1.5.0 (A2/A3): the API HARVEST proposer ────────
         // The browser view scouted this site while it
         // rendered: the calls its own scripts fired are in
@@ -893,7 +951,8 @@ class LinkProber(
                 }.getOrNull()
                 if (firstBook != null) {
                     val directDrive = testDriveScored(
-                        apiConfig, firstBook.id, apiContext
+                        apiConfig, firstBook.id, apiContext,
+                        seedTitle = firstBook.title
                     )
                     consider("API harvest", apiConfig, firstBook.id, directDrive)
                     var directWon = directDrive.result is AppResult.Ok &&
@@ -919,7 +978,8 @@ class LinkProber(
                             clientStack.fetcher, host
                         )
                         val clientDrive = testDriveScored(
-                            clientConfig, firstBook.id, clientContext
+                            clientConfig, firstBook.id, clientContext,
+                            seedTitle = firstBook.title
                         )
                         consider(
                             "API harvest (browser client)",
@@ -953,6 +1013,28 @@ class LinkProber(
                             "but its book list didn't answer"
                     )
                 }
+            }
+        }
+
+        // v1.5.1 (item 3): every automatic tier has now run.
+        // Only here may a held gate surface — the login /
+        // check outcome as the source's sanctioned-screen
+        // state, or the shell refusal — each carrying the
+        // stage lines that prove the escalation happened.
+        if (bestDraft == null) {
+            gateLogin?.let { held ->
+                DiagnosticLog.record(
+                    "add from link",
+                    "gate outcome reached only after automatic escalation",
+                    outcomeLines().joinToString("\n") { it.render() }
+                )
+                return held
+            }
+            gateShellMessage?.let { message ->
+                return Outcome.Failed(
+                    message,
+                    stageLines = outcomeLines()
+                )
             }
         }
 
@@ -2292,10 +2374,20 @@ class LinkProber(
         laneVerified: Boolean = false,
         // v1.0.8.3: the self-heal redrive passes true so a
         // healed candidate is never healed twice.
-        healAttempted: Boolean = false
+        healAttempted: Boolean = false,
+        // v1.5.1 (item 3): the API-harvest proposer seeds the
+        // title its own listing leg already extracted from the
+        // site's payload. A synthesised API recipe carries no
+        // details-title field (the listing IS the title's
+        // source), so a blank seed made every harvest candidate
+        // fail the title leg no matter how well its chapters
+        // and text drove — the BOTI front-door failure. Other
+        // proposers keep the blank seed: their candidates must
+        // prove title extraction from the book page itself.
+        seedTitle: String = ""
     ): ScoredDrive {
         val source = DeclarativeSource(config, context)
-        val testBook = SourceBook(id = bookUrl, title = "")
+        val testBook = SourceBook(id = bookUrl, title = seedTitle)
         val fetched = runCatching { source.detailsAndChapters(testBook) }
             .recoverCatching { first ->
                 when {

@@ -136,14 +136,18 @@ class EscalatingPageFetcher(
     /** True once any render has been attempted through this fetcher. */
     val renderedAny: Boolean get() = rendered.get()
 
-    private fun inputs(): RenderInputs = RenderInputs(
-        purpose = purpose,
-        needsRendering = needsRendering(),
-        tier = gate.tier(),
-        userDriven = gate.userDriven(),
-        backgroundWork = gate.backgroundWork(),
-        masterEnabled = gate.masterEnabled()
-    )
+    private fun inputs(suppressed: Boolean = false): RenderInputs =
+        RenderInputs(
+            purpose = purpose,
+            needsRendering = needsRendering(),
+            tier = gate.tier(),
+            userDriven = gate.userDriven(),
+            // v1.5.1 (item 2): a suppressed fetch (the global
+            // search fan-out) reads as background work to the
+            // policy — static-only, never waiting on a render.
+            backgroundWork = gate.backgroundWork() || suppressed,
+            masterEnabled = gate.masterEnabled()
+        )
 
     override suspend fun get(
         url: String,
@@ -158,8 +162,10 @@ class EscalatingPageFetcher(
         // needed (solve action) and every other surface shows
         // as a plain failure with Retry. An endless spinner
         // is the one forbidden outcome.
+        val suppressed =
+            kotlinx.coroutines.currentCoroutineContext()[RenderSuppression.Key] != null
         val budgeted = kotlinx.coroutines.withTimeoutOrNull(budgetMs()) {
-            getEscalated(url, headers)
+            getEscalated(url, headers, suppressed)
         }
         return budgeted ?: AppResult.Err(
             AppError.ProviderDown(
@@ -172,9 +178,10 @@ class EscalatingPageFetcher(
 
     private suspend fun getEscalated(
         url: String,
-        headers: Map<String, String>
+        headers: Map<String, String>,
+        suppressed: Boolean = false
     ): AppResult<HostResponse> {
-        val mode = RenderPolicy.mode(inputs())
+        val mode = RenderPolicy.mode(inputs(suppressed))
         if (forceRender && mode != RenderMode.STATIC_ONLY) {
             return render(url)
         }
@@ -350,8 +357,27 @@ class EscalatingPageFetcher(
      * sees the payload it asked for.
      */
     private suspend fun render(url: String): AppResult<HostResponse> {
-        val result = renderSettled(url)
-        if (result !is AppResult.Ok) return result
+        // v1.5.1 (items 2 + 5): the containment memory. A
+        // source whose render already failed once (or which
+        // spent its attempt window) does NOT render again —
+        // its fetch goes to the WebView fetch bridge with the
+        // saved session. And a render that fails HERE earns
+        // the strike and one immediate bridge attempt before
+        // the failure is handed back, so a catalogue open
+        // lands on the bridge in the same tap instead of
+        // dead-ending on "never finished loading".
+        if (!RenderHealth.renderAllowed(sessionKey)) {
+            bridgeFetch(url)?.let { return it }
+        }
+        RenderHealth.noteAttempt(sessionKey)
+        val settled = renderSettled(url)
+        if (settled !is AppResult.Ok) {
+            RenderHealth.recordFailure(sessionKey)
+            bridgeFetch(url)?.let { return it }
+            return settled
+        }
+        RenderHealth.recordSuccess(sessionKey)
+        val result = settled
         val body = result.value.body
         // v1.3.4 (T4): the rendered road's page shape joins
         // the source's diagnostics too — for walled sources
@@ -454,17 +480,26 @@ class EscalatingPageFetcher(
     }
 
     /** Whether a rendered [body] actually contains the content
-     * its wait-for [selector] promised. A selector that cannot
-     * be run (or a body that cannot be parsed) is NOT evidence
-     * the wait failed — the page is accepted, exactly as
-     * before this check existed. */
+     * its wait-for [selector] promised. v1.5.1 (item 5,
+     * adopted steer): a matched node must carry something —
+     * non-empty text, an href of its own, or a book link
+     * inside it; an empty shell node that merely EXISTS (a
+     * placeholder the app shell rendered before its data
+     * arrived) is not the content the wait promised. A
+     * selector that cannot be run (or a body that cannot be
+     * parsed) is NOT evidence the wait failed — the page is
+     * accepted, exactly as before this check existed. */
     private suspend fun renderCarriesHint(
         body: String,
         url: String,
         selector: String
     ): Boolean = withContext(Dispatchers.Default) {
         runCatching {
-            Jsoup.parse(body, url).select(selector).isNotEmpty()
+            Jsoup.parse(body, url).select(selector).any { node ->
+                node.text().isNotBlank() ||
+                    node.attr("href").isNotBlank() ||
+                    node.select("a[href]").isNotEmpty()
+            }
         }.getOrDefault(true)
     }
 
@@ -476,4 +511,37 @@ class EscalatingPageFetcher(
      * retry" only when the retry could really render. */
     fun renderAvailable(): Boolean =
         RenderPolicy.mode(inputs()) != RenderMode.STATIC_ONLY
+
+    /** v1.5.1 (item 5): one bridge attempt for [url] through
+     * the rendered fetcher, paying the same rate budget a
+     * render pays. Only a bridge SUCCESS is returned — a
+     * bridge failure or absence leaves the caller's own
+     * verdict standing, never a second, vaguer error. */
+    private suspend fun bridgeFetch(
+        url: String
+    ): AppResult<HostResponse>? {
+        rateLimiter.awaitTurn()
+        val bridged = runCatching {
+            renderedFetcher.fetchViaBridge(url, sessionKey, permissions())
+        }.getOrNull() ?: return null
+        return bridged as? AppResult.Ok
+    }
+}
+
+/**
+ * v1.5.1 (item 2): a coroutine-context marker meaning "this
+ * fetch must never wait on the render tier". The global
+ * search fan-out wraps each source's search in it: a sick
+ * source (BrightNovel's never-settling render was the field
+ * case) then contributes its static answer or nothing inside
+ * its own strict timeout, and can no longer wedge the whole
+ * search behind a 30–75 s render budget. [EscalatingPageFetcher]
+ * reads the marker as background work for [RenderPolicy] —
+ * static-only, the same leash background work already had.
+ */
+object RenderSuppression : kotlin.coroutines.CoroutineContext.Element {
+    override val key: kotlin.coroutines.CoroutineContext.Key<RenderSuppression>
+        get() = Key
+
+    object Key : kotlin.coroutines.CoroutineContext.Key<RenderSuppression>
 }

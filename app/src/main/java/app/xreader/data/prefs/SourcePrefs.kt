@@ -48,7 +48,46 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
 
     suspend fun setContentVisibility(
         visibility: app.xreader.data.extension.ContentVisibility
-    ) = store.edit { it[KEY_CONTENT_VISIBILITY] = visibility.name }
+    ) = store.edit {
+        it[KEY_CONTENT_VISIBILITY] = visibility.name
+        // v1.5.1 (audit F5): a deliberate three-way choice (the
+        // Customise chips write through here) supersedes the quick
+        // toggle's remembered mode — the memory is cleared so a
+        // stale mode can never resurrect over a deliberate pick.
+        it.remove(KEY_CONTENT_VISIBILITY_PRE_TOGGLE)
+    }
+
+    /** v1.5.1 (audit F5): the mode the quick toggle stepped away
+     * from, or null when no toggle step is outstanding. */
+    val contentVisibilityPreToggle:
+        Flow<app.xreader.data.extension.ContentVisibility?> =
+        store.data.map { prefs ->
+            prefs[KEY_CONTENT_VISIBILITY_PRE_TOGGLE]?.let {
+                app.xreader.data.extension.ContentVisibility.fromName(it)
+            }
+        }
+
+    /**
+     * v1.5.1 (audit F5): ONE quick-toggle step, atomic — the
+     * current mode and the remembered mode are read and written
+     * in a single edit, so toggle → toggle restores the exact
+     * prior three-way mode (see AdultToggleLogic).
+     */
+    suspend fun toggleContentVisibility() = store.edit { prefs ->
+        val current = app.xreader.data.extension.ContentVisibility
+            .fromName(prefs[KEY_CONTENT_VISIBILITY])
+        val remembered = prefs[KEY_CONTENT_VISIBILITY_PRE_TOGGLE]?.let {
+            app.xreader.data.extension.ContentVisibility.fromName(it)
+        }
+        val (next, nextRemembered) =
+            app.xreader.data.extension.AdultToggleLogic.next(current, remembered)
+        prefs[KEY_CONTENT_VISIBILITY] = next.name
+        if (nextRemembered != null) {
+            prefs[KEY_CONTENT_VISIBILITY_PRE_TOGGLE] = nextRemembered.name
+        } else {
+            prefs.remove(KEY_CONTENT_VISIBILITY_PRE_TOGGLE)
+        }
+    }
 
     // ── Keiyoushi player kill switch (K6) ────────────────────
     //
@@ -293,6 +332,22 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         store.edit { it[KEY_STORED_REPAIR_DONE_FOR] = versionCode }
     }
 
+    // ── Update-time source migration (v1.5.1, item 1) ──────
+    // The user's rule: updating the app replaces the old
+    // learned sources with new ones — no duplicates. The
+    // migration re-derives every learned/link-added source
+    // with the current learner once per app version code
+    // (the same versioned-flag shape as the sweeps above);
+    // the flag is written only after the pass completes, so
+    // a process death mid-pass re-runs it on a later launch.
+
+    val sourceMigrationDoneForCode: Flow<Int> =
+        store.data.map { it[KEY_SOURCE_MIGRATION_DONE_FOR] ?: 0 }
+
+    suspend fun setSourceMigrationDoneForCode(versionCode: Int) {
+        store.edit { it[KEY_SOURCE_MIGRATION_DONE_FOR] = versionCode }
+    }
+
     val healNote: Flow<String?> = store.data.map { it[KEY_HEAL_NOTE] }
 
     suspend fun setHealNote(note: String?) {
@@ -417,6 +472,8 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         val KEY_BEST_PRIORITY = stringPreferencesKey("sources.best_priority")
         val KEY_CONTENT_VISIBILITY =
             stringPreferencesKey("sources.content_visibility")
+        val KEY_CONTENT_VISIBILITY_PRE_TOGGLE =
+            stringPreferencesKey("sources.content_visibility_pre_toggle")
         val KEY_KEIYOUSHI_PLAYER =
             booleanPreferencesKey("sources.keiyoushi_player_enabled")
         val KEY_PINNED_REPOS = stringPreferencesKey("sources.pinned_repos")
@@ -431,6 +488,8 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
             androidx.datastore.preferences.core.intPreferencesKey("heal.sweep_done_for_code")
         val KEY_STORED_REPAIR_DONE_FOR =
             androidx.datastore.preferences.core.intPreferencesKey("repair.stored_done_for_code")
+        val KEY_SOURCE_MIGRATION_DONE_FOR =
+            androidx.datastore.preferences.core.intPreferencesKey("source.migration_done_for_code")
         val KEY_HEAL_NOTE = stringPreferencesKey("heal.note")
         val KEY_BROWSER_VIEW = booleanPreferencesKey("sources.browser_view_enabled")
         val KEY_BROWSER_VIEW_NEEDED = stringPreferencesKey("sources.browser_view_needed")

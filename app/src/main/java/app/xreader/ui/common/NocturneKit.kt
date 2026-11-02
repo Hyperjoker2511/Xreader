@@ -27,6 +27,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -154,7 +155,13 @@ fun NocturneChip(
     if (onClick != null) {
         Surface(
             onClick = onClick,
-            modifier = modifier,
+            // v1.5.1 (UI audit F2): the chip's visual stays compact
+            // (~26dp) but the clickable variant reserves the M3
+            // minimum interactive size (48dp ≥ the 40dp floor), so
+            // every NocturneChip toggle — the 18+ toggle, Library's
+            // Filter & sort chip, the Keiyoushi language chip — is
+            // a proper touch target from this one kit change.
+            modifier = modifier.minimumInteractiveComponentSize(),
             shape = CircleShape,
             color = containerColor,
             contentColor = contentColor

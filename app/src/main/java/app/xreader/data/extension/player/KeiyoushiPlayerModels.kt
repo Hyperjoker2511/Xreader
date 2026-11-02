@@ -72,6 +72,19 @@ data class KeiyoushiPlayerRecord(
      * cookies an uninstall must clear. */
     val sourceHosts: List<String> = emptyList(),
     val languages: String = "",
+    /** v1.5.1 (item 6): the index content rating, stamped
+     * durably at install / catalogue fetch. Browse's content
+     * filter reads the rating through the manager — before
+     * this stamp existed it read through the in-memory
+     * catalogue cache, so after an app restart (cache cold,
+     * index not yet re-fetched) the rating read missed,
+     * failed closed to ADULT, and installed Ready sources
+     * vanished from Browse → Manga while the shelf (reading
+     * these durable records) still showed them Ready. The
+     * stamp makes the two surfaces read one truth. Null on
+     * records written before this field existed — the next
+     * catalogue fetch stamps them. */
+    val contentRatingName: String? = null,
     /** The InstalledExtension row mirroring this package. */
     val extensionRowId: Long = 0,
     val updatedAt: Long = 0,

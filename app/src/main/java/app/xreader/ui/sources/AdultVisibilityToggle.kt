@@ -11,28 +11,27 @@ import app.xreader.ui.common.NocturneChip
  * tap off"). It drives the SAME [ContentVisibility]
  * preference as Customise → Sources & repairs — one source
  * of truth, so the toggle and the three-way chips can never
- * disagree: ON shows everything, OFF hides 18+ (the
- * default). The full three-way control stays in Customise.
+ * disagree: ON shows everything, OFF hides per the mode.
+ * The full three-way control stays in Customise.
+ *
+ * v1.5.1 (full-app audit F5): the step itself is delegated to
+ * [onToggle] (SourcePrefs.toggleContentVisibility) — the old
+ * binary write (ON = SHOW_ALL, OFF = HIDE_ADULT) silently
+ * destroyed a "Hide Mixed and 18+" choice. The toggle now
+ * remembers the mode it stepped away from and restores it
+ * exactly on the step back (AdultToggleLogic).
  */
 @Composable
 fun AdultVisibilityToggle(
     visibility: ContentVisibility,
-    onSetVisibility: (ContentVisibility) -> Unit,
+    onToggle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val showing = visibility == ContentVisibility.SHOW_ALL
     NocturneChip(
         label = "18+",
         selected = showing,
-        onClick = {
-            onSetVisibility(
-                if (showing) {
-                    ContentVisibility.HIDE_ADULT
-                } else {
-                    ContentVisibility.SHOW_ALL
-                }
-            )
-        },
+        onClick = onToggle,
         modifier = modifier
     )
 }

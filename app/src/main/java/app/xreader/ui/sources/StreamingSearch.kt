@@ -21,11 +21,26 @@ import java.util.concurrent.atomic.AtomicInteger
  * a failure never cancels the others, and cancelling the run
  * cancels the whole fan-out.
  */
+/** v1.5.1 (item 2): one source exceeding its strict slice of
+ * the fan-out. It settles as that source's failure alone —
+ * the search completes with what the healthy sources gave. */
+class SearchSourceTimeoutException(
+    val timeoutMs: Long
+) : Exception("the source took too long to answer")
+
 object StreamingSearch {
+
+    /** v1.5.1 (item 2): the per-source slice. A source that
+     * hasn't answered inside it contributes nothing — on
+     * device, one sick source (a catalogue render that never
+     * settled) held its permit indefinitely and the whole
+     * all-sources search sat stuck behind it. */
+    const val DEFAULT_PER_ITEM_TIMEOUT_MS: Long = 20_000L
 
     suspend fun <T, R> run(
         items: List<T>,
         parallelism: Int = 5,
+        perItemTimeoutMs: Long = DEFAULT_PER_ITEM_TIMEOUT_MS,
         search: suspend (T) -> R,
         onResult: (T, Result<R>) -> Unit,
         onProgress: (done: Int, total: Int) -> Unit
@@ -41,7 +56,23 @@ object StreamingSearch {
                 async {
                     permits.withPermit {
                         val result = try {
-                            Result.success(search(item))
+                            val value = if (perItemTimeoutMs > 0) {
+                                kotlinx.coroutines.withTimeoutOrNull(
+                                    perItemTimeoutMs
+                                ) { search(item) }
+                            } else {
+                                search(item)
+                            }
+                            if (value == null && perItemTimeoutMs > 0) {
+                                Result.failure(
+                                    SearchSourceTimeoutException(
+                                        perItemTimeoutMs
+                                    )
+                                )
+                            } else {
+                                @Suppress("UNCHECKED_CAST")
+                                Result.success(value as R)
+                            }
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (failure: Throwable) {

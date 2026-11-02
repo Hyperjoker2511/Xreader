@@ -150,7 +150,11 @@ class SourceDedupe(
     private val bookDao: BookDao,
     private val sourceMapDao: ChapterSourceMapDao,
     private val store: ExtensionStore,
-    private val service: ExtensionService
+    private val service: ExtensionService,
+    /** v1.5.1 (item 1, ChatGPT sift): the session store, when
+     * wired — a superseded row's still-valid session moves
+     * to the survivor instead of dying with the row. */
+    private val sessionStore: SessionStore? = null
 ) {
 
     /** One removed row, for the audit log. */
@@ -211,6 +215,34 @@ class SourceDedupe(
                 )
                 rebound++
             }
+            // v1.5.1 (item 1, ChatGPT sift): user-owned
+            // per-source state crosses the supersede — the
+            // switch state (a source the user turned OFF
+            // stays off under its survivor) and a still-valid
+            // session association (the survivor inherits the
+            // removed row's saved session, so a signed-in
+            // learned copy's login survives its merge).
+            if (!removedRow.enabled && survivorRow.enabled) {
+                extensionDao.update(
+                    survivorRow.copy(enabled = false)
+                )
+            }
+            val sessions = sessionStore
+            if (sessions != null) {
+                val fromKey = ExtensionHttpClient
+                    .sessionKeyFor(removedRow.id)
+                if (runCatching { sessions.has(fromKey) }
+                        .getOrDefault(false)
+                ) {
+                    runCatching {
+                        sessions.copyTo(
+                            fromKey,
+                            ExtensionHttpClient
+                                .sessionKeyFor(survivorRow.id)
+                        )
+                    }
+                }
+            }
             sourceMapDao.deleteByAltExtension(removedRow.id)
             extensionDao.delete(removedRow)
             service.invalidate(removedRow.id)
@@ -246,18 +278,36 @@ class SourceDedupe(
                 "Added by you"
             else -> repo?.name ?: "Unknown repo"
         }
-        val configs = if (
+        val rawDefinition = if (
             row.kind == app.xreader.data.db.ExtensionKind.DECLARATIVE ||
             row.kind == app.xreader.data.db.ExtensionKind.LIVE
         ) {
             store.readText(store.definitionFile(row.packageId))
-                ?.let { raw ->
-                    runCatching {
-                        DeclarativeFingerprints.decode(raw)
-                    }.getOrNull()
-                } ?: emptyList()
         } else {
-            emptyList()
+            null
+        }
+        val configs = rawDefinition?.let { raw ->
+            runCatching {
+                DeclarativeFingerprints.decode(raw)
+            }.getOrNull()
+        } ?: emptyList()
+        // v1.5.1 (item 1): a LIVE row's definition is a
+        // LiveSourceSpec, not a config list — the declarative
+        // decode above reads it as nothing, so a learned Live
+        // source had NO canonical domain here and could never
+        // be grouped (the field case: the learned chikari.moe
+        // row survived every dedupe pass while the bundled
+        // Chikari stood beside it). The spec's own baseUrl
+        // gives the row its domain.
+        val liveBaseUrl = if (
+            row.kind == app.xreader.data.db.ExtensionKind.LIVE &&
+            configs.isEmpty()
+        ) {
+            rawDefinition?.let { raw ->
+                runCatching { LiveSourceSpec.decode(raw) }.getOrNull()
+            }?.baseUrl
+        } else {
+            null
         }
         val first = configs.firstOrNull()
         return SourceDedupePlanner.Row(
@@ -266,7 +316,7 @@ class SourceDedupe(
             displayName = row.displayName,
             origin = origin,
             canonicalDomain = SourceDedupePlanner.canonicalDomain(
-                first?.baseUrl
+                first?.baseUrl ?: liveBaseUrl
             ),
             sourceIds = configs.map { it.id }.ifEmpty {
                 row.sourceIds.split(",").map { it.trim() }
@@ -284,9 +334,13 @@ class SourceDedupe(
             // declarative/live rows can be unreadable.
             enabled = row.enabled,
             readable = when (row.kind) {
-                app.xreader.data.db.ExtensionKind.DECLARATIVE,
-                app.xreader.data.db.ExtensionKind.LIVE ->
+                app.xreader.data.db.ExtensionKind.DECLARATIVE ->
                     configs.isNotEmpty()
+                // v1.5.1 (item 1): a Live row reads through
+                // its spec — a decodable spec is a readable
+                // row, whatever the config decode made of it.
+                app.xreader.data.db.ExtensionKind.LIVE ->
+                    configs.isNotEmpty() || liveBaseUrl != null
                 else -> true
             }
         )

@@ -4,7 +4,6 @@ import app.xreader.core.error.AppResult
 import app.xreader.data.db.BookDao
 import app.xreader.data.db.SourceType
 import app.xreader.data.download.DownloadController
-import app.xreader.data.extension.SourceBookSync
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
@@ -32,9 +31,13 @@ import kotlinx.coroutines.sync.withPermit
 class LibraryRefresher(
     private val bookDao: BookDao,
     private val bookMetaPrefs: BookMetaPrefs,
-    private val sourceBookSync: SourceBookSync,
+    // v1.5.1 (item 2, Library wedge exhibit): the per-book
+    // refresh as a seam — production wires SourceBookSync, and
+    // every call through it is time-bounded below.
+    private val refreshBook: suspend (app.xreader.data.db.Book) -> AppResult<app.xreader.data.db.Book>,
     private val libraryPrefs: LibraryPrefs,
-    private val downloadController: DownloadController
+    private val downloadController: DownloadController,
+    private val perBookTimeoutMs: Long = PER_BOOK_TIMEOUT_MS
 ) {
     data class Outcome(
         val booksChecked: Int = 0,
@@ -109,8 +112,20 @@ class LibraryRefresher(
         if (before.lastSeenChapterCount == 0) {
             bookMetaPrefs.set(book.id, before.copy(lastSeenChapterCount = seen))
         }
-        val result = runCatching { sourceBookSync.refresh(book) }
-            .getOrElse { null }
+        // v1.5.1 (item 2, Library wedge exhibit 2026-11-02
+        // 17:47): a per-book refresh used to run UNBOUNDED —
+        // one book whose source never answered (an extension
+        // call that never returned) held its whole source
+        // group, refreshAll's awaitAll, and the Library's
+        // update state hostage forever: the cover spinner
+        // never terminated and no surface ever got its answer
+        // back. Every per-book refresh is now hard-bounded; a
+        // timeout is an ordinary per-book failure, the group
+        // moves on to the next book, and the sweep always
+        // terminates with an honest outcome.
+        val result = kotlinx.coroutines.withTimeoutOrNull(perBookTimeoutMs) {
+            runCatching { refreshBook(book) }.getOrElse { null }
+        }
         if (result is AppResult.Ok) {
             val fresh = bookDao.getById(book.id)
             val total = fresh?.totalChapters ?: book.totalChapters
@@ -134,6 +149,13 @@ class LibraryRefresher(
         /** Sources refreshed in parallel (audit finding 6's
          * "small bounded concurrency (2–3)"). */
         const val MAX_PARALLEL_SOURCES = 3
+
+        /** v1.5.1: one book's refresh may take at most this
+         * long before it counts as that book's failure and
+         * the sweep moves on (see refreshOne). Generous next
+         * to the fetch stack's own budgets; a hang is not a
+         * slow book, and a slow book is not a hang. */
+        const val PER_BOOK_TIMEOUT_MS = 120_000L
     }
 }
 

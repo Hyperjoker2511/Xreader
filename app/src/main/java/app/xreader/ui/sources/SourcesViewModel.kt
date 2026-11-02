@@ -341,8 +341,17 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         // Manga programme (M1): each installed source's
         // content rating, recomputed when the installed set
         // changes — the Explore list's hide/badge input.
+        // v1.5.1 (item 6): the player's package states are a
+        // second trigger — a restore settling or an install
+        // landing changes what the rating read can answer
+        // (the durable stamp), and the snapshot must not stay
+        // frozen at the fail-closed value it computed while
+        // the player was still starting.
         viewModelScope.launch {
-            container.database.installedExtensionDao().observeAll()
+            combine(
+                container.database.installedExtensionDao().observeAll(),
+                container.keiyoushiPlayerManager.packageStates
+            ) { exts, _ -> exts }
                 .collect { exts ->
                     _sourceRatings.value = computeSourceRatings(exts)
                 }
@@ -1247,6 +1256,14 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
     ) {
         viewModelScope.launch {
             container.sourcePrefs.setContentVisibility(visibility)
+        }
+    }
+
+    /** v1.5.1 (audit F5): one 18+ quick-toggle step — restores
+     * the exact remembered three-way mode on the step back. */
+    fun toggleAdultVisibility() {
+        viewModelScope.launch {
+            container.sourcePrefs.toggleContentVisibility()
         }
     }
 

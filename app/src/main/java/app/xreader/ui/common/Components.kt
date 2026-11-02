@@ -183,8 +183,12 @@ fun GlassSheetActionRow(
     }
     GlassCard(
         modifier = modifier.fillMaxWidth(),
-        onClick = if (enabled) onClick else ({}),
-        bouncePress = true,
+        // v1.5.1 (UI audit F8): a disabled row passes NO click at
+        // all — GlassCard then renders its plain, interaction-free
+        // surface (no ripple, no bounce) instead of a live-feeling
+        // card whose onClick merely swallowed the tap.
+        onClick = if (enabled) onClick else null,
+        bouncePress = enabled,
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Row(
@@ -194,7 +198,9 @@ fun GlassSheetActionRow(
             Icon(
                 icon,
                 contentDescription = null,
-                tint = if (destructive) {
+                tint = if (!enabled) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else if (destructive) {
                     errorTextColor()
                 } else {
                     MaterialTheme.colorScheme.primary

@@ -5,6 +5,7 @@ import app.xreader.core.error.AppResult
 import app.xreader.data.db.InstalledExtension
 import app.xreader.data.db.InstalledExtensionDao
 import app.xreader.data.db.TrustState
+import app.xreader.data.extension.ContentRating
 import app.xreader.data.extension.DiagnosticLog
 import app.xreader.data.extension.ExtensionPermissions
 import app.xreader.data.extension.ExtensionPermissions.Companion.encode
@@ -222,8 +223,52 @@ class KeiyoushiPlayerManager(
                 )
             )
         val parsed = KeiyoushiIndex.parseCatalog(body)
-        if (parsed is AppResult.Ok) catalogCache = parsed.value
+        if (parsed is AppResult.Ok) {
+            catalogCache = parsed.value
+            // v1.5.1 (item 6): stamp every known record with
+            // its index rating while the catalogue is in hand,
+            // so the rating survives restarts on the record
+            // itself (see KeiyoushiPlayerRecord.contentRatingName).
+            stampRatingsLocked(parsed.value)
+        }
         return parsed
+    }
+
+    /** v1.5.1 (item 6): the content rating for one package,
+     * answered WITHOUT any network fetch — the record's
+     * durable stamp first, the in-memory catalogue second,
+     * null when neither knows. (The pre-1.5.1 provider called
+     * [catalog] from inside source lookups: a cold cache
+     * turned every lookup into a full-index fetch, and a
+     * miss failed the source closed to ADULT, hiding
+     * installed Ready sources from Browse.) */
+    fun ratingOf(packageName: String): ContentRating? {
+        _records.value[packageName]?.contentRatingName?.let { name ->
+            return runCatching { ContentRating.valueOf(name) }
+                .getOrNull()
+        }
+        return catalogCache?.packages
+            ?.firstOrNull { it.packageName == packageName }?.rating
+    }
+
+    /** Persist the catalogue's ratings onto the records.
+     * Caller holds no lock; takes [mutex]'s sibling path via
+     * the same publish plumbing the state machine uses —
+     * records only ever move through [publishRecordLocked],
+     * which the install flows also call under [mutex]; a
+     * racing stamp writes the same value the install flow
+     * would, so no extra lock is taken here. */
+    private fun stampRatingsLocked(catalog: KeiyoushiIndex.Catalog) {
+        val byPackage = catalog.packages.associateBy { it.packageName }
+        for (record in _records.value.values) {
+            val rating = byPackage[record.packageName]?.rating
+                ?: continue
+            if (record.contentRatingName != rating.name) {
+                publishRecordLocked(
+                    record.copy(contentRatingName = rating.name)
+                )
+            }
+        }
     }
 
     /** Compare the catalogue against installed records and
@@ -331,7 +376,11 @@ class KeiyoushiPlayerManager(
             record = record.copy(
                 displayName = pkg.name,
                 indexVersionCode = pkg.versionCode,
-                indexVersionName = pkg.versionName
+                indexVersionName = pkg.versionName,
+                // v1.5.1 (item 6): the rating stamp lands with
+                // the install, before any load — Browse never
+                // has to guess this package's rating.
+                contentRatingName = pkg.rating.name
             )
             publishRecordLocked(record)
             record

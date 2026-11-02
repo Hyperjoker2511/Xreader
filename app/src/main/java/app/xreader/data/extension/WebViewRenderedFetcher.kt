@@ -9,15 +9,19 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.View
 import android.webkit.CookieManager
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import app.xreader.core.error.AppError
 import app.xreader.core.error.AppResult
 import app.xreader.data.prefs.PerfTier
 import app.xreader.extensionapi.HostResponse
+import java.io.ByteArrayInputStream
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -191,6 +195,9 @@ class WebViewRenderedFetcher(
     ): RenderOutcome {
         cancelScheduledDestroy()
         val view = webView ?: createWebView().also { webView = it }
+        // Hoisted so the finally can see it (v1.5.1 item 2:
+        // a timed-out view is destroyed, not reused).
+        var timedOut = false
         try {
             seedCookies(session)
             // v1.5.0 (steer A4): the session's captured UA
@@ -265,6 +272,36 @@ class WebViewRenderedFetcher(
                     }
                 }
 
+                // v1.5.1 (item 5): known ad / tracker
+                // sub-resources are refused an empty response
+                // — their scripts and pixels otherwise keep
+                // the page's network busy long after the
+                // catalogue arrived, delaying the settle and
+                // churning in the background after a timeout.
+                // Main-frame loads are never intercepted.
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): WebResourceResponse? = interceptAds(request)
+
+                // v1.5.1 (item 2, adopted steer): if the
+                // renderer process dies, the view is dead
+                // weight — destroy the instance, fail THIS
+                // fetch honestly (the poll loop sees the
+                // error and settles), and tell the platform
+                // we handled it. A dead renderer must never
+                // take the app with it.
+                override fun onRenderProcessGone(
+                    view: WebView?,
+                    detail: RenderProcessGoneDetail?
+                ): Boolean {
+                    if (loadError == null) {
+                        loadError = "the browser view stopped working"
+                    }
+                    destroyWebViewSoon()
+                    return true
+                }
+
                 override fun onReceivedError(
                     view: WebView?,
                     request: WebResourceRequest?,
@@ -290,7 +327,6 @@ class WebViewRenderedFetcher(
             view.loadUrl(url)
             val samples = mutableListOf<RenderSettleSample>()
             val deadline = SystemClock.uptimeMillis() + timeoutMs
-            var timedOut = false
             var expanderClicked = false
             while (true) {
                 delayOnMain(RenderSettle.POLL_INTERVAL_MS)
@@ -329,6 +365,18 @@ class WebViewRenderedFetcher(
                     break
                 }
             }
+            // v1.5.1 (item 2): a timed-out page STOPS loading
+            // here. Before this, the loop simply stopped
+            // watching: the shared view kept pulling the
+            // page's sub-resources in the background (the
+            // uplink in the field screenshots), and the next
+            // render inherited a still-busy view — the churn
+            // that lagged, then froze, the whole app. The DOM
+            // already built stays readable for the snapshot
+            // below; the network does not continue.
+            if (timedOut) {
+                runCatching { view.stopLoading() }
+            }
             var html: String? = null
             var pageError = loadError
             if (loadError == null && !blocked) {
@@ -350,8 +398,22 @@ class WebViewRenderedFetcher(
                 timedOut = timedOut,
                 error = pageError
             )
+        } catch (e: CancellationException) {
+            // v1.5.1 (item 2): the caller left (screen closed,
+            // search cancelled, budget expired) — the render
+            // dies with its job and the view is destroyed, not
+            // left loading behind the user's back.
+            destroyWebViewSoon()
+            throw e
         } finally {
-            scheduleDestroy()
+            // v1.5.1 (item 2): a timed-out view is destroyed,
+            // not reused — a page that never settled may be
+            // wedged, and the next render deserves a clean one.
+            if (timedOut) {
+                destroyWebViewSoon()
+            } else {
+                scheduleDestroy()
+            }
         }
     }
 
@@ -432,6 +494,189 @@ class WebViewRenderedFetcher(
                 userAgent
             )
         }
+    }
+
+    /** v1.5.1 (item 5): refuse a sub-resource the extraction
+     * never needs — a known ad/tracker host, or a font /
+     * media payload (the catalogue's text and structure are
+     * the cargo; fonts and media only keep the network and
+     * the load event busy). Main-frame requests and the
+     * page's own content hosts are never touched. */
+    private fun interceptAds(
+        request: WebResourceRequest?
+    ): WebResourceResponse? {
+        if (request == null || request.isForMainFrame) return null
+        val host = request.url?.host
+        val path = request.url?.path?.lowercase().orEmpty()
+        val shedByType = SHED_EXTENSIONS.any { path.endsWith(it) }
+        if (!shedByType &&
+            (host == null || !AdBlockHosts.isBlocked(host))
+        ) {
+            return null
+        }
+        return WebResourceResponse(
+            "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
+        )
+    }
+
+    /**
+     * v1.5.1 (item 5): the fetch bridge — see
+     * [RenderedPageFetcher.fetchViaBridge]. The view loads
+     * the site's origin once (its own page, with the saved
+     * session's cookies), then the page context fetches the
+     * target URL with credentials and hands the body back.
+     * No page is built for the target and nothing renders:
+     * a source whose render struck out still answers its
+     * catalogue through the session that already passed
+     * the site's check.
+     */
+    override suspend fun fetchViaBridge(
+        url: String,
+        sessionKey: String,
+        permissions: ExtensionPermissions
+    ): AppResult<HostResponse>? {
+        val host = CookieParsing.hostOf(url).orEmpty()
+        if (host.isEmpty() || !permissions.allows(host)) return null
+        val session = runCatching { sessionStore.load(sessionKey) }
+            .getOrNull()
+        return mutex.withLock {
+            val text = withTimeoutOrNull(BRIDGE_TIMEOUT_MS) {
+                withContext(Dispatchers.Main) {
+                    bridgeOnMain(url, session)
+                }
+            }
+            when {
+                text == null -> null
+                text == BRIDGE_ERROR -> AppResult.Err(
+                    AppError.ProviderDown(
+                        "browser view",
+                        retryable = true,
+                        detail = "the browser view couldn't fetch that page"
+                    )
+                )
+                else -> {
+                    val sep = text.indexOf('')
+                    if (sep <= 0) {
+                        null
+                    } else {
+                        harvestCookies(sessionKey, url, null)
+                        AppResult.Ok(
+                            HostResponse(
+                                status = text.substring(0, sep)
+                                    .toIntOrNull() ?: 200,
+                                body = text.substring(sep + 1),
+                                headers = emptyMap(),
+                                finalUrl = url
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /** Runs entirely on the main thread. Returns the bridge
+     * payload ("<status>\u0001<body>"), [BRIDGE_ERROR] when
+     * the page's fetch failed, or null when the bridge
+     * couldn't run (origin never committed, no answer in
+     * time, oversized body) — null keeps the caller's own
+     * verdict standing. */
+    private suspend fun bridgeOnMain(
+        url: String,
+        session: SessionData?
+    ): String? {
+        cancelScheduledDestroy()
+        val view = webView ?: createWebView().also { webView = it }
+        try {
+            seedCookies(session)
+            val ua = session?.userAgent?.takeIf { it.isNotBlank() }
+                ?: PinnedUserAgent.current()
+            ua?.let { view.settings.userAgentString = it }
+            val origin = originOf(url) ?: return null
+            var rendererGone = false
+            if (view.url == null || originOf(view.url!!) != origin) {
+                var committed = false
+                view.webViewClient = object : WebViewClient() {
+                    // v1.5.1 (item 2): a dead renderer ends
+                    // the bridge attempt (the caller keeps its
+                    // own verdict) and the instance is
+                    // destroyed — never left for the next call.
+                    override fun onRenderProcessGone(
+                        view: WebView?,
+                        detail: RenderProcessGoneDetail?
+                    ): Boolean {
+                        rendererGone = true
+                        destroyWebViewSoon()
+                        return true
+                    }
+
+                    override fun onPageCommitVisible(
+                        view: WebView?,
+                        url: String?
+                    ) {
+                        committed = true
+                    }
+
+                    override fun onPageFinished(
+                        view: WebView?,
+                        url: String?
+                    ) {
+                        committed = true
+                    }
+
+                    override fun shouldInterceptRequest(
+                        view: WebView?,
+                        request: WebResourceRequest?
+                    ): WebResourceResponse? = interceptAds(request)
+                }
+                view.loadUrl(origin)
+                val waitDeadline = SystemClock.uptimeMillis() +
+                    BRIDGE_ORIGIN_WAIT_MS
+                while (!committed && !rendererGone &&
+                    SystemClock.uptimeMillis() < waitDeadline
+                ) {
+                    delayOnMain(200)
+                }
+                if (!committed) return null
+            }
+            val urlLiteral = org.json.JSONObject.quote(url)
+            val kick = "(function(){window.__xrBridge=null;" +
+                "fetch($urlLiteral,{credentials:'include'})" +
+                ".then(function(r){return r.text().then(" +
+                "function(t){window.__xrBridge=r.status+" +
+                "'\\u0001'+t;});})" +
+                ".catch(function(e){window.__xrBridge=" +
+                "'$BRIDGE_ERROR';});})()"
+            evaluate(view, kick)
+            val deadline = SystemClock.uptimeMillis() +
+                BRIDGE_FETCH_WAIT_MS
+            while (!rendererGone &&
+                SystemClock.uptimeMillis() < deadline
+            ) {
+                delayOnMain(250)
+                val decoded = decodeJsString(
+                    evaluate(view, "window.__xrBridge")
+                ) ?: continue
+                if (decoded.length > BRIDGE_MAX_CHARS) return null
+                return decoded
+            }
+            return null
+        } catch (e: CancellationException) {
+            destroyWebViewSoon()
+            throw e
+        } finally {
+            scheduleDestroy()
+        }
+    }
+
+    /** scheme://host[:port]/ for a URL, or null. */
+    private fun originOf(url: String): String? {
+        val uri = runCatching { java.net.URI(url) }.getOrNull()
+            ?: return null
+        val scheme = uri.scheme ?: return null
+        val host = uri.host ?: return null
+        val port = if (uri.port > 0) ":${uri.port}" else ""
+        return "$scheme://$host$port/"
     }
 
     private suspend fun samplePage(
@@ -591,6 +836,29 @@ class WebViewRenderedFetcher(
     private companion object {
         /** Slack over the settle budget for main-thread scheduling. */
         const val MAIN_SLACK_MS: Long = 15_000L
+
+        /** v1.5.1 (item 5): the fetch bridge's budgets — the
+         * whole bridge answers well inside one render's. */
+        const val BRIDGE_TIMEOUT_MS: Long = 30_000L
+        const val BRIDGE_ORIGIN_WAIT_MS: Long = 10_000L
+        const val BRIDGE_FETCH_WAIT_MS: Long = 20_000L
+
+        /** A bridge body past this size is refused (the
+         * caller keeps its render verdict) — evaluateJavascript
+         * string returns are not a bulk channel. */
+        const val BRIDGE_MAX_CHARS: Int = 4_000_000
+
+        /** The page-context fetch's failure marker. */
+        const val BRIDGE_ERROR: String = "ERR"
+
+        /** v1.5.1 (item 5): payload types an extraction
+         * render sheds — fonts and media. (Images are
+         * already blocked by the view's own settings.) */
+        val SHED_EXTENSIONS: List<String> = listOf(
+            ".woff", ".woff2", ".ttf", ".otf", ".eot",
+            ".mp4", ".webm", ".mov", ".m4v", ".mp3", ".m4a",
+            ".ogg", ".wav", ".flac", ".avi", ".mkv"
+        )
 
         /** v1.5.0 (A2): the harvest observer — wraps the
          * page's fetch and XMLHttpRequest, recording each

@@ -552,7 +552,28 @@ class SourceCatalogViewModel(
         val current = handle ?: return
         _state.value = _state.value.copy(openingBookId = ref.id)
         viewModelScope.launch {
-            when (val result = container.sourceBookSync.openBook(current, ref)) {
+            // v1.5.1 (item 7): a hard bound on the open. On
+            // device, tapping a book in a Keiyoushi catalogue
+            // froze the app MID-NAVIGATION (catalogue and book
+            // page composited, input dead, force-stop needed):
+            // work the tap triggered on the source path could
+            // block without bound while the transition waited
+            // on it. The open now answers inside the bound —
+            // the book, or an honest failure the user can back
+            // out of — never an endless transition.
+            val result = kotlinx.coroutines.withTimeoutOrNull(
+                OPEN_BOOK_TIMEOUT_MS
+            ) {
+                container.sourceBookSync.openBook(current, ref)
+            }
+            when (result) {
+                null -> {
+                    _state.value = _state.value.copy(openingBookId = null)
+                    _messages.tryEmit(
+                        "That book took too long to open — " +
+                            "check your connection and try again."
+                    )
+                }
                 is AppResult.Err -> {
                     _state.value = _state.value.copy(openingBookId = null)
                     _messages.tryEmit(ErrorText.displayText(result.error))
@@ -588,6 +609,11 @@ class SourceCatalogViewModel(
          * whose pages never repeat and never end — 50 pages of
          * catalogue is beyond any real browsing session. */
         const val MAX_CATALOG_PAGE = 50
+
+        /** v1.5.1 (item 7): the book-open bound — generous for
+         * a slow source's details fetch, finite so a wedged
+         * source path can never hold a navigation hostage. */
+        const val OPEN_BOOK_TIMEOUT_MS = 30_000L
 
         fun factory(
             container: AppContainer,

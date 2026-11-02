@@ -239,6 +239,10 @@ object ReaderImageDecode {
             ImageRequest.Builder(context)
                 .data(model)
                 .size(Size(Dimension.Pixels(MAX_WIDTH_PX), Dimension.Undefined))
+                // v1.5.1 (item 6 rider): the same tall-strip
+                // guard as the scroll reader — a paged strip
+                // decoded whole hits the same texture limit.
+                .transformations(TallStripGuardTransformation)
                 .build()
         }
 }

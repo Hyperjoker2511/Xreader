@@ -113,6 +113,34 @@ enum class ContentVisibility {
 }
 
 /**
+ * v1.5.1 (full-app audit F5): the 18+ QUICK TOGGLE's step logic,
+ * pure. The toggle is a two-state control over a THREE-state
+ * preference; the old binary mapping (ON = SHOW_ALL, OFF =
+ * HIDE_ADULT) silently destroyed a user's "Hide Mixed and 18+"
+ * choice — tap ON, tap OFF, and the strictest mode was gone.
+ *
+ * The rule: stepping ON remembers the exact mode it came from;
+ * stepping OFF returns to that remembered mode (falling back to
+ * the DEFAULT only when nothing was remembered — e.g. the mode
+ * was set to SHOW_ALL in Customise, which clears the memory).
+ * Toggle → toggle therefore restores the EXACT prior mode from
+ * every starting state.
+ */
+object AdultToggleLogic {
+
+    /** One toggle step: returns (newMode, newRememberedMode). */
+    fun next(
+        current: ContentVisibility,
+        remembered: ContentVisibility?
+    ): Pair<ContentVisibility, ContentVisibility?> =
+        if (current == ContentVisibility.SHOW_ALL) {
+            (remembered ?: ContentVisibility.DEFAULT) to null
+        } else {
+            ContentVisibility.SHOW_ALL to current
+        }
+}
+
+/**
  * The rating rules, pure: does this preference list a source
  * with this rating, and what badge does a listed source wear.
  * Every list/search seam (Explore, global search, repo

@@ -237,6 +237,52 @@ object MangaDecode {
         }
 }
 
+/**
+ * v1.5.1 (item 6 rider): the tall-strip safeguard. A webtoon
+ * "page" can be one strip many thousands of pixels tall;
+ * decoded whole it exceeds GPU texture limits on ordinary
+ * phones (the image renders BLACK) and can OOM the decode —
+ * the reader black-screen class. The hotfix guard caps the
+ * decoded height at [MAX_HEIGHT_PX] (aspect preserved, the
+ * whole strip stays visible, slightly softer); full tiled
+ * decoding is feature-era work, and [sliceBounds] is the
+ * chunk math it will use. Pure, so the table is testable.
+ */
+object TallStripPolicy {
+
+    const val MAX_HEIGHT_PX: Int = 3_072
+
+    fun needsGuard(heightPx: Int): Boolean =
+        heightPx > MAX_HEIGHT_PX
+
+    fun guardedHeight(heightPx: Int): Int =
+        minOf(heightPx, MAX_HEIGHT_PX)
+
+    fun guardedWidth(widthPx: Int, heightPx: Int): Int {
+        if (!needsGuard(heightPx) || heightPx <= 0) return widthPx
+        return (widthPx.toLong() * MAX_HEIGHT_PX / heightPx)
+            .toInt().coerceAtLeast(1)
+    }
+
+    /** [top, bottom) chunk bounds covering [heightPx] in
+     * slices of at most [slicePx] — the tiler's future map,
+     * pinned now so the guard and the tiler agree. */
+    fun sliceBounds(
+        heightPx: Int,
+        slicePx: Int = MAX_HEIGHT_PX
+    ): List<IntRange> {
+        if (heightPx <= 0 || slicePx <= 0) return emptyList()
+        val bounds = mutableListOf<IntRange>()
+        var top = 0
+        while (top < heightPx) {
+            val bottom = minOf(heightPx, top + slicePx)
+            bounds += top until bottom
+            top = bottom
+        }
+        return bounds
+    }
+}
+
 // ── v1.5.0 (Part C — the Komikku transplant) ────────────────
 
 /**

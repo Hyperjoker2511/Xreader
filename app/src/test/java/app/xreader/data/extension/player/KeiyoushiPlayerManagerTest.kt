@@ -4,6 +4,7 @@ import app.xreader.core.error.AppResult
 import app.xreader.data.db.InstalledExtension
 import app.xreader.data.db.InstalledExtensionDao
 import app.xreader.data.db.TrustState
+import app.xreader.data.extension.ContentRating
 import app.xreader.data.extension.ExtensionPermissions
 import app.xreader.data.extension.ExtensionStore
 import app.xreader.data.extension.Hashes
@@ -140,6 +141,52 @@ class KeiyoushiPlayerManagerTest {
         assertTrue(done is AppResult.Ok)
         (done as AppResult.Ok).value
     }
+
+    // ── v1.5.1 (item 6): the durable rating stamp ──────────
+    // The v1.5.0 field bug: Browse → Manga hid installed
+    // Ready sources after a restart because the rating read
+    // went through the in-memory catalogue (cold after a
+    // restart → miss → fail-closed ADULT → hidden under the
+    // default preference), while the shelf read the durable
+    // records and said Ready. The stamp puts the rating ON
+    // the record; ratingOf answers without any fetch.
+
+    @Test
+    fun `install stamps the rating and ratingOf answers with no catalogue`() =
+        runBlocking {
+            installV1()
+            val stored = recordStore.records.first { it.packageName == pkg }
+            assertEquals("SAFE", stored.contentRatingName)
+            // The catalogue is gone (a restart's cold cache):
+            // the rating still answers, from the record.
+            transport.bodies.clear()
+            assertEquals(ContentRating.SAFE, manager.ratingOf(pkg))
+        }
+
+    @Test
+    fun `a legacy record without a stamp is stamped by the next catalogue fetch`() =
+        runBlocking {
+            recordStore.records = listOf(
+                KeiyoushiPlayerRecord(
+                    packageName = pkg,
+                    displayName = "Fake Panels",
+                    status = KeiyoushiExtStatus.READY,
+                    installedVersionCode = 106005,
+                    installedVersionName = "1.6.5"
+                )
+            )
+            val fresh = newManager()
+            fresh.restoreInstalled()
+            assertEquals(null, fresh.ratingOf(pkg))
+            val catalog = fresh.catalog()
+            assertTrue(catalog is AppResult.Ok)
+            assertEquals(ContentRating.SAFE, fresh.ratingOf(pkg))
+            assertEquals(
+                "SAFE",
+                recordStore.records.first { it.packageName == pkg }
+                    .contentRatingName
+            )
+        }
 
     @Test
     fun `consent comes before any load`() = runBlocking {

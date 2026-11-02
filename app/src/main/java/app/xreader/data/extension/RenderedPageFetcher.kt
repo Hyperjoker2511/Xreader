@@ -29,6 +29,105 @@ interface RenderedPageFetcher {
         permissions: ExtensionPermissions,
         waitForSelector: String? = null
     ): AppResult<HostResponse>
+
+    /**
+     * v1.5.1 (item 5): the WebView FETCH BRIDGE — fetch [url]
+     * through the browser view's own network stack (a page-
+     * context `fetch` with the saved session's cookies), for
+     * sources whose full render already failed once: the
+     * session answers, no page is built, nothing renders.
+     * Returns null when this fetcher has no bridge (test
+     * fakes, or the bridge couldn't run) — the caller then
+     * keeps its render verdict instead of a bridge guess.
+     */
+    suspend fun fetchViaBridge(
+        url: String,
+        sessionKey: String,
+        permissions: ExtensionPermissions
+    ): AppResult<HostResponse>? = null
+}
+
+/**
+ * v1.5.1 (item 5): the well-known ad / tracker hosts whose
+ * sub-resource loads are refused during catalogue renders.
+ * A page's own content hosts are never on this list — these
+ * are the third-party networks whose scripts and pixels keep
+ * a page's network (and its load event) busy long after the
+ * catalogue itself arrived, which on device delayed the
+ * settle and kept a timed-out page churning in the
+ * background. Suffix match on the host (a listed parent
+ * covers its subdomains); main-frame navigations are never
+ * intercepted, only sub-resources.
+ */
+object AdBlockHosts {
+
+    private val BLOCKED_SUFFIXES = listOf(
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "google-analytics.com",
+        "googletagmanager.com",
+        "googletagservices.com",
+        "amazon-adsystem.com",
+        "adnxs.com",
+        "rubiconproject.com",
+        "pubmatic.com",
+        "openx.net",
+        "casalemedia.com",
+        "contextweb.com",
+        "smartadserver.com",
+        "taboola.com",
+        "outbrain.com",
+        "mgid.com",
+        "popads.net",
+        "popcash.net",
+        "propellerads.com",
+        "exoclick.com",
+        "juicyads.com",
+        "trafficjunky.com",
+        "adsterra.com",
+        "hilltopads.net",
+        "monetag.com",
+        "onclickads.net",
+        "adcash.com",
+        "revenuehits.com",
+        "infolinks.com",
+        "media.net",
+        "sovrn.com",
+        "sharethrough.com",
+        "triplelift.com",
+        "teads.tv",
+        "adsrvr.org",
+        "demdex.net",
+        "scorecardresearch.com",
+        "quantserve.com",
+        "moatads.com",
+        "doubleverify.com",
+        "adsafeprotected.com",
+        "hotjar.com",
+        "fullstory.com",
+        "clarity.ms",
+        "segment.io",
+        "amplitude.com",
+        "mixpanel.com",
+        "crwdcntrl.net",
+        "bluekai.com",
+        "exelator.com",
+        "krxd.net",
+        "mathtag.com",
+        "bidswitch.net",
+        "sharethis.com",
+        "addthis.com"
+    )
+
+    /** True when [host] is, or sits under, a blocked network. */
+    fun isBlocked(host: String): Boolean {
+        val clean = host.lowercase().trim().trimEnd('.')
+        if (clean.isEmpty()) return false
+        return BLOCKED_SUFFIXES.any { suffix ->
+            clean == suffix || clean.endsWith(".$suffix")
+        }
+    }
 }
 
 /**

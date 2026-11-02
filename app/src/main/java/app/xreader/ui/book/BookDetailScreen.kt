@@ -591,6 +591,20 @@ fun BookDetailScreen(
                     // Tweak 2: mid-read it reads "Continue" with
                     // the current chapter and the book's percent.
                     val continueEnabled = state.readBlockedReason == null
+                    // v1.5.1 (item 4): a blocked read NEVER
+                    // renders as a live violet Start Reading
+                    // pill over an empty chapter state — the
+                    // honest state REPLACES the button (the
+                    // v1.5.0 field book showed the full-violet
+                    // pill and the broken-source warning at
+                    // once, and the tap dead-ended in the
+                    // reader). The pill below is inert, muted,
+                    // and carries the reason itself.
+                    if (state.readBlockedReason != null) {
+                        ChaptersUnavailablePill(
+                            reason = state.readBlockedReason!!
+                        )
+                    } else {
                     Surface(
                         onClick = { onReadChapter(state.continueChapterIndex) },
                         enabled = continueEnabled,
@@ -672,13 +686,12 @@ fun BookDetailScreen(
                             )
                         }
                     }
-                    state.readBlockedReason?.let { reason ->
-                        Text(
-                            reason,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = errorTextColor()
-                        )
                     }
+                    // v1.5.1 (item 4): the blocked reason used
+                    // to render as a second line under a still-
+                    // violet pill; it now lives inside
+                    // ChaptersUnavailablePill above, which
+                    // replaces the button outright.
                     // Cycle 1 (F3): the progress carry-over
                     // notes sit right under the Continue pill —
                     // that pill is where the resume they
@@ -2370,6 +2383,38 @@ private fun SourcesMergeSection(
  * chapter, and the download state at the trailing edge — the
  * same four states (and retry door) the row has always had.
  */
+/**
+ * v1.5.1 (item 4): the honest state that REPLACES the Start
+ * Reading pill when the chapter state is truly empty — same
+ * slot, same pill shape (the page's look is unchanged), but
+ * muted and inert: it can never read as a live button, and
+ * it carries the reason itself.
+ */
+@Composable
+private fun ChaptersUnavailablePill(reason: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+    ) {
+        Column(
+            Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+        ) {
+            Text(
+                "Chapters unavailable",
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1
+            )
+            Text(
+                reason,
+                style = MaterialTheme.typography.bodySmall,
+                color = errorTextColor()
+            )
+        }
+    }
+}
+
 @Composable
 private fun ChapterRow(
     chapter: Chapter,

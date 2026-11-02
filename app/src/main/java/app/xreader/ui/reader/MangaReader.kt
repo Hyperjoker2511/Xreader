@@ -346,12 +346,20 @@ internal fun mangaPageRequest(
         )
         .apply {
             if (referer != null) addHeader("Referer", referer)
+            // v1.5.1 (item 6 rider): the tall-strip guard
+            // rides EVERY page request — a strip decoded
+            // whole can black-screen (texture limits) or
+            // crash the decode; the guard caps its height.
             // v1.5.0 (Part C): crop borders rides the request
-            // (display and preload share the shape, so a
+            // too (display and preload share the shape, so a
             // warmed page stays a cache hit).
+            val transforms = mutableListOf<coil.transform.Transformation>(
+                TallStripGuardTransformation
+            )
             if (cropBorders) {
-                transformations(CropBordersTransformation)
+                transforms += CropBordersTransformation
             }
+            transformations(transforms)
         }
         .build()
 
@@ -374,6 +382,31 @@ private fun mangaPageModel(
             is MangaPageSource.Remote -> source.url
         }
         mangaPageRequest(context, model, lowRam, screenWidthPx, referer, cropBorders)
+    }
+}
+
+/**
+ * v1.5.1 (item 6 rider): the tall-strip guard as a Coil
+ * transformation — any page bitmap taller than
+ * [TallStripPolicy.MAX_HEIGHT_PX] is scaled down to that
+ * height (aspect preserved) before it can reach a texture.
+ * Pages at or under the cap pass through untouched.
+ */
+object TallStripGuardTransformation : coil.transform.Transformation {
+
+    override val cacheKey: String = "xreader-tall-strip-guard-v1"
+
+    override suspend fun transform(
+        input: android.graphics.Bitmap,
+        size: coil.size.Size
+    ): android.graphics.Bitmap {
+        if (!TallStripPolicy.needsGuard(input.height)) return input
+        return android.graphics.Bitmap.createScaledBitmap(
+            input,
+            TallStripPolicy.guardedWidth(input.width, input.height),
+            TallStripPolicy.guardedHeight(input.height),
+            true
+        )
     }
 }
 
