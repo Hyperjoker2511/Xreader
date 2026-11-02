@@ -21,7 +21,16 @@ internal object BundledSingles {
      * against the API's stated total, text from the read
      * endpoint whose `body` is plain-text prose and whose
      * `locked` flag names paid chapters. Proven end-to-end from
-     * this machine: 3,231/3,231 chapters, two chapters of prose. */
+     * this machine: 3,231/3,231 chapters, two chapters of prose.
+     *
+     * v1.4.4: the chapters envelope re-verified live
+     * (2026-11-02): `{"items":[…],"total":N,"limit":L,
+     * "offset":O}` — the endpoint's own page size is 100 (a
+     * bare request defaults to it; larger limits are clamped
+     * to 500). The walk now pages at that native 100 per
+     * request — the progressive-loading design: the list
+     * grows a page at a time as the reader scrolls, never a
+     * bulk fetch of a 3,000-chapter list up front. */
     fun chikari(id: String, name: String): DeclarativeConfig {
         val listing = ListSpec(
             url = "https://chikari.moe/api/novels/search?q=a&limit=20",
@@ -55,7 +64,7 @@ internal object BundledSingles {
                         bookIdPattern = "",
                         jsonArrayPath = "items",
                         jsonTotalPath = "total",
-                        pageSize = 500
+                        pageSize = 100
                     ),
                     jsonNameField = "title",
                     jsonLinkField = "number",

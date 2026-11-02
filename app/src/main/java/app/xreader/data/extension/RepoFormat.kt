@@ -64,7 +64,15 @@ data class ForeignSite(
      * install unit, and the join key for the row's player
      * state. Empty for ecosystems that don't package sites.
      * Defaulted so older sidecars decode unchanged. */
-    val packageName: String = ""
+    val packageName: String = "",
+    /** v1.4.4: the carrying package's extension-library
+     * version ("1.6"), when the index declares one. The shelf
+     * compares it against the player's supported library
+     * BEFORE any download, so a too-new package shows
+     * "Needs a newer Xreader" instead of failing strangely
+     * at open time. Defaulted so older sidecars decode
+     * unchanged. */
+    val extensionLib: String = ""
 )
 
 sealed interface RepoFormat {
@@ -232,6 +240,10 @@ object RepoFormatDetector {
             // the Keiyoushi player's install unit and the row
             // state join key.
             val packageName = stringValue(extension, "packageName") ?: ""
+            // v1.4.4: the package's extension-library version
+            // rides along too — the shelf's up-front honesty
+            // check (see ForeignSite.extensionLib).
+            val extensionLib = stringValue(extension, "extensionLib") ?: ""
             for (sourceElement in sources) {
                 val source = sourceElement as? JsonObject ?: continue
                 val homeUrl = stringValue(source, "homeUrl") ?: continue
@@ -241,7 +253,8 @@ object RepoFormatDetector {
                     lang = stringValue(source, "language") ?: "",
                     baseUrl = homeUrl,
                     contentRating = rating,
-                    packageName = packageName
+                    packageName = packageName,
+                    extensionLib = extensionLib
                 )
             }
         }

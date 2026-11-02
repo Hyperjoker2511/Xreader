@@ -76,7 +76,11 @@ object KeiyoushiIndex {
         val mirrorUrls: List<String> = emptyList(),
         val rating: ContentRating = ContentRating.SAFE,
         /** The Keiyoushi package that carries this source. */
-        val packageName: String = ""
+        val packageName: String = "",
+        /** v1.4.4: the carrying package's extension-library
+         * version, when the index declares one — the shelf's
+         * up-front "needs a newer Xreader" check. */
+        val extensionLib: String = ""
     ) {
         /** The site's normalised host — the conversion join
          * key (a native conversion declares the same host). */
@@ -100,7 +104,13 @@ object KeiyoushiIndex {
         LOADING("Starting…"),
         UPDATE_AVAILABLE("Update available"),
         FAILED("Couldn't be installed"),
-        INCOMPATIBLE("Can't run in this version")
+        INCOMPATIBLE("Can't run in this version"),
+        /** v1.4.4: the index itself says this package was made
+         * for a NEWER extension library than the player runs —
+         * shown up front, before any download, and the row
+         * offers no install (Komikku's obsolete-extension
+         * honesty). */
+        UNSUPPORTED_LIB("Needs a newer Xreader")
     }
 
     /** K3: the action a row offers, if any. */
@@ -363,10 +373,50 @@ object KeiyoushiIndex {
 
     fun shelfGroupOf(row: PackageRow): ShelfGroup = when (row.state) {
         State.UPDATE_AVAILABLE -> ShelfGroup.UPDATES
-        State.NOT_INSTALLED, State.NEEDS_CONVERSION ->
+        State.NOT_INSTALLED, State.NEEDS_CONVERSION,
+        State.UNSUPPORTED_LIB ->
             ShelfGroup.AVAILABLE
         else -> ShelfGroup.INSTALLED
     }
+
+    /**
+     * v1.4.4: does an index-declared extension-library version
+     * exceed the player's supported library
+     * ([app.xreader.data.extension.player.KeiyoushiTrust.SUPPORTED_LIB_VERSION])?
+     * Versions compare as (major, minor) number pairs — "1.10"
+     * is newer than "1.6", never older. A blank or unreadable
+     * declaration is NOT unsupported: the player's own
+     * APK-metadata check still guards the install itself.
+     */
+    fun libExceedsSupported(extensionLib: String): Boolean {
+        val declared = parseLibVersion(extensionLib) ?: return false
+        val supported = parseLibVersion(
+            app.xreader.data.extension.player.KeiyoushiTrust
+                .SUPPORTED_LIB_VERSION.toString()
+        ) ?: return false
+        return declared.first > supported.first ||
+            (declared.first == supported.first &&
+                declared.second > supported.second)
+    }
+
+    /** "1.6" → (1, 6); anything unparsable → null. Compared
+     * lexicographically, major first. */
+    private fun parseLibVersion(raw: String): Pair<Int, Int>? {
+        val parts = raw.trim().split('.')
+        if (parts.isEmpty()) return null
+        val major = parts[0].takeWhile { it.isDigit() }
+            .toIntOrNull() ?: return null
+        val minor = parts.getOrNull(1)
+            ?.takeWhile { it.isDigit() }?.toIntOrNull() ?: 0
+        return major to minor
+    }
+
+    /** The supported library in the index's own words
+     * ("1.6") — for the unsupported row's plain-words line. */
+    fun supportedLibWords(): String =
+        app.xreader.data.extension.player.KeiyoushiTrust
+            .SUPPORTED_LIB_VERSION.toString()
+            .removeSuffix(".0")
 
     /**
      * v1.4.3: the shelf's rows — [rows]' inputs and preference
@@ -411,6 +461,17 @@ object KeiyoushiIndex {
                 it.lang.equals("en", ignoreCase = true) ||
                     it.lang.equals("all", ignoreCase = true)
             } ?: pkgEntries.first()
+            // v1.4.4: the package's index-declared library —
+            // the up-front honesty check for untouched rows.
+            val pkgLib = pkgEntries.firstOrNull {
+                it.extensionLib.isNotBlank()
+            }?.extensionLib
+            val unsupportedDetail = pkgLib
+                ?.takeIf { libExceedsSupported(it) }
+                ?.let {
+                    "Made for source library $it — this Xreader " +
+                        "runs ${supportedLibWords()}."
+                }
             val (state, detail, action) = when (player?.kind) {
                 PlayerPackageState.Kind.READY ->
                     Triple(State.READY, null, RowAction.REMOVE)
@@ -433,6 +494,18 @@ object KeiyoushiIndex {
                 PlayerPackageState.Kind.INCOMPATIBLE ->
                     Triple(State.INCOMPATIBLE, player.reason, RowAction.NONE)
                 PlayerPackageState.Kind.NOT_INSTALLED, null -> when {
+                    // v1.4.4: too new for this player — plain
+                    // words up front, and NO install offered:
+                    // downloading it could only fail at open
+                    // time. (An installed/loaded package is
+                    // never re-judged here — the player's own
+                    // states above win.)
+                    unsupportedDetail != null ->
+                        Triple(
+                            State.UNSUPPORTED_LIB,
+                            unsupportedDetail,
+                            RowAction.NONE
+                        )
                     converted ->
                         Triple(State.READY, null, RowAction.NONE)
                     packageName.isNotBlank() ->

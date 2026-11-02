@@ -234,6 +234,45 @@ fun SourcesScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 88.dp)
         ) {
+            // ── ONE add door, at the TOP (v1.4.4) ───────────────
+            // The user's order (2026-11-02): the add door sat at
+            // the very bottom of a long list — "It's very bottom
+            // should add top". §5.3: a full-width GlassCard door
+            // with PrimaryPills, visible — never demoted to a
+            // plain row. It now leads the list, directly under
+            // the header and the Novels | Manga switch, and it
+            // is the only add door on this screen.
+            item {
+                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                    // v1.2.0 (WS4 declutter): the card used to say
+                    // "Add a source" twice — a title and the pill
+                    // under it. The pill IS the action and keeps
+                    // the words; the card now opens with the one
+                    // explanatory line, then the big visible door.
+                    Text(
+                        "A repository, a novel site's link, or a Legado file.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement =
+                            Arrangement.spacedBy(8.dp)
+                    ) {
+                        PrimaryPill(
+                            text = "Repositories",
+                            onClick = onOpenStore,
+                            modifier = Modifier.weight(1f)
+                        )
+                        PrimaryPill(
+                            text = "Add a source",
+                            onClick = onAddSource,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
             // ── Search everything, right here (v1.3.2 scope D) ─
             // Mihon-style: the field sits at the top of Explore;
             // from here it searches every source at once and the
@@ -589,10 +628,8 @@ fun SourcesScreen(
             }
 
             // ── Your sources, extensions and OPDS together ──────
-            // v1.4.3: the list LEADS — the add door moved below
-            // it (one door, no duplicates: the "Repositories"
-            // tile at the bottom of the list is gone; the card's
-            // two pills are the only way in).
+            // v1.4.4: the add door stands at the TOP of this
+            // list (above) — one door, no duplicates.
             item {
                 SectionHeader(
                     title = "Your sources",
@@ -684,43 +721,6 @@ fun SourcesScreen(
                         onOpen = { onOpenOpdsServer(server) },
                         modifier = Modifier.animateItem(placementSpec = listPlacementSpec())
                     )
-                }
-            }
-
-            // ── ONE add door; the forms live on their own screen ─
-            // §5.3: a full-width GlassCard door with PrimaryPills,
-            // visible — never demoted to a plain row. v1.4.3: it
-            // sits UNDER the sources list (the list leads) and is
-            // the only add door on this screen.
-            item {
-                GlassCard(modifier = Modifier.fillMaxWidth()) {
-                    // v1.2.0 (WS4 declutter): the card used to say
-                    // "Add a source" twice — a title and the pill
-                    // under it. The pill IS the action and keeps
-                    // the words; the card now opens with the one
-                    // explanatory line, then the big visible door.
-                    Text(
-                        "A repository, a novel site's link, or a Legado file.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement =
-                            Arrangement.spacedBy(8.dp)
-                    ) {
-                        PrimaryPill(
-                            text = "Repositories",
-                            onClick = onOpenStore,
-                            modifier = Modifier.weight(1f)
-                        )
-                        PrimaryPill(
-                            text = "Add a source",
-                            onClick = onAddSource,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
                 }
             }
 

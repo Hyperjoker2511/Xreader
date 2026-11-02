@@ -36,7 +36,19 @@ dependencies {
     api(libs.okhttp.zstd)
     api(libs.okhttp.dnsoverhttps)
     api(libs.kotlinx.coroutines.android)
+    // v1.4.4: Okio pinned explicitly — it is part of the platform
+    // extensions are compiled against (the donor pins 3.17.0);
+    // before, it only arrived transitively at whatever version
+    // OkHttp happened to drag in.
+    api(libs.okio)
     api(libs.kotlinx.serialization.json)
+    // v1.4.4: the donor's serialization bundle includes
+    // kotlinx-serialization-json-okio — shared extension code
+    // (keiyoushi.source parse machinery) references
+    // OkioStreamsKt from it. It was never our dependency, so
+    // Asura died with NoClassDefFoundError on its first fetch
+    // (V143-ASURA-CRASH-DIAGNOSIS, disease 2).
+    api(libs.kotlinx.serialization.json.okio)
     // v1.4.3: the Keiyoushi core resolves ProtoBuf and XML from
     // Injekt exactly as it resolves Json (keiyoushi.utils) — the
     // types must ride the host classpath or every source using

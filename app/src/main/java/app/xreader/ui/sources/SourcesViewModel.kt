@@ -1470,6 +1470,9 @@ fun keiyoushiEntries(
             rating = site.contentRating,
             // K3: the carrying package — the player's install
             // unit and row-state join key.
-            packageName = site.packageName
+            packageName = site.packageName,
+            // v1.4.4: the package's library version — the
+            // shelf's "Needs a newer Xreader" check.
+            extensionLib = site.extensionLib
         )
     }

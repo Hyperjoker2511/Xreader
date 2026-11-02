@@ -391,4 +391,91 @@ class KeiyoushiIndexTest {
         assertEquals(KeiyoushiIndex.RowAction.INSTALL, fresh.action)
         assertEquals(KeiyoushiIndex.State.NOT_INSTALLED, fresh.state)
     }
+
+    // ── v1.4.4: unsupported-library shelf honesty ──────────
+
+    private fun shelfEntryLib(
+        name: String,
+        url: String,
+        pkg: String,
+        lib: String
+    ) = KeiyoushiIndex.Entry(
+        name = name, lang = "en", baseUrl = url,
+        packageName = pkg, extensionLib = lib
+    )
+
+    @Test
+    fun `shelf marks a too-new library plainly and offers no install`() {
+        val rows = KeiyoushiIndex.shelfRows(
+            entries = listOf(
+                shelfEntryLib(
+                    "Future Panels", "https://future.example",
+                    "eu.kanade.tachiyomi.extension.en.future", "1.7"
+                ),
+                shelfEntryLib(
+                    "Current Panels", "https://current.example",
+                    "eu.kanade.tachiyomi.extension.en.current", "1.6"
+                ),
+                shelfEntryLib(
+                    "Silent Panels", "https://silent.example",
+                    "eu.kanade.tachiyomi.extension.en.silent", ""
+                )
+            ),
+            convertedHosts = emptySet(),
+            visibility = ContentVisibility.SHOW_ALL,
+            playerStates = emptyMap()
+        )
+        val future = rows.single { it.name == "Future Panels" }
+        assertEquals(
+            KeiyoushiIndex.State.UNSUPPORTED_LIB, future.state
+        )
+        assertEquals("Needs a newer Xreader", future.state.label)
+        assertEquals(KeiyoushiIndex.RowAction.NONE, future.action)
+        assertEquals(
+            KeiyoushiIndex.ShelfGroup.AVAILABLE,
+            KeiyoushiIndex.shelfGroupOf(future)
+        )
+        assertTrue(future.detail!!.contains("1.7"))
+        assertTrue(future.detail!!.contains("1.6"))
+        // The supported and the undeclared keep their Install.
+        for (name in listOf("Current Panels", "Silent Panels")) {
+            val row = rows.single { it.name == name }
+            assertEquals(KeiyoushiIndex.State.NOT_INSTALLED, row.state)
+            assertEquals(KeiyoushiIndex.RowAction.INSTALL, row.action)
+        }
+    }
+
+    @Test
+    fun `an installed package is never re-judged by the index lib`() {
+        val pkg = "eu.kanade.tachiyomi.extension.en.future"
+        val rows = KeiyoushiIndex.shelfRows(
+            entries = listOf(
+                shelfEntryLib(
+                    "Future Panels", "https://future.example", pkg, "1.7"
+                )
+            ),
+            convertedHosts = emptySet(),
+            visibility = ContentVisibility.SHOW_ALL,
+            playerStates = mapOf(
+                pkg to KeiyoushiIndex.PlayerPackageState(
+                    KeiyoushiIndex.PlayerPackageState.Kind.READY
+                )
+            )
+        )
+        val row = rows.single()
+        assertEquals(KeiyoushiIndex.State.READY, row.state)
+        assertEquals(KeiyoushiIndex.RowAction.REMOVE, row.action)
+    }
+
+    @Test
+    fun `lib comparison is numeric per part not lexicographic`() {
+        assertTrue(KeiyoushiIndex.libExceedsSupported("1.7"))
+        assertTrue(KeiyoushiIndex.libExceedsSupported("1.10"))
+        assertTrue(KeiyoushiIndex.libExceedsSupported("2.0"))
+        assertTrue(!KeiyoushiIndex.libExceedsSupported("1.6"))
+        assertTrue(!KeiyoushiIndex.libExceedsSupported("1.5"))
+        // Unknown declarations never block the shelf.
+        assertTrue(!KeiyoushiIndex.libExceedsSupported(""))
+        assertTrue(!KeiyoushiIndex.libExceedsSupported("beta"))
+    }
 }
