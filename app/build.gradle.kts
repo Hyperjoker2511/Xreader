@@ -24,8 +24,8 @@ android {
         applicationId = "app.xreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 38
-        versionName = "1.4.1"
+        versionCode = 39
+        versionName = "1.4.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -96,6 +96,10 @@ android {
         unitTests {
             // Android stubs (Log, Keystore) are inert on the JVM by default.
             isReturnDefaultValues = true
+            // v1.4.2: Robolectric (ProductionDatabaseTest) locates the
+            // merged manifest/resources through AGP's test config —
+            // only wired up when unit-test resources are included.
+            isIncludeAndroidResources = true
         }
     }
 }
@@ -127,11 +131,6 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
-    // v1.4.1: Room 2.8's driver is pinned EXPLICITLY (BundledSQLiteDriver)
-    // instead of relying on the runtime's default-driver resolution on a
-    // real device — the 2.7/2.8 migration path. Same database file, same
-    // schema: the bundled driver opens the existing library as-is.
-    implementation(libs.androidx.sqlite.bundled)
     implementation(libs.androidx.datastore.preferences)
 
     // Phase 2 document engine (PLAN §4): network (OPDS + downloads),
@@ -191,6 +190,11 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.kxml2)
+    // v1.4.2: Robolectric — the harness for tests that need a real
+    // Android runtime on the JVM (first use: ProductionDatabaseTest
+    // builds the Room database through the production factory; plain
+    // JVM cannot run Room's Android builder at all).
+    testImplementation(libs.robolectric)
 
     // K6: the project's first instrumented tests (the Keiyoushi
     // fixture load test). Test-only: neither artifact reaches

@@ -49,6 +49,41 @@ import kotlinx.coroutines.launch
 import tachiyomi.core.common.preference.AndroidPreferenceStore
 
 /**
+ * The production database factory — the ONLY place the app's Room
+ * database is built (AppContainer delegates here). Extracted in
+ * v1.4.2 so the unit suite can build the database through the exact
+ * production chain (see ProductionDatabaseTest): until then no test
+ * built a Room database at all, which is how the break below
+ * shipped unnoticed.
+ *
+ * Deliberately driverless — no `setDriver(...)`, no
+ * openHelperFactory: Room's Android default (the framework
+ * SupportSQLiteOpenHelper) is what v1.3.4 shipped and what
+ * [androidx.room.withTransaction] requires. v1.4.1 pinned
+ * `BundledSQLiteDriver()` as a pre-emptive migration step; a
+ * configured driver suppresses Room's default open-helper factory,
+ * and the first withTransaction on a real phone then threw
+ * IllegalStateException ("Cannot return a SupportSQLiteOpenHelper
+ * since no SupportSQLiteOpenHelper.Factory was configured with
+ * Room"). `build()` succeeded either way — the throw is lazy, at
+ * the first transaction. Schema v7, same database file: neither
+ * the pin nor this revert touches a single row.
+ */
+fun buildXreaderDatabase(context: Context): XreaderDatabase =
+    Room.databaseBuilder(
+        context.applicationContext,
+        XreaderDatabase::class.java,
+        XreaderDatabase.NAME
+    ).addMigrations(
+        app.xreader.data.db.MIGRATION_1_2,
+        app.xreader.data.db.MIGRATION_2_3,
+        app.xreader.data.db.MIGRATION_3_4,
+        app.xreader.data.db.MIGRATION_4_5,
+        app.xreader.data.db.MIGRATION_5_6,
+        app.xreader.data.db.MIGRATION_6_7
+    ).build()
+
+/**
  * Manual DI (PLAN §1.2): one container, constructed in [app.xreader.XreaderApp],
  * constructor injection everywhere. No Hilt — the ReTranslate-proven shape.
  * Later phases add their engines here; nothing else builds its own
@@ -68,25 +103,7 @@ class AppContainer(context: Context) {
     val databaseFileExisted: Boolean =
         appContext.getDatabasePath(XreaderDatabase.NAME).exists()
 
-    val database: XreaderDatabase = Room.databaseBuilder(
-        appContext,
-        XreaderDatabase::class.java,
-        XreaderDatabase.NAME
-        // v1.4.1: the SQLite driver is pinned explicitly (Room 2.7/2.8
-        // migration path). v1.4.0 bumped Room 2.6.1 → 2.8.3 and left
-        // driver resolution to the runtime default, which is unproven
-        // on a real device; the bundled driver opens the SAME database
-        // file and schema (v7) as-is — no migration, no data change.
-    ).setDriver(
-        androidx.sqlite.driver.bundled.BundledSQLiteDriver()
-    ).addMigrations(
-        app.xreader.data.db.MIGRATION_1_2,
-        app.xreader.data.db.MIGRATION_2_3,
-        app.xreader.data.db.MIGRATION_3_4,
-        app.xreader.data.db.MIGRATION_4_5,
-        app.xreader.data.db.MIGRATION_5_6,
-        app.xreader.data.db.MIGRATION_6_7
-    ).build()
+    val database: XreaderDatabase = buildXreaderDatabase(appContext)
 
     val appearancePrefs: AppearancePrefs = AppearancePrefs(
         appContext.settingsDataStore,
