@@ -61,6 +61,26 @@ class ProviderPackViewModel(
         )
     }
 
+    /**
+     * The HTTP status an [app.xreader.core.error.AppError]
+     * carries, when it carries one: [AppError.ProviderDown]'s
+     * code directly; [AppError.AuthFailed]'s detail in the
+     * transport's "HTTP <code>" shape. Null otherwise — the
+     * plain line without a status is still honest.
+     */
+    private fun httpStatusOf(
+        error: app.xreader.core.error.AppError
+    ): Int? = when (error) {
+        is app.xreader.core.error.AppError.ProviderDown ->
+            error.httpCode
+        is app.xreader.core.error.AppError.AuthFailed ->
+            error.detail
+                ?.removePrefix("HTTP ")
+                ?.trim()
+                ?.toIntOrNull()
+        else -> null
+    }
+
     fun checkNow() {
         if (_state.value.busy) return
         _state.value = _state.value.copy(busy = true, message = null)
@@ -76,8 +96,21 @@ class ProviderPackViewModel(
                     "Your pack is already up to date."
                 is PackCheckOutcome.SkippedThrottled ->
                     "Just checked — you're up to date."
-                is PackCheckOutcome.Failed ->
-                    "Couldn't check just now — your sources keep working as they are."
+                is PackCheckOutcome.Failed -> {
+                    // v1.4.3: name the cause — the HTTP status
+                    // rides the error itself (ProviderDown's
+                    // code, or AuthFailed's "HTTP <code>"
+                    // detail from the transport). A failure
+                    // line that says nothing teaches nothing.
+                    val code = httpStatusOf(outcome.error)
+                    if (code != null) {
+                        "Couldn't check just now (HTTP $code) — " +
+                            "your sources keep working as they are."
+                    } else {
+                        "Couldn't check just now — your sources " +
+                            "keep working as they are."
+                    }
+                }
             }
             _state.value = PackUiState(
                 info = container.providerPackManager.info(),

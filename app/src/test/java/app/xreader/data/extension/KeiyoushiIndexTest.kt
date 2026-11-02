@@ -267,4 +267,128 @@ class KeiyoushiIndexTest {
         )
         assertEquals(listOf("Safe Panels"), safeRows.map { it.entry.name })
     }
+
+    // ── v1.4.3: the shelf (per-package rows + search) ──────
+
+    private fun shelfEntry(
+        name: String,
+        lang: String,
+        url: String,
+        pkg: String
+    ) = KeiyoushiIndex.Entry(
+        name = name, lang = lang, baseUrl = url, packageName = pkg
+    )
+
+    @Test
+    fun `shelf search ranks a name match above domain matches`() {
+        val rows = KeiyoushiIndex.shelfRows(
+            entries = listOf(
+                // Shelf order puts this row FIRST (alphabetical),
+                // and its domain contains the query — but its
+                // NAME does not.
+                shelfEntry(
+                    "Aardvark Panels", "en",
+                    "https://aardvarkcomics.example",
+                    "eu.kanade.tachiyomi.extension.en.aardvark"
+                ),
+                shelfEntry(
+                    "Comix", "en",
+                    "https://comix.example",
+                    "eu.kanade.tachiyomi.extension.en.comix"
+                ),
+                shelfEntry(
+                    "Zebra Tales", "en",
+                    "https://zebra.example",
+                    "eu.kanade.tachiyomi.extension.en.zebra"
+                )
+            ),
+            convertedHosts = emptySet(),
+            visibility = ContentVisibility.SHOW_ALL,
+            playerStates = emptyMap()
+        )
+        assertEquals(
+            listOf("Aardvark Panels", "Comix", "Zebra Tales"),
+            rows.map { it.name }
+        )
+        val found = KeiyoushiIndex.searchShelf(rows, "com")
+        // The name match leads even though the domain match
+        // stood above it on the shelf; the non-match is gone.
+        assertEquals(
+            listOf("Comix", "Aardvark Panels"),
+            found.map { it.name }
+        )
+    }
+
+    @Test
+    fun `shelf search covers the whole shelf not a filtered subset`() {
+        val rows = KeiyoushiIndex.shelfRows(
+            entries = listOf(
+                shelfEntry(
+                    "Comix", "en",
+                    "https://comix.example",
+                    "eu.kanade.tachiyomi.extension.en.comix"
+                ),
+                shelfEntry(
+                    "Luna Panels", "es",
+                    "https://lunapanels.example",
+                    "eu.kanade.tachiyomi.extension.es.luna"
+                )
+            ),
+            convertedHosts = emptySet(),
+            visibility = ContentVisibility.SHOW_ALL,
+            playerStates = emptyMap()
+        )
+        // A language-filtered subset (what the old screen
+        // searched) would never surface the Spanish row…
+        val englishOnly = rows.filter { "en" in it.langs }
+        assertTrue(
+            KeiyoushiIndex.searchShelf(englishOnly, "luna").isEmpty()
+        )
+        // …the whole-shelf search does.
+        assertEquals(
+            listOf("Luna Panels"),
+            KeiyoushiIndex.searchShelf(rows, "luna").map { it.name }
+        )
+        // A blank query is the shelf itself, untouched.
+        assertEquals(rows, KeiyoushiIndex.searchShelf(rows, "  "))
+    }
+
+    @Test
+    fun `shelf groups updates installed and available`() {
+        val pkg = "eu.kanade.tachiyomi.extension.en.comix"
+        val rows = KeiyoushiIndex.shelfRows(
+            entries = listOf(
+                shelfEntry(
+                    "Comix", "en", "https://comix.example", pkg
+                ),
+                shelfEntry(
+                    "Fresh Ink", "en",
+                    "https://freshink.example",
+                    "eu.kanade.tachiyomi.extension.en.freshink"
+                )
+            ),
+            convertedHosts = emptySet(),
+            visibility = ContentVisibility.SHOW_ALL,
+            playerStates = mapOf(
+                pkg to KeiyoushiIndex.PlayerPackageState(
+                    KeiyoushiIndex.PlayerPackageState.Kind
+                        .UPDATE_AVAILABLE
+                )
+            )
+        )
+        val comix = rows.single { it.name == "Comix" }
+        assertEquals(
+            KeiyoushiIndex.ShelfGroup.UPDATES,
+            KeiyoushiIndex.shelfGroupOf(comix)
+        )
+        assertEquals(KeiyoushiIndex.RowAction.UPDATE, comix.action)
+        val fresh = rows.single { it.name == "Fresh Ink" }
+        assertEquals(
+            KeiyoushiIndex.ShelfGroup.AVAILABLE,
+            KeiyoushiIndex.shelfGroupOf(fresh)
+        )
+        // One verb for every not-installed row: Install.
+        assertEquals(KeiyoushiIndex.RowAction.INSTALL, fresh.action)
+        assertEquals(KeiyoushiIndex.State.NOT_INSTALLED, fresh.state)
+    }
 }

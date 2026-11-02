@@ -1033,7 +1033,17 @@ private fun XreaderNavHost(
             app.xreader.ui.sources.AddSourceScreen(
                 viewModel = sourcesViewModel,
                 onBack = { navController.popBackStack() },
-                onAddFromLink = { navController.navigate("addFromLink") },
+                onAddFromLink = {
+                    // v1.4.3: file by ENTRY SECTION — the
+                    // section showing when "Add a link" was
+                    // tapped is authoritative for the saved
+                    // source's kind (Manga → manga source,
+                    // Novels → novel source).
+                    linkAddViewModel.setIntendedKind(
+                        sourcesViewModel.state.value.librarySide
+                    )
+                    navController.navigate("addFromLink")
+                },
                 onOpenStore = { navController.navigate("sourceStore") },
                 onOpenRepo = { repoId ->
                     navController.navigate("repo/$repoId")
@@ -1429,7 +1439,13 @@ private fun XreaderNavHost(
             app.xreader.ui.migration.MigrationScreen(
                 viewModel = viewModel,
                 onBack = { navController.popBackStack() },
-                onAddFromLink = { navController.navigate("addFromLink") }
+                onAddFromLink = {
+                    // Migration isn't section-scoped: clear any
+                    // section stamp from an earlier add so the
+                    // learner's own default decides here.
+                    linkAddViewModel.setIntendedKind(null)
+                    navController.navigate("addFromLink")
+                }
             )
         }
         composable("providers") {

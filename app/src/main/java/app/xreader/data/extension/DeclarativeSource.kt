@@ -642,9 +642,18 @@ class DeclarativeSource(
         // (the NovelFire window disease, on the road the
         // book actually opens through).
         session.proveFirstPage()
-        return ChapterChunk(
+        val chunk = ChapterChunk(
             filled, session.readingRows(), session.walk(), session.complete
         )
+        // v1.4.3: the zero-chapter rule on the progressive
+        // road too — a COMPLETE walk that found nothing on a
+        // page linking chapters is a failed read, not an
+        // empty book (an incomplete walk may legitimately
+        // still be empty-handed mid-flight).
+        if (chunk.complete && chunk.chapters.isEmpty()) {
+            guardChapterList(chunk.chapters, doc, url)
+        }
+        return chunk
     }
 
     /** Grow a previously started walk to at least [minTotal]
@@ -1328,8 +1337,65 @@ class DeclarativeSource(
         // reading order — it must NOT pass through the reverse
         // finishing the parsed-rows path uses.
         val patterned = patternCompletedRows(doc, pageUrl, rows)
-        if (patterned != null) return ChapterIdentity.merge(patterned)
-        return finishChapterRows(rows, pageUrl)
+        if (patterned != null) {
+            return guardChapterList(
+                ChapterIdentity.merge(patterned), doc, pageUrl
+            )
+        }
+        return guardChapterList(
+            finishChapterRows(rows, pageUrl), doc, pageUrl
+        )
+    }
+
+    /**
+     * v1.4.3 — the ZERO-CHAPTER RULE (the field diagnosis's
+     * Asura case): a chapter-list parse that returns ZERO
+     * chapters from a page that visibly LINKS to chapters is
+     * a failed read, never an empty list marked complete.
+     * The living example: a site moved its series URLs and
+     * the stored book URL's page kept linking chapters under
+     * the new shape while the learned rule matched none of
+     * them — the engine stored "0 chapters, complete" and the
+     * book looked empty instead of broken. Throwing here
+     * means the sync fails honestly (nothing is stored), the
+     * book page shows its broken/repair wording, and Repair
+     * re-walks from the book page. A page with NO chapter
+     * links at all keeps the honest empty list (a book that
+     * genuinely has no chapters yet is not an error).
+     */
+    private fun guardChapterList(
+        chapters: List<SourceChapter>,
+        doc: Document,
+        pageUrl: String
+    ): List<SourceChapter> {
+        if (chapters.isEmpty() && pageHasChapterShapedLinks(doc, pageUrl)) {
+            throw SourceException(
+                "the chapter list couldn't be read — this page " +
+                    "links to chapters but none of them matched. " +
+                    "The site may have changed; try Repair on the " +
+                    "source's Details page."
+            )
+        }
+        return chapters
+    }
+
+    /**
+     * Does this book page carry chapter-shaped links — anchors
+     * pointing BELOW the book page's own URL whose address
+     * mentions "chapter"? The below-the-book prefix requirement
+     * keeps site navigation and "latest chapters" widgets (which
+     * link elsewhere on the site) from counting.
+     */
+    internal fun pageHasChapterShapedLinks(
+        doc: Document,
+        bookPageUrl: String
+    ): Boolean {
+        val prefix = bookPageUrl.trimEnd('/') + "/"
+        return doc.select("a[href]").any { anchor ->
+            val href = anchor.attr("abs:href")
+            href.startsWith(prefix) &&
+                href.contains("chapter", ignoreCase = true)
+        }
     }
 
     /** The earliest chapter number a row set carries, or

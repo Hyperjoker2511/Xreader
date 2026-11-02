@@ -31,10 +31,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -89,6 +92,10 @@ fun SourcesScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val searchState by searchViewModel.state.collectAsStateWithLifecycle()
+    // v1.4.3: Recent searches show only while the search
+    // field has focus (part of the search flow), never as
+    // permanent page furniture.
+    var searchFocused by remember { mutableStateOf(false) }
     // The host collects searchViewModel.openedBook — a result tap
     // opens the book through the same path as everywhere else.
     val searchActive = searchState.searched
@@ -127,16 +134,24 @@ fun SourcesScreen(
     // split — the same remembered switch, the same rule (an
     // extension stands on a side when at least one of its
     // sources belongs to it; kindless sources are Novels).
+    // v1.4.3: a Keiyoushi player row is MANGA by definition —
+    // it never stands on the Novels side, even while its
+    // sources aren't loaded and so carry no kind of their
+    // own (the IA rule: Keiyoushi lives in Manga only).
     fun kindsOf(ext: InstalledExtension):
         List<app.xreader.data.extension.MediaKind> =
-        ext.sourceIds.split(",")
-            .map { it.trim() }.filter { it.isNotBlank() }
-            .mapNotNull { sourceId ->
-                state.sourceKinds[
-                    app.xreader.data.extension.SourceHealthRecord
-                        .key(ext.id, sourceId)
-                ]
-            }
+        if (ext.kind == app.xreader.data.db.ExtensionKind.KEIYOUSHI) {
+            listOf(app.xreader.data.extension.MediaKind.MANGA)
+        } else {
+            ext.sourceIds.split(",")
+                .map { it.trim() }.filter { it.isNotBlank() }
+                .mapNotNull { sourceId ->
+                    state.sourceKinds[
+                        app.xreader.data.extension.SourceHealthRecord
+                            .key(ext.id, sourceId)
+                    ]
+                }
+        }
     val sideExtensions = visibleExtensions.filter { ext ->
         app.xreader.data.library.LibrarySplit.extensionOnSide(
             kindsOf(ext), state.librarySide
@@ -171,15 +186,27 @@ fun SourcesScreen(
             title = "Browse",
             eyebrow = "Sources",
             action = {
-                if (hasCheckableRepos) {
-                    TextButton(
-                        onClick = { viewModel.refreshAll() },
-                        enabled = !state.busy,
-                        interactionSource = checkUpdatesInteraction,
-                        modifier = Modifier.pressBounce(
-                            checkUpdatesInteraction, enabled = !state.busy
-                        )
-                    ) { Text("Check for updates") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // v1.4.3: the 18+ quick toggle, top-right —
+                    // the same ContentVisibility preference as
+                    // Customise → Sources & repairs.
+                    AdultVisibilityToggle(
+                        visibility = state.contentVisibility,
+                        onSetVisibility = {
+                            viewModel.setContentVisibility(it)
+                        }
+                    )
+                    if (hasCheckableRepos) {
+                        TextButton(
+                            onClick = { viewModel.refreshAll() },
+                            enabled = !state.busy,
+                            interactionSource = checkUpdatesInteraction,
+                            modifier = Modifier.pressBounce(
+                                checkUpdatesInteraction,
+                                enabled = !state.busy
+                            )
+                        ) { Text("Check for updates") }
+                    }
                 }
             }
         )
@@ -212,12 +239,18 @@ fun SourcesScreen(
             // from here it searches every source at once and the
             // results stream in per source below it. (Inside one
             // source, that source's own screen searches only it.)
+            // v1.4.3: Recent searches live INSIDE this search
+            // flow — they appear while the field is focused and
+            // disappear with it, instead of standing as
+            // permanent furniture above the sources list.
             item {
                 androidx.compose.material3.OutlinedTextField(
                     value = searchState.query,
                     onValueChange = { searchViewModel.setQuery(it) },
                     label = { Text("Search all your sources") },
                     singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                        .onFocusChanged { searchFocused = it.isFocused },
                     leadingIcon = {
                         Icon(Icons.Filled.Search, contentDescription = null)
                     },
@@ -238,8 +271,7 @@ fun SourcesScreen(
                     keyboardActions = androidx.compose.foundation.text
                         .KeyboardActions(
                             onSearch = { searchViewModel.search() }
-                        ),
-                    modifier = Modifier.fillMaxWidth()
+                        )
                 )
             }
             if (searchState.searching) {
@@ -284,7 +316,7 @@ fun SourcesScreen(
                     }
                 }
             }
-            if (!searchState.searched &&
+            if (!searchState.searched && searchFocused &&
                 searchState.recents.isNotEmpty()
             ) {
                 item {
@@ -556,47 +588,11 @@ fun SourcesScreen(
                 }
             }
 
-            // ── ONE add door; the forms live on their own screen ─
-            // §5.3: a full-width GlassCard door with a PrimaryPill,
-            // visible — never demoted to a plain row.
-            item {
-                GlassCard(modifier = Modifier.fillMaxWidth()) {
-                    // v1.2.0 (WS4 declutter): the card used to say
-                    // "Add a source" twice — a title and the pill
-                    // under it. The pill IS the action and keeps
-                    // the words; the card now opens with the one
-                    // explanatory line, then the big visible door.
-                    Text(
-                        "A repository, a novel site's link, or a Legado file.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    // v1.3.4 (U1/T5): Repositories is a FIRST-CLASS
-                    // door at the TOP of the sources area — same
-                    // visual weight as "Add a source", beside it,
-                    // plain label, no menus. (The QuickActionTile
-                    // at the bottom of the list stays too.)
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement =
-                            Arrangement.spacedBy(8.dp)
-                    ) {
-                        PrimaryPill(
-                            text = "Repositories",
-                            onClick = onOpenStore,
-                            modifier = Modifier.weight(1f)
-                        )
-                        PrimaryPill(
-                            text = "Add a source",
-                            onClick = onAddSource,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-            }
-
             // ── Your sources, extensions and OPDS together ──────
+            // v1.4.3: the list LEADS — the add door moved below
+            // it (one door, no duplicates: the "Repositories"
+            // tile at the bottom of the list is gone; the card's
+            // two pills are the only way in).
             item {
                 SectionHeader(
                     title = "Your sources",
@@ -616,8 +612,8 @@ fun SourcesScreen(
                                 app.xreader.data.extension.MediaKind.MANGA ->
                                 "No manga sources yet. Manga comes " +
                                     "from the Keiyoushi catalogue — " +
-                                    "open Repositories to see which " +
-                                    "sites are converted."
+                                    "open Repositories and install " +
+                                    "the ones you want."
                             state.extensions.isEmpty() ->
                                 "No sources yet. Add a repository, paste a novel " +
                                     "site's link, or add a library server — your sources " +
@@ -691,30 +687,55 @@ fun SourcesScreen(
                 }
             }
 
-            // ── The store and the server manager (§5.3 doors row) ─
+            // ── ONE add door; the forms live on their own screen ─
+            // §5.3: a full-width GlassCard door with PrimaryPills,
+            // visible — never demoted to a plain row. v1.4.3: it
+            // sits UNDER the sources list (the list leads) and is
+            // the only add door on this screen.
             item {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    QuickActionTile(
-                        icon = Icons.Filled.Storefront,
-                        // v1.3.3 (scope S7b): the door says what
-                        // it opens, in the user's own words —
-                        // "Repositories", one tap from here.
-                        label = "Repositories",
-                        modifier = Modifier.weight(1f),
-                        active = false,
-                        onClick = onOpenStore
+                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                    // v1.2.0 (WS4 declutter): the card used to say
+                    // "Add a source" twice — a title and the pill
+                    // under it. The pill IS the action and keeps
+                    // the words; the card now opens with the one
+                    // explanatory line, then the big visible door.
+                    Text(
+                        "A repository, a novel site's link, or a Legado file.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    QuickActionTile(
-                        icon = Icons.Filled.LibraryBooks,
-                        label = "OPDS servers",
-                        modifier = Modifier.weight(1f),
-                        active = false,
-                        onClick = onOpenOpdsServers
-                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement =
+                            Arrangement.spacedBy(8.dp)
+                    ) {
+                        PrimaryPill(
+                            text = "Repositories",
+                            onClick = onOpenStore,
+                            modifier = Modifier.weight(1f)
+                        )
+                        PrimaryPill(
+                            text = "Add a source",
+                            onClick = onAddSource,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
+            }
+
+            // ── The server manager ──────────────────────────────
+            // v1.4.3: the Repositories tile that used to stand
+            // beside this one is deleted — Repositories is the
+            // add card's pill above, one door, easy to find.
+            item {
+                QuickActionTile(
+                    icon = Icons.Filled.LibraryBooks,
+                    label = "OPDS servers",
+                    modifier = Modifier.fillMaxWidth(),
+                    active = false,
+                    onClick = onOpenOpdsServers
+                )
             }
             }
         }

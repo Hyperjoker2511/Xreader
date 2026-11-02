@@ -503,6 +503,108 @@ class KeiyoushiPlayerManagerTest {
             assertTrue(manager2.allLiveSources().isEmpty())
         }
 
+    // ── v1.4.3 (R3): the update pipe at the state level ────
+
+    @Test
+    fun `update detection flags the record and the row state`() =
+        runBlocking {
+            installV1()
+            transport.bodies[KeiyoushiIndex.INDEX_URL] = indexBody(
+                versionCode = "106071", versionName = "1.6.71"
+            ).toByteArray()
+            val flagged = manager.checkForUpdates()
+            assertTrue(flagged is AppResult.Ok)
+            assertEquals(1, (flagged as AppResult.Ok).value)
+            val record = manager.record(pkg)!!
+            assertEquals(106071, record.availableVersionCode)
+            assertEquals(106005, record.installedVersionCode)
+            assertEquals(
+                KeiyoushiIndex.PlayerPackageState.Kind.UPDATE_AVAILABLE,
+                manager.packageStates.value[pkg]!!.kind
+            )
+        }
+
+    @Test
+    fun `a failed update download keeps the flag and records the reason`() =
+        runBlocking {
+            installV1()
+            transport.bodies[KeiyoushiIndex.INDEX_URL] = indexBody(
+                versionCode = "106071", versionName = "1.6.71"
+            ).toByteArray()
+            manager.checkForUpdates()
+            // The update's file is suddenly unreachable.
+            transport.bodies.remove("https://example.test/fake.apk")
+            val result = manager.beginInstall(pkg)
+            // The call itself reports the failure (the shelf's
+            // tap handler speaks it)…
+            assertTrue(result is AppResult.Err)
+            // …and the RECORD carries it too — no silent state.
+            // The proven v1 keeps working (the state machine's
+            // rule), WITH the failure as its notice; the pending
+            // update survives — the flag clears only on a proven
+            // load of the new version.
+            val record = manager.record(pkg)!!
+            assertEquals(KeiyoushiExtStatus.READY, record.status)
+            assertEquals(
+                "the download didn't finish", record.failureReason
+            )
+            assertEquals(106071, record.availableVersionCode)
+            assertEquals(106005, record.installedVersionCode)
+            val state = manager.packageStates.value[pkg]!!
+            assertEquals(
+                KeiyoushiIndex.PlayerPackageState.Kind.UPDATE_AVAILABLE,
+                state.kind
+            )
+            assertEquals(record.failureReason, state.reason)
+            // The working v1 underneath is untouched.
+            assertNotNull(manager.sourceById("keiyoushi:$pkg:777"))
+        }
+
+    @Test
+    fun `retry load recovers a quarantined package and only then reads ready`() =
+        runBlocking {
+            installV1()
+            // A hard death at restore quarantines the package:
+            // FAILED, unloaded, never auto-retried (K6).
+            loader.failure = LinkageError("dex gone")
+            val manager2 = newManager()
+            manager2.restoreInstalled()
+            assertEquals(
+                KeiyoushiExtStatus.FAILED,
+                manager2.record(pkg)!!.status
+            )
+            assertNull(manager2.sourceById("keiyoushi:$pkg:777"))
+            // A retry that fails again is NOT a silent no-op:
+            // the shelf state says FAILED, with a reason. (The
+            // record itself follows the state machine's proven-
+            // version rule; what the user SEES is the package
+            // state, and it must never claim Ready for a package
+            // whose sources are not loaded.)
+            loader.failure = IllegalStateException("still broken")
+            val failed = manager2.retryLoad(pkg)
+            assertTrue(failed is AppResult.Ok)
+            val failedState = manager2.packageStates.value[pkg]!!
+            assertEquals(
+                KeiyoushiIndex.PlayerPackageState.Kind.FAILED,
+                failedState.kind
+            )
+            assertTrue(failedState.reason != null)
+            assertNull(manager2.sourceById("keiyoushi:$pkg:777"))
+            // The loader recovers: the same tap now loads, and
+            // only NOW may the row read Ready — because it is.
+            loader.failure = null
+            val recovered = manager2.retryLoad(pkg)
+            assertTrue(recovered is AppResult.Ok)
+            val record = (recovered as AppResult.Ok).value
+            assertEquals(KeiyoushiExtStatus.READY, record.status)
+            assertNull(record.failureReason)
+            assertNotNull(manager2.sourceById("keiyoushi:$pkg:777"))
+            assertEquals(
+                KeiyoushiIndex.PlayerPackageState.Kind.READY,
+                manager2.packageStates.value[pkg]!!.kind
+            )
+        }
+
     // ── fakes ───────────────────────────────────────────────
 
     private class FakeSource(

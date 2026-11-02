@@ -18,6 +18,19 @@ interface UpdateHttp {
     suspend fun getText(url: String): String?
 
     /**
+     * v1.4.3: the same GET, but the HTTP status comes back
+     * with it — (body, status); either may be null (no answer
+     * at all / a transport failure). The updater's failure
+     * line names the status ("GitHub couldn't be reached
+     * (403)") instead of shrugging; a bare null from
+     * [getText] couldn't tell a rate-limit from a dead line.
+     * The default delegates to [getText] with no status, so
+     * existing fakes and callers are untouched.
+     */
+    suspend fun getTextWithStatus(url: String): Pair<String?, Int?> =
+        getText(url) to null
+
+    /**
      * Streams [url] into [target], reporting
      * (downloadedBytes, totalBytesOrMinusOne) as it goes.
      * False on any failure; the partial file is the caller's
@@ -48,6 +61,26 @@ class OkHttpUpdateHttp(
                 }
             }.getOrNull()
         }
+
+    override suspend fun getTextWithStatus(
+        url: String
+    ): Pair<String?, Int?> = withContext(Dispatchers.IO) {
+        runCatching {
+            val request = Request.Builder()
+                .url(url)
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "Xreader-Android")
+                .build()
+            client.newCall(request).execute().use { response ->
+                val body = if (response.isSuccessful) {
+                    response.body?.string()
+                } else {
+                    null
+                }
+                body to response.code
+            }
+        }.getOrNull() ?: (null to null)
+    }
 
     override suspend fun download(
         url: String,

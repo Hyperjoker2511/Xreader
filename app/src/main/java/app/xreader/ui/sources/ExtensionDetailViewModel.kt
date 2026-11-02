@@ -744,9 +744,37 @@ class ExtensionDetailViewModel(
                 )) {
                     is app.xreader.data.extension.LinkProber.Outcome.Ready -> {
                         repairStageLines = outcome.stageLines.map { it.render() }
+                        // v1.4.3: RE-CLASSIFY ADVISOR (the
+                        // smallest honest form of the filing
+                        // rule's repair half). A rebuilt draft
+                        // starts kindless (TEXT default), so a
+                        // repair used to silently re-file a MANGA
+                        // link source under Novels. Now the
+                        // existing filing is PRESERVED — and when
+                        // the existing filing says TEXT while the
+                        // fresh test-drive proves chapters with
+                        // NO readable text in them (picture
+                        // chapters), the source moves to Manga
+                        // and the note says so. The advisor never
+                        // overrides a Manga filing, and never
+                        // touches the add flow (the section the
+                        // user adds from is authoritative there).
+                        val reclassified =
+                            config.mediaKind ==
+                                app.xreader.data.extension.MediaKind.TEXT &&
+                                outcome.draft.testDrive.chapterCount > 0 &&
+                                outcome.draft.testDrive.chapterTextLength == 0
+                        val stampedKind = if (reclassified) {
+                            app.xreader.data.extension.MediaKind.MANGA
+                        } else {
+                            config.mediaKind
+                        }
+                        val rebuiltConfig = outcome.draft.config.copy(
+                            mediaKind = stampedKind
+                        )
                         when (
                             val saved = container.repoManager.saveLinkSource(
-                                outcome.draft.config, outcome.draft.host,
+                                rebuiltConfig, outcome.draft.host,
                                 // v1.0.6.1 (P5): write into THIS
                                 // row's package, never one derived
                                 // from the rebuilt config's id.
@@ -754,7 +782,7 @@ class ExtensionDetailViewModel(
                             )
                         ) {
                             is AppResult.Ok -> {
-                                _linkConfig.value = outcome.draft.config
+                                _linkConfig.value = rebuiltConfig
                                 // v1.0.6.1 (P2): the old health
                                 // verdict described the old
                                 // rules — clear it before the
@@ -762,7 +790,13 @@ class ExtensionDetailViewModel(
                                 clearStaleHealth(config.id)
                                 repairSaved = true
                                 repairNote =
-                                    "Repair rebuilt the rules from the live site."
+                                    "Repair rebuilt the rules from the live site." +
+                                        if (reclassified) {
+                                            " Repair also moved it to Manga — " +
+                                                "its chapters are pictures, not text."
+                                        } else {
+                                            ""
+                                        }
                                 say(
                                     "Repair rebuilt the rules from the live " +
                                         "site. Running the test-drive…"
@@ -813,9 +847,31 @@ class ExtensionDetailViewModel(
                                 repairStageLines = repairStageLines +
                                     "AI detector — passed: its rules passed " +
                                     "the test-drive"
+                                // v1.4.3: the same filing
+                                // preservation as the probe save
+                                // above — the AI draft is kindless
+                                // too; the substance advisor
+                                // applies identically.
+                                val aiReclassified =
+                                    config.mediaKind ==
+                                        app.xreader.data.extension
+                                            .MediaKind.TEXT &&
+                                        aiOutcome.draft.testDrive
+                                            .chapterCount > 0 &&
+                                        aiOutcome.draft.testDrive
+                                            .chapterTextLength == 0
+                                val aiRebuiltConfig =
+                                    aiOutcome.draft.config.copy(
+                                        mediaKind = if (aiReclassified) {
+                                            app.xreader.data.extension
+                                                .MediaKind.MANGA
+                                        } else {
+                                            config.mediaKind
+                                        }
+                                    )
                                 when (
                                     container.repoManager.saveLinkSource(
-                                        aiOutcome.draft.config, aiOutcome.draft.host,
+                                        aiRebuiltConfig, aiOutcome.draft.host,
                                         // v1.0.6.1 (P5): this
                                         // row's package (see the
                                         // probe save above).
@@ -823,7 +879,7 @@ class ExtensionDetailViewModel(
                                     )
                                 ) {
                                     is AppResult.Ok -> {
-                                        _linkConfig.value = aiOutcome.draft.config
+                                        _linkConfig.value = aiRebuiltConfig
                                         // v1.0.6.1 (P2): clear
                                         // the stale verdict (see
                                         // the probe save above).
@@ -831,7 +887,14 @@ class ExtensionDetailViewModel(
                                         repairSaved = true
                                         repairNote =
                                             "Repair rebuilt the rules with the " +
-                                                "AI detector."
+                                                "AI detector." +
+                                                if (aiReclassified) {
+                                                    " Repair also moved it to " +
+                                                        "Manga — its chapters are " +
+                                                        "pictures, not text."
+                                                } else {
+                                                    ""
+                                                }
                                         say(
                                             "Repair rebuilt the rules with the AI " +
                                                 "detector. Running the test-drive…"

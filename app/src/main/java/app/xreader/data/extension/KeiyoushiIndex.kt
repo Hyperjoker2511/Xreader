@@ -293,6 +293,198 @@ object KeiyoushiIndex {
             compareBy<Row>({ it.entry.name.lowercase() }, { it.entry.lang })
         )
 
+    // ── repo identity (v1.4.3) ──────────────────────────────
+
+    /**
+     * v1.4.3: is this repository row THE Keiyoushi repo? By
+     * identity, never by the exact index-URL string alone: the
+     * pre-1.4.3 screens keyed everything (which screen renders,
+     * whether update detection runs, which rows the shelf
+     * shows) on `indexUrl == INDEX_URL`, so a Keiyoushi row the
+     * user had added by hand under any variant address (mirror,
+     * trailing form, older shape) opened a DIFFERENT screen
+     * with different counts, different verbs and a Novels-only
+     * filter — two shelves wearing one name. A row is the
+     * Keiyoushi repo when its address is the canonical index,
+     * when its address names the keiyoushi/extensions repo
+     * under any host or form, or when it carries the repo's
+     * own name.
+     */
+    fun isKeiyoushiRepo(name: String, indexUrl: String): Boolean {
+        if (indexUrl == INDEX_URL) return true
+        if (name.trim().equals(REPO_NAME, ignoreCase = true)) return true
+        return indexUrl.lowercase().contains("keiyoushi/extensions")
+    }
+
+    // ── the shelf (v1.4.3: per-extension rows, donor shape) ──
+
+    /**
+     * v1.4.3: ONE row of the Keiyoushi shelf — per EXTENSION
+     * PACKAGE, the donor's unit (Komikku's extension list is
+     * per extension, never per source). A package carrying
+     * several sources (languages/sites) is one row; its
+     * sources ride along as the search's secondary signal and
+     * the row's quiet count.
+     */
+    data class PackageRow(
+        val packageName: String,
+        val name: String,
+        /** Every language this package's sources declare,
+         * sorted; empty = the index didn't say. */
+        val langs: List<String>,
+        /** The hosts of this package's sources — the search's
+         * SECONDARY signal (a domain match never outranks a
+         * name match). */
+        val domains: List<String>,
+        val rating: ContentRating,
+        val badge: String?,
+        val state: State,
+        /** The failure/incompatibility reason in plain words,
+         * when the state carries one. */
+        val detail: String? = null,
+        val action: RowAction = RowAction.NONE,
+        val sourceCount: Int = 0
+    ) {
+        /** The language an Available row files under in the
+         * donor's by-language grouping: "all" beats "en"
+         * beats the first declared language. */
+        val primaryLang: String
+            get() = when {
+                langs.any { it.equals("all", ignoreCase = true) } ->
+                    "all"
+                langs.any { it.equals("en", ignoreCase = true) } ->
+                    "en"
+                else -> langs.firstOrNull()?.lowercase() ?: ""
+            }
+    }
+
+    /** The donor's three shelf groups, in display order. */
+    enum class ShelfGroup { UPDATES, INSTALLED, AVAILABLE }
+
+    fun shelfGroupOf(row: PackageRow): ShelfGroup = when (row.state) {
+        State.UPDATE_AVAILABLE -> ShelfGroup.UPDATES
+        State.NOT_INSTALLED, State.NEEDS_CONVERSION ->
+            ShelfGroup.AVAILABLE
+        else -> ShelfGroup.INSTALLED
+    }
+
+    /**
+     * v1.4.3: the shelf's rows — [rows]' inputs and preference
+     * filtering, grouped up to the package, the player's unit.
+     * State/action mapping is [rows]' own, applied per package:
+     * a package the player has loaded is Ready; any other
+     * player state shows itself with its action; an untouched
+     * package falls back to the conversion rule (Ready when any
+     * of its sites has a native conversion, Install when the
+     * catalogue names its package).
+     */
+    fun shelfRows(
+        entries: List<Entry>,
+        convertedHosts: Set<String>,
+        visibility: ContentVisibility,
+        playerStates: Map<String, PlayerPackageState>
+    ): List<PackageRow> {
+        val visible = entries.filter {
+            ContentAccess.allows(it.rating, visibility)
+        }
+        val groups = LinkedHashMap<String, MutableList<Entry>>()
+        for (entry in visible) {
+            val key = entry.packageName.ifBlank {
+                "entry:${entry.name.lowercase()}|${entry.lang.lowercase()}|${entry.host}"
+            }
+            groups.getOrPut(key) { mutableListOf() } += entry
+        }
+        return groups.map { (key, pkgEntries) ->
+            val packageName = pkgEntries.first().packageName
+            val player = packageName
+                .takeIf { it.isNotBlank() }
+                ?.let { playerStates[it] }
+            val converted = pkgEntries.any {
+                stateOf(it, convertedHosts) == State.READY
+            }
+            val rating = pkgEntries.maxByOrNull { it.rating.severity }
+                ?.rating ?: ContentRating.SAFE
+            // The display name: prefer an English/all entry's
+            // own name (the form a reader recognises), else the
+            // first entry's.
+            val display = pkgEntries.firstOrNull {
+                it.lang.equals("en", ignoreCase = true) ||
+                    it.lang.equals("all", ignoreCase = true)
+            } ?: pkgEntries.first()
+            val (state, detail, action) = when (player?.kind) {
+                PlayerPackageState.Kind.READY ->
+                    Triple(State.READY, null, RowAction.REMOVE)
+                PlayerPackageState.Kind.UPDATE_AVAILABLE ->
+                    // The reason rides along when the last
+                    // update attempt failed (the proven version
+                    // keeps working with a notice) — the row
+                    // shows why, beside its Update action.
+                    Triple(State.UPDATE_AVAILABLE, player.reason, RowAction.UPDATE)
+                PlayerPackageState.Kind.DOWNLOADING ->
+                    Triple(State.DOWNLOADING, null, RowAction.NONE)
+                PlayerPackageState.Kind.VERIFYING ->
+                    Triple(State.VERIFYING, null, RowAction.NONE)
+                PlayerPackageState.Kind.AWAITING_CONSENT ->
+                    Triple(State.AWAITING_CONSENT, null, RowAction.REVIEW)
+                PlayerPackageState.Kind.LOADING ->
+                    Triple(State.LOADING, null, RowAction.NONE)
+                PlayerPackageState.Kind.FAILED ->
+                    Triple(State.FAILED, player.reason, RowAction.INSTALL)
+                PlayerPackageState.Kind.INCOMPATIBLE ->
+                    Triple(State.INCOMPATIBLE, player.reason, RowAction.NONE)
+                PlayerPackageState.Kind.NOT_INSTALLED, null -> when {
+                    converted ->
+                        Triple(State.READY, null, RowAction.NONE)
+                    packageName.isNotBlank() ->
+                        Triple(State.NOT_INSTALLED, null, RowAction.INSTALL)
+                    else ->
+                        Triple(State.NEEDS_CONVERSION, null, RowAction.NONE)
+                }
+            }
+            PackageRow(
+                packageName = packageName.ifBlank { key },
+                name = display.name,
+                langs = pkgEntries.map { it.lang.trim().lowercase() }
+                    .filter { it.isNotEmpty() }.distinct().sorted(),
+                domains = pkgEntries.map { it.host }
+                    .filter { it.isNotEmpty() }.distinct(),
+                rating = rating,
+                badge = rating.badge,
+                state = state,
+                detail = detail,
+                action = action,
+                sourceCount = pkgEntries.size
+            )
+        }.sortedWith(
+            compareBy<PackageRow>({ it.name.lowercase() }, { it.primaryLang })
+        )
+    }
+
+    /**
+     * v1.4.3: the shelf search — the donor's semantics. The
+     * WHOLE shelf is searched (never a pre-filtered subset),
+     * NAME matches rank first (in shelf order), and a row
+     * whose name misses can still surface on its DOMAIN —
+     * but only after every name match. (The pre-1.4.3 matcher
+     * OR-ed name and domain over the filtered subset with no
+     * ranking, so "com" flooded the list with every .com.)
+     */
+    fun searchShelf(
+        rows: List<PackageRow>,
+        query: String
+    ): List<PackageRow> {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return rows
+        val nameMatches = rows.filter { it.name.lowercase().contains(q) }
+        if (nameMatches.size == rows.size) return nameMatches
+        val named = nameMatches.toSet()
+        val domainMatches = rows.filter { row ->
+            row !in named &&
+                row.domains.any { it.lowercase().contains(q) }
+        }
+        return nameMatches + domainMatches
+    }
+
     // ── package catalogue (K3: installable form) ────────────
 
     /** One source inside a [Package], as the index lists it. */

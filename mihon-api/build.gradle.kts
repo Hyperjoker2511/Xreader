@@ -37,6 +37,13 @@ dependencies {
     api(libs.okhttp.dnsoverhttps)
     api(libs.kotlinx.coroutines.android)
     api(libs.kotlinx.serialization.json)
+    // v1.4.3: the Keiyoushi core resolves ProtoBuf and XML from
+    // Injekt exactly as it resolves Json (keiyoushi.utils) — the
+    // types must ride the host classpath or every source using
+    // them dies on its first data call (the F1 trunk fix).
+    api(libs.kotlinx.serialization.protobuf)
+    api(libs.xmlutil.core.android)
+    api(libs.xmlutil.serialization)
     api(libs.androidx.preference.ktx)
     api(libs.injekt)
     api(libs.logcat)

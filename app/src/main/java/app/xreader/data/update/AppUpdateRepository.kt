@@ -52,8 +52,20 @@ class AppUpdateRepository(
      * changes nothing, so a later open can try again.
      */
     suspend fun checkNow(): CheckOutcome {
-        val payload = http.getText(LATEST_RELEASE_URL)
-            ?: return CheckOutcome.Failed("GitHub couldn't be reached.")
+        // v1.4.3: the failure line names the HTTP status when
+        // GitHub answered at all (a 403 rate-limit is the
+        // common case) — "couldn't be reached" alone taught
+        // the user nothing about whether to retry.
+        val (payloadOrNull, status) =
+            http.getTextWithStatus(LATEST_RELEASE_URL)
+        val payload = payloadOrNull
+            ?: return CheckOutcome.Failed(
+                if (status != null) {
+                    "GitHub couldn't be reached ($status)."
+                } else {
+                    "GitHub couldn't be reached."
+                }
+            )
         val release = ReleaseParsing.parseLatestRelease(payload)
             ?: return CheckOutcome.Failed("That release couldn't be read.")
         prefs.setCachedReleaseJson(payload)

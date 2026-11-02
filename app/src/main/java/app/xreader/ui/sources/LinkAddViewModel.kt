@@ -64,6 +64,27 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
     private val _state = MutableStateFlow<LinkAddUiState>(LinkAddUiState.Idle)
     val state: StateFlow<LinkAddUiState> = _state.asStateFlow()
 
+    /**
+     * v1.4.3 (the user's add-link rule): the Explore SECTION
+     * the user tapped "Add a link" in is the filing decision
+     * — Novels files a novel source, Manga files a manga
+     * source, and nothing in the learner overrides it. The
+     * navigation layer sets this from the Sources screen's
+     * current section right before opening the add flow, and
+     * [save] stamps it on the saved source. (Chapter-substance
+     * detection exists only as an advisor in Repair's
+     * re-classify, never here.)
+     */
+    @Volatile
+    var intendedKind: app.xreader.data.extension.MediaKind? = null
+        private set
+
+    fun setIntendedKind(
+        kind: app.xreader.data.extension.MediaKind?
+    ) {
+        intendedKind = kind
+    }
+
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
@@ -239,7 +260,12 @@ class LinkAddViewModel(private val container: AppContainer) : ViewModel() {
         _state.value = LinkAddUiState.Saving
         launchGuarded {
             val config = current.draft.config.copy(
-                name = current.sourceName.ifBlank { current.draft.config.name }
+                name = current.sourceName.ifBlank { current.draft.config.name },
+                // v1.4.3: the section the user added from is
+                // authoritative — a manga site added from the
+                // Manga section files as a manga source, never
+                // under Novels (the link-added Asura case).
+                mediaKind = intendedKind ?: current.draft.config.mediaKind
             )
             when (val saved = container.repoManager.saveLinkSource(config, current.draft.host)) {
                 is AppResult.Err -> {

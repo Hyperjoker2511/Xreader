@@ -142,10 +142,18 @@ data class SourcesUiState(
      * [app.xreader.data.extension.KeiyoushiIndex.rows] from
      * the repo's loaded site list — preference-filtered, each
      * with its true conversion state and rating badge. Empty
-     * until the repo's list has loaded. */
+     * until the repo's list has loaded.
+     * v1.4.3: PER-PACKAGE shelf rows (the donor's unit) from
+     * [app.xreader.data.extension.KeiyoushiIndex.shelfRows]. */
     val keiyoushiRows:
-        List<app.xreader.data.extension.KeiyoushiIndex.Row> =
+        List<app.xreader.data.extension.KeiyoushiIndex.PackageRow> =
         emptyList(),
+    /** v1.4.3: the packages whose install/update is on the
+     * wire right now — the shelf's per-row progress + Cancel.
+     * (The pre-1.4.3 shelf keyed every row's enabled state to
+     * the one global [busy] flag, so a single stuck install
+     * faded the whole list behind a progress bar, forever.) */
+    val keiyoushiBusyPackages: Set<String> = emptySet(),
     /** K3: a staged Keiyoushi install waiting for the user's
      * consent — the sheet's data (honest DEX wording,
      * fingerprint, signer). Non-null only between a verified
@@ -188,8 +196,13 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         Map<String, app.xreader.data.extension.MediaKind>
     >(emptyMap())
     private val _keiyoushiRows = MutableStateFlow<
-        List<app.xreader.data.extension.KeiyoushiIndex.Row>
+        List<app.xreader.data.extension.KeiyoushiIndex.PackageRow>
     >(emptyList())
+    private val _keiyoushiBusy = MutableStateFlow<Set<String>>(emptySet())
+    /** v1.4.3: the running install/update job per package —
+     * the row's Cancel lands on exactly its own job. */
+    private val keiyoushiJobs =
+        mutableMapOf<String, kotlinx.coroutines.Job>()
     private val _keiyoushiConsent = MutableStateFlow<
         app.xreader.data.extension.player.KeiyoushiConsentPrompt?
     >(null)
@@ -209,7 +222,8 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         container.sourcePrefs.contentVisibility,
         _sourceRatings,
         container.libraryPrefs.librarySide,
-        _sourceKinds, _keiyoushiRows, _keiyoushiConsent
+        _sourceKinds, _keiyoushiRows, _keiyoushiConsent,
+        _keiyoushiBusy
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val rawExtensions = values[1] as List<InstalledExtension>
@@ -247,10 +261,11 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
             sourceKinds =
                 values[21] as Map<String, app.xreader.data.extension.MediaKind>,
             keiyoushiRows =
-                values[22] as List<app.xreader.data.extension.KeiyoushiIndex.Row>,
+                values[22] as List<app.xreader.data.extension.KeiyoushiIndex.PackageRow>,
             keiyoushiConsent =
                 values[23] as
-                    app.xreader.data.extension.player.KeiyoushiConsentPrompt?
+                    app.xreader.data.extension.player.KeiyoushiConsentPrompt?,
+            keiyoushiBusyPackages = values[24] as Set<String>
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SourcesUiState())
 
@@ -428,10 +443,15 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
      * "check for updates" empty state. */
     private suspend fun computeKeiyoushiRows(
         inputs: KeiyoushiInputs
-    ): List<app.xreader.data.extension.KeiyoushiIndex.Row> {
+    ): List<app.xreader.data.extension.KeiyoushiIndex.PackageRow> {
+        // v1.4.3: the repo is found by IDENTITY (name / repo
+        // shape / canonical address), never the exact-URL
+        // string alone — a hand-added variant row used to
+        // leave the shelf empty here while opening the wrong
+        // screen there (the two-shelves bug).
         val repo = inputs.repos.firstOrNull {
-            it.indexUrl ==
-                app.xreader.data.extension.KeiyoushiIndex.INDEX_URL
+            app.xreader.data.extension.KeiyoushiIndex
+                .isKeiyoushiRepo(it.name, it.indexUrl)
         } ?: return emptyList()
         val sites = inputs.foreignRepos[repo.id]?.sites
             ?: return emptyList()
@@ -445,7 +465,7 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                     .declarativeConfigOf(handle)?.let { configs += it }
             }
         }
-        return app.xreader.data.extension.KeiyoushiIndex.rows(
+        return app.xreader.data.extension.KeiyoushiIndex.shelfRows(
             entries = keiyoushiEntries(sites),
             convertedHosts = app.xreader.data.extension
                 .KeiyoushiIndex.convertedHosts(configs),
@@ -935,13 +955,41 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                             // re-checks installed packages
                             // against the fresh catalogue —
                             // newer versions flag their rows
-                            // "Update available".
-                            if (repo.indexUrl ==
-                                app.xreader.data.extension
-                                    .KeiyoushiIndex.INDEX_URL
+                            // "Update available". v1.4.3: by
+                            // repo IDENTITY (the exact-URL gate
+                            // meant detection never ran for a
+                            // hand-added row), and the outcome
+                            // is SAID — a check that fails or
+                            // finds updates is never silent.
+                            if (app.xreader.data.extension
+                                    .KeiyoushiIndex.isKeiyoushiRepo(
+                                        repo.name, repo.indexUrl
+                                    )
                             ) {
-                                container.keiyoushiPlayerManager
-                                    .checkForUpdates()
+                                when (
+                                    val check = container
+                                        .keiyoushiPlayerManager
+                                        .checkForUpdates()
+                                ) {
+                                    is AppResult.Err -> say(
+                                        "Keiyoushi's own update " +
+                                            "check didn't finish: " +
+                                            ErrorText.displayText(
+                                                check.error
+                                            )
+                                    )
+                                    is AppResult.Ok ->
+                                        if (check.value > 0) {
+                                            say(
+                                                "${check.value} " +
+                                                    "Keiyoushi " +
+                                                    "update(s) are " +
+                                                    "waiting — they're " +
+                                                    "at the top of " +
+                                                    "the shelf."
+                                            )
+                                        }
+                                }
                             }
                         }
                     }
@@ -1066,41 +1114,139 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
     /** A row's Install/Update tap: download + verify, then
      * the consent sheet (state.keiyoushiConsent) when the
      * file checks out. A failure lands on the row itself as
-     * its Failed/Incompatible state. */
+     * its Failed/Incompatible state.
+     *
+     * v1.4.3 (the field diagnosis's §6/§7): the tap is NEVER
+     * a silent no-op and never freezes the shelf —
+     * - progress is PER ROW ([keiyoushiBusyPackages] + the
+     *   row's own job, cancellable from the row), never the
+     *   global busy flag;
+     * - an installed, consented package with no newer
+     *   version waiting doesn't re-download: its tap means
+     *   "run it" and routes to the player's retryLoad (the
+     *   way back for a failed load, incl. a quarantined
+     *   record — the pre-1.4.3 tap looped silently on
+     *   exactly this state);
+     * - EVERY outcome is said: the consent sheet, a ready
+     *   line, or the record's plain-words reason. */
     fun installKeiyoushi(packageName: String) {
-        viewModelScope.launch {
-            _busy.value = true
+        if (keiyoushiJobs[packageName]?.isActive == true) return
+        val job = viewModelScope.launch {
+            _keiyoushiBusy.value =
+                _keiyoushiBusy.value + packageName
             try {
-                when (
-                    val result = container.keiyoushiPlayerManager
-                        .beginInstall(packageName)
+                val player = container.keiyoushiPlayerManager
+                val record = player.record(packageName)
+                val updateWaiting = record != null &&
+                    record.availableVersionCode >
+                    record.installedVersionCode
+                val result = if (
+                    record != null && record.isInstalled &&
+                    !updateWaiting && record.consentedSha256 != null
                 ) {
+                    player.retryLoad(packageName)
+                } else {
+                    player.beginInstall(packageName)
+                }
+                when (result) {
                     is AppResult.Err ->
                         say(ErrorText.displayText(result.error))
                     is AppResult.Ok -> {
-                        val prompt = container.keiyoushiPlayerManager
-                            .consentPrompt(packageName)
+                        val prompt = player.consentPrompt(packageName)
+                        val rec = result.value
                         if (prompt != null) {
                             _keiyoushiConsent.value = prompt
-                        } else if (
-                            result.value.status ==
-                            app.xreader.data.extension.player
-                                .KeiyoushiExtStatus.FAILED ||
-                            result.value.status ==
-                            app.xreader.data.extension.player
-                                .KeiyoushiExtStatus.INCOMPATIBLE
-                        ) {
+                        } else {
                             say(
-                                "“${result.value.displayName}”: " +
-                                    (result.value.failureReason
-                                        ?: "couldn't be installed")
+                                "“${rec.displayName}”: " +
+                                    when (rec.status) {
+                                        app.xreader.data.extension
+                                            .player.KeiyoushiExtStatus
+                                            .READY ->
+                                            rec.failureReason
+                                                ?: "it's ready"
+                                        else ->
+                                            rec.failureReason
+                                                ?: "couldn't be installed"
+                                    }
                             )
                         }
                     }
                 }
             } finally {
-                _busy.value = false
+                _keiyoushiBusy.value =
+                    _keiyoushiBusy.value - packageName
+                keiyoushiJobs.remove(packageName)
             }
+        }
+        keiyoushiJobs[packageName] = job
+    }
+
+    /** v1.4.3: a busy row's Cancel — stops exactly that
+     * row's job, then clears the staged/transient state in
+     * the player. Nothing else on the shelf is touched. */
+    fun cancelKeiyoushiInstall(packageName: String) {
+        val job = keiyoushiJobs[packageName] ?: return
+        job.cancel()
+        viewModelScope.launch {
+            job.join()
+            container.keiyoushiPlayerManager
+                .cancelInstall(packageName)
+        }
+    }
+
+    /** v1.4.3: the shelf's own update check — runs when the
+     * shelf opens (donor parity: detection is not something
+     * the user must remember to ask for). A failure is said;
+     * waiting updates announce themselves. */
+    fun checkKeiyoushiUpdates() {
+        viewModelScope.launch {
+            when (
+                val check = container.keiyoushiPlayerManager
+                    .checkForUpdates()
+            ) {
+                is AppResult.Err -> say(
+                    "Keiyoushi's update check didn't finish: " +
+                        ErrorText.displayText(check.error)
+                )
+                is AppResult.Ok -> if (check.value > 0) {
+                    say(
+                        "${check.value} Keiyoushi update(s) are " +
+                            "waiting — they're at the top of the shelf."
+                    )
+                }
+            }
+        }
+    }
+
+    /** v1.4.3: "Update all" in the shelf's Updates-pending
+     * section (donor parity). Each package still stages and
+     * takes its own consent — the consent sheet is per
+     * package by design; packages the sheet isn't showing
+     * wait as "Needs your OK" rows with a Review button. */
+    fun updateAllKeiyoushi() {
+        val pending = container.keiyoushiPlayerManager
+            .records.value.values
+            .filter {
+                it.availableVersionCode > it.installedVersionCode
+            }
+            .map { it.packageName }
+        if (pending.isEmpty()) {
+            say("No updates are waiting.")
+            return
+        }
+        pending.forEach { installKeiyoushi(it) }
+    }
+
+    /** v1.4.3: the 18+ quick toggle on the source screens
+     * writes the SAME ContentVisibility preference the
+     * Customise screen's chips drive — one source of truth,
+     * both surfaces stay in sync. */
+    fun setContentVisibility(
+        visibility: app.xreader.data.extension.ContentVisibility
+    ) {
+        viewModelScope.launch {
+            container.sourcePrefs.setContentVisibility(visibility)
         }
     }
 
@@ -1118,8 +1264,12 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
     fun confirmKeiyoushiConsent() {
         val prompt = _keiyoushiConsent.value ?: return
         _keiyoushiConsent.value = null
-        viewModelScope.launch {
-            _busy.value = true
+        // v1.4.3: the confirm's load is per-row work too —
+        // the global busy flag stays out of it.
+        if (keiyoushiJobs[prompt.packageName]?.isActive == true) return
+        val job = viewModelScope.launch {
+            _keiyoushiBusy.value =
+                _keiyoushiBusy.value + prompt.packageName
             try {
                 when (
                     val result = container.keiyoushiPlayerManager
@@ -1147,9 +1297,12 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                     }
                 }
             } finally {
-                _busy.value = false
+                _keiyoushiBusy.value =
+                    _keiyoushiBusy.value - prompt.packageName
+                keiyoushiJobs.remove(prompt.packageName)
             }
         }
+        keiyoushiJobs[prompt.packageName] = job
     }
 
     /** The consent sheet dismissed: the staged file is

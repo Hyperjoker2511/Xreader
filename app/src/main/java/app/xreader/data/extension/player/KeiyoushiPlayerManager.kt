@@ -76,7 +76,20 @@ class KeiyoushiPlayerManager(
     private val nowMs: () -> Long = System::currentTimeMillis
 ) {
 
+    /** Guards the record STATE (the map, publishes, the
+     * record store). Held only for state transitions and
+     * quick file moves — NEVER across a network download or
+     * an extension load (v1.4.3, §7 of the field diagnosis:
+     * one stuck load used to wedge every install for the
+     * process lifetime behind this single lock). */
     private val mutex = Mutex()
+
+    /** v1.4.3: serialises the LOADER only — arbitrary
+     * extension code runs under this lock and no other, so a
+     * slow or stuck load can delay another load but can
+     * never block installs, updates or state reads. Lock
+     * order where both are needed: loadMutex, then mutex. */
+    private val loadMutex = Mutex()
 
     private val _records =
         MutableStateFlow<Map<String, KeiyoushiPlayerRecord>>(emptyMap())
@@ -103,6 +116,14 @@ class KeiyoushiPlayerManager(
     @Volatile
     private var restored = false
 
+    /** v1.4.3: restore's load pass has finished (or there
+     * was nothing to load). Until then a READY record's
+     * empty registry may just mean "not reached yet" — the
+     * READY-must-mean-LOADED surfacing in
+     * [toPlayerPackageState] only applies once this is set. */
+    @Volatile
+    private var restoreSettled = false
+
     /** K6: the kill switch, in memory. Off means no extension
      * loads and the registry reads empty — player sources
      * vanish from Explore/search and library books meet the
@@ -126,15 +147,17 @@ class KeiyoushiPlayerManager(
      * user retries them, exactly as at startup.
      */
     suspend fun setPlayerEnabled(enabled: Boolean) {
-        mutex.withLock {
+        val shouldLoad = mutex.withLock {
             val was = playerEnabledFlag
             playerEnabledFlag = enabled
             if (!enabled) {
                 liveSources.clear()
-            } else if (!was && restored) {
-                loadInstalledLocked()
             }
+            !was && enabled && restored
         }
+        // v1.4.3: the loads run OUTSIDE the state lock (they
+        // take their own locks per package).
+        if (shouldLoad) loadInstalled()
     }
 
     // ── lookups (K4's seam) ─────────────────────────────────
@@ -265,27 +288,22 @@ class KeiyoushiPlayerManager(
                 "that source isn't in the Keiyoushi catalogue"
             )
         )
-        return mutex.withLock { beginInstallLocked(pkg, catalog) }
-    }
-
-    private suspend fun beginInstallLocked(
-        pkg: KeiyoushiIndex.Package,
-        catalog: KeiyoushiIndex.Catalog
-    ): AppResult<KeiyoushiPlayerRecord> {
-        var record = _records.value[pkg.packageName]
-            ?: KeiyoushiPlayerRecord(
-                packageName = pkg.packageName,
-                displayName = pkg.name
-            )
 
         // The trust anchor first: an index whose key isn't
         // the Keiyoushi key blesses nothing.
         when (val keyVerdict = KeiyoushiTrust.verifyIndexKey(catalog.signingKey)) {
             is KeiyoushiTrust.Verdict.Refuse -> {
-                record = applyLocked(
-                    record,
-                    KeiyoushiEvent.DownloadFailed(keyVerdict.reason)
-                )
+                mutex.withLock {
+                    val record = _records.value[pkg.packageName]
+                        ?: KeiyoushiPlayerRecord(
+                            packageName = pkg.packageName,
+                            displayName = pkg.name
+                        )
+                    applyLocked(
+                        record,
+                        KeiyoushiEvent.DownloadFailed(keyVerdict.reason)
+                    )
+                }
                 return AppResult.Err(
                     AppError.ExtensionFailed(pkg.name, keyVerdict.reason)
                 )
@@ -293,14 +311,41 @@ class KeiyoushiPlayerManager(
             else -> Unit
         }
 
-        record = applyLocked(record, KeiyoushiEvent.DownloadStarted)
-        record = record.copy(
-            displayName = pkg.name,
-            indexVersionCode = pkg.versionCode,
-            indexVersionName = pkg.versionName
-        )
-        publishRecordLocked(record)
+        // Phase 1 (state lock): open the attempt. A second
+        // tap while a download/verify is already on the wire
+        // is the same attempt, not a new one.
+        val started = mutex.withLock {
+            val existing = _records.value[pkg.packageName]
+            if (existing != null &&
+                (existing.status == KeiyoushiExtStatus.DOWNLOADING ||
+                    existing.status == KeiyoushiExtStatus.VERIFYING)
+            ) {
+                return@withLock existing
+            }
+            var record = existing
+                ?: KeiyoushiPlayerRecord(
+                    packageName = pkg.packageName,
+                    displayName = pkg.name
+                )
+            record = applyLocked(record, KeiyoushiEvent.DownloadStarted)
+            record = record.copy(
+                displayName = pkg.name,
+                indexVersionCode = pkg.versionCode,
+                indexVersionName = pkg.versionName
+            )
+            publishRecordLocked(record)
+            record
+        }
+        if (started.status != KeiyoushiExtStatus.DOWNLOADING) {
+            // The in-flight attempt another caller opened.
+            return AppResult.Ok(started)
+        }
 
+        // Phase 2 (NO lock): the download itself. v1.4.3: this
+        // used to run under the manager's single mutex, so one
+        // slow download — or a stuck load queued ahead of it —
+        // froze every other row's install for the process
+        // lifetime (the field diagnosis's §7 hang).
         val staging = store.keiyoushiStagingFile(pkg.packageName)
         val sha = try {
             val response = transport.execute(
@@ -308,12 +353,9 @@ class KeiyoushiPlayerManager(
             )
             when (response) {
                 is AppResult.Err -> {
-                    applyLocked(
-                        record,
-                        KeiyoushiEvent.DownloadFailed(
-                            "the download didn't finish",
-                            response.error.toString()
-                        )
+                    downloadFailedLocked(
+                        pkg, "the download didn't finish",
+                        response.error.toString()
                     )
                     return AppResult.Err(response.error)
                 }
@@ -322,9 +364,7 @@ class KeiyoushiPlayerManager(
                     if (resp.code !in 200..299 || resp.body == null) {
                         val reason =
                             "the download didn't finish (HTTP ${resp.code})"
-                        applyLocked(
-                            record, KeiyoushiEvent.DownloadFailed(reason)
-                        )
+                        downloadFailedLocked(pkg, reason, null)
                         return AppResult.Err(
                             AppError.ExtensionFailed(pkg.name, reason)
                         )
@@ -335,17 +375,68 @@ class KeiyoushiPlayerManager(
                 }
             }
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is kotlinx.coroutines.CancellationException) {
+                // Leave the record honest even when the caller
+                // went away: a cancelled attempt is a failed
+                // stage, never a phantom "Downloading…" forever.
+                kotlinx.coroutines.withContext(
+                    kotlinx.coroutines.NonCancellable
+                ) {
+                    downloadFailedLocked(
+                        pkg, "the download was stopped", null
+                    )
+                }
+                throw e
+            }
             val reason = "the download didn't finish"
-            applyLocked(
-                record,
-                KeiyoushiEvent.DownloadFailed(reason, e.toString())
-            )
+            downloadFailedLocked(pkg, reason, e.toString())
             return AppResult.Err(
                 AppError.ExtensionFailed(pkg.name, reason)
             )
         }
 
+        // Phase 3 (state lock): pin the staged fingerprint and
+        // verify the staged bytes (local file reads only).
+        return mutex.withLock {
+            verifyStagedLocked(pkg, sha, catalog.signingKey)
+        }
+    }
+
+    /** Apply a download failure to the CURRENT record (the
+     * record may have moved while the download ran unlocked).
+     * Caller does NOT hold [mutex]. */
+    private suspend fun downloadFailedLocked(
+        pkg: KeiyoushiIndex.Package,
+        reason: String,
+        detail: String?
+    ) {
+        mutex.withLock {
+            val current = _records.value[pkg.packageName]
+                ?: return@withLock
+            if (current.status == KeiyoushiExtStatus.DOWNLOADING) {
+                applyLocked(
+                    current,
+                    KeiyoushiEvent.DownloadFailed(reason, detail)
+                )
+            }
+        }
+    }
+
+    /** Phase 3 of [beginInstall]: the staged file's
+     * fingerprint + the full verification chain (package,
+     * library gate, certificate vs the index key, entry
+     * class). Caller holds [mutex]. */
+    private fun verifyStagedLocked(
+        pkg: KeiyoushiIndex.Package,
+        sha: String,
+        signingKey: String?
+    ): AppResult<KeiyoushiPlayerRecord> {
+        var record = _records.value[pkg.packageName]
+            ?: return AppResult.Err(
+                AppError.ExtensionFailed(
+                    pkg.name, "the install was interrupted"
+                )
+            )
         record = record.copy(
             stagedSha256 = sha,
             stagedVersionCode = pkg.versionCode,
@@ -354,6 +445,7 @@ class KeiyoushiPlayerManager(
         publishRecordLocked(record)
         record = applyLocked(record, KeiyoushiEvent.Downloaded)
 
+        val staging = store.keiyoushiStagingFile(pkg.packageName)
         // ── verify the staged bytes ────────────────────────
         val metadata = apkReader.read(staging)
         if (metadata == null) {
@@ -405,7 +497,7 @@ class KeiyoushiPlayerManager(
         }
         when (
             val certVerdict = KeiyoushiTrust.verifyCertificate(
-                metadata.certSha256s, catalog.signingKey!!
+                metadata.certSha256s, signingKey!!
             )
         ) {
             is KeiyoushiTrust.Verdict.Refuse -> {
@@ -480,116 +572,195 @@ class KeiyoushiPlayerManager(
     suspend fun confirmInstall(
         packageName: String,
         fingerprint: String
-    ): AppResult<KeiyoushiPlayerRecord> = mutex.withLock {
-        var record = _records.value[packageName]
+    ): AppResult<KeiyoushiPlayerRecord> {
+        // Phase 1 (state lock): consent validation, the file
+        // moves and the pin updates — quick local work only.
+        // The load itself runs AFTER this block, unlocked
+        // (v1.4.3: it used to run inside this same mutex,
+        // where one extension's slow start froze every other
+        // package's install — the §7 hang).
+        data class Prepared(
+            val record: KeiyoushiPlayerRecord,
+            val oldRecord: KeiyoushiPlayerRecord,
+            val isUpdate: Boolean
+        )
+        val prepared = mutex.withLock {
+            var record = _records.value[packageName]
+                ?: return AppResult.Err(
+                    AppError.ExtensionFailed(
+                        packageName,
+                        "there's nothing waiting for your OK — tap Install first"
+                    )
+                )
+            if (record.status != KeiyoushiExtStatus.AWAITING_CONSENT) {
+                return AppResult.Err(
+                    AppError.ExtensionFailed(
+                        record.displayName,
+                        "there's nothing waiting for your OK — tap Install first"
+                    )
+                )
+            }
+            val staged = store.keiyoushiStagingFile(packageName)
+            val stagedSha = record.stagedSha256
+            if (stagedSha == null || !staged.exists()) {
+                val updated = applyLocked(
+                    record,
+                    KeiyoushiEvent.VerifyFailed(
+                        "the staged file is gone — tap Install to fetch it again"
+                    )
+                )
+                return AppResult.Ok(updated)
+            }
+            if (!fingerprint.equals(stagedSha, ignoreCase = true)) {
+                // The user agreed to different bytes than were
+                // verified. Nothing loads; the staged copy stays
+                // for a fresh review.
+                return AppResult.Err(
+                    AppError.ExtensionFailed(
+                        record.displayName,
+                        "the file changed since you reviewed it — check it again"
+                    )
+                )
+            }
+            val onDisk = store.hashFile(staged)
+            if (onDisk == null ||
+                !onDisk.equals(stagedSha, ignoreCase = true)
+            ) {
+                staged.delete()
+                val updated = applyLocked(
+                    record,
+                    KeiyoushiEvent.VerifyFailed(
+                        "the file changed after it was checked — it wasn't installed"
+                    )
+                )
+                return AppResult.Ok(updated)
+            }
+
+            // An update keeps its predecessor until the new bytes
+            // prove they load (the state machine's READY-on-failure
+            // rule is only honest if the old file can come back).
+            val finalFile = store.keiyoushiExtFile(packageName)
+            val previousFile = previousFile(packageName)
+            val isUpdate = record.isInstalled && finalFile.exists()
+            if (isUpdate) {
+                runCatching {
+                    finalFile.copyTo(previousFile, overwrite = true)
+                }
+            }
+            val oldRecord = record
+            staged.copyTo(finalFile, overwrite = true)
+            staged.delete()
+            runCatching { finalFile.setReadOnly() }
+
+            record = record.copy(
+                consentedSha256 = stagedSha,
+                apkSha256 = stagedSha,
+                installedVersionCode = record.stagedVersionCode,
+                installedVersionName = record.stagedVersionName
+                    .ifBlank { record.indexVersionName }
+            )
+            publishRecordLocked(record)
+            Prepared(record, oldRecord, isUpdate)
+        }
+        val prep = prepared
+
+        // Phase 2 (own locks): gate + load + register.
+        val (loaded, ok) = loadRecord(prep.record)
+        if (!ok && prep.isUpdate) {
+            // Phase 3 (state lock): roll the predecessor back —
+            // file, pins, version.
+            val previousFile = previousFile(packageName)
+            val finalFile = store.keiyoushiExtFile(packageName)
+            return mutex.withLock {
+                runCatching {
+                    if (previousFile.exists()) {
+                        finalFile.delete()
+                        previousFile.copyTo(finalFile, overwrite = true)
+                        finalFile.setReadOnly()
+                        previousFile.delete()
+                    }
+                }
+                val reverted = loaded.copy(
+                    installedVersionCode = prep.oldRecord.installedVersionCode,
+                    installedVersionName = prep.oldRecord.installedVersionName,
+                    apkSha256 = prep.oldRecord.apkSha256,
+                    consentedSha256 = prep.oldRecord.consentedSha256,
+                    status = KeiyoushiExtStatus.READY,
+                    failureReason =
+                        "the update couldn't be started — the version you had is back"
+                )
+                publishRecordLocked(reverted)
+                AppResult.Ok(reverted)
+            }
+        }
+        if (ok) runCatching { previousFile(packageName).delete() }
+        return AppResult.Ok(loaded)
+    }
+
+    /**
+     * v1.4.3: start an already-installed, already-consented
+     * package WITHOUT a new download — the way back for a
+     * record whose load failed (the state machine's soft
+     * READY-with-notice trap, or a quarantined FAILED the
+     * user retries with its Install tap). The bytes are
+     * re-hashed against their pin first, exactly as at
+     * restore: a mismatch freezes the record FAILED and
+     * flips the mirroring row to re-trust, and nothing loads.
+     */
+    suspend fun retryLoad(
+        packageName: String
+    ): AppResult<KeiyoushiPlayerRecord> {
+        val record = _records.value[packageName]
             ?: return AppResult.Err(
                 AppError.ExtensionFailed(
                     packageName,
-                    "there's nothing waiting for your OK — tap Install first"
+                    "that source isn't installed"
                 )
             )
-        if (record.status != KeiyoushiExtStatus.AWAITING_CONSENT) {
+        if (!record.isInstalled || record.consentedSha256 == null) {
             return AppResult.Err(
                 AppError.ExtensionFailed(
                     record.displayName,
-                    "there's nothing waiting for your OK — tap Install first"
+                    "there's no installed copy to start — tap Install"
                 )
             )
         }
-        val staged = store.keiyoushiStagingFile(packageName)
-        val stagedSha = record.stagedSha256
-        if (stagedSha == null || !staged.exists()) {
-            val updated = applyLocked(
-                record,
-                KeiyoushiEvent.VerifyFailed(
-                    "the staged file is gone — tap Install to fetch it again"
-                )
-            )
-            return AppResult.Ok(updated)
-        }
-        if (!fingerprint.equals(stagedSha, ignoreCase = true)) {
-            // The user agreed to different bytes than were
-            // verified. Nothing loads; the staged copy stays
-            // for a fresh review.
-            return AppResult.Err(
-                AppError.ExtensionFailed(
-                    record.displayName,
-                    "the file changed since you reviewed it — check it again"
-                )
-            )
-        }
-        val onDisk = store.hashFile(staged)
+        val onDisk = store.hashFile(store.keiyoushiExtFile(packageName))
         if (onDisk == null ||
-            !onDisk.equals(stagedSha, ignoreCase = true)
+            !onDisk.equals(record.apkSha256, ignoreCase = true)
         ) {
-            staged.delete()
-            val updated = applyLocked(
-                record,
-                KeiyoushiEvent.VerifyFailed(
-                    "the file changed after it was checked — it wasn't installed"
+            val failed = mutex.withLock {
+                val current = _records.value[packageName] ?: record
+                val frozen = current.copy(
+                    status = KeiyoushiExtStatus.FAILED,
+                    failureReason =
+                        "the file changed since it was installed — " +
+                            "install it again to review the new file",
+                    failureDetail =
+                        "onDisk=$onDisk pinned=${record.apkSha256}"
                 )
-            )
-            return AppResult.Ok(updated)
-        }
-
-        // An update keeps its predecessor until the new bytes
-        // prove they load (the state machine's READY-on-failure
-        // rule is only honest if the old file can come back).
-        val finalFile = store.keiyoushiExtFile(packageName)
-        val previousFile = previousFile(packageName)
-        val isUpdate = record.isInstalled && finalFile.exists()
-        if (isUpdate) {
-            runCatching {
-                finalFile.copyTo(previousFile, overwrite = true)
+                publishRecordLocked(frozen)
+                markRowRetrustLocked(frozen)
+                frozen
             }
+            return AppResult.Ok(failed)
         }
-        val oldRecord = record
-        staged.copyTo(finalFile, overwrite = true)
-        staged.delete()
-        runCatching { finalFile.setReadOnly() }
-
-        record = record.copy(
-            consentedSha256 = stagedSha,
-            apkSha256 = stagedSha,
-            installedVersionCode = record.stagedVersionCode,
-            installedVersionName = record.stagedVersionName
-                .ifBlank { record.indexVersionName }
-        )
-        publishRecordLocked(record)
-
-        val (loaded, ok) = loadRecordLocked(record)
-        if (!ok && isUpdate) {
-            // Roll the predecessor back: file, pins, version.
-            runCatching {
-                if (previousFile.exists()) {
-                    finalFile.delete()
-                    previousFile.copyTo(finalFile, overwrite = true)
-                    finalFile.setReadOnly()
-                    previousFile.delete()
-                }
-            }
-            val reverted = loaded.copy(
-                installedVersionCode = oldRecord.installedVersionCode,
-                installedVersionName = oldRecord.installedVersionName,
-                apkSha256 = oldRecord.apkSha256,
-                consentedSha256 = oldRecord.consentedSha256,
-                status = KeiyoushiExtStatus.READY,
-                failureReason =
-                    "the update couldn't be started — the version you had is back"
-            )
-            publishRecordLocked(reverted)
-            return AppResult.Ok(reverted)
-        }
-        if (ok) runCatching { previousFile.delete() }
-        AppResult.Ok(loaded)
+        val (loaded, _) = loadRecord(record)
+        return AppResult.Ok(loaded)
     }
 
     /** Dismiss a staged install: the staged bytes go, an
-     * installed predecessor is untouched. */
+     * installed predecessor is untouched. v1.4.3: also the
+     * row-Cancel for an in-flight download/verify — the
+     * transient states clear the same way, so a cancelled
+     * attempt never leaves a phantom "Downloading…" record. */
     suspend fun cancelInstall(packageName: String) {
         mutex.withLock {
             val record = _records.value[packageName] ?: return
-            if (record.status != KeiyoushiExtStatus.AWAITING_CONSENT) {
+            if (record.status != KeiyoushiExtStatus.AWAITING_CONSENT &&
+                record.status != KeiyoushiExtStatus.DOWNLOADING &&
+                record.status != KeiyoushiExtStatus.VERIFYING
+            ) {
                 return
             }
             runCatching {
@@ -601,6 +772,8 @@ class KeiyoushiPlayerManager(
                 } else {
                     KeiyoushiExtStatus.NOT_INSTALLED
                 },
+                failureReason = null,
+                failureDetail = null,
                 stagedSha256 = null,
                 stagedVersionCode = 0,
                 stagedVersionName = ""
@@ -624,7 +797,19 @@ class KeiyoushiPlayerManager(
      * source reads as gone through the existing orphan
      * handling (no row + no live source). */
     suspend fun uninstall(packageName: String) {
-        mutex.withLock {
+        // v1.4.3: wait out any in-flight load first (the load
+        // lock), then run the cascade under the state lock —
+        // the one place both locks are held, always in this
+        // order (loadMutex, then mutex).
+        loadMutex.withLock {
+            mutex.withLock {
+                uninstallLocked(packageName)
+            }
+        }
+    }
+
+    private suspend fun uninstallLocked(packageName: String) {
+        run {
             val record = _records.value[packageName] ?: return
             for (step in KeiyoushiUninstall.plan(record)) {
                 when (step) {
@@ -694,8 +879,9 @@ class KeiyoushiPlayerManager(
      * hashed or loaded.
      */
     suspend fun restoreInstalled() {
-        mutex.withLock {
+        val shouldLoad = mutex.withLock {
             if (restored) return
+            restored = true
             restored = true
             playerEnabledFlag = playerEnabledProvider()
             val prepared = recordStore.load().map { stored ->
@@ -731,9 +917,16 @@ class KeiyoushiPlayerManager(
                 KeiyoushiStateMachine.normaliseAfterRestart(record)
             }
             publishLocked(prepared.associateBy { it.packageName })
-            if (!playerEnabledFlag) return
-            loadInstalledLocked()
+            playerEnabledFlag
         }
+        // v1.4.3: the loads run OUTSIDE the state lock (each
+        // takes its own locks per package), so a slow cold
+        // start can never freeze installs behind restore.
+        if (shouldLoad) loadInstalled()
+        restoreSettled = true
+        // Republish so the settled surfacing (READY must mean
+        // LOADED) reaches rows computed during the load pass.
+        mutex.withLock { publishLocked(_records.value) }
     }
 
     /**
@@ -743,37 +936,47 @@ class KeiyoushiPlayerManager(
      * against its pin and loaded, sequentially, each
      * failure isolated to its own package. FAILED and
      * INCOMPATIBLE records are deliberately NOT touched —
-     * no auto-retry, ever. Caller holds [mutex] and has
-     * checked the kill switch.
+     * no auto-retry, ever. Callers hold NO lock; the hash
+     * pre-check takes the state lock per record and each
+     * load runs through [loadRecord]'s own locking.
      */
-    private suspend fun loadInstalledLocked() {
+    private suspend fun loadInstalled() {
         for (snapshot in _records.value.values.toList()) {
-            val record = _records.value[snapshot.packageName]
-                ?: continue
-            if (record.consentedSha256 == null) continue
-            if (record.status != KeiyoushiExtStatus.LOADING &&
-                record.status != KeiyoushiExtStatus.READY
-            ) {
-                continue
-            }
-            val onDisk = store.hashFile(
-                store.keiyoushiExtFile(record.packageName)
-            )
-            if (onDisk == null ||
-                !onDisk.equals(record.apkSha256, ignoreCase = true)
-            ) {
-                val failed = record.copy(
-                    status = KeiyoushiExtStatus.FAILED,
-                    failureReason =
-                        "the file changed since it was installed — " +
-                            "install it again to review the new file",
-                    failureDetail = "onDisk=$onDisk pinned=${record.apkSha256}"
+            val proceed = mutex.withLock {
+                val record = _records.value[snapshot.packageName]
+                    ?: return@withLock false
+                if (record.consentedSha256 == null) {
+                    return@withLock false
+                }
+                if (record.status != KeiyoushiExtStatus.LOADING &&
+                    record.status != KeiyoushiExtStatus.READY
+                ) {
+                    return@withLock false
+                }
+                val onDisk = store.hashFile(
+                    store.keiyoushiExtFile(record.packageName)
                 )
-                publishRecordLocked(failed)
-                markRowRetrustLocked(failed)
-                continue
+                if (onDisk == null ||
+                    !onDisk.equals(record.apkSha256, ignoreCase = true)
+                ) {
+                    val failed = record.copy(
+                        status = KeiyoushiExtStatus.FAILED,
+                        failureReason =
+                            "the file changed since it was installed — " +
+                                "install it again to review the new file",
+                        failureDetail =
+                            "onDisk=$onDisk pinned=${record.apkSha256}"
+                    )
+                    publishRecordLocked(failed)
+                    markRowRetrustLocked(failed)
+                    return@withLock false
+                }
+                true
             }
-            loadRecordLocked(record)
+            if (!proceed) continue
+            val current = _records.value[snapshot.packageName]
+                ?: continue
+            loadRecord(current)
         }
     }
 
@@ -782,59 +985,79 @@ class KeiyoushiPlayerManager(
     /**
      * Gate + load + register one installed package. Returns
      * the resulting record and whether sources registered.
-     * Caller holds [mutex].
+     *
+     * v1.4.3 locking: the caller holds NO lock. The state
+     * transitions take [mutex] in short phases; the loader
+     * itself — arbitrary extension code — runs under
+     * [loadMutex] alone, so a stuck load can never wedge
+     * installs, updates or the shelf (the §7 hang). A record
+     * that changed under the load (uninstalled, superseded)
+     * fails the final phase's guard and its sources are
+     * dropped rather than registered.
      */
-    private suspend fun loadRecordLocked(
+    private suspend fun loadRecord(
         starting: KeiyoushiPlayerRecord
     ): Pair<KeiyoushiPlayerRecord, Boolean> {
-        var record = try {
-            applyLocked(starting, KeiyoushiEvent.LoadStarted)
-        } catch (e: IllegalStateException) {
-            starting.copy(status = KeiyoushiExtStatus.LOADING)
-                .also { publishRecordLocked(it) }
-        }
-        // K6 (crash safety): arm the in-flight marker and
-        // persist it BEFORE the gate or the loader can run
-        // extension code. If the process dies during this
-        // load, the next restore finds the marker set and
-        // quarantines the package (see restoreInstalled)
-        // instead of retrying into the same crash on every
-        // launch. Every outcome below applies its transition
-        // to the DISARMED copy, so a completed load never
-        // leaves the marker set.
-        val armed = record.copy(loadInFlight = true)
-        publishRecordLocked(armed)
-        record = armed.copy(loadInFlight = false)
-        val finalFile = store.keiyoushiExtFile(record.packageName)
-
-        val refusal = KeiyoushiLoadGate.refusalReason(
-            record, store.hashFile(finalFile)
-        )
-        if (refusal != null) {
-            val failed = applyLocked(
-                record, KeiyoushiEvent.LoadFailed(refusal)
+        // Phase A (state lock): transition to LOADING, arm +
+        // persist the in-flight marker, run the load gate.
+        var refusalOutcome: KeiyoushiPlayerRecord? = null
+        val record = mutex.withLock {
+            var current = _records.value[starting.packageName]
+                ?: starting
+            current = try {
+                applyLocked(current, KeiyoushiEvent.LoadStarted)
+            } catch (e: IllegalStateException) {
+                current.copy(status = KeiyoushiExtStatus.LOADING)
+                    .also { publishRecordLocked(it) }
+            }
+            // K6 (crash safety): arm the in-flight marker and
+            // persist it BEFORE the gate or the loader can run
+            // extension code. If the process dies during this
+            // load, the next restore finds the marker set and
+            // quarantines the package (see restoreInstalled)
+            // instead of retrying into the same crash on every
+            // launch. Every outcome below applies its transition
+            // to the DISARMED copy, so a completed load never
+            // leaves the marker set.
+            val armed = current.copy(loadInFlight = true)
+            publishRecordLocked(armed)
+            val disarmed = armed.copy(loadInFlight = false)
+            val finalFile = store.keiyoushiExtFile(disarmed.packageName)
+            val refusal = KeiyoushiLoadGate.refusalReason(
+                disarmed, store.hashFile(finalFile)
             )
-            return failed to false
+            if (refusal != null) {
+                refusalOutcome = applyLocked(
+                    disarmed, KeiyoushiEvent.LoadFailed(refusal)
+                )
+                return@withLock null
+            }
+            disarmed
         }
+        refusalOutcome?.let { return it to false }
+        val loading = record ?: return starting to false
+        val finalFile = store.keiyoushiExtFile(loading.packageName)
 
         val metadata = KeiyoushiApkMetadata(
-            packageName = record.packageName,
-            label = record.displayName,
-            versionName = record.installedVersionName,
-            versionCode = record.installedVersionCode,
-            entryClass = record.entryClass,
+            packageName = loading.packageName,
+            label = loading.displayName,
+            versionName = loading.installedVersionName,
+            versionCode = loading.installedVersionCode,
+            entryClass = loading.entryClass,
             pkgFactory = null,
-            extensionLib = record.extensionLib.toFloatOrNull() ?: 0.0f,
+            extensionLib = loading.extensionLib.toFloatOrNull() ?: 0.0f,
             isNsfw = false,
-            certSha256s = listOfNotNull(record.certSha256)
+            certSha256s = listOfNotNull(loading.certSha256)
         )
+        // Phase B (load lock only): run the loader.
         val sources = try {
-            loader.load(finalFile, metadata)
+            loadMutex.withLock { loader.load(finalFile, metadata) }
         } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
             val failure = PlayerFailureWords.describe(t)
             DiagnosticLog.record(
                 TAG, "Keiyoushi extension failed to load",
-                "${record.packageName}: ${failure.detail}"
+                "${loading.packageName}: ${failure.detail}"
             )
             // K6 (crash safety): a HARD death — an Error
             // anywhere in the chain (linkage failures, stack
@@ -846,68 +1069,98 @@ class KeiyoushiPlayerManager(
             // notice; an unproven one lands FAILED).
             val hard = generateSequence(t) { it.cause }
                 .any { it is Error }
-            val failed = applyLocked(
-                record,
-                if (hard) {
-                    KeiyoushiEvent.LoadQuarantined(
-                        failure.reason, failure.detail
-                    )
-                } else {
-                    KeiyoushiEvent.LoadFailed(
-                        failure.reason, failure.detail
-                    )
-                }
-            )
+            val failed = mutex.withLock {
+                val current = _records.value[loading.packageName]
+                    ?: loading
+                // The load is OVER: every outcome applies to
+                // the DISARMED copy (the pre-1.4.3 rule this
+                // restructure must keep) — leaving the marker
+                // set would quarantine a healthy package at
+                // the next restore.
+                applyLocked(
+                    current.copy(loadInFlight = false),
+                    if (hard) {
+                        KeiyoushiEvent.LoadQuarantined(
+                            failure.reason, failure.detail
+                        )
+                    } else {
+                        KeiyoushiEvent.LoadFailed(
+                            failure.reason, failure.detail
+                        )
+                    }
+                )
+            }
             return failed to false
         }
         if (sources.isEmpty()) {
-            val failed = applyLocked(
-                record,
-                KeiyoushiEvent.LoadFailed(
-                    "it loaded but offered no sources"
+            val failed = mutex.withLock {
+                val current = _records.value[loading.packageName]
+                    ?: loading
+                applyLocked(
+                    current.copy(loadInFlight = false),
+                    KeiyoushiEvent.LoadFailed(
+                        "it loaded but offered no sources"
+                    )
                 )
-            )
+            }
             return failed to false
         }
 
-        // Register: replace this package's previous sources.
-        liveSources.keys.removeAll {
-            it.startsWith("keiyoushi:${record.packageName}:")
-        }
-        for (source in sources) {
-            liveSources[record.namespacedSourceId(source.id)] = source
-        }
-        val hosts = LinkedHashSet<String>()
-        hosts += record.sourceHosts
-        for (source in sources) {
-            if (source is HttpSource) {
-                source.baseUrl.normaliseHost()
-                    .takeIf { it.isNotEmpty() }?.let { hosts += it }
+        // Phase C (state lock): register + succeed + row.
+        return mutex.withLock {
+            val stored = _records.value[loading.packageName]
+            if (stored == null ||
+                stored.status != KeiyoushiExtStatus.LOADING
+            ) {
+                // The record moved under the load — it was
+                // uninstalled or a newer flow superseded this
+                // attempt. Its sources are NOT registered.
+                return@withLock (stored ?: loading) to false
             }
-        }
-        catalogCache?.packages
-            ?.firstOrNull { it.packageName == record.packageName }
-            ?.sources
-            ?.forEach { stub ->
-                stub.homeUrl.normaliseHost()
-                    .takeIf { it.isNotEmpty() }?.let { hosts += it }
+            // The load is OVER: the success applies to the
+            // DISARMED copy, exactly as the pre-1.4.3 single-
+            // lock flow did — a persisted armed marker would
+            // quarantine this healthy package at next launch.
+            val current = stored.copy(loadInFlight = false)
+            // Register: replace this package's previous sources.
+            liveSources.keys.removeAll {
+                it.startsWith("keiyoushi:${current.packageName}:")
             }
-        val ready = applyLocked(
-            record,
-            KeiyoushiEvent.LoadSucceeded(
-                sourceIds = sources.map {
-                    record.namespacedSourceId(it.id)
-                },
-                sourceHosts = hosts.toList(),
-                languages = sources.map {
-                    (it as? eu.kanade.tachiyomi.source.CatalogueSource)
-                        ?.lang ?: ""
-                }.filter { it.isNotBlank() }
-                    .distinct().joinToString(",")
+            for (source in sources) {
+                liveSources[current.namespacedSourceId(source.id)] = source
+            }
+            val hosts = LinkedHashSet<String>()
+            hosts += current.sourceHosts
+            for (source in sources) {
+                if (source is HttpSource) {
+                    source.baseUrl.normaliseHost()
+                        .takeIf { it.isNotEmpty() }?.let { hosts += it }
+                }
+            }
+            catalogCache?.packages
+                ?.firstOrNull { it.packageName == current.packageName }
+                ?.sources
+                ?.forEach { stub ->
+                    stub.homeUrl.normaliseHost()
+                        .takeIf { it.isNotEmpty() }?.let { hosts += it }
+                }
+            val ready = applyLocked(
+                current,
+                KeiyoushiEvent.LoadSucceeded(
+                    sourceIds = sources.map {
+                        current.namespacedSourceId(it.id)
+                    },
+                    sourceHosts = hosts.toList(),
+                    languages = sources.map {
+                        (it as? eu.kanade.tachiyomi.source.CatalogueSource)
+                            ?.lang ?: ""
+                    }.filter { it.isNotBlank() }
+                        .distinct().joinToString(",")
+                )
             )
-        )
-        val withRow = upsertRowLocked(ready, sources.map { it.id })
-        return withRow to true
+            val withRow = upsertRowLocked(ready, sources.map { it.id })
+            withRow to true
+        }
     }
 
     /** Insert/update the mirroring InstalledExtension row
@@ -1042,6 +1295,21 @@ class KeiyoushiPlayerManager(
                     record.installedVersionCode
                 ) {
                     KeiyoushiIndex.PlayerPackageState.Kind.UPDATE_AVAILABLE
+                } else if (record.failureReason != null &&
+                    record.isInstalled && playerEnabledFlag &&
+                    restoreSettled &&
+                    record.sourceIds.isNotEmpty() &&
+                    liveSourcesOf(record.packageName).isEmpty()
+                ) {
+                    // v1.4.3 (§6.4 of the field diagnosis):
+                    // READY must mean LOADED. A record carrying
+                    // a failure notice whose sources never made
+                    // the registry is NOT installed-and-working,
+                    // however its status reads — it surfaces as
+                    // FAILED with its reason, and its row's
+                    // Install action routes to a fresh load
+                    // attempt (retryLoad), not a silent stare.
+                    KeiyoushiIndex.PlayerPackageState.Kind.FAILED
                 } else {
                     KeiyoushiIndex.PlayerPackageState.Kind.READY
                 }

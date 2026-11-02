@@ -51,10 +51,12 @@ import app.xreader.ui.theme.primaryTextColor
  * sources, the FULL list reachable (no "…and N more" dead end),
  * an in-list search and a language filter, rows of
  * name + language + domain + one Add button that becomes
- * "Added ✓", and a plain count line. Novel-led per the repo's
- * nature: a mixed repo (Keiyoushi) leads with its novel shelf
- * and keeps the rest behind a "show all" toggle; a novels-only
- * repo (LNReader) simply lists everything.
+ * "Added ✓", and a plain count line. Novel-led ORDERING per
+ * the repo's nature (novels sort first), but the full list
+ * shows: since v1.4.3 the "Novels only" filter is a toggle
+ * the user turns on, never a default hiding most of a repo.
+ * (Keiyoushi never renders here any more — it has its own
+ * shelf, reached by repo identity.)
  *
  * [builtIn] renders the Built-in sources shelf instead of a
  * repository (whose [repo] row may legitimately be absent while
@@ -74,8 +76,14 @@ fun RepoSourcesScreen(
     // its own catalogue screen (KeiyoushiIndex.rows — the true
     // Ready / Needs-the-manga-conversion states), not the
     // novel-style Add list this screen implements.
+    // v1.4.3: by repo IDENTITY, never the exact index-URL
+    // string — a hand-added Keiyoushi row under any variant
+    // address used to fall through to this generic screen
+    // (different counts, an "Add" verb, a Novels-only filter:
+    // the two-shelves bug). Any Keiyoushi-shaped row renders
+    // the one shelf.
     if (!builtIn && repo != null &&
-        repo.indexUrl == KeiyoushiIndex.INDEX_URL
+        KeiyoushiIndex.isKeiyoushiRepo(repo.name, repo.indexUrl)
     ) {
         KeiyoushiRepoScreen(
             viewModel = viewModel,
@@ -87,7 +95,11 @@ fun RepoSourcesScreen(
     val foreign = repo?.let { state.foreignRepos[it.id] }
     var query by remember(repo?.id, builtIn) { mutableStateOf("") }
     var language by remember(repo?.id, builtIn) { mutableStateOf<String?>(null) }
-    var novelsOnly by remember(repo?.id, builtIn) { mutableStateOf(true) }
+    // v1.4.3: the full list leads — "Novels only" is a filter
+    // the user turns ON, never a default that hides most of
+    // a repo behind a chip (the diagnosis's §5 rule for
+    // wherever this generic screen survives).
+    var novelsOnly by remember(repo?.id, builtIn) { mutableStateOf(false) }
     var pendingInstall by remember { mutableStateOf<IndexPackage?>(null) }
 
     // ── Resolve the rows for this repo's nature ─────────────────
@@ -250,7 +262,14 @@ fun RepoSourcesScreen(
             }
             Text(
                 if (builtIn) "Built-in sources" else repo?.name ?: "",
-                style = MaterialTheme.typography.headlineSmall
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.weight(1f)
+            )
+            // v1.4.3: the 18+ quick toggle, top-right — the
+            // same ContentVisibility preference as Customise.
+            AdultVisibilityToggle(
+                visibility = state.contentVisibility,
+                onSetVisibility = { viewModel.setContentVisibility(it) }
             )
         }
         if (state.busy) {

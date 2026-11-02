@@ -186,7 +186,9 @@ object PlayerFailureWords {
         }
 
         // Injekt asked for something the player doesn't
-        // register (only Application + NetworkHelper exist).
+        // register (v1.4.3: Application, NetworkHelper,
+        // JavaScriptEngine, Json, ProtoBuf and XML are
+        // registered — anything beyond those lands here).
         val injektHit = chain.firstOrNull { e ->
             e.javaClass.name.contains("injekt", ignoreCase = true) ||
                 e.message?.contains("injekt", ignoreCase = true) == true

@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -26,7 +27,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,29 +44,36 @@ import app.xreader.data.extension.KeiyoushiIndex
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.KitEmptyState
 import app.xreader.ui.common.NocturneChip
+import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SearchCapsule
 import app.xreader.ui.theme.primaryTextColor
 
 /**
- * Manga programme (M3): the Keiyoushi repository's own
- * screen — the manga catalogue rendered from
- * [KeiyoushiIndex.rows] (the M1 contract): every entry with
- * its name, language, rating badge and TRUE state.
+ * The Keiyoushi shelf (manga programme M3; player K3;
+ * donor-parity rebuild v1.4.3). ONE row per extension
+ * PACKAGE — Komikku's unit — grouped the donor's way:
+ * Updates pending (with Update all) · Installed · Available
+ * by language. Search is name-first over the WHOLE shelf
+ * ([KeiyoushiIndex.searchShelf]); a domain can only surface
+ * a row after every name match.
  *
- * Keiyoushi player (K3): the states are the player's now.
- * A row is "Ready" when its extension is installed and
- * loaded in the player (or a native conversion exists);
- * every other row shows its real install state — Install /
- * Downloading / Needs your OK / Update available / the
- * failure's plain-words reason — with the action that
- * belongs to it. Installing runs the consent sheet first
- * (the honest DEX wording, the fingerprint, the signer);
- * nothing loads before the user agrees to the exact bytes.
+ * States are the player's truth: Ready only when the
+ * extension is installed AND loaded; every other row shows
+ * its real state — Install / Downloading / Needs your OK /
+ * Update available / the failure's plain-words reason —
+ * with the action that belongs to it. Installing runs the
+ * consent sheet first (the honest DEX wording, the
+ * fingerprint, the signer); nothing loads before the user
+ * agrees to the exact bytes.
  *
- * The rows arrive preference-filtered from the view model
- * (KeiyoushiIndex.rows applies the content preference); this
- * screen adds only the in-list search + language filter, in
- * the repo screen's own idiom.
+ * v1.4.3: progress is PER ROW (spinner + Cancel on the busy
+ * row only) — the pre-1.4.3 shelf disabled every row behind
+ * one global busy flag, so a single stuck install faded
+ * the whole list forever. Opening the shelf also runs the
+ * player's update detection: an update is something the
+ * app notices, not something the user must remember to
+ * ask for. The 18+ chip at the top-right drives the same
+ * ContentVisibility preference as Customise.
  */
 @Composable
 fun KeiyoushiRepoScreen(
@@ -75,30 +85,54 @@ fun KeiyoushiRepoScreen(
     var query by remember(repo.id) { mutableStateOf("") }
     var language by remember(repo.id) { mutableStateOf<String?>(null) }
 
+    // Update detection on shelf open (by repo identity —
+    // this screen only ever renders for the Keiyoushi repo).
+    LaunchedEffect(repo.id) { viewModel.checkKeiyoushiUpdates() }
+
     val rows = state.keiyoushiRows
-    // The in-list filter rides the repo screen's pure filter:
-    // each catalogue row maps to a filter row (novel = true
-    // only so the novels-only rule can never hide a manga
-    // row — this screen has no such toggle).
-    val filterRows = remember(rows) {
-        rows.map { row ->
-            row to RepoSourceFilter.Row(
-                name = row.entry.name,
-                lang = row.entry.lang,
-                domain = RepoSourceFilter.hostOf(row.entry.baseUrl),
-                novel = true
-            )
+    val languageFiltered = remember(rows, language) {
+        if (language == null) {
+            rows
+        } else {
+            rows.filter { row ->
+                row.langs.any { it.equals(language, ignoreCase = true) }
+            }
         }
     }
-    val visible = remember(filterRows, query, language) {
-        filterRows.filter { (_, filterRow) ->
-            RepoSourceFilter.matches(
-                filterRow, query, language, novelsOnly = false
-            )
-        }.map { it.first }
+    val searching = query.isNotBlank()
+    val searchResults = remember(languageFiltered, query) {
+        if (searching) {
+            KeiyoushiIndex.searchShelf(languageFiltered, query)
+        } else {
+            emptyList()
+        }
+    }
+    val updates = remember(languageFiltered) {
+        languageFiltered.filter {
+            KeiyoushiIndex.shelfGroupOf(it) ==
+                KeiyoushiIndex.ShelfGroup.UPDATES
+        }
+    }
+    val installed = remember(languageFiltered) {
+        languageFiltered.filter {
+            KeiyoushiIndex.shelfGroupOf(it) ==
+                KeiyoushiIndex.ShelfGroup.INSTALLED
+        }
+    }
+    val availableByLang = remember(languageFiltered) {
+        languageFiltered
+            .filter {
+                KeiyoushiIndex.shelfGroupOf(it) ==
+                    KeiyoushiIndex.ShelfGroup.AVAILABLE
+            }
+            .groupBy { it.primaryLang }
+            .toSortedMap()
     }
     val readyCount = remember(rows) {
         rows.count { it.state == KeiyoushiIndex.State.READY }
+    }
+    val allLangs = remember(rows) {
+        rows.flatMap { it.langs }.distinct().sorted()
     }
 
     Column(
@@ -116,7 +150,12 @@ fun KeiyoushiRepoScreen(
             }
             Text(
                 repo.name,
-                style = MaterialTheme.typography.headlineSmall
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.weight(1f)
+            )
+            AdultVisibilityToggle(
+                visibility = state.contentVisibility,
+                onSetVisibility = { viewModel.setContentVisibility(it) }
             )
         }
         if (state.busy) {
@@ -128,10 +167,8 @@ fun KeiyoushiRepoScreen(
         Text(
             if (rows.isEmpty()) {
                 "The manga catalogue"
-            } else if (visible.size == rows.size) {
-                "${rows.size} manga sources · $readyCount ready"
             } else {
-                "${rows.size} manga sources · showing ${visible.size}"
+                "${rows.size} manga sources · $readyCount ready"
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -149,10 +186,7 @@ fun KeiyoushiRepoScreen(
                     placeholder = "Search this catalogue…",
                     modifier = Modifier.fillMaxWidth()
                 )
-                val langs = RepoSourceFilter.languages(
-                    filterRows.map { it.second }
-                )
-                if (langs.size > 1) {
+                if (allLangs.size > 1) {
                     Spacer(Modifier.height(8.dp))
                     var languageMenuOpen by remember {
                         mutableStateOf(false)
@@ -175,9 +209,17 @@ fun KeiyoushiRepoScreen(
                                     languageMenuOpen = false
                                 }
                             )
-                            langs.forEach { lang ->
+                            allLangs.forEach { lang ->
                                 DropdownMenuItem(
-                                    text = { Text(lang.uppercase()) },
+                                    text = {
+                                        Text(
+                                            if (lang == "all") {
+                                                "All languages (multi)"
+                                            } else {
+                                                lang.uppercase()
+                                            }
+                                        )
+                                    },
                                     onClick = {
                                         language = lang
                                         languageMenuOpen = false
@@ -199,171 +241,96 @@ fun KeiyoushiRepoScreen(
                         onAction = { viewModel.refreshRepo(repo) }
                     )
                 }
-            }
-            items(visible, key = { "keiyoushi-${it.entry.baseUrl}-${it.entry.lang}" }) { row ->
-                GlassCard(
-                    contentPadding = PaddingValues(
-                        horizontal = 14.dp, vertical = 10.dp
-                    )
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.primary
-                                .copy(alpha = 0.18f),
-                            modifier = Modifier.size(38.dp)
-                        ) {
-                            Column(
-                                verticalArrangement =
-                                    Arrangement.Center,
-                                horizontalAlignment =
-                                    Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    row.entry.name.firstOrNull()
-                                        ?.uppercase() ?: "?",
-                                    style = MaterialTheme.typography
-                                        .titleSmall,
-                                    color = primaryTextColor()
-                                )
-                            }
-                        }
-                        Column(
-                            Modifier.weight(1f)
-                                .padding(horizontal = 10.dp)
-                        ) {
-                            Text(
-                                row.entry.name,
-                                style = MaterialTheme.typography
-                                    .bodyLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                listOfNotNull(
-                                    row.entry.lang
-                                        .takeIf { it.isNotBlank() }
-                                        ?.uppercase(),
-                                    RepoSourceFilter.hostOf(
-                                        row.entry.baseUrl
-                                    ).takeIf { it.isNotBlank() },
-                                    // The rating badge rides
-                                    // the same quiet line.
-                                    row.badge
-                                ).joinToString(" · "),
-                                style = MaterialTheme.typography
-                                    .bodySmall,
-                                color = MaterialTheme.colorScheme
-                                    .onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            // K3: a failed or incompatible
-                            // row says WHY, in plain words,
-                            // right under its name.
-                            if (row.detail != null) {
-                                Text(
-                                    row.detail,
-                                    style = MaterialTheme.typography
-                                        .bodySmall,
-                                    color = MaterialTheme.colorScheme
-                                        .error,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                        // K3: the TRUE state + its action.
-                        // Ready only when the extension is
-                        // installed and loaded (or a native
-                        // conversion exists); a busy state
-                        // shows its words; an actionable
-                        // state shows its button.
-                        Column(
-                            horizontalAlignment =
-                                Alignment.End,
-                            modifier = Modifier.padding(start = 8.dp)
-                        ) {
-                            val showLabel =
-                                row.action ==
-                                    KeiyoushiIndex.RowAction.NONE ||
-                                    row.state ==
-                                    KeiyoushiIndex.State.READY ||
-                                    row.state ==
-                                    KeiyoushiIndex.State.UPDATE_AVAILABLE
-                            if (showLabel) {
-                                Text(
-                                    row.state.label,
-                                    style = MaterialTheme.typography
-                                        .labelLarge,
-                                    color = if (
-                                        row.state ==
-                                        KeiyoushiIndex.State.READY
-                                    ) {
-                                        MaterialTheme.colorScheme
-                                            .secondary
-                                    } else {
-                                        MaterialTheme.colorScheme
-                                            .onSurfaceVariant
-                                    },
-                                    maxLines = 2
-                                )
-                            }
-                            when (row.action) {
-                                KeiyoushiIndex.RowAction.INSTALL ->
-                                    app.xreader.ui.common.PrimaryPill(
-                                        text = "Install",
-                                        onClick = {
-                                            viewModel.installKeiyoushi(
-                                                row.entry.packageName
-                                            )
-                                        },
-                                        enabled = !state.busy
-                                    )
-                                KeiyoushiIndex.RowAction.REVIEW ->
-                                    app.xreader.ui.common.PrimaryPill(
-                                        text = "Review",
-                                        onClick = {
-                                            viewModel
-                                                .reviewKeiyoushiConsent(
-                                                    row.entry.packageName
-                                                )
-                                        },
-                                        enabled = !state.busy
-                                    )
-                                KeiyoushiIndex.RowAction.UPDATE ->
-                                    app.xreader.ui.common.PrimaryPill(
-                                        text = "Update",
-                                        onClick = {
-                                            viewModel.installKeiyoushi(
-                                                row.entry.packageName
-                                            )
-                                        },
-                                        enabled = !state.busy
-                                    )
-                                KeiyoushiIndex.RowAction.REMOVE ->
-                                    androidx.compose.material3
-                                        .TextButton(
-                                            onClick = {
-                                                viewModel
-                                                    .uninstallKeiyoushi(
-                                                        row.entry.packageName
-                                                    )
-                                            }
-                                        ) { Text("Remove") }
-                                KeiyoushiIndex.RowAction.NONE -> Unit
-                            }
-                        }
+            } else if (searching) {
+                if (searchResults.isEmpty()) {
+                    item {
+                        KitEmptyState(
+                            icon = Icons.Filled.Storefront,
+                            message = "Nothing in this catalogue " +
+                                "matches that search."
+                        )
+                    }
+                } else {
+                    items(
+                        searchResults,
+                        key = { "keiyoushi-pkg-${it.packageName}" }
+                    ) { row ->
+                        KeiyoushiShelfRow(row, viewModel, state)
                     }
                 }
-            }
-            if (rows.isNotEmpty() && visible.isEmpty()) {
-                item {
-                    KitEmptyState(
-                        icon = Icons.Filled.Storefront,
-                        message = "Nothing in this catalogue " +
-                            "matches that search."
-                    )
+            } else {
+                if (updates.isNotEmpty()) {
+                    item(key = "shelf-updates-head") {
+                        Row(
+                            verticalAlignment =
+                                Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "Updates pending",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = { viewModel.updateAllKeiyoushi() }
+                            ) { Text("Update all") }
+                        }
+                    }
+                    items(
+                        updates,
+                        key = { "keiyoushi-pkg-${it.packageName}" }
+                    ) { row ->
+                        KeiyoushiShelfRow(row, viewModel, state)
+                    }
+                }
+                if (installed.isNotEmpty()) {
+                    item(key = "shelf-installed-head") {
+                        Text(
+                            "Installed",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                    items(
+                        installed,
+                        key = { "keiyoushi-pkg-${it.packageName}" }
+                    ) { row ->
+                        KeiyoushiShelfRow(row, viewModel, state)
+                    }
+                }
+                for ((lang, langRows) in availableByLang) {
+                    item(key = "shelf-avail-head-$lang") {
+                        Text(
+                            if (lang.isBlank()) {
+                                "Available"
+                            } else if (lang == "all") {
+                                "Available · All languages"
+                            } else {
+                                "Available · ${lang.uppercase()}"
+                            },
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                    items(
+                        langRows,
+                        key = { "keiyoushi-pkg-${it.packageName}" }
+                    ) { row ->
+                        KeiyoushiShelfRow(row, viewModel, state)
+                    }
+                }
+                if (languageFiltered.isEmpty()) {
+                    item {
+                        KitEmptyState(
+                            icon = Icons.Filled.Storefront,
+                            message = "Nothing in this catalogue " +
+                                "matches that filter."
+                        )
+                    }
                 }
             }
         }
@@ -419,5 +386,167 @@ fun KeiyoushiRepoScreen(
                 ) { Text("Cancel") }
             }
         )
+    }
+}
+
+/**
+ * One shelf row: letter tile, name, the quiet meta line
+ * (language(s) · first host · source count · rating badge),
+ * the failure's plain-words reason when the state carries
+ * one, and the state's own action. A busy row shows its
+ * spinner + Cancel; no other row is ever disabled by it.
+ * The one verb for a not-installed row is "Install".
+ */
+@Composable
+private fun KeiyoushiShelfRow(
+    row: KeiyoushiIndex.PackageRow,
+    viewModel: SourcesViewModel,
+    state: SourcesUiState
+) {
+    val busy = row.packageName in state.keiyoushiBusyPackages
+    GlassCard(
+        contentPadding = PaddingValues(
+            horizontal = 14.dp, vertical = 10.dp
+        )
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.primary
+                    .copy(alpha = 0.18f),
+                modifier = Modifier.size(38.dp)
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment =
+                        Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        row.name.firstOrNull()?.uppercase() ?: "?",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = primaryTextColor()
+                    )
+                }
+            }
+            Column(
+                Modifier.weight(1f).padding(horizontal = 10.dp)
+            ) {
+                Text(
+                    row.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    listOfNotNull(
+                        row.langs
+                            .joinToString(", ") { it.uppercase() }
+                            .takeIf { it.isNotBlank() },
+                        row.domains.firstOrNull(),
+                        if (row.sourceCount > 1) {
+                            "${row.sourceCount} sources"
+                        } else {
+                            null
+                        },
+                        row.badge
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (row.detail != null) {
+                    Text(
+                        row.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Column(
+                horizontalAlignment = Alignment.End,
+                modifier = Modifier.padding(start = 8.dp)
+            ) {
+                if (busy) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        TextButton(
+                            onClick = {
+                                viewModel.cancelKeiyoushiInstall(
+                                    row.packageName
+                                )
+                            }
+                        ) { Text("Cancel") }
+                    }
+                } else {
+                    val showLabel =
+                        row.action == KeiyoushiIndex.RowAction.NONE ||
+                            row.state == KeiyoushiIndex.State.READY ||
+                            row.state ==
+                            KeiyoushiIndex.State.UPDATE_AVAILABLE
+                    if (showLabel) {
+                        Text(
+                            row.state.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (
+                                row.state == KeiyoushiIndex.State.READY
+                            ) {
+                                MaterialTheme.colorScheme.secondary
+                            } else {
+                                MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            },
+                            maxLines = 2
+                        )
+                    }
+                    when (row.action) {
+                        KeiyoushiIndex.RowAction.INSTALL ->
+                            PrimaryPill(
+                                text = "Install",
+                                onClick = {
+                                    viewModel.installKeiyoushi(
+                                        row.packageName
+                                    )
+                                }
+                            )
+                        KeiyoushiIndex.RowAction.REVIEW ->
+                            PrimaryPill(
+                                text = "Review",
+                                onClick = {
+                                    viewModel.reviewKeiyoushiConsent(
+                                        row.packageName
+                                    )
+                                }
+                            )
+                        KeiyoushiIndex.RowAction.UPDATE ->
+                            PrimaryPill(
+                                text = "Update",
+                                onClick = {
+                                    viewModel.installKeiyoushi(
+                                        row.packageName
+                                    )
+                                }
+                            )
+                        KeiyoushiIndex.RowAction.REMOVE ->
+                            TextButton(
+                                onClick = {
+                                    viewModel.uninstallKeiyoushi(
+                                        row.packageName
+                                    )
+                                }
+                            ) { Text("Remove") }
+                        KeiyoushiIndex.RowAction.NONE -> Unit
+                    }
+                }
+            }
+        }
     }
 }

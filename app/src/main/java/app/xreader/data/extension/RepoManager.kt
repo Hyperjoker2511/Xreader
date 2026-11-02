@@ -1046,16 +1046,60 @@ class RepoManager(
      */
     suspend fun registerKeiyoushiRepo(): ExtensionRepo {
         val repos = repoDaoSnapshot()
-        repos.firstOrNull { it.indexUrl == KeiyoushiIndex.INDEX_URL }
-            ?.let { return it }
-        val repo = ExtensionRepo(
-            name = KeiyoushiIndex.REPO_NAME,
-            indexUrl = KeiyoushiIndex.INDEX_URL,
-            indexSha256 = null,
-            lastFetchedAt = null,
-            enabled = true
-        )
-        return repo.copy(id = repoDao.insert(repo))
+        val keiyoushiRows = repos.filter {
+            KeiyoushiIndex.isKeiyoushiRepo(it.name, it.indexUrl)
+        }
+        if (keiyoushiRows.isEmpty()) {
+            val repo = ExtensionRepo(
+                name = KeiyoushiIndex.REPO_NAME,
+                indexUrl = KeiyoushiIndex.INDEX_URL,
+                indexSha256 = null,
+                lastFetchedAt = null,
+                enabled = true
+            )
+            return repo.copy(id = repoDao.insert(repo))
+        }
+        // v1.4.3: ONE Keiyoushi row, by identity. The canonical
+        // row is the exact-index one when it exists, else the
+        // oldest; its address normalises to the canonical
+        // index. Every other Keiyoushi-shaped row is a
+        // duplicate the pre-1.4.3 exact-URL checks couldn't
+        // see (a hand-added variant opened a different screen
+        // with different counts and verbs): its installed
+        // extensions move to the canonical row, its site list
+        // fills the canonical sidecar when that is missing,
+        // and the row goes — so only one shelf can ever exist.
+        val canonical = keiyoushiRows.firstOrNull {
+            it.indexUrl == KeiyoushiIndex.INDEX_URL
+        } ?: keiyoushiRows.minByOrNull { it.id }!!
+        var result = canonical
+        if (canonical.indexUrl != KeiyoushiIndex.INDEX_URL) {
+            result = canonical.copy(indexUrl = KeiyoushiIndex.INDEX_URL)
+            repoDao.update(result)
+        }
+        for (duplicate in keiyoushiRows) {
+            if (duplicate.id == canonical.id) continue
+            installedSnapshot()
+                .filter { it.repoId == duplicate.id }
+                .forEach { ext ->
+                    extensionDao.update(ext.copy(repoId = canonical.id))
+                }
+            val canonicalSidecar = store.readText(
+                store.foreignRepoFile(canonical.id)
+            )
+            if (canonicalSidecar == null) {
+                store.readText(store.foreignRepoFile(duplicate.id))
+                    ?.let { sidecar ->
+                        store.writeText(
+                            store.foreignRepoFile(canonical.id), sidecar
+                        )
+                    }
+            }
+            repoDao.delete(duplicate)
+            runCatching { store.repoIndexFile(duplicate.id).delete() }
+            runCatching { store.foreignRepoFile(duplicate.id).delete() }
+        }
+        return result
     }
 
     /**
