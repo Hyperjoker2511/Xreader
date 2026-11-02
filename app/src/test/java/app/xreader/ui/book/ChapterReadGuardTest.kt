@@ -58,6 +58,62 @@ class ChapterReadGuardTest {
     }
 
     @Test
+    fun `cta state - loading over an empty list is finding, never ready`() {
+        // v1.5.1 (item 4): the crack this closes — blockedReason
+        // is null while loading, which used to leave the CTA a
+        // live violet pill over 0 chapters.
+        org.junit.Assert.assertEquals(
+            ReadCtaState.FINDING_CHAPTERS,
+            ChapterReadGuard.ctaState(
+                isExtensionBook = true,
+                chapterCount = 0,
+                pageLoading = false,
+                chaptersLoading = true
+            )
+        )
+        org.junit.Assert.assertEquals(
+            ReadCtaState.FINDING_CHAPTERS,
+            ChapterReadGuard.ctaState(
+                isExtensionBook = true,
+                chapterCount = 0,
+                pageLoading = true,
+                chaptersLoading = false
+            )
+        )
+    }
+
+    @Test
+    fun `cta state - settled empty is unavailable, chapters present is ready`() {
+        org.junit.Assert.assertEquals(
+            ReadCtaState.CHAPTERS_UNAVAILABLE,
+            ChapterReadGuard.ctaState(
+                isExtensionBook = true,
+                chapterCount = 0,
+                pageLoading = false,
+                chaptersLoading = false
+            )
+        )
+        org.junit.Assert.assertEquals(
+            ReadCtaState.READY,
+            ChapterReadGuard.ctaState(
+                isExtensionBook = true,
+                chapterCount = 3,
+                pageLoading = true,
+                chaptersLoading = true
+            )
+        )
+        org.junit.Assert.assertEquals(
+            ReadCtaState.READY,
+            ChapterReadGuard.ctaState(
+                isExtensionBook = false,
+                chapterCount = 0,
+                pageLoading = true,
+                chaptersLoading = false
+            )
+        )
+    }
+
+    @Test
     fun `local books are never blocked by this guard`() {
         assertNull(
             ChapterReadGuard.blockedReason(

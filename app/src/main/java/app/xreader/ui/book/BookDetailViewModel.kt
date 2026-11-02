@@ -140,6 +140,16 @@ data class BookDetailUiState(
             pageLoading = loading,
             chaptersLoading = chaptersLoading
         )
+    /** v1.5.1 (item 4): the CTA state model — see
+     * ChapterReadGuard.ctaState. */
+    val readCtaState: ReadCtaState
+        get() = ChapterReadGuard.ctaState(
+            isExtensionBook = book?.sourceType ==
+                app.xreader.data.db.SourceType.EXTENSION,
+            chapterCount = chapters.size,
+            pageLoading = loading,
+            chaptersLoading = chaptersLoading
+        )
     val hasUndownloadedChapters: Boolean
         get() = chapters.any {
             it.downloadState != DownloadState.READY && !it.remoteId.isNullOrBlank()
@@ -168,7 +178,34 @@ object ChapterReadGuard {
         return "No chapters found — this source may be broken. " +
             "Try Repair on the source's Details page."
     }
+
+    /** v1.5.1 (item 4, ChatGPT sift #8): the Read CTA's state
+     * model. blockedReason alone left a crack — it returns
+     * null WHILE LOADING, so a chapter load that never
+     * settled left the CTA fully live and full-violet over a
+     * 0-chapter book, and its tap dead-ended in the reader.
+     * The CTA is a state, not a colour: READY renders the
+     * live pill; FINDING_CHAPTERS and CHAPTERS_UNAVAILABLE
+     * render the inert pill, so a live Start Reading over an
+     * unproven chapter state is impossible in the model. */
+    fun ctaState(
+        isExtensionBook: Boolean,
+        chapterCount: Int,
+        pageLoading: Boolean,
+        chaptersLoading: Boolean
+    ): ReadCtaState = when {
+        blockedReason(
+            isExtensionBook, chapterCount, pageLoading, chaptersLoading
+        ) != null -> ReadCtaState.CHAPTERS_UNAVAILABLE
+        isExtensionBook && chapterCount == 0 &&
+            (pageLoading || chaptersLoading) ->
+            ReadCtaState.FINDING_CHAPTERS
+        else -> ReadCtaState.READY
+    }
 }
+
+/** The book page Read CTA's three states (see ChapterReadGuard). */
+enum class ReadCtaState { READY, FINDING_CHAPTERS, CHAPTERS_UNAVAILABLE }
 
 enum class OtherSourcesState { NOT_LOADED, LOADING, LOADED, FAILED }
 

@@ -600,9 +600,23 @@ fun BookDetailScreen(
                     // once, and the tap dead-ended in the
                     // reader). The pill below is inert, muted,
                     // and carries the reason itself.
-                    if (state.readBlockedReason != null) {
+                    if (state.readCtaState ==
+                        app.xreader.ui.book.ReadCtaState.CHAPTERS_UNAVAILABLE
+                    ) {
                         ChaptersUnavailablePill(
                             reason = state.readBlockedReason!!
+                        )
+                    } else if (state.readCtaState ==
+                        app.xreader.ui.book.ReadCtaState.FINDING_CHAPTERS
+                    ) {
+                        // v1.5.1 (item 4): while the chapter list
+                        // is still loading, the CTA is the SAME
+                        // inert, muted pill — never a live violet
+                        // button over an unproven chapter state
+                        // (a load that never settles can no longer
+                        // leave a tappable Start Reading behind).
+                        ChaptersUnavailablePill(
+                            reason = "Finding chapters…"
                         )
                     } else {
                     Surface(
