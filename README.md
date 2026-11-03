@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="160" alt="Xreader" />
+  <img src="icon.svg" width="160" alt="Xreader" />
 </p>
 
 <h1 align="center">Xreader</h1>
