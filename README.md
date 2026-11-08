@@ -53,6 +53,12 @@ No accounts, no tracking, no analytics. Your library, progress and reading live 
 
 Issues and pull requests are welcome — every contribution is reviewed and must pass the full test gate before merging. Please use the issue templates for bug reports and source problems.
 
+## Legal notice
+
+Xreader does not host, upload or store any books or other content, and it is not affiliated with any content provider. Everything you read through the app comes from the internet — publicly accessible third-party websites — or from files you open from your own device. Xreader only displays that content in a clean reader, much like a web browser or a search engine, and has no control over what those sites publish or remove.
+
+All content belongs to its respective owners. Any copyright or legal questions about content should go to the sites and providers that host it — and please support the official releases and the authors. Xreader is for personal use; what you read with it is your responsibility under the laws where you live.
+
 ## Licence
 
 [MIT](LICENSE) © Hyperjoker2511
