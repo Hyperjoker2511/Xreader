@@ -24,7 +24,7 @@ Get the latest APK from the [**Releases**](https://github.com/Hyperjoker2511/Xre
 - **36 built-in novel sources**, each verified end to end (catalogue, search, book, chapter list, chapter text) before it ships — Korean, Chinese and Japanese novels in translation, plus English originals.
 - **Add any site by pasting its link.** Xreader studies the site and learns how to read it — catalogue, books, chapters and search — always in the app's own native screens, never a bare web page. Sites that need a sign-in show their own login page once; the app securely reuses that session afterwards.
 - **Repositories** — add source repositories and browse their full catalogues per repo, with search and language filters.
-- **Manga, properly** — 1,400+ manga sources through extension repositories, in a dedicated reader with smooth Komikku-style zoom, tap zones and reading modes. They live in Explore under **Manga sources** — the app checks for source updates itself and tells you when one is ready.
+- **Manga, properly** — 1,400+ manga sources through extension repositories, in a dedicated reader with smooth zoom, tap zones and reading modes. They live in Explore under **Manga sources** — the app checks for source updates itself and tells you when one is ready.
 - **Your own books** — open EPUB and PDF files from your device and read them in the same calm reader, exactly as published.
 - **A reader built for long novels** — progressive chapter loading (a book opens after the first chapters, the rest load as you read), true chapter numbers everywhere, custom fonts and paragraph spacing, themes, text-to-speech, and offline downloads with resume.
 - **AI features with your own provider** — summaries, catch-up and lore with Gemini or compatible providers, plus offline translation. Your keys stay encrypted on your device.
@@ -33,8 +33,6 @@ Get the latest APK from the [**Releases**](https://github.com/Hyperjoker2511/Xre
 ## Screenshots
 
 <p align="center">
-  <img src="Library.jpg" width="250" alt="Library — Continue Reading hero and your books" />
-  <img src="Explore.jpg" width="250" alt="Explore — sources, repositories and add-a-source" />
   <img src="Reader.jpg" width="250" alt="The reader — clean prose on pure black" />
 </p>
 <p align="center">
