@@ -8,7 +8,7 @@
 
 <p align="center">
 
-> **Where things stand: this is our stable version** — fully tested and ready for everyone. Novels and manga are both fully supported. Novels read through built-in sources, provider packs and any site you add by link; manga reads through Keiyoushi sources in a dedicated image reader with tap zones, reading modes and border cropping.
+> **Where things stand: this is our stable version** — fully tested and ready for everyone. Novels and manga are both fully supported. Novels read through built-in sources, provider packs and any site you add by link; manga reads through extension repositories in a dedicated image reader with tap zones, reading modes and border cropping.
 
 [![Release](https://img.shields.io/github/v/release/Hyperjoker2511/Xreader)](https://github.com/Hyperjoker2511/Xreader/releases)
 [![Licence](https://img.shields.io/github/license/Hyperjoker2511/Xreader)](LICENSE)
@@ -23,8 +23,8 @@ Get the latest APK from the [**Releases**](https://github.com/Hyperjoker2511/Xre
 
 - **36 built-in novel sources**, each verified end to end (catalogue, search, book, chapter list, chapter text) before it ships — Korean, Chinese and Japanese novels in translation, plus English originals.
 - **Add any site by pasting its link.** Xreader studies the site and learns how to read it — catalogue, books, chapters and search — always in the app's own native screens, never a bare web page. Sites that need a sign-in show their own login page once; the app securely reuses that session afterwards.
-- **Repositories** — add source repositories (Novel Sourcery, LNReader and more) and browse their full catalogues per repo, with search and language filters.
-- **Manga, properly** — 1,400+ manga sources through Keiyoushi, in a dedicated reader with smooth Komikku-style zoom, tap zones and reading modes. They live in Explore under **Manga sources** — the app checks for source updates itself and tells you when one is ready.
+- **Repositories** — add source repositories and browse their full catalogues per repo, with search and language filters.
+- **Manga, properly** — 1,400+ manga sources through extension repositories, in a dedicated reader with smooth Komikku-style zoom, tap zones and reading modes. They live in Explore under **Manga sources** — the app checks for source updates itself and tells you when one is ready.
 - **Your own books** — open EPUB and PDF files from your device and read them in the same calm reader, exactly as published.
 - **A reader built for long novels** — progressive chapter loading (a book opens after the first chapters, the rest load as you read), true chapter numbers everywhere, custom fonts and paragraph spacing, themes, text-to-speech, and offline downloads with resume.
 - **AI features with your own provider** — summaries, catch-up and lore with Gemini or compatible providers, plus offline translation. Your keys stay encrypted on your device.
