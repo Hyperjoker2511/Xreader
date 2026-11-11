@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -401,8 +402,9 @@ class V120SpeedTest {
                 .map { it.fileName }
                 .toSet()
             assertEquals(
-                "stored + fetched images resolve; the dead one drops",
-                setOf("a.png", "b.png"),
+                "stored + fetched images resolve; the dead one " +
+                    "becomes the labelled placeholder (v1.5.4 WS-5)",
+                setOf("a.png", "b.png", "picture-unavailable.png"),
                 imageNames
             )
             val imageRequests = rig.transport.requests
@@ -424,6 +426,14 @@ class V120SpeedTest {
                 sentinelA.contentEquals(File(dir, "img-a.png").readBytes())
             )
             assertTrue(servedB.contentEquals(File(dir, "img-b.png").readBytes()))
+            assertTrue(
+                "the placeholder file must be stored for the dead image",
+                File(dir, "img-picture-unavailable.png").isFile
+            )
+            assertFalse(
+                "the dead image's own file must not exist",
+                File(dir, "img-c.png").exists()
+            )
             assertTrue(content.plainText().contains("the road bends north"))
         }
 

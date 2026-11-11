@@ -110,6 +110,129 @@ class V133FixEngineTest {
         assertTrue(SiteCheck.hasChallengeMarkersIn(wall))
     }
 
+    // ── §4 (v1.5.6): structural challenge evidence ─────────
+    // Markup markers are a pre-filter signal only; a page
+    // convicts as an interstitial on a challenge TITLE, or
+    // on markup TOGETHER WITH failing the content test
+    // (visible prose below the interstitial threshold).
+    // Fixtures 1, 2 and 6 are the BOTI shape — content pages
+    // carrying Cloudflare widgets — and fixtures 3–5 are
+    // the regression fence for every real gated source.
+
+    @Test
+    fun `fixture 1 - spa shell loading turnstile library with catalogue content is not a challenge`() {
+        val rows = (1..12).joinToString("\n") { n ->
+            "<div class=\"book\">" +
+                "<a href=\"/book/tale-$n\">Catalogue Tale $n</a>" +
+                "<p>A travelling cartographer maps the drowned " +
+                "cities along the river road, trading charts " +
+                "for shelter through the long winter season " +
+                "in the northern harbour towns and villages.</p>" +
+                "</div>"
+        }
+        val page = """
+            <html><head><title>Novel Catalogue</title>
+            <script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
+            </head><body><div id="app">
+            <div class="cf-turnstile" data-sitekey="site-key"></div>
+            <div class="catalogue">$rows</div>
+            </div></body></html>
+        """.trimIndent()
+        // The markers ARE present — they are the pre-filter
+        // signal — but they no longer convict on their own.
+        assertTrue(SiteCheck.hasChallengeMarkersIn(page))
+        assertFalse(SiteCheck.isChallengePage(page))
+    }
+
+    @Test
+    fun `fixture 2 - spa carrying challenge platform scripts with real prose is not a challenge`() {
+        val prose = buildString {
+            repeat(12) {
+                append(
+                    "<p>The ferryman poled his raft across the " +
+                        "black river. The town bells counted the " +
+                        "evening hour, and every passenger held a " +
+                        "lantern against the dark water while the " +
+                        "old pier groaned below the boards.</p>"
+                )
+            }
+        }
+        val page = """
+            <html><head><title>River Tales — Home</title>
+            <script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
+            <script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>
+            </head><body><main>$prose</main></body></html>
+        """.trimIndent()
+        assertTrue(SiteCheck.hasChallengeMarkersIn(page))
+        assertFalse(SiteCheck.isChallengePage(page))
+    }
+
+    @Test
+    fun `fixture 3 - genuine small challenge document with challenge form and no prose is a challenge`() {
+        val page = """
+            <html><head><title>Home</title></head>
+            <body><div id="challenge-running"></div>
+            <form id="challenge-form" method="post" action="/verify">
+            <input type="hidden" name="token" value="abc"/>
+            </form>
+            <p>Please wait while we confirm the request.</p>
+            </body></html>
+        """.trimIndent()
+        assertTrue(SiteCheck.hasChallengeMarkersIn(page))
+        assertTrue(SiteCheck.isChallengePage(page))
+    }
+
+    @Test
+    fun `fixture 4 - genuine challenge title is a challenge`() {
+        val page = """
+            <html><head><title>Just a moment...</title></head>
+            <body><p>Checking your browser before accessing.</p>
+            </body></html>
+        """.trimIndent()
+        assertTrue(SiteCheck.isChallengePage(page))
+    }
+
+    @Test
+    fun `fixture 5 - real challenge-form page is a challenge`() {
+        val page = """
+            <html><head><title>Home</title>
+            <script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
+            </head><body>
+            <form id="challenge-form" method="post"
+                  action="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page">
+            <div class="cf-turnstile" data-sitekey="site-key"></div>
+            </form>
+            <p>One more step before the library opens.</p>
+            </body></html>
+        """.trimIndent()
+        assertTrue(SiteCheck.hasChallengeMarkersIn(page))
+        assertTrue(SiteCheck.isChallengePage(page))
+    }
+
+    @Test
+    fun `fixture 6 - dense content page with embedded turnstile widget is not a challenge`() {
+        // Over 500 words of real prose (28 × a 20-word
+        // sentence = 560 words) carrying one embedded
+        // Turnstile widget — the BOTI content shape itself.
+        val prose = buildString {
+            repeat(28) {
+                append(
+                    "<p>The ferryman poled his raft across the " +
+                        "black river while the town bells counted " +
+                        "the evening hour above the water.</p>"
+                )
+            }
+        }
+        val page = """
+            <html><head><title>Sword Saga — Chapter One</title></head>
+            <body><article>$prose</article>
+            <div class="cf-turnstile" data-sitekey="site-key"></div>
+            </body></html>
+        """.trimIndent()
+        assertTrue(SiteCheck.hasChallengeMarkersIn(page))
+        assertFalse(SiteCheck.isChallengePage(page))
+    }
+
     @Test
     fun `empty catalogue on a gated source is a suspected wall`() {
         val gated = config(needsRendering = true)
@@ -792,4 +915,41 @@ class V133FixEngineTest {
         assertEquals(stored.reversed(), newest)
         assertTrue(oldest != newest)
     }
+
+    // ── v1.5.3 (item 13 mechanism): data: placeholder srcs ──
+
+    @Test
+    fun `data uri placeholder src falls through to the lazy cover`() =
+        runBlocking {
+            // The NovelFire shape the S2 pins didn't cover:
+            // src is NOT blank — it holds a 1×1 data: gif —
+            // and the real cover rides in data-src. A data:
+            // URI counts as blank, so the lazy fallthrough
+            // fires; the row with a real src keeps it.
+            val page = """
+                <html><body><div class="results">
+                  <div class="result">
+                    <a class="t" href="/book/placeholder-tale">Placeholder Tale</a>
+                    <img class="c"
+                         src="data:image/gif;base64,R0lGODlhAQABAAAAACw="
+                         data-src="/covers/real.jpg"/>
+                  </div>
+                  <div class="result">
+                    <a class="t" href="/book/plain-tale">Plain Tale</a>
+                    <img class="c" src="/covers/plain.jpg"/>
+                  </div>
+                </div></body></html>
+            """.trimIndent()
+            val transport = FakeTransport { request ->
+                if (request.url == "$base/popular") {
+                    FakeTransport.ok(page)
+                } else {
+                    AppResult.Ok(FakeTransport.response(404, "no"))
+                }
+            }
+            val books = source(config(), transport).popular(1).books
+            assertEquals(2, books.size)
+            assertEquals("$base/covers/real.jpg", books[0].coverUrl)
+            assertEquals("$base/covers/plain.jpg", books[1].coverUrl)
+        }
 }

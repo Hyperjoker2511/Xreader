@@ -102,6 +102,103 @@ class PlayerChallengeBridgeTest {
         assertNull(bridge.prompts.value)
     }
 
+    // ── v1.5.2: the re-prompt cooldown ───────────────────────
+
+    private fun cooldownBridge(
+        bus: MutableSharedFlow<String>,
+        clearance: AtomicBoolean,
+        clock: java.util.concurrent.atomic.AtomicLong,
+        cooldownMillis: Long = 120_000
+    ) = PlayerChallengeBridge(
+        sessionSavedEvents = bus,
+        hasClearance = { clearance.get() },
+        timeoutMillis = 5_000,
+        cooldownMillis = cooldownMillis,
+        nowMs = { clock.get() }
+    )
+
+    /** Drive one prompt to a dismissal; returns after the waiter
+     * has fully resolved (so the cooldown is recorded). */
+    private fun dismissOnce(bridge: PlayerChallengeBridge) {
+        val result = AtomicReference<Boolean?>()
+        val waiter = Thread { result.set(bridge.requestSolve(url)) }
+        waiter.start()
+        awaitTrue { bridge.prompts.value != null }
+        bridge.dismissCurrent()
+        waiter.join(5_000)
+        assertEquals(false, result.get())
+        awaitTrue { bridge.prompts.value == null }
+    }
+
+    @Test
+    fun `retry inside the cooldown fails fast with no second prompt`() {
+        val bus = MutableSharedFlow<String>(extraBufferCapacity = 4)
+        val clock = java.util.concurrent.atomic.AtomicLong(1_000_000L)
+        val bridge = cooldownBridge(bus, AtomicBoolean(false), clock)
+        dismissOnce(bridge)
+
+        // An extension retry moments later: no prompt, fast false.
+        val started = System.currentTimeMillis()
+        assertEquals(false, bridge.requestSolve(url))
+        assertTrue(
+            "cooldown must fail fast, took ${System.currentTimeMillis() - started}ms",
+            System.currentTimeMillis() - started < 2_000
+        )
+        assertNull(bridge.prompts.value)
+    }
+
+    @Test
+    fun `after the cooldown a prompt is emitted again`() {
+        val bus = MutableSharedFlow<String>(extraBufferCapacity = 4)
+        val clock = java.util.concurrent.atomic.AtomicLong(1_000_000L)
+        val bridge = cooldownBridge(bus, AtomicBoolean(false), clock)
+        dismissOnce(bridge)
+
+        clock.addAndGet(120_001L)
+        val result = AtomicReference<Boolean?>()
+        val waiter = Thread { result.set(bridge.requestSolve(url)) }
+        waiter.start()
+        awaitTrue { bridge.prompts.value?.host == "asurascans.com" }
+        bridge.dismissCurrent()
+        waiter.join(5_000)
+        assertEquals(false, result.get())
+    }
+
+    @Test
+    fun `an explicit clear re-arms the prompt inside the cooldown`() {
+        val bus = MutableSharedFlow<String>(extraBufferCapacity = 4)
+        val clock = java.util.concurrent.atomic.AtomicLong(1_000_000L)
+        val bridge = cooldownBridge(bus, AtomicBoolean(false), clock)
+        dismissOnce(bridge)
+
+        bridge.clearCooldown("asurascans.com")
+        val result = AtomicReference<Boolean?>()
+        val waiter = Thread { result.set(bridge.requestSolve(url)) }
+        waiter.start()
+        awaitTrue { bridge.prompts.value?.host == "asurascans.com" }
+        bridge.dismissCurrent()
+        waiter.join(5_000)
+        assertEquals(false, result.get())
+    }
+
+    @Test
+    fun `a timeout also starts the cooldown`() {
+        val bus = MutableSharedFlow<String>(extraBufferCapacity = 4)
+        val clock = java.util.concurrent.atomic.AtomicLong(1_000_000L)
+        val bridge = PlayerChallengeBridge(
+            sessionSavedEvents = bus,
+            hasClearance = { false },
+            timeoutMillis = 300,
+            cooldownMillis = 120_000,
+            nowMs = { clock.get() }
+        )
+        // Nobody answers: the prompt times out unsolved.
+        assertEquals(false, bridge.requestSolve(url))
+        // The retry is throttled even though the clock never moved.
+        assertEquals(false, bridge.requestSolve(url))
+        assertNull(bridge.prompts.value)
+    }
+
     private fun awaitTrue(deadlineMillis: Long = 3_000, condition: () -> Boolean) {
         val end = System.currentTimeMillis() + deadlineMillis
         while (!condition()) {

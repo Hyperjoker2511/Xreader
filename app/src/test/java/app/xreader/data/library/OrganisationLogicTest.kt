@@ -36,10 +36,11 @@ class OrganisationLogicTest {
             facts = listOf(facts(1)),
             userShelves = emptyList(),
             manualMembers = emptyMap(),
-            hiddenBuiltins = setOf(
-                ShelfLogic.BUILTIN_FAVOURITES, ShelfLogic.BUILTIN_DOWNLOADED,
-                ShelfLogic.BUILTIN_BEHIND_ON
-            ),
+            // v1.5.3 (WS-6, items 29–31): the five status
+            // builtins joined BUILTIN_KEYS — hide EVERY builtin
+            // (derived from the live list, so future builtins are
+            // hidden too) and "all" must still pin first.
+            hiddenBuiltins = ShelfLogic.BUILTIN_KEYS.toSet(),
             nowMillis = now
         )
         assertEquals(listOf("all"), chips.map { it.ref })

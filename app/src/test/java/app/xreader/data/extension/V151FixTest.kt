@@ -511,16 +511,20 @@ class V151FixTest {
         }
 
     @Test
-    fun `an unanswered player rating fails closed — the v150 field condition`() =
+    fun `an unanswered player rating is visible pending — the v152 settled ruling`() =
         runBlocking {
+            // v1.5.2 (§8.4 ruling i) SUPERSEDES the v1.5.1
+            // fail-closed assertion that used to live here: an
+            // unanswered rating is UNKNOWN — the source stays
+            // VISIBLE (badge state), never hidden as ADULT.
             val extDao = app.xreader.data.FakeInstalledExtensionDao()
             extDao.insert(keiyoushiRow())
             val service = keiyoushiService(extDao) { null }
             val handles = service.sourcesOf(1L).getOrNull()
             assertNotNull(handles)
             val rating = service.contentRatingOf(handles!!.first())
-            assertEquals(ContentRating.ADULT, rating)
-            assertFalse(
+            assertEquals(ContentRating.SAFE, rating)
+            assertTrue(
                 ContentAccess.allows(
                     rating, ContentVisibility.HIDE_ADULT
                 )

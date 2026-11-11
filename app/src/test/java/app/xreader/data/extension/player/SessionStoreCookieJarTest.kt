@@ -103,4 +103,56 @@ class SessionStoreCookieJarTest {
         assertTrue(cookies.none { it.name == "cf_clearance" })
         assertTrue(cookies.any { it.name == "session" })
     }
+
+    @Test
+    fun `cloudflare clear is cross-record so a stale twin cannot shadow a fresh solve`() =
+        runBlocking {
+            // FIX-13's shape: the same host holds Cloudflare
+            // cookies in TWO records — the player's own (fresh,
+            // from the solve) and a link-add session record whose
+            // key sorts AFTER "keiyoushi-player" ("linkadd_…"),
+            // so the merged read serves the STALE values. This
+            // first assertion pins the shadowing itself (the
+            // merged-read rule is deliberate and unchanged).
+            val host = "challenge.example"
+            val url = "https://challenge.example/browse".toHttpUrl()
+            store.mergeCookies(
+                "linkadd_challenge.example", host,
+                mapOf(
+                    "cf_clearance" to "STALE",
+                    "__cf_bm" to "STALE_BM",
+                    "session" to "keep-me"
+                )
+            )
+            store.mergeCookies(
+                SessionStoreCookieJar.PLAYER_SESSION_KEY, host,
+                mapOf("cf_clearance" to "FRESH", "__cf_bm" to "FRESH_BM")
+            )
+            val shadowed = jar.loadForRequest(url)
+                .associate { it.name to it.value }
+            assertEquals("STALE", shadowed["cf_clearance"])
+            assertEquals("STALE_BM", shadowed["__cf_bm"])
+
+            // The Cloudflare path's clear (both names, the
+            // interceptor's exact call) removes them from EVERY
+            // record — the unrelated cookie survives.
+            jar.removeCookies(host, listOf("cf_clearance", "__cf_bm"))
+            val cleared = jar.loadForRequest(url)
+                .associate { it.name to it.value }
+            assertTrue("cf_clearance survived: $cleared", "cf_clearance" !in cleared)
+            assertTrue("__cf_bm survived: $cleared", "__cf_bm" !in cleared)
+            assertEquals("keep-me", cleared["session"])
+
+            // A fresh solve then writes the player record — and
+            // the fresh values are what loadForRequest returns
+            // (no stale twin remains to win the merge).
+            store.mergeCookies(
+                SessionStoreCookieJar.PLAYER_SESSION_KEY, host,
+                mapOf("cf_clearance" to "SOLVED", "__cf_bm" to "SOLVED_BM")
+            )
+            val solved = jar.loadForRequest(url)
+                .associate { it.name to it.value }
+            assertEquals("SOLVED", solved["cf_clearance"])
+            assertEquals("SOLVED_BM", solved["__cf_bm"])
+        }
 }

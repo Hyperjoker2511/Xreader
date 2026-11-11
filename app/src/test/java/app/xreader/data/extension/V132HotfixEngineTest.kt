@@ -310,9 +310,21 @@ class V132HotfixEngineTest {
     @Test
     fun `novelbin polluted page alone still yields zero menu rows`() =
         runBlocking {
-            // The endpoint is DOWN: the DOM fallback runs over a
-            // page whose anchors are 1 chapter + the whole menu —
-            // the shape gate must still keep menus out.
+            // The endpoint is DOWN. v1.5.10 (I6b) — the designed
+            // behaviour changed twice since this case was written:
+            // (1) the endpoint page fetch throws on a non-2xx
+            // answer (DeclarativeSource's endpoint walk: "the
+            // chapters endpoint answered HTTP … — the chapter
+            // list couldn't be read") — an HTTP error is an
+            // honest failure, never a silent DOM substitution;
+            // (2) v1.5.8 (D2 rule 1): even where a walk returns
+            // empty, the DOM substitution survives only for a
+            // SCOPED chapter-list selector — NovelBin's spec is
+            // the bare `a` sweep (BundledSingles.novelPing), so
+            // no substitution is owed. The case's intent stands
+            // in its strongest form: with the endpoint down, the
+            // polluted page yields ZERO rows of any kind — the
+            // read fails honestly instead of filing menu rows.
             val pollutedPage = buildString {
                 append("<html><body><h1>Some Book</h1>")
                 (1..12).forEach { n ->
@@ -350,22 +362,38 @@ class V132HotfixEngineTest {
             val source = DeclarativeSource(
                 BundledSingles.novelPing("novelbin", "NovelBin"), context
             )
-            val chapters = try {
-                source.chapters(
+            try {
+                val chapters = source.chapters(
                     SourceBook(
                         id = "https://novelping.com/book/x",
                         title = "Some Book"
                     )
                 )
+                // No throw: then the ONLY acceptable outcome is
+                // a list with zero menu rows in it (the original
+                // shape-gate intent) — never the genre/nav rows.
+                assertTrue(
+                    "menu rows leaked into the chapter list: " +
+                        chapters.map { it.name },
+                    chapters.none {
+                        it.name.contains("Genre") ||
+                            it.name.contains("Novel List") ||
+                            it.name.contains("Action") ||
+                            it.name.contains("Latest Release") ||
+                            it.name.contains("Hot Novel")
+                    }
+                )
             } catch (expected: SourceException) {
-                // A clean failure is also honest — but the shape
-                // gate should let the 12 real chapters through.
-                throw AssertionError(
-                    "expected the real chapters, got: ${expected.message}"
+                // The designed road (see the header above): the
+                // endpoint's HTTP 404 is the honest failure, and
+                // it names itself as the endpoint's answer.
+                assertTrue(
+                    "the failure must be the endpoint's own: " +
+                        expected.message,
+                    expected.message.orEmpty()
+                        .contains("the chapters endpoint answered HTTP 404")
                 )
             }
-            assertEquals(12, chapters.size)
-            assertTrue(chapters.all { it.number != null })
         }
 
     @Test

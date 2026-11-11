@@ -222,4 +222,211 @@ class PdfBookParserTest : ParserTestBase() {
         assertTrue(error is AppError.ParseFailed)
         assertTrue((error as AppError.ParseFailed).reason.contains("scanned"))
     }
+
+    // ── v1.5.2 (FIX-21): PDF illustrations ─────────────────────
+
+    private class FakeExtractorWithImages(
+        private val pages: List<String>,
+        private val images: List<PdfPageImage>
+    ) : PdfTextExtractor {
+        override fun extractPages(file: File): AppResult<List<String>> =
+            AppResult.Ok(pages)
+
+        override fun extractImages(file: File): List<PdfPageImage> = images
+    }
+
+    private fun chapterBlocks(
+        parsed: ParsedBook, chapterIndex: Int
+    ): List<app.xreader.domain.content.ChapterBlock> {
+        val file = File(parsed.chaptersDir, parsed.chapters[chapterIndex].contentFileName)
+        return json.decodeChapter(file.readText()).blocks
+    }
+
+    @Test fun pdfIllustrationsLandPageAnchoredInPageOrder() {
+        val prose = "The road wound on through the long valley and the river ran beside it all the way north."
+        val pages = listOf(
+            "Chapter 1\n$prose\n",
+            "$prose And then the mountains rose ahead of them, white with the first snow of the year.\n",
+            "$prose At last they saw the tower standing alone above the plain, its lamp already lit.\n"
+        )
+        val plate = byteArrayOf(9, 9, 9, 1)
+        val sketch = byteArrayOf(7, 7, 2)
+        val images = listOf(
+            PdfPageImage(0, plate),
+            PdfPageImage(2, sketch)
+        )
+        val (staged, work) = stage("illus.pdf", byteArrayOf(1))
+        val parsed = PdfBookParser(FakeExtractorWithImages(pages, images))
+            .parse(staged, work) {}.unwrap()
+        // Assets staged for the importer's book-asset copy.
+        val assets = requireNotNull(parsed.assetsDir) { "assets dir must be set" }
+        assertEquals(2, assets.listFiles()?.size)
+        val blocks = chapterBlocks(parsed, 0)
+        val imageBlocks = blocks.filterIsInstance<app.xreader.domain.content.ChapterBlock.Image>()
+        assertEquals(2, imageBlocks.size)
+        // Page order: the page-1 plate precedes the page-3 sketch,
+        // and both sit at their pages' positions in the flow.
+        val firstImageAt = blocks.indexOfFirst { it is app.xreader.domain.content.ChapterBlock.Image }
+        assertTrue("page 1's plate anchors at the page's own position (the chapter head)", firstImageAt == 0)
+        val names = imageBlocks.map { it.fileName }
+        assertTrue(names.all { File(assets, it).isFile })
+        assertTrue(names[0] != names[1])
+    }
+
+    @Test fun pdfIllustrationsDedupeByContentHashFileNotReference() {
+        val prose = "A long enough paragraph of real prose to carry this page well past the scanned threshold."
+        val pages = listOf("Chapter 1\n$prose\n", "$prose The same small ornament prints at the head of every part.\n")
+        val ornament = byteArrayOf(5, 5, 5, 5)
+        val images = listOf(PdfPageImage(0, ornament), PdfPageImage(1, ornament))
+        val (staged, work) = stage("dedupe.pdf", byteArrayOf(1))
+        val parsed = PdfBookParser(FakeExtractorWithImages(pages, images))
+            .parse(staged, work) {}.unwrap()
+        val assets = requireNotNull(parsed.assetsDir)
+        // One FILE for the repeated image…
+        assertEquals(1, assets.listFiles()?.size)
+        // …but a reference at EACH occurrence.
+        val blocks = chapterBlocks(parsed, 0)
+        val refs = blocks.filterIsInstance<app.xreader.domain.content.ChapterBlock.Image>()
+        assertEquals(2, refs.size)
+        assertEquals(refs[0].fileName, refs[1].fileName)
+    }
+
+    @Test fun scannedPdfWithImagesKeepsHonestScannedState() {
+        val pages = listOf("", "", "")
+        val images = listOf(PdfPageImage(0, byteArrayOf(1, 2, 3)))
+        val (staged, work) = stage("scanimg.pdf", byteArrayOf(1))
+        val error = PdfBookParser(FakeExtractorWithImages(pages, images))
+            .parse(staged, work) {}.unwrapErr()
+        assertTrue(error is AppError.ParseFailed)
+        assertTrue((error as AppError.ParseFailed).reason.contains("scanned"))
+    }
+
+    // ── v1.5.2 (FIX-24): PDF first-page cover ──────────────────
+
+    /** A fake modelling every cover-relevant extractor leg: the
+     * FIX-21 image list (or a throwing extraction) and the FIX-24
+     * render fallback (bytes, null, or a throw). */
+    private class FakeCoverExtractor(
+        private val pages: List<String>,
+        private val images: List<PdfPageImage> = emptyList(),
+        private val imagesThrow: Boolean = false,
+        private val rendered: ByteArray? = null,
+        private val renderThrows: Boolean = false
+    ) : PdfTextExtractor {
+        override fun extractPages(file: File): AppResult<List<String>> =
+            AppResult.Ok(pages)
+
+        override fun extractImages(file: File): List<PdfPageImage> {
+            if (imagesThrow) throw IllegalStateException("image walk broke")
+            return images
+        }
+
+        override fun renderFirstPageCover(file: File): ByteArray? {
+            if (renderThrows) throw IllegalStateException("renderer broke")
+            return rendered
+        }
+    }
+
+    private val coverProse =
+        "The road wound on through the long valley and the river ran beside it all the way north."
+    private val coverPages = listOf(
+        "Chapter 1\n$coverProse\n",
+        "$coverProse And then the mountains rose ahead of them, white with the first snow.\n"
+    )
+
+    private fun sizedBytes(size: Int, fill: Byte): ByteArray =
+        ByteArray(size) { fill }
+
+    @Test fun pdfCoverPicksDominantFirstPageImage() {
+        val logo = sizedBytes(20 * 1024, 3)          // above floor, not dominant
+        val plate = sizedBytes(200 * 1024, 9)        // the page-1 plate
+        val laterPage = sizedBytes(500 * 1024, 7)    // bigger, but page 2 — never a cover
+        val images = listOf(
+            PdfPageImage(0, logo),
+            PdfPageImage(0, plate),
+            PdfPageImage(1, laterPage)
+        )
+        val (staged, work) = stage("cover.pdf", byteArrayOf(1))
+        val parsed = PdfBookParser(FakeCoverExtractor(coverPages, images))
+            .parse(staged, work) {}.unwrap()
+        val cover = requireNotNull(parsed.coverFile) { "a cover must be derived" }
+        assertEquals("cover.png", cover.name)
+        assertTrue(cover.readBytes().contentEquals(plate))
+    }
+
+    @Test fun pdfCoverRejectsTinyFirstPageImages() {
+        // A 100-byte ornament is below the dominance floor: with no
+        // render fallback the book imports with NO cover rather
+        // than dressing the shelf in a logo.
+        val images = listOf(PdfPageImage(0, sizedBytes(100, 5)))
+        val (staged, work) = stage("tiny.pdf", byteArrayOf(1))
+        val parsed = PdfBookParser(FakeCoverExtractor(coverPages, images))
+            .parse(staged, work) {}.unwrap()
+        assertTrue(parsed.chapters.isNotEmpty())
+        assertTrue(parsed.coverFile == null)
+    }
+
+    @Test fun pdfCoverOversizedFallsBackToNextCandidate() {
+        val oversized = sizedBytes(PdfBookParser.MAX_COVER_BYTES + 1, 8)
+        val inBound = sizedBytes(100 * 1024, 4)
+        val images = listOf(PdfPageImage(0, oversized), PdfPageImage(0, inBound))
+        val (staged, work) = stage("oversized.pdf", byteArrayOf(1))
+        val parsed = PdfBookParser(FakeCoverExtractor(coverPages, images))
+            .parse(staged, work) {}.unwrap()
+        val cover = requireNotNull(parsed.coverFile)
+        assertTrue(cover.readBytes().contentEquals(inBound))
+    }
+
+    @Test fun pdfCoverOversizedOnlyFallsBackToRenderLeg() {
+        val oversized = sizedBytes(PdfBookParser.MAX_COVER_BYTES + 1, 8)
+        val rendered = sizedBytes(50 * 1024, 6)
+        val (staged, work) = stage("oversizedonly.pdf", byteArrayOf(1))
+        val parsed = PdfBookParser(
+            FakeCoverExtractor(
+                coverPages,
+                images = listOf(PdfPageImage(0, oversized)),
+                rendered = rendered
+            )
+        ).parse(staged, work) {}.unwrap()
+        val cover = requireNotNull(parsed.coverFile)
+        assertEquals("cover.jpg", cover.name)
+        assertTrue(cover.readBytes().contentEquals(rendered))
+    }
+
+    @Test fun pdfCoverRenderFallbackForPlainTextPdf() {
+        // No embedded images at all: the rendered first page is
+        // the cover (the Android leg itself is device-proven; here
+        // the parser seam is what is pinned).
+        val rendered = sizedBytes(80 * 1024, 2)
+        val (staged, work) = stage("plain.pdf", byteArrayOf(1))
+        val parsed = PdfBookParser(
+            FakeCoverExtractor(coverPages, rendered = rendered)
+        ).parse(staged, work) {}.unwrap()
+        val cover = requireNotNull(parsed.coverFile)
+        assertEquals("cover.jpg", cover.name)
+        assertTrue(cover.readBytes().contentEquals(rendered))
+    }
+
+    @Test fun pdfCoverRenderedBytesOverBoundRejected() {
+        val rendered = sizedBytes(PdfBookParser.MAX_COVER_BYTES + 1, 1)
+        val (staged, work) = stage("bigrender.pdf", byteArrayOf(1))
+        val parsed = PdfBookParser(
+            FakeCoverExtractor(coverPages, rendered = rendered)
+        ).parse(staged, work) {}.unwrap()
+        assertTrue(parsed.coverFile == null)
+        assertTrue(parsed.chapters.isNotEmpty())
+    }
+
+    @Test fun pdfCoverExtractionFailureLeavesImportUntouched() {
+        // The image walk throws AND the render leg throws: the
+        // book still imports, chapters intact, simply coverless —
+        // exactly as it did before FIX-24.
+        val (staged, work) = stage("brokenimg.pdf", byteArrayOf(1))
+        val parsed = PdfBookParser(
+            FakeCoverExtractor(coverPages, imagesThrow = true, renderThrows = true)
+        ).parse(staged, work) {}.unwrap()
+        assertTrue(parsed.coverFile == null)
+        assertTrue(parsed.chapters.isNotEmpty())
+        assertTrue(chapterTexts(parsed)[0].contains("long valley"))
+    }
 }

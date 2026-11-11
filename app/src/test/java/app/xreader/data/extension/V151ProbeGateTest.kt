@@ -178,6 +178,12 @@ class V151ProbeGateTest {
                     )
                 is LinkProber.Outcome.Failed ->
                     fail("the probe failed outright: ${outcome.message}")
+                is LinkProber.Outcome.NotProven ->
+                    fail(
+                        "the probe stopped at not-proven " +
+                            "(missing ${outcome.missingLegs}) instead of " +
+                            "escalating to the API road"
+                    )
             }
         }
 

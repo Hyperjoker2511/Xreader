@@ -189,6 +189,8 @@ class V122NovelBuddySurveyTest {
                             outcome.stageLines.joinToString(" ;; ") { it.render() }
                     is LinkProber.Outcome.LoginRequired ->
                         "LoginRequired ${outcome.loginUrl}"
+                    is LinkProber.Outcome.NotProven ->
+                        "NotProven missing=${outcome.missingLegs}"
                 }
             }
         }

@@ -31,8 +31,9 @@ import org.junit.rules.TemporaryFolder
  * plain web chapters. The image bytes travel through the source's
  * own HTTP stack (whitelist + session), land in the book's content
  * dir as `img-<name>`, and the content model references the bare
- * name. A dead image is skipped, the text survives; constructions
- * without storage keep the pre-image behaviour exactly.
+ * name. A dead image becomes the labelled placeholder slot
+ * (v1.5.4 WS-5), the text survives; constructions without
+ * storage keep the pre-image behaviour exactly.
  */
 class V1062PluginImagesTest {
 
@@ -196,17 +197,37 @@ class V1062PluginImagesTest {
     }
 
     @Test
-    fun aDeadImageIsSkippedAndTheTextSurvives() = runBlocking {
+    fun aDeadImageBecomesALabelledPlaceholderAndTheTextSurvives() = runBlocking {
         val transport = transport(serveImage = false)
         setUp(transport)
         val storage = BookStorage(tmp.newFolder("plugin-dead"))
         val outcome = fetchChapter(resolver(transport, storage))
         assertTrue("fetch failed: $outcome", outcome is FetchOutcome.Success)
         val content = (outcome as FetchOutcome.Success).content
-        assertFalse(content.blocks.any { it is ChapterBlock.Image })
+        // v1.5.4 (WS-5): a dead image no longer vanishes — its
+        // slot becomes the shared placeholder, alt text kept, so
+        // the reader can say why the picture is missing.
+        val images = content.blocks.filterIsInstance<ChapterBlock.Image>()
+        assertEquals(1, images.size)
+        val image = images.single()
+        assertEquals("picture-unavailable.png", image.fileName)
+        assertEquals("Site map", image.alt)
+        val storedPlaceholder = File(
+            storage.contentDir(bookId), "img-picture-unavailable.png"
+        )
+        assertTrue("placeholder file was not stored", storedPlaceholder.isFile)
+        assertTrue(
+            "stored placeholder is not the generated placeholder image",
+            PlaceholderImage.bytes()
+                .contentEquals(storedPlaceholder.readBytes())
+        )
+        assertFalse(
+            "the placeholder must not carry the dead image's own bytes",
+            pngBytes.contentEquals(storedPlaceholder.readBytes())
+        )
+        assertFalse(File(storage.contentDir(bookId), "img-map.png").exists())
         assertTrue(content.plainText().contains("travelling far from home"))
         assertTrue(content.plainText().contains("the road bends north"))
-        assertFalse(File(storage.contentDir(bookId), "img-map.png").exists())
     }
 
     @Test

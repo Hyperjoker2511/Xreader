@@ -8,6 +8,7 @@ import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -460,17 +461,35 @@ class V123CatalogueGateTest {
         )
         assertNotNull("the BOTI family builds a full config", config)
         assertNotNull("the lane config carries a catalogue", config!!.popular)
-        assertTrue(
-            "the catalogue is the /mobile/ home",
-            config.popular!!.url.endsWith("/mobile/")
+        // v1.5.10 (I6b): since v1.5.7 (Scope E) the lane's recipe
+        // is the site's own /v1 JSON API — KnownSites.botiConfig's
+        // header records why: the rendered /mobile/ road never
+        // completed a catalogue on the owner's phone, while the
+        // API answers every leg anonymously. The assertions
+        // below pin THAT road, not the retired /mobile/ one.
+        assertEquals(
+            "the catalogue is the API books endpoint",
+            "https://api.mystorywave.com/story-wave-backend" +
+                "/api/v1/content/books?pageNumber={page}&pageSize=20",
+            config.popular!!.url
         )
         assertTrue(
-            "a shell site's config must read rendered pages",
+            "the API host is whitelisted for the source",
+            config.extraDomains.contains("api.mystorywave.com")
+        )
+        assertFalse(
+            "the API road needs no rendering — a bare-JSON " +
+                "answer could never satisfy a rendered-HTML wait",
             config.needsRendering
         )
-        assertNull(
-            "no search shape is derivable — honestly absent",
+        assertNotNull(
+            "the API lane carries the search endpoint the " +
+                "/mobile/ lane predated",
             config.search
+        )
+        assertTrue(
+            "search rides the API search endpoint",
+            config.search!!.url.contains("/books/search")
         )
     }
 

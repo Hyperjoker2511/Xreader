@@ -14,15 +14,75 @@ class ChapterReadGuardTest {
 
     @Test
     fun `empty list on a settled source book blocks read`() {
+        // v1.5.8 (A3/A4): the settled-empty LINK source — the
+        // list came back empty, and Repair is its real door.
         val reason = ChapterReadGuard.blockedReason(
             isExtensionBook = true,
             chapterCount = 0,
             pageLoading = false,
-            chaptersLoading = false
+            chaptersLoading = false,
+            verdict = ChaptersVerdict.EMPTY_SOURCE,
+            isLinkSource = true
         )
         assertNotNull(reason)
         assertTrue(reason!!.contains("No chapters found"))
+        assertTrue(reason.contains("came back empty"))
         assertTrue(reason.contains("Repair"))
+    }
+
+    @Test
+    fun `error verdict keeps its honest error wording`() {
+        // v1.5.8 (A3): ERROR ≠ EMPTY — the fetch threw, and the
+        // pill says so with the recorded error, never "empty".
+        val reason = ChapterReadGuard.blockedReason(
+            isExtensionBook = true,
+            chapterCount = 0,
+            pageLoading = false,
+            chaptersLoading = false,
+            verdict = ChaptersVerdict.ERROR,
+            chaptersError = "the site didn't answer",
+            isLinkSource = true
+        )
+        assertNotNull(reason)
+        assertTrue(reason!!.contains("couldn't be loaded"))
+        assertTrue(reason.contains("the site didn't answer"))
+        assertTrue(!reason.contains("came back empty"))
+    }
+
+    @Test
+    fun `repair sentence is emitted only for link sources`() {
+        // v1.5.8 (A4): player / declarative / live kinds never
+        // get the Repair sentence — they name the door that
+        // exists (Re-check here / the source's test-drive).
+        for (verdict in ChaptersVerdict.entries) {
+            val reason = ChapterReadGuard.blockedReason(
+                isExtensionBook = true,
+                chapterCount = 0,
+                pageLoading = false,
+                chaptersLoading = false,
+                verdict = verdict,
+                isLinkSource = false
+            )
+            assertNotNull(reason)
+            assertTrue(
+                "no Repair advice for non-link kind ($verdict)",
+                !reason!!.contains("Repair")
+            )
+            assertTrue(reason.contains("Re-check"))
+            assertTrue(reason.contains("test-drive"))
+        }
+        // And the link kind keeps it, both verdicts.
+        for (verdict in ChaptersVerdict.entries) {
+            val reason = ChapterReadGuard.blockedReason(
+                isExtensionBook = true,
+                chapterCount = 0,
+                pageLoading = false,
+                chaptersLoading = false,
+                verdict = verdict,
+                isLinkSource = true
+            )
+            assertTrue(reason!!.contains("Repair"))
+        }
     }
 
     @Test

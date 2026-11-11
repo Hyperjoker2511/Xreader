@@ -33,9 +33,16 @@ import org.junit.rules.TemporaryFolder
  *
  * This is the never-finishing-render fixture's Library shape:
  * one book's refresh never completes; the sweep must still
- * terminate inside its per-book bound, count that book as a
- * failure, and refresh every other book — including the one
- * queued BEHIND the hung book in its own source group.
+ * terminate inside its per-book bound, count that book, and
+ * refresh every other book — including the one queued BEHIND
+ * the hung book in its own source group.
+ *
+ * v1.5.3 (item 26, gate-repair): the COUNTING changed — a
+ * per-book TIMEOUT is now a SKIP (skipped = 1, failures = 0)
+ * and the sweep reports success-with-partial, superseding
+ * this test's v1.5.1 "count that book as a failure" pin. The
+ * wedge assertions themselves (the sweep terminates; every
+ * other book refreshes) are unchanged.
  */
 class V151LibraryRefreshTest {
 
@@ -107,8 +114,12 @@ class V151LibraryRefreshTest {
             val outcome = withTimeout(15_000) { refresher.refreshAll() }
             assertEquals("all three books were attempted", 3, outcome.booksChecked)
             assertEquals(
-                "the hung book is an ordinary failure, not a wedge",
-                1, outcome.failures
+                "the hung book is a skip, not a failure or a wedge",
+                0, outcome.failures
+            )
+            assertEquals(
+                "the hung book is counted as skipped, not a wedge",
+                1, outcome.skipped
             )
             assertEquals(
                 "both healthy books reported their new chapters",

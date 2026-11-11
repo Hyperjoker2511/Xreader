@@ -238,21 +238,30 @@ class MihonSourceAdapterTest {
         val content = adapter.chapterContent(
             SourceChapter(id = "/ch/1", name = "Chapter 1")
         )
-        // Page 1 carried its address; page 2's was resolved
-        // through the fake's getImageUrl (its signed-CDN
-        // transform) — the recorded call proves the path ran.
-        assertEquals(listOf("/read/p2"), source.imageUrlCalls)
+        // v1.5.11 (transplant, Verdict 1): page image URLs
+        // resolve LAZILY, the donor HttpPageLoader shape —
+        // chapter open makes NO getImageUrl call at all (the
+        // pre-v1.5.11 eager loop fired one per unaddressed
+        // page at open). Page 1 carried its address; page 2
+        // is carried under its registration key, and its
+        // signed-CDN resolution happens only when its bytes
+        // are requested (see pageBytesRunThroughTheSourcesImageRequest).
+        assertEquals(emptyList<String>(), source.imageUrlCalls)
         val pages = adapter.pagesOf("/ch/1")
         assertNotNull(pages)
         assertEquals(
             listOf(
                 "https://cdn.test/1.jpg",
-                "https://cdn.test/signed/p2"
+                "https://panels.test/read/p2#xreaderPage=1"
             ),
             pages!!.urls
         )
         assertTrue(content.html.contains("https://cdn.test/1.jpg"))
-        assertTrue(content.html.contains("https://cdn.test/signed/p2"))
+        assertTrue(
+            content.html.contains(
+                "https://panels.test/read/p2#xreaderPage=1"
+            )
+        )
     }
 
     @Test
@@ -302,15 +311,26 @@ class MihonSourceAdapterTest {
     @Test
     fun pageBytesRunThroughTheSourcesImageRequest() = runBlocking {
         adapter.chapterContent(SourceChapter(id = "/ch/1", name = "C1"))
-        val result = adapter.pageBytes("https://cdn.test/signed/p2")
+        // v1.5.11: the caller hands pageBytes the page's
+        // REGISTRATION KEY (what the page record carries);
+        // the lazy getImageUrl resolution fires HERE, at
+        // byte-request time — never at chapter open.
+        assertEquals(emptyList<String>(), source.imageUrlCalls)
+        val result = adapter.pageBytes(
+            "https://panels.test/read/p2#xreaderPage=1"
+        )
         assertTrue(result is AppResult.Ok)
         assertEquals(
             FakeHttpSource.PAGE_BYTES.toList(),
             (result as AppResult.Ok).value.toList()
         )
-        // The bytes were fetched by executing the source's
-        // image request for the RESOLVED page — its imageUrl
-        // is the signed address, under the package namespace.
+        // The resolution ran through the source's own
+        // image-url path (its signed-CDN transform)…
+        assertEquals(listOf("/read/p2"), source.imageUrlCalls)
+        // …and the bytes were fetched by executing the
+        // source's image request for the RESOLVED page — its
+        // imageUrl is the signed address, under the package
+        // namespace.
         assertEquals(
             listOf("https://cdn.test/signed/p2"), source.imageRequests
         )
@@ -433,7 +453,12 @@ class MihonSourceAdapterTest {
     }
 
     @Test
-    fun unknownRatingFailsClosedToAdult() = runBlocking {
+    fun unknownRatingIsVisiblePendingNeverAdult() = runBlocking {
+        // v1.5.2 (§8.4, settled ruling i): a MISSING stamp is
+        // UNKNOWN — visible with a "rating pending" badge, never
+        // resolved to ADULT (the v1.5.1 fail-closed default hid a
+        // pre-stamp Asura forever). SAFE is the transport value;
+        // the pending state is the absent stamp itself.
         val stack = serviceStack(
             mapOf(namespaced to source), rating = null
         )
@@ -441,7 +466,13 @@ class MihonSourceAdapterTest {
         val handle = (stack.service.sourcesOf(rowId) as AppResult.Ok)
             .value.single()
         assertEquals(
-            ContentRating.ADULT, stack.service.contentRatingOf(handle)
+            ContentRating.SAFE, stack.service.contentRatingOf(handle)
+        )
+        assertTrue(
+            app.xreader.data.extension.ContentAccess.allows(
+                stack.service.contentRatingOf(handle),
+                app.xreader.data.extension.ContentVisibility.HIDE_ADULT
+            )
         )
     }
 
@@ -522,10 +553,14 @@ class MihonSourceAdapterTest {
         assertTrue(outcome is FetchOutcome.Success)
         val pages = (outcome as FetchOutcome.Success).content.pages
         assertNotNull(pages)
+        // v1.5.11: the record carries page 2 under its lazy
+        // registration key — the signed address is resolved
+        // only when that page's bytes are fetched (the
+        // download road below proves that leg).
         assertEquals(
             listOf(
                 "https://cdn.test/1.jpg",
-                "https://cdn.test/signed/p2"
+                "https://panels.test/read/p2#xreaderPage=1"
             ),
             pages!!.urls
         )

@@ -449,7 +449,12 @@ class V130EngineTest {
                 repoDao, extDao, store, transport, service, sessionStore
             )
             val first = manager.installBundledDefaults()
-            assertEquals(BundledDefaults.configs().size, first)
+            // Declarative defaults + the bundled JS entries
+            // (WuxiaWorld was pulled from v1.5.2 by owner ruling; see V152-WUXIAWORLD-BANKED.md).
+            assertEquals(
+                BundledDefaults.configs().size,
+                first
+            )
             // Idempotent: a second run changes nothing.
             assertEquals(0, manager.installBundledDefaults())
             assertTrue(

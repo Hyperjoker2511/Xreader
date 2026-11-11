@@ -60,7 +60,7 @@ class LoginCookiesByOriginTest {
 
     @Test
     fun `an empty jar groups to nothing`() {
-        val grouped = loginCookiesByOrigin(currentUrl, loginUrl) { null }
+        val grouped = loginCookiesByOrigin(currentUrl, loginUrl, { null })
         assertTrue(grouped.isEmpty())
     }
 

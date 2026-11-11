@@ -188,6 +188,61 @@ class KeiyoushiPlayerManagerTest {
             )
         }
 
+    // v1.5.2 housekeeping (§8.4): backfillRatings DIRECTLY —
+    // the post-restore leg AppContainer runs. A legacy record
+    // with no stamp is stamped from the index WITHOUT any
+    // explicit catalog() call from the caller: backfill does
+    // the one healing fetch itself. An index that cannot be
+    // fetched leaves the record unstamped (ratingOf then
+    // answers the unknown state — visible + "Rating pending",
+    // never adult-by-default).
+    @Test
+    fun `backfillRatings stamps legacy records via its own index fetch`() =
+        runBlocking {
+            recordStore.records = listOf(
+                KeiyoushiPlayerRecord(
+                    packageName = pkg,
+                    displayName = "Fake Panels",
+                    status = KeiyoushiExtStatus.READY,
+                    installedVersionCode = 106005,
+                    installedVersionName = "1.6.5"
+                )
+            )
+            val fresh = newManager()
+            fresh.restoreInstalled()
+            assertNull(
+                recordStore.records.first { it.packageName == pkg }
+                    .contentRatingName
+            )
+            fresh.backfillRatings()
+            assertEquals(
+                "SAFE",
+                recordStore.records.first { it.packageName == pkg }
+                    .contentRatingName
+            )
+            assertEquals(ContentRating.SAFE, fresh.ratingOf(pkg))
+
+            // Index unreachable: no stamp, no crash, still the
+            // honest unknown — never a guessed rating.
+            recordStore.records = listOf(
+                KeiyoushiPlayerRecord(
+                    packageName = pkg,
+                    displayName = "Fake Panels",
+                    status = KeiyoushiExtStatus.READY,
+                    installedVersionCode = 106005,
+                    installedVersionName = "1.6.5"
+                )
+            )
+            val offline = newManager()
+            offline.restoreInstalled()
+            transport.bodies.clear()
+            offline.backfillRatings()
+            assertNull(
+                recordStore.records.first { it.packageName == pkg }
+                    .contentRatingName
+            )
+        }
+
     @Test
     fun `consent comes before any load`() = runBlocking {
         val staged = manager.beginInstall(pkg)
@@ -784,6 +839,24 @@ class KeiyoushiPlayerManagerTest {
         override fun observeAll():
             Flow<List<InstalledExtension>> =
             MutableStateFlow(rows.toList())
+
+        override suspend fun setNeedsRepair(id: Long, reason: String?) {
+            val i = rows.indexOfFirst { it.id == id }
+            if (i >= 0) {
+                rows[i] = rows[i].copy(
+                    needsRepair = true, needsRepairReason = reason
+                )
+            }
+        }
+
+        override suspend fun clearNeedsRepair(id: Long) {
+            val i = rows.indexOfFirst { it.id == id }
+            if (i >= 0) {
+                rows[i] = rows[i].copy(
+                    needsRepair = false, needsRepairReason = null
+                )
+            }
+        }
 
         override suspend fun countAll(): Int = rows.size
 
