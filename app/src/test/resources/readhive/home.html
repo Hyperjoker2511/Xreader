@@ -1,0 +1,2013 @@
+<!doctype html>
+<html lang="en-US" class="scroll-smooth scroll-pt-12">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Readhive &#8211; Your favourite reading hive.</title>
+<meta name='robots' content='max-image-preview:large' />
+<link rel="stylesheet" href="/public/css/app.c45fbd.css"><meta property="og:title" name="og:title" content="Readhive" />
+<meta property="og:type" name="og:type" content="website" />
+<meta property="og:image" name="og:image" content="/public/images/2022/07/FO721D5FA0CC7-02-scaled-e1658075230203.jpg" />
+<meta property="og:description" name="og:description" content="Your favourite reading hive." />
+<meta property="og:locale" name="og:locale" content="en_US" />
+<meta property="og:site_name" name="og:site_name" content="Readhive" />
+<meta property="twitter:card" name="twitter:card" content="summary" />
+<link rel="icon" href="/public/images/2022/07/FO721D5FA0CC7-02-scaled-e1658075230203-150x150.jpg" sizes="32x32">
+<link rel="icon" href="/public/images/2022/07/FO721D5FA0CC7-02-1536x1536.jpg" sizes="192x192">
+<link rel="apple-touch-icon" href="/public/images/2022/07/FO721D5FA0CC7-02-1536x1536.jpg">
+<meta name="msapplication-TileImage" content="/public/images/2022/07/FO721D5FA0CC7-02-1536x1536.jpg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preload" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;700&display=swap" as="style">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;700&display=swap">
+  </head>
+
+  <body
+    x-data="theme"
+    class=""  >
+        
+    <div
+      id="app"
+      up-main
+    >
+      <div x-data="{nav:false}" class="text-foreground bg-accent-2 w-full h-full">
+  <div class="flex flex-grow min-h-screen">
+    <aside
+      x-init="nav = ($screen('lg'))"
+      class="bg-accent fixed inset-y-0 z-30 lg:static shadow-lg"
+      :class="{'overlay': !$screen('lg')}"
+      x-transition:enter="transition-spacing ease-in-out"
+      x-transition:enter-start="-ml-60"
+      x-transition:enter-end="ml-0"
+      x-transition:leave="transition-spacing ease-in-out"
+      x-transition:leave-start="ml-0"
+      x-transition:leave-end="-ml-60"
+      @click.away="if (!$screen('lg')) nav = false"
+      x-show="nav"
+      x-cloak
+    >
+      <div class="sticky top-0 px-4 w-60">
+        <div class="py-2 text-2xl tracking-widest text-center uppercase">
+  <a aria-current="page" href="/" up-follow up-preload>Readhive</a>
+</div>
+
+<hr class="h-px mx-8 my-2 bg-accent-border">
+
+  <nav
+    :class="nav || 'collaped'"
+    class="text-sm mb-44">
+    <ul>
+              
+        
+                  <li class="relative px-4 rounded cursor-pointer text-white bg-red active font-bold">
+            <a class="flex items-center py-2" href="https://readhive.org/" up-follow up-preload>
+              <svg  xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-home mr-2" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+              Home
+            </a>
+          </li>
+                        
+        
+                  <li class="relative px-4 rounded cursor-pointer font-medium hover:bg-accent-hover">
+            <a class="flex items-center py-2" href="https://discord.gg/zzGdEQjS3U" up-follow up-preload>
+              <svg  xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-users mr-2" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+              Discord
+            </a>
+          </li>
+                        
+        
+                  <li class="relative px-4 rounded cursor-pointer font-medium hover:bg-accent-hover">
+            <a class="flex items-center py-2" href="https://readhive.org/updates/" up-follow up-preload>
+              <svg  xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-rss mr-2" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"></path><path d="M4 4a16 16 0 0 1 16 16"></path><circle cx="5" cy="19" r="1"></circle></svg>
+              Updates
+            </a>
+          </li>
+                        
+        
+                  <li class="relative px-4 rounded cursor-pointer font-medium hover:bg-accent-hover">
+            <a class="flex items-center py-2" href="https://readhive.org/reading-list/" up-follow up-preload>
+              <svg  xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-bookmark mr-2" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+              Reading List
+            </a>
+          </li>
+                        
+        
+                  <li class="relative px-4 rounded cursor-pointer font-medium hover:bg-accent-hover">
+            <a class="flex items-center py-2" href="https://readhive.org/browse-series/" up-follow up-preload>
+              <svg  xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-filter mr-2" aria-hidden="true"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+              Browse Series
+            </a>
+          </li>
+                    </ul>
+  </nav>
+
+<div class="my-2">
+  <hr class="h-px mx-8 my-2 bg-accent-border">
+
+      <div
+      :class="nav || 'collaped'"
+      class="mb-4 text-sm">
+      <ul>
+                  
+          
+                      <li class="relative px-4 rounded cursor-pointer font-medium hover:bg-accent-hover">
+              <a class="flex items-center py-2" href="https://readhive.org/dmca/" up-follow up-preload>
+                  
+                  DMCA
+              </a>
+            </li>
+                              
+          
+                      <li class="relative px-4 rounded cursor-pointer font-medium hover:bg-accent-hover">
+              <a class="flex items-center py-2" href="https://readhive.org/copyright-faq/" up-follow up-preload>
+                  
+                  Copyright FAQ
+              </a>
+            </li>
+                              
+          
+                      <li class="relative px-4 rounded cursor-pointer font-medium hover:bg-accent-hover">
+              <a class="flex items-center py-2" href="https://readhive.org/terms-of-service/" up-follow up-preload>
+                  
+                  Terms of Service
+              </a>
+            </li>
+                          </ul>
+    </div>
+  
+  <footer class="px-8 py-2 text-xs">
+    <div>© 2022 Readhive</div>
+  </footer>
+</div>
+
+<div class="py-3 overflow-hidden relative">
+  <div class="flex justify-center">
+    <div x-data="unit" data-fuse="22792698429"></div>
+  </div>
+</div>
+      </div>
+    </aside>
+
+    <div
+      x-init="$store.app.main = $el"
+      :class="{'pointer-events-none': nav && !$screen('lg')}"
+      class="flex flex-col min-w-0 w-full relative"
+    >
+      <header
+      class="sticky top-0 left-0 w-full h-0 z-20"
+  >
+  <div
+      x-data="{opacity: 0}"
+      class="relative flex justify-between w-full px-4 py-1 banner sm:px-8"
+  >
+          <div
+        @scroll.window="opacity = Math.min(1, Math.max(0, (scrollY - 20) / 20))"
+        :style="{ opacity: opacity }"
+        class="absolute top-0 left-0 w-full h-full bg-accent-2 border-b opacity-100 md:opacity-0 -z-10 border-b-red"
+      ></div>
+    
+    <div class="flex items-center justify-start">
+      <button @click.prevent="nav = !nav" class="p-2 transition rounded-full hover:bg-btn-hover hover:bg-opacity-30 active:bg-opacity-50">
+                  <svg xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            width="28"
+            height="28"
+            :class="opacity > 0.5 ? 'fill-header-menuflip' : 'fill-header-menu'"
+          >
+            <path d="M2 5.995c0-.55.446-.995.995-.995h8.01c.55 0 .995.446.995.995s-.446.995-.995.995h-8.01c-.55 0-.995-.446-.995-.995zM2 12c0-.55.446-.995.995-.995h18.01c.55 0 .995.446.995.995s-.446.995-.995.995H2.995C2.445 12.995 2 12.55 2 12zm.995 5.01c-.55 0-.995.446-.995.995s.446.995.995.995h12.01c.55 0 .995-.446.995-.995s-.446-.995-.995-.995H2.995z"/>
+          </svg>
+              </button>
+
+              <div
+          x-show="!nav"
+          :class="opacity > 0.5 ? 'text-header-menuflip' : 'text-header-menu'"
+          class="hidden text-2xl tracking-widest text-center uppercase truncated md:block"
+          x-cloak
+        >
+          <a aria-current="page" href="/" up-follow up-preload>Readhive</a>
+        </div>
+          </div>
+
+    <div class="flex items-center justify-end flex-grow">
+      <div
+  x-data="{focus:false}"
+  class="flex flex-grow max-w-xs mx-4 transition-width duration-500 rounded-md"
+  :class="{'max-w-full lg:max-w-md': focus, 'max-w-xs': !focus}"
+>
+  <form
+    x-data="search"
+    class="relative flex-grow opacity-80 transition z-30"
+    :style="focus && 'opacity: 100%'"
+  >
+    <div @click.outside="focus = false">
+      <div class="relative overflow-hidden rounded-md">
+        <input @click="focus = true" type="search" class="w-full px-4 py-2 pr-10 rounded-sm shadow-md bg-accent text-sm focus:outline-none placeholder:text-foreground" placeholder="Search Series…" x-model.debounce="value">
+        <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+          <svg class="w-5 h-5 text-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+          </svg>
+        </div>
+      </div>
+  
+      <div
+        class="absolute w-full mt-4 flex items-start justify-center overflow-hidden"
+        x-show="focus"
+        x-transition:enter="transform transition"
+        x-transition:enter-start="opacity-0 translate-y-4"
+        x-transition:enter-end="opacity-100 translate-y-0"
+        x-transition:leave="transition transform"
+        x-transition:leave-start="opacity-100 translate-y-0"
+        x-transition:leave-end="opacity-0 translate-y-4"
+        x-cloak
+      >
+        <div class="relative w-full max-w-2xl max-h-full overflow-auto bg-accent-2 rounded shadow-lg">
+          <div class="p-4">
+            <div x-show="!value || !results">Enter a search query…</div>
+            <div class="grid gap-2" x-show="value && results">
+              <template x-for="series in results">
+                <a :href="series.url" up-follow up-preload>
+                  <div class="flex gap-2 p-2 rounded bg-accent hover:bg-accent-hover">
+                    <div class="flex-shrink-0 h-16 w-14 cover">
+                      <img class="w-full h-full rounded shadow-md" :src="series.thumb" :alt="series.title + ' cover'">
+                    </div>
+  
+                    <div class="flex flex-col justify-between gap-2">
+                      <h4 class="font-bold break-all line-clamp-2 text-foreground" x-text="series.title"></h4>
+  
+                      <div class="flex flex-col sm:flex-row gap-x-4 gap-y-2">
+                      </div>
+                    </div>
+                  </div>
+                </a>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </form>
+
+  <div class="fixed inset-0 bg-black/50" x-show="focus" x-cloak></div>
+</div>
+      <div
+  x-data="{open:false}"
+  class="relative"
+  >
+  <button
+    class="flex items-center flex-shrink-0 space-x-2 focus:outline-none"
+    @click="open = !open"
+  >
+          <div class="flex items-center justify-center p-2 bg-header-profile border-2 border-accent-border rounded-full">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24">
+          <path opacity="0" d="M0 0h24v24H0z" />
+          <path d="M12 11a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm6 10a1 1 0 0 0 1-1 7 7 0 0 0-14 0 1 1 0 0 0 1 1z" />
+        </svg>
+      </div>
+      </button>
+
+  <div
+    class="bg-header-profilemenu absolute top-full right-0 mt-2 px-3 py-2 rounded-md shadow-lg min-w-64 overflow-hidden z-20"
+    @click.outside="open = false"
+    x-show="open"
+    x-transition:enter="transition ease-out transform"
+    x-transition:enter-start="opacity-0 -translate-y-2"
+    x-transition:enter-end="opacity-100 translate-y-0"
+    x-transition:leave="transition ease-in"
+    x-transition:leave-start="opacity-100"
+    x-transition:leave-end="opacity-0"
+    x-cloak
+  >
+          <div
+        class="grid grid-cols-2 gap-2 px-3 py-2 mb-2 border-b border-accent-2-border"
+      >
+        <a href="/login" class="flex items-center justify-center w-full py-2 text-sm font-medium text-white rounded bg-red focus:outline-none sm:text-base hover:bg-red-700 active:bg-red-800" up-follow up-preload>Login</a>
+        <a href="/register" class="flex items-center justify-center w-full py-2 text-sm font-medium text-foreground rounded bg-btn focus:outline-none sm:text-base hover:bg-accent-hover active:bg-shade" up-follow up-preload>Register</a>
+      </div>
+    
+    <div x-data="theme" class="flex flex-wrap justify-center items-center border-b border-accent-2-border pb-2 mb-2">
+      <div @click="reset" :class="theme === 'light' && 'border-red'" class="bg-white rounded border mr-1 w-16 h-5"></div>
+      <div @click="update('dark')" :class="theme === 'dark' && 'border-red'" class="dark bg-accent-2 rounded border mr-1 w-16 h-5"></div>
+    </div>
+
+          <ul class="mb-2 pb-2 border-b border-accent-2-border">
+                  <li>
+            <a href="https://readhive.org/register/" class="flex items-center px-3 py-2 text-sm font-medium rounded hover:bg-shade" up-follow up-preload>
+              Register
+            </a>
+          </li>
+                  <li>
+            <a href="https://readhive.org/login/" class="flex items-center px-3 py-2 text-sm font-medium rounded hover:bg-shade" up-follow up-preload>
+              Login
+            </a>
+          </li>
+              </ul>
+    
+      </div>
+</div>
+    </div>
+  </div>
+</header>
+
+              <main class="min-h-screen pb-24">
+                <div class="relative flex flex-col flex-grow w-full mb-4 overflow-hidden">
+  <div
+    x-ignore
+    ax-load
+    x-data="slider(true, true, 'big', true)"
+    class="swiper w-full"
+  >
+    <div class="swiper-wrapper">
+             <div class="swiper-slide h-auto bg-cover bg-no-repeat cursor-pointer" style="background-image: url(/public/images/2026/04/대학원생은-교수님을-암살하고-싶어.jpg); background-position-y: 25%">
+        <div @click.prevent="up.visit('https://readhive.org/series/169056/')" class="block h-full w-full px-4 pb-6 pt-16 sm:px-8 big-slider__fading-edge">
+          <div class="grid gap-x-4 px-2 pt-4 grid-cols-12">
+            <a href="https://readhive.org/series/169056/" class="col-span-4 md:col-span-2" up-follow up-preload>
+              <div class="aspect-w-4 aspect-h-6">
+                <img src="/public/images/2026/04/대학원생은-교수님을-암살하고-싶어.jpg" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+              </div>
+            </a>
+
+            <div class="col-span-8 md:col-span-10">
+              <a href="https://readhive.org/series/169056/" up-follow up-preload>
+                <h2 class="sm:text-2xl text-white font-medium line-clamp-3 hover:underline">The Graduate Student Wants to Assassinate the Professor</h2>
+              </a>
+
+                              <div class="flex flex-wrap text-sm">
+                                      <a @click.prevent="up.visit('/genre/fantasy/')" href="/genre/fantasy/" class="text-white mr-2 hover:underline" title="Fantasy" rel="genre" up-follow up-preload>Fantasy</a>
+                                      <a @click.prevent="up.visit('/genre/romance/')" href="/genre/romance/" class="text-white mr-2 hover:underline" title="Romance" rel="genre" up-follow up-preload>Romance</a>
+                                  </div>
+              
+              <div class="mt-4 line-clamp-4 max-w-2xl">
+                <p class="text-sm text-white">&#8220;A one-horned demon shall one day reign as the Demon King, unifying the demons scattered across the world, which will cause the many lands to be torn asunder.&#8221; An oracle received by the Saintess of the Holy State of Jorken.And because of it, Leorina—a member of the Special Task Force directly under the Pope—was assigned...</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+            <div class="swiper-slide h-auto bg-cover bg-no-repeat cursor-pointer" style="background-image: url(/public/images/2026/08/Yeon-Ryeong-hwa..jpg); background-position-y: 25%">
+        <div @click.prevent="up.visit('https://readhive.org/series/205695/')" class="block h-full w-full px-4 pb-6 pt-16 sm:px-8 big-slider__fading-edge">
+          <div class="grid gap-x-4 px-2 pt-4 grid-cols-12">
+            <a href="https://readhive.org/series/205695/" class="col-span-4 md:col-span-2" up-follow up-preload>
+              <div class="aspect-w-4 aspect-h-6">
+                <img src="/public/images/2026/08/Yeon-Ryeong-hwa..jpg" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+              </div>
+            </a>
+
+            <div class="col-span-8 md:col-span-10">
+              <a href="https://readhive.org/series/205695/" up-follow up-preload>
+                <h2 class="sm:text-2xl text-white font-medium line-clamp-3 hover:underline">The Youngest Daughter of a Prestigious Medical Family Is a Genius Physician</h2>
+              </a>
+
+                              <div class="flex flex-wrap text-sm">
+                                      <a @click.prevent="up.visit('/genre/drama/')" href="/genre/drama/" class="text-white mr-2 hover:underline" title="Drama" rel="genre" up-follow up-preload>Drama</a>
+                                      <a @click.prevent="up.visit('/genre/fantasy/')" href="/genre/fantasy/" class="text-white mr-2 hover:underline" title="Fantasy" rel="genre" up-follow up-preload>Fantasy</a>
+                                      <a @click.prevent="up.visit('/genre/romance/')" href="/genre/romance/" class="text-white mr-2 hover:underline" title="Romance" rel="genre" up-follow up-preload>Romance</a>
+                                  </div>
+              
+              <div class="mt-4 line-clamp-4 max-w-2xl">
+                <p class="text-sm text-white">Yeon Ryeong-hwa, the youngest daughter of a prestigious medical family, is living on borrowed time. The person who beheaded her after she was treated as the family’s disgrace was none other than her fiancé—the only person she trusted and relied on. “……So you had been deceiving me from the very beginning.” When she opened her...</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+            <div class="swiper-slide h-auto bg-cover bg-no-repeat cursor-pointer" style="background-image: url(/public/images/2025/07/ZOMBIE.jpg); background-position-y: 25%">
+        <div @click.prevent="up.visit('https://readhive.org/series/123039/')" class="block h-full w-full px-4 pb-6 pt-16 sm:px-8 big-slider__fading-edge">
+          <div class="grid gap-x-4 px-2 pt-4 grid-cols-12">
+            <a href="https://readhive.org/series/123039/" class="col-span-4 md:col-span-2" up-follow up-preload>
+              <div class="aspect-w-4 aspect-h-6">
+                <img src="/public/images/2025/07/ZOMBIE.jpg" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+              </div>
+            </a>
+
+            <div class="col-span-8 md:col-span-10">
+              <a href="https://readhive.org/series/123039/" up-follow up-preload>
+                <h2 class="sm:text-2xl text-white font-medium line-clamp-3 hover:underline">The Only Woman in a Zombie Apocalypse</h2>
+              </a>
+
+                              <div class="flex flex-wrap text-sm">
+                                      <a @click.prevent="up.visit('/genre/adult/')" href="/genre/adult/" class="text-white mr-2 hover:underline" title="Adult" rel="genre" up-follow up-preload>Adult</a>
+                                      <a @click.prevent="up.visit('/genre/comedy/')" href="/genre/comedy/" class="text-white mr-2 hover:underline" title="Comedy" rel="genre" up-follow up-preload>Comedy</a>
+                                      <a @click.prevent="up.visit('/genre/ecchi/')" href="/genre/ecchi/" class="text-white mr-2 hover:underline" title="Ecchi" rel="genre" up-follow up-preload>Ecchi</a>
+                                      <a @click.prevent="up.visit('/genre/fantasy/')" href="/genre/fantasy/" class="text-white mr-2 hover:underline" title="Fantasy" rel="genre" up-follow up-preload>Fantasy</a>
+                                      <a @click.prevent="up.visit('/genre/harem/')" href="/genre/harem/" class="text-white mr-2 hover:underline" title="Harem" rel="genre" up-follow up-preload>Harem</a>
+                                      <a @click.prevent="up.visit('/genre/reincarnation/')" href="/genre/reincarnation/" class="text-white mr-2 hover:underline" title="Reincarnation" rel="genre" up-follow up-preload>Reincarnation</a>
+                                      <a @click.prevent="up.visit('/genre/romance/')" href="/genre/romance/" class="text-white mr-2 hover:underline" title="Romance" rel="genre" up-follow up-preload>Romance</a>
+                                      <a @click.prevent="up.visit('/genre/shoujo/')" href="/genre/shoujo/" class="text-white mr-2 hover:underline" title="Shoujo" rel="genre" up-follow up-preload>Shoujo</a>
+                                  </div>
+              
+              <div class="mt-4 line-clamp-4 max-w-2xl">
+                <p class="text-sm text-white">※ Please note that this story contains scenes that may be divisive—reader discretion is advised. &nbsp; I’ve been reincarnated into a zombie apocalypse story. As the only woman in a group full of men—with a killer body and a gorgeous face! 🫧 &#8220;Noona, you’re so pretty.&#8221; &nbsp; Ian rose from his seat, quietly gazing at...</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+            <div class="swiper-slide h-auto bg-cover bg-no-repeat cursor-pointer" style="background-image: url(/public/images/2022/07/Berlin-The-writer-lives-the-life-of-a-time-limited-villain.jpeg); background-position-y: 25%">
+        <div @click.prevent="up.visit('https://readhive.org/series/153/')" class="block h-full w-full px-4 pb-6 pt-16 sm:px-8 big-slider__fading-edge">
+          <div class="grid gap-x-4 px-2 pt-4 grid-cols-12">
+            <a href="https://readhive.org/series/153/" class="col-span-4 md:col-span-2" up-follow up-preload>
+              <div class="aspect-w-4 aspect-h-6">
+                <img src="/public/images/2022/07/Berlin-The-writer-lives-the-life-of-a-time-limited-villain.jpeg" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+              </div>
+            </a>
+
+            <div class="col-span-8 md:col-span-10">
+              <a href="https://readhive.org/series/153/" up-follow up-preload>
+                <h2 class="sm:text-2xl text-white font-medium line-clamp-3 hover:underline">Brelin: The Writer Lives the Life of a Time Limited Villain</h2>
+              </a>
+
+                              <div class="flex flex-wrap text-sm">
+                                      <a @click.prevent="up.visit('/genre/fantasy/')" href="/genre/fantasy/" class="text-white mr-2 hover:underline" title="Fantasy" rel="genre" up-follow up-preload>Fantasy</a>
+                                      <a @click.prevent="up.visit('/genre/historical/')" href="/genre/historical/" class="text-white mr-2 hover:underline" title="Historical" rel="genre" up-follow up-preload>Historical</a>
+                                      <a @click.prevent="up.visit('/genre/mature/')" href="/genre/mature/" class="text-white mr-2 hover:underline" title="Mature" rel="genre" up-follow up-preload>Mature</a>
+                                      <a @click.prevent="up.visit('/genre/reincarnation/')" href="/genre/reincarnation/" class="text-white mr-2 hover:underline" title="Reincarnation" rel="genre" up-follow up-preload>Reincarnation</a>
+                                  </div>
+              
+              <div class="mt-4 line-clamp-4 max-w-2xl">
+                <p class="text-sm text-white">&nbsp; Someone was licking down her neck. &nbsp; It must be part of a dream… &nbsp; a very vivid one. &nbsp; Electrical impulses sprung up through the blood vessels of her body. &nbsp; “It’s you who planned tonight, but you’re treating me as if I’m the shameless one.” &nbsp; “What the hell?!” &nbsp; I had...</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+            <div class="swiper-slide h-auto bg-cover bg-no-repeat cursor-pointer" style="background-image: url(/public/images/2022/07/FETdPXSakAETDkZ-1.jpg); background-position-y: 25%">
+        <div @click.prevent="up.visit('https://readhive.org/series/95/')" class="block h-full w-full px-4 pb-6 pt-16 sm:px-8 big-slider__fading-edge">
+          <div class="grid gap-x-4 px-2 pt-4 grid-cols-12">
+            <a href="https://readhive.org/series/95/" class="col-span-4 md:col-span-2" up-follow up-preload>
+              <div class="aspect-w-4 aspect-h-6">
+                <img src="/public/images/2022/07/FETdPXSakAETDkZ-1.jpg" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+              </div>
+            </a>
+
+            <div class="col-span-8 md:col-span-10">
+              <a href="https://readhive.org/series/95/" up-follow up-preload>
+                <h2 class="sm:text-2xl text-white font-medium line-clamp-3 hover:underline">The Nerd Turned Out To Be The Tyrant</h2>
+              </a>
+
+                              <div class="flex flex-wrap text-sm">
+                                      <a @click.prevent="up.visit('/genre/drama/')" href="/genre/drama/" class="text-white mr-2 hover:underline" title="Drama" rel="genre" up-follow up-preload>Drama</a>
+                                      <a @click.prevent="up.visit('/genre/fantasy/')" href="/genre/fantasy/" class="text-white mr-2 hover:underline" title="Fantasy" rel="genre" up-follow up-preload>Fantasy</a>
+                                      <a @click.prevent="up.visit('/genre/romance/')" href="/genre/romance/" class="text-white mr-2 hover:underline" title="Romance" rel="genre" up-follow up-preload>Romance</a>
+                                  </div>
+              
+              <div class="mt-4 line-clamp-4 max-w-2xl">
+                <p class="text-sm text-white">I possessed an R19 devastating novel where a tyrant went mad and killed all the characters in the story. &nbsp; The problem is that I only looked at the scenes and didn’t know the contents properly! &nbsp; In any case, there is only one person to avoid, and it’s no other than the emperor. &nbsp;...</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+           </div>
+
+    <div class="swiper-button-next"></div>
+    <div class="swiper-button-prev"></div>
+
+    <div class="swiper-pagination"></div>
+  </div>
+</div>  <div class="space-y-8 px-4 py-2 sm:px-8">
+    
+    <div>
+      <h2 class="mb-4 text-2xl font-medium">Latest Updates</h2>
+
+      <div class="flex flex-wrap">
+        <div class="flex flex-col w-full px-2 mb-4 lg:max-w-1/5 sm:max-w-1/4 max-w-1/2">
+      <a href="https://readhive.org/series/127374/" class="peer" up-follow up-preload>
+        <div class="mb-1 aspect-w-3 aspect-h-4">
+          <img src="/public/images/2025/08/resource-13.webp" alt="The Reason Why the Forsaken Fake Returned thumbnail" class="object-cover rounded shadow-lg">
+        </div>
+      </a>
+
+      <div class="flex flex-col items-center justify-center flex-grow mb-2 peer-hover:text-red hover:text-red">
+        <a href="https://readhive.org/series/127374/" class="text-lg font-medium text-center line-clamp-2" up-follow up-preload>The Reason Why the Forsaken Fake Returned</a>
+      </div>
+
+      <div>
+                              <a href="https://readhive.org/series/127374/146" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 146</span>
+                <span class="self-end flex-shrink-0 text-xs">39 mins</span>
+              </div>
+            </a>
+                                        <a href="https://readhive.org/series/127374/145" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 145</span>
+                <span class="self-end flex-shrink-0 text-xs">4 days</span>
+              </div>
+            </a>
+                        </div>
+    </div>
+      <div class="flex flex-col w-full px-2 mb-4 lg:max-w-1/5 sm:max-w-1/4 max-w-1/2">
+      <a href="https://readhive.org/series/127370/" class="peer" up-follow up-preload>
+        <div class="mb-1 aspect-w-3 aspect-h-4">
+          <img src="/public/images/2026/10/resource-2-1.jpg" alt="If You Take the Enemy Prince as Your Knight thumbnail" class="object-cover rounded shadow-lg">
+        </div>
+      </a>
+
+      <div class="flex flex-col items-center justify-center flex-grow mb-2 peer-hover:text-red hover:text-red">
+        <a href="https://readhive.org/series/127370/" class="text-lg font-medium text-center line-clamp-2" up-follow up-preload>If You Take the Enemy Prince as Your Knight</a>
+      </div>
+
+      <div>
+                              <a href="https://readhive.org/series/127370/168" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 168</span>
+                <span class="self-end flex-shrink-0 text-xs">44 mins</span>
+              </div>
+            </a>
+                                        <a href="https://readhive.org/series/127370/167" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 167</span>
+                <span class="self-end flex-shrink-0 text-xs">4 days</span>
+              </div>
+            </a>
+                        </div>
+    </div>
+      <div class="flex flex-col w-full px-2 mb-4 lg:max-w-1/5 sm:max-w-1/4 max-w-1/2">
+      <a href="https://readhive.org/series/111674/" class="peer" up-follow up-preload>
+        <div class="mb-1 aspect-w-3 aspect-h-4">
+          <img src="/public/images/2025/05/resource-14.jpeg" alt="I&#8217;m Trying to End This Possession thumbnail" class="object-cover rounded shadow-lg">
+        </div>
+      </a>
+
+      <div class="flex flex-col items-center justify-center flex-grow mb-2 peer-hover:text-red hover:text-red">
+        <a href="https://readhive.org/series/111674/" class="text-lg font-medium text-center line-clamp-2" up-follow up-preload>I&#8217;m Trying to End This Possession</a>
+      </div>
+
+      <div>
+                              <a href="https://readhive.org/series/111674/293" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 293</span>
+                <span class="self-end flex-shrink-0 text-xs">50 mins</span>
+              </div>
+            </a>
+                                        <a href="https://readhive.org/series/111674/292" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 292</span>
+                <span class="self-end flex-shrink-0 text-xs">4 days</span>
+              </div>
+            </a>
+                        </div>
+    </div>
+      <div class="flex flex-col w-full px-2 mb-4 lg:max-w-1/5 sm:max-w-1/4 max-w-1/2">
+      <a href="https://readhive.org/series/175522/" class="peer" up-follow up-preload>
+        <div class="mb-1 aspect-w-3 aspect-h-4">
+          <img src="/public/images/2026/05/xxlarge-2.webp" alt="Only Obedient to Me! Sir Knight thumbnail" class="object-cover rounded shadow-lg">
+        </div>
+      </a>
+
+      <div class="flex flex-col items-center justify-center flex-grow mb-2 peer-hover:text-red hover:text-red">
+        <a href="https://readhive.org/series/175522/" class="text-lg font-medium text-center line-clamp-2" up-follow up-preload>Only Obedient to Me! Sir Knight</a>
+      </div>
+
+      <div>
+                              <a href="https://readhive.org/series/175522/50" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 50</span>
+                <span class="self-end flex-shrink-0 text-xs">53 mins</span>
+              </div>
+            </a>
+                                        <a href="https://readhive.org/series/175522/49" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 49</span>
+                <span class="self-end flex-shrink-0 text-xs">3 days</span>
+              </div>
+            </a>
+                        </div>
+    </div>
+      <div class="flex flex-col w-full px-2 mb-4 lg:max-w-1/5 sm:max-w-1/4 max-w-1/2">
+      <a href="https://readhive.org/series/207451/" class="peer" up-follow up-preload>
+        <div class="mb-1 aspect-w-3 aspect-h-4">
+          <img src="/public/images/2026/09/돌멩이부터-시작하는-환생-라이프.jpg" alt="Starting My Reincarnated Life as a Pebble thumbnail" class="object-cover rounded shadow-lg">
+        </div>
+      </a>
+
+      <div class="flex flex-col items-center justify-center flex-grow mb-2 peer-hover:text-red hover:text-red">
+        <a href="https://readhive.org/series/207451/" class="text-lg font-medium text-center line-clamp-2" up-follow up-preload>Starting My Reincarnated Life as a Pebble</a>
+      </div>
+
+      <div>
+                              <a href="https://readhive.org/series/207451/7" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 7</span>
+                <span class="self-end flex-shrink-0 text-xs">2 hours</span>
+              </div>
+            </a>
+                                        <a href="https://readhive.org/series/207451/6" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 6</span>
+                <span class="self-end flex-shrink-0 text-xs">3 days</span>
+              </div>
+            </a>
+                        </div>
+    </div>
+      <div class="flex flex-col w-full px-2 mb-4 lg:max-w-1/5 sm:max-w-1/4 max-w-1/2">
+      <a href="https://readhive.org/series/132739/" class="peer" up-follow up-preload>
+        <div class="mb-1 aspect-w-3 aspect-h-4">
+          <img src="/public/images/2025/09/xxlarge-2-2.webp" alt="As Giju Wishes thumbnail" class="object-cover rounded shadow-lg">
+        </div>
+      </a>
+
+      <div class="flex flex-col items-center justify-center flex-grow mb-2 peer-hover:text-red hover:text-red">
+        <a href="https://readhive.org/series/132739/" class="text-lg font-medium text-center line-clamp-2" up-follow up-preload>As Giju Wishes</a>
+      </div>
+
+      <div>
+                              <a href="https://readhive.org/series/132739/14.8" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 14.8</span>
+                <span class="self-end flex-shrink-0 text-xs">3 hours</span>
+              </div>
+            </a>
+                                        <a href="https://readhive.org/series/132739/14.7" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 14.7</span>
+                <span class="self-end flex-shrink-0 text-xs">3 days</span>
+              </div>
+            </a>
+                        </div>
+    </div>
+      <div class="flex flex-col w-full px-2 mb-4 lg:max-w-1/5 sm:max-w-1/4 max-w-1/2">
+      <a href="https://readhive.org/series/69095/" class="peer" up-follow up-preload>
+        <div class="mb-1 aspect-w-3 aspect-h-4">
+          <img src="/public/images/2024/06/zDlJ2ZpceKjRxtqnSZGHELtbKRFBh-5YdxKUSMxgvK5RHk7bhjZ_aNbYI1b2BvdwOazpIXqmn81Fu0aeuJfIUjE08H9plH5TZD9TiyXxYhTO87rx1cJ58Rst7p7hHXsX2WznrdNcpP1_NTU6c1QgaHMyOs7jTxRMLhgRlKegutk.webp" alt="Assistant Manager Kim Hates Idols thumbnail" class="object-cover rounded shadow-lg">
+        </div>
+      </a>
+
+      <div class="flex flex-col items-center justify-center flex-grow mb-2 peer-hover:text-red hover:text-red">
+        <a href="https://readhive.org/series/69095/" class="text-lg font-medium text-center line-clamp-2" up-follow up-preload>Assistant Manager Kim Hates Idols</a>
+      </div>
+
+      <div>
+                              <a href="https://readhive.org/series/69095/552" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 552 - Reconciliation (1)</span>
+                <span class="self-end flex-shrink-0 text-xs">4 hours</span>
+              </div>
+            </a>
+                                        <a href="https://readhive.org/series/69095/551" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 551 - Choice</span>
+                <span class="self-end flex-shrink-0 text-xs">1 day</span>
+              </div>
+            </a>
+                        </div>
+    </div>
+      <div class="flex flex-col w-full px-2 mb-4 lg:max-w-1/5 sm:max-w-1/4 max-w-1/2">
+      <a href="https://readhive.org/series/192296/" class="peer" up-follow up-preload>
+        <div class="mb-1 aspect-w-3 aspect-h-4">
+          <img src="/public/images/2026/07/xxlarge-7.webp" alt="Debuting by Riding the Returnee’s Bus thumbnail" class="object-cover rounded shadow-lg">
+        </div>
+      </a>
+
+      <div class="flex flex-col items-center justify-center flex-grow mb-2 peer-hover:text-red hover:text-red">
+        <a href="https://readhive.org/series/192296/" class="text-lg font-medium text-center line-clamp-2" up-follow up-preload>Debuting by Riding the Returnee’s Bus</a>
+      </div>
+
+      <div>
+                              <a href="https://readhive.org/series/192296/181" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 181</span>
+                <span class="self-end flex-shrink-0 text-xs">4 hours</span>
+              </div>
+            </a>
+                                        <a href="https://readhive.org/series/192296/180" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 180</span>
+                <span class="self-end flex-shrink-0 text-xs">3 days</span>
+              </div>
+            </a>
+                        </div>
+    </div>
+      <div class="flex flex-col w-full px-2 mb-4 lg:max-w-1/5 sm:max-w-1/4 max-w-1/2">
+      <a href="https://readhive.org/series/186310/" class="peer" up-follow up-preload>
+        <div class="mb-1 aspect-w-3 aspect-h-4">
+          <img src="/public/images/2026/07/resource.jpe" alt="Your Majesty, Dinner Is Ready. thumbnail" class="object-cover rounded shadow-lg">
+        </div>
+      </a>
+
+      <div class="flex flex-col items-center justify-center flex-grow mb-2 peer-hover:text-red hover:text-red">
+        <a href="https://readhive.org/series/186310/" class="text-lg font-medium text-center line-clamp-2" up-follow up-preload>Your Majesty, Dinner Is Ready.</a>
+      </div>
+
+      <div>
+                              <a href="https://readhive.org/series/186310/223" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 223 - You&#039;re More Than Welcome</span>
+                <span class="self-end flex-shrink-0 text-xs">4 hours</span>
+              </div>
+            </a>
+                                        <a href="https://readhive.org/series/186310/222" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 222 - I Am the Newly Hired Maid</span>
+                <span class="self-end flex-shrink-0 text-xs">1 day</span>
+              </div>
+            </a>
+                        </div>
+    </div>
+      <div class="flex flex-col w-full px-2 mb-4 lg:max-w-1/5 sm:max-w-1/4 max-w-1/2">
+      <a href="https://readhive.org/series/181004/" class="peer" up-follow up-preload>
+        <div class="mb-1 aspect-w-3 aspect-h-4">
+          <img src="/public/images/2026/06/resource.jpg" alt="How a Loan Shark Survives as an Actor thumbnail" class="object-cover rounded shadow-lg">
+        </div>
+      </a>
+
+      <div class="flex flex-col items-center justify-center flex-grow mb-2 peer-hover:text-red hover:text-red">
+        <a href="https://readhive.org/series/181004/" class="text-lg font-medium text-center line-clamp-2" up-follow up-preload>How a Loan Shark Survives as an Actor</a>
+      </div>
+
+      <div>
+                              <a href="https://readhive.org/series/181004/152" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 152</span>
+                <span class="self-end flex-shrink-0 text-xs">4 hours</span>
+              </div>
+            </a>
+                                        <a href="https://readhive.org/series/181004/151" class="text-sm hover:text-red" up-follow up-preload>
+              <div class="flex justify-between px-2 py-1 mb-2 bg-accent rounded">
+                <span class="font-medium truncate">Chapter 151</span>
+                <span class="self-end flex-shrink-0 text-xs">1 day</span>
+              </div>
+            </a>
+                        </div>
+    </div>
+        </div>
+
+      <nav class="flex items-center justify-center space-x-1" role="navigation" aria-label="pagination">
+    
+    <ul class="flex space-x-1 pagination">
+              
+                              <li>
+                              <span
+                  class="px-3 py-1 text-white border rounded-md bg-red border-red"
+                  aria-current="page"
+                >1</span>
+                          </li>
+                      <li>
+                              <a
+                  href="/page/2/"
+                  class="px-3 py-1 border rounded-md bg-component-lighter border-component-darker hover:text-red hover:bg-red-300 hover:border-red"
+                  up-follow
+                  up-preload
+                >2</a>
+                          </li>
+                      <li>
+                              <a
+                  href="/page/3/"
+                  class="px-3 py-1 border rounded-md bg-component-lighter border-component-darker hover:text-red hover:bg-red-300 hover:border-red"
+                  up-follow
+                  up-preload
+                >3</a>
+                          </li>
+                      <li>
+                              <a
+                  href="/page/4/"
+                  class="px-3 py-1 border rounded-md bg-component-lighter border-component-darker hover:text-red hover:bg-red-300 hover:border-red"
+                  up-follow
+                  up-preload
+                >4</a>
+                          </li>
+                      <li>
+                              <a
+                  href="/page/5/"
+                  class="px-3 py-1 border rounded-md bg-component-lighter border-component-darker hover:text-red hover:bg-red-300 hover:border-red"
+                  up-follow
+                  up-preload
+                >5</a>
+                          </li>
+                      <li>
+                              <a
+                  href="/page/6/"
+                  class="px-3 py-1 border rounded-md bg-component-lighter border-component-darker hover:text-red hover:bg-red-300 hover:border-red"
+                  up-follow
+                  up-preload
+                >6</a>
+                          </li>
+                                          <li class="disabled" aria-disabled="true">
+            <span>&hellip;</span>
+          </li>
+        
+                      
+                              <li>
+                              <a
+                  href="/page/44/"
+                  class="px-3 py-1 border rounded-md bg-component-lighter border-component-darker hover:text-red hover:bg-red-300 hover:border-red"
+                  up-follow
+                  up-preload
+                >44</a>
+                          </li>
+                      <li>
+                              <a
+                  href="/page/45/"
+                  class="px-3 py-1 border rounded-md bg-component-lighter border-component-darker hover:text-red hover:bg-red-300 hover:border-red"
+                  up-follow
+                  up-preload
+                >45</a>
+                          </li>
+                            </ul>
+
+          <a
+        href="/page/2/"
+        rel="next"
+        aria-label="Next Page"
+        class="flex items-center justify-center px-2 py-2 border rounded-md shadow bg-component border-component-darker hover:text-white hover:bg-red hover:border-red"
+        up-follow
+        up-preload
+      >
+      <svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" class="w-4">
+        <polyline points="9 18 15 12 9 6"></polyline>
+      </svg>
+    </a>
+      </nav>
+
+    </div>
+
+    <div class="py-3 overflow-hidden relative">
+  <div class="flex justify-center">
+    <div x-data="unit" data-fuse="22792698411"></div>
+  </div>
+</div>
+
+    <div class="flex flex-col justify-between lg:flex-row">
+      <div class="flex-1 mb-4 mr-2 lg:mb-0">
+        <h2 class="mb-4 text-2xl font-medium">Trending</h2>
+
+        <div class="flex flex-wrap">
+       <div class="flex flex-grow pr-4 mb-4 sm:max-w-1/2 group">
+      <div x-data>
+        <div class="w-12 mr-2 aspect-w-4 aspect-h-5">
+          <img x-ref="art" src="/public/images/2026/10/xxlarge-6.webp" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+
+          <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <a href="https://readhive.org/series/217672/" class="text-sm font-medium line-clamp-2 group-hover:text-red" up-follow up-preload>Black Swan</a>
+        <div class="text-xs line-clamp-2">
+          ※ This novel contains numerous vulgar expressions related to the body, and includes high-intensity violence, profanity, non-consensual relationships, and hateful expressions, so please be sure to check the preview before purchasing.  &nbsp; ※ In addition, we clarify that the background and settings within the work are entirely fictional, and regions, characters, organizations, and other company...
+        </div>
+      </div>
+    </div>
+      <div class="flex flex-grow pr-4 mb-4 sm:max-w-1/2 group">
+      <div x-data>
+        <div class="w-12 mr-2 aspect-w-4 aspect-h-5">
+          <img x-ref="art" src="/public/images/2026/09/resource-3.jpe" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+
+          <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <a href="https://readhive.org/series/212317/" class="text-sm font-medium line-clamp-2 group-hover:text-red" up-follow up-preload>I’m Debuting With The Bias I Killed</a>
+        <div class="text-xs line-clamp-2">
+          Today, I killed my bias. And then, I died too. No matter how much he was my bias, I never intended for us to share the same memorial day. Then, an unidentified status window appeared before me. [Chosen Deceased ‘Yoo Seongwoo’ is granted a single wish.] &nbsp; And just like that, I was given the...
+        </div>
+      </div>
+    </div>
+      <div class="flex flex-grow pr-4 mb-4 sm:max-w-1/2 group">
+      <div x-data>
+        <div class="w-12 mr-2 aspect-w-4 aspect-h-5">
+          <img x-ref="art" src="/public/images/2026/08/xxlarge-2-1.webp" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+
+          <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <a href="https://readhive.org/series/204528/" class="text-sm font-medium line-clamp-2 group-hover:text-red" up-follow up-preload>The Prosecutor’s Office’s Proposal</a>
+        <div class="text-xs line-clamp-2">
+          After failing to adapt to life as a police officer, Lee Chaeha becomes an 8th-grade civil servant and is assigned as an investigator to the Danhyeon Branch Office. Having lived his whole life suffering from bullying by his peers and violence from his uncle due to the lifelong label of being a &#8220;murderer&#8217;s son,&#8221; he...
+        </div>
+      </div>
+    </div>
+      <div class="flex flex-grow pr-4 mb-4 sm:max-w-1/2 group">
+      <div x-data>
+        <div class="w-12 mr-2 aspect-w-4 aspect-h-5">
+          <img x-ref="art" src="/public/images/2026/07/xxlarge-7.webp" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+
+          <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <a href="https://readhive.org/series/192296/" class="text-sm font-medium line-clamp-2 group-hover:text-red" up-follow up-preload>Debuting by Riding the Returnee’s Bus</a>
+        <div class="text-xs line-clamp-2">
+          In a f*cking fantasy world— Lee Woonha barely managed to survive! But that luck of returning to Earth was short-lived. [You’ve only contributed 1% to the subjugation of the Demon King.] &nbsp; [Join forces with Hero Joo Wooyoung and debut together.] &nbsp; [This is a rare chance to become one of the hero’s companions.] &nbsp;...
+        </div>
+      </div>
+    </div>
+      <div class="flex flex-grow pr-4 mb-4 sm:max-w-1/2 group">
+      <div x-data>
+        <div class="w-12 mr-2 aspect-w-4 aspect-h-5">
+          <img x-ref="art" src="/public/images/2026/07/download-37.pngrf6-Photoroom.webp" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+
+          <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <a href="https://readhive.org/series/189033/" class="text-sm font-medium line-clamp-2 group-hover:text-red" up-follow up-preload>Winter Field</a>
+        <div class="text-xs line-clamp-2">
+          The illegitimate son of the warm southern kingdom of Cornia&#8217;s royal family, Rensley Malosen, in place of his vanished sister, sets out for Oldenland, the northern country at the end of the continent, disguised as a woman to become the bride of Archduke Gisel Siebendad. &nbsp; Abandoned by the royal family in all but name,his...
+        </div>
+      </div>
+    </div>
+      <div class="flex flex-grow pr-4 mb-4 sm:max-w-1/2 group">
+      <div x-data>
+        <div class="w-12 mr-2 aspect-w-4 aspect-h-5">
+          <img x-ref="art" src="/public/images/2026/06/resource.jpg" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+
+          <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <a href="https://readhive.org/series/181004/" class="text-sm font-medium line-clamp-2 group-hover:text-red" up-follow up-preload>How a Loan Shark Survives as an Actor</a>
+        <div class="text-xs line-clamp-2">
+          ―Why does Yoo Seulho, who can&#8217;t even act, keep showing up? LOL A celebrity hated by the entire nation. Yoo Seulho, a useless actor infamous for his terrible acting skills. &#8220;&#8230;Why am I in Yoo Seul-ho&#8217;s body?&#8221; A loan shark unexpectedly wakes up in the body of an actor. He heads to a filming set...
+        </div>
+      </div>
+    </div>
+      <div class="flex flex-grow pr-4 mb-4 sm:max-w-1/2 group">
+      <div x-data>
+        <div class="w-12 mr-2 aspect-w-4 aspect-h-5">
+          <img x-ref="art" src="/public/images/2026/05/resource-1.jpg" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+
+          <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <a href="https://readhive.org/series/177390/" class="text-sm font-medium line-clamp-2 group-hover:text-red" up-follow up-preload>The S-Rank Paparazzi Reincarnates as an Idol</a>
+        <div class="text-xs line-clamp-2">
+          “Idols? Those high-priced kids?” Paparazzi Cha Siwoo. After dying, he opens his eyes to find himself… five years in the past. [You have been sent back to five years before your death.] &nbsp; “What?” [Complete the quest, and ultimately become a world-class, top-tier idol.] &nbsp; Back in his paparazzi days, idols were nothing more than...
+        </div>
+      </div>
+    </div>
+      <div class="flex flex-grow pr-4 mb-4 sm:max-w-1/2 group">
+      <div x-data>
+        <div class="w-12 mr-2 aspect-w-4 aspect-h-5">
+          <img x-ref="art" src="/public/images/2026/04/A-Survival-Guide-for-Counselor-in-the-Destruction.jpeg" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded shadow-lg">
+
+          <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <a href="https://readhive.org/series/167884/" class="text-sm font-medium line-clamp-2 group-hover:text-red" up-follow up-preload>A Survival Guide for a Counselor in the Apocalypse</a>
+        <div class="text-xs line-clamp-2">
+          The apocalypse is far away, and life is close. My daily worries weren’t about how to survive today, but about how I could pass the school counselor appointment exam. A game made using the IP of a web novel of the same name, &lt;Ruined World&gt;. Before I fell into that apocalypse, that was certainly how...
+        </div>
+      </div>
+    </div>
+   </div>
+      </div>
+
+      <div class="flex flex-col flex-1">
+        <div class="mb-4 lg:mb-16">
+                      <h2 class="mb-4 text-2xl font-medium">Top Genres</h2>
+
+            <ul class="flex flex-wrap my-2 text-xs">
+      <li class="my-2 mr-2">
+      <a href="/genre/fantasy/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Fantasy">Fantasy</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/genre/romance/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Romance">Romance</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/genre/bl/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="BL">BL</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/genre/drama/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Drama">Drama</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/genre/comedy/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Comedy">Comedy</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/genre/shoujo/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Shoujo">Shoujo</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/genre/reincarnation/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Reincarnation">Reincarnation</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/genre/action/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Action">Action</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/genre/adventure/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Adventure">Adventure</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/genre/adult/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Adult">Adult</a>
+    </li>
+  </ul>
+                  </div>
+
+        <div>
+                      <h2 class="mb-4 text-2xl font-medium">Top Tags</h2>
+
+            <ul class="flex flex-wrap my-2 text-xs">
+      <li class="my-2 mr-2">
+      <a href="/tag/female-protagonist/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Female Protagonist">#Female Protagonist</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/tag/romance/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Romance">#Romance</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/tag/beautiful-female-lead/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Beautiful Female Lead">#Beautiful Female Lead</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/tag/reincarnation/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Reincarnation">#Reincarnation</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/tag/fantasy/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="fantasy">#fantasy</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/tag/transmigration/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Transmigration">#Transmigration</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/tag/possessive-characters/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Possessive Characters">#Possessive Characters</a>
+    </li>
+      <li class="my-2 mr-2">
+      <a href="/tag/obsessive-love/" class="px-3 py-1 text-red-500 bg-red-600 rounded-lg shadow bg-opacity-10 hover:underline" title="Obsessive Love">#Obsessive Love</a>
+    </li>
+  </ul>
+                  </div>
+      </div>
+    </div>
+
+    <div class="py-3 overflow-hidden relative">
+  <div class="flex justify-center">
+    <div x-data="unit" data-fuse="22792698417"></div>
+  </div>
+</div>
+
+    <div>
+      <h2 class="mb-4 text-2xl font-medium">Popular This Month</h2>
+
+      <div
+  x-ignore
+  ax-load
+  x-data="slider"
+  class="swiper"
+>
+  <div class="swiper-wrapper">
+           <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/212317/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/09/resource-3.jpe" alt="I’m Debuting With The Bias I Killed" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/212317/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">I’m Debuting With The Bias I Killed</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/204528/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/08/xxlarge-2-1.webp" alt="The Prosecutor’s Office’s Proposal" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/204528/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">The Prosecutor’s Office’s Proposal</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/194209/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/07/xxlarge-11.webp" alt="Flower Fiancé" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/194209/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Flower Fiancé</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/192296/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/07/xxlarge-7.webp" alt="Debuting by Riding the Returnee’s Bus" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/192296/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Debuting by Riding the Returnee’s Bus</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/189033/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/07/download-37.pngrf6-Photoroom.webp" alt="Winter Field" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/189033/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Winter Field</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/186310/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/07/resource.jpe" alt="Your Majesty, Dinner Is Ready." class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/186310/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Your Majesty, Dinner Is Ready.</h6>
+        </a>
+      </div>
+       </div>
+</div>
+    </div>
+
+           <div>
+        <h2 class="mb-4 text-2xl font-medium">Popular in Fantasy</h2>
+
+        <div
+  x-ignore
+  ax-load
+  x-data="slider"
+  class="swiper"
+>
+  <div class="swiper-wrapper">
+           <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/223720/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/Only-I-Know-the-War-Heros-Secret.jpg" alt="Only I Know the War Hero’s Secret" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/223720/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Only I Know the War Hero’s Secret</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/223242/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/Its-My-First-Time-as-a-Lady-So-Ill-Cause-a-Little-Trouble..jpg" alt="It&#8217;s My First Time as a Lady, So I&#8217;ll Cause a Little Trouble" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/223242/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">It&#8217;s My First Time as a Lady, So I&#8217;ll Cause a Little Trouble</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/222518/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/The-Munchkin-Princess-Wants-to-Run-Away.jpg" alt="The Munchkin Princess Wants to Run Away" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/222518/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">The Munchkin Princess Wants to Run Away</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/222110/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/I-Thought-It-Was-a-Healing-Farming-Game.jpg" alt="I Thought It Was a Healing Farming Game" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/222110/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">I Thought It Was a Healing Farming Game</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/221645/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/Its-My-First-Time-Being-Loved.jpg" alt="Being Loved for the First Time" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/221645/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Being Loved for the First Time</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/221437/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/The-Male-Leads-Secretary-Is-Too-Good-at-Her-Job.jpg" alt="The Male Lead’s Secretary Is Too Good at Her Job" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/221437/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">The Male Lead’s Secretary Is Too Good at Her Job</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/221006/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/How-the-Prince-Makes-Friends.jpg" alt="How the Prince Makes Friends" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/221006/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">How the Prince Makes Friends</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/221000/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/xxlarge.webp" alt="The B-Rank Civil Servant and the Squishy Emergency Food" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/221000/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">The B-Rank Civil Servant and the Squishy Emergency Food</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/220560/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/resource-2.jpg" alt="The Prince’s First Love Was Me" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/220560/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">The Prince’s First Love Was Me</h6>
+        </a>
+      </div>
+       </div>
+</div>
+      </div>
+          <div>
+        <h2 class="mb-4 text-2xl font-medium">Popular in Romance</h2>
+
+        <div
+  x-ignore
+  ax-load
+  x-data="slider"
+  class="swiper"
+>
+  <div class="swiper-wrapper">
+           <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/223720/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/Only-I-Know-the-War-Heros-Secret.jpg" alt="Only I Know the War Hero’s Secret" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/223720/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Only I Know the War Hero’s Secret</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/223242/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/Its-My-First-Time-as-a-Lady-So-Ill-Cause-a-Little-Trouble..jpg" alt="It&#8217;s My First Time as a Lady, So I&#8217;ll Cause a Little Trouble" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/223242/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">It&#8217;s My First Time as a Lady, So I&#8217;ll Cause a Little Trouble</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/222518/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/The-Munchkin-Princess-Wants-to-Run-Away.jpg" alt="The Munchkin Princess Wants to Run Away" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/222518/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">The Munchkin Princess Wants to Run Away</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/222110/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/I-Thought-It-Was-a-Healing-Farming-Game.jpg" alt="I Thought It Was a Healing Farming Game" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/222110/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">I Thought It Was a Healing Farming Game</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/221645/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/Its-My-First-Time-Being-Loved.jpg" alt="Being Loved for the First Time" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/221645/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Being Loved for the First Time</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/221437/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/The-Male-Leads-Secretary-Is-Too-Good-at-Her-Job.jpg" alt="The Male Lead’s Secretary Is Too Good at Her Job" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/221437/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">The Male Lead’s Secretary Is Too Good at Her Job</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/218494/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/The-returning-husband-refuses-to-divorce.jpg" alt="The Returning Husband Refuses to Divorce" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/218494/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">The Returning Husband Refuses to Divorce</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/216514/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/How-a-Nuisance-Character-Survives-in-a-Horror-Game.jpg" alt="How a Nuisance Character Survives a Horror Game" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/216514/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">How a Nuisance Character Survives a Horror Game</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/216054/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/09/Dad-Came-Back-from-a-Deserted-Island.jpg" alt="Dad Came Back from a Deserted Island" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/216054/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Dad Came Back from a Deserted Island</h6>
+        </a>
+      </div>
+       </div>
+</div>
+      </div>
+          <div>
+        <h2 class="mb-4 text-2xl font-medium">Popular in BL</h2>
+
+        <div
+  x-ignore
+  ax-load
+  x-data="slider"
+  class="swiper"
+>
+  <div class="swiper-wrapper">
+           <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/223952/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/11/xxlarge.webp" alt="The Future Calamity&#8217;s Brainwashing Won&#8217;t Wear Off" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/223952/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">The Future Calamity&#8217;s Brainwashing Won&#8217;t Wear Off</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/217672/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/10/xxlarge-6.webp" alt="Black Swan" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/217672/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Black Swan</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/213144/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/09/xxlarge-4.webp" alt="How to Avoid the Monday Blues" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/213144/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">How to Avoid the Monday Blues</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/211513/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/09/xxlarge-3.webp" alt="Runway" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/211513/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Runway</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/208564/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/09/xxlarge-2.webp" alt="The Hunter&#8217;s Gonna Lay Low" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/208564/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">The Hunter&#8217;s Gonna Lay Low</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/207328/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/09/xxlarge.jpg" alt="A Scorching Day" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/207328/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">A Scorching Day</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/206876/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/09/xxlarge.webp" alt="Lovely Monsters" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/206876/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Lovely Monsters</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/204528/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/08/xxlarge-2-1.webp" alt="The Prosecutor’s Office’s Proposal" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/204528/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">The Prosecutor’s Office’s Proposal</h6>
+        </a>
+      </div>
+          <div class="swiper-slide w-32 flex-shrink-0 group">
+        <a href="https://readhive.org/series/204221/" up-follow up-preload>
+          <div class="aspect-w-3 aspect-h-4">
+            <img src="/public/images/2026/08/xxlarge-9.webp" alt="Hit by a Pitched Ball" class="object-cover rounded shadow-lg">
+          </div>
+        </a>
+        
+        <a href="https://readhive.org/series/204221/" up-follow up-preload>
+          <h6 class="mt-2 text-sm font-medium line-clamp-2 text-center group-hover:text-red">Hit by a Pitched Ball</h6>
+        </a>
+      </div>
+       </div>
+</div>
+      </div>
+     
+    <div>
+      <h2 class="mb-4 text-2xl font-medium">Advanced Chapters</h2>
+
+      <div class="grid gap-2">
+            
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2025/08/resource-13.webp" alt="The Reason Why the Forsaken Fake Returned Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/127374/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>The Reason Why the Forsaken Fake Returned</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/127374/151" class="font-medium hover:underline" up-follow up-preload>Chapter 151</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">alyalia</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 2 weeks</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/10/resource-2-1.jpg" alt="If You Take the Enemy Prince as Your Knight Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/127370/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>If You Take the Enemy Prince as Your Knight</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/127370/173" class="font-medium hover:underline" up-follow up-preload>Chapter 173</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">alyalia</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 2 weeks</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2025/05/resource-14.jpeg" alt="I'm Trying to End This Possession Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/111674/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>I'm Trying to End This Possession</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/111674/303" class="font-medium hover:underline" up-follow up-preload>Chapter 303</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">alyalia</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 1 month</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/215" class="font-medium hover:underline" up-follow up-preload>Chapter 215</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 4 months</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/214" class="font-medium hover:underline" up-follow up-preload>Chapter 214</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 3 months</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/213" class="font-medium hover:underline" up-follow up-preload>Chapter 213</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 3 months</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/212" class="font-medium hover:underline" up-follow up-preload>Chapter 212</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 3 months</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/211" class="font-medium hover:underline" up-follow up-preload>Chapter 211</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 3 months</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/210" class="font-medium hover:underline" up-follow up-preload>Chapter 210</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 3 months</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/209" class="font-medium hover:underline" up-follow up-preload>Chapter 209</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 3 months</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/208" class="font-medium hover:underline" up-follow up-preload>Chapter 208</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 3 months</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/207" class="font-medium hover:underline" up-follow up-preload>Chapter 207</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 3 months</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/206" class="font-medium hover:underline" up-follow up-preload>Chapter 206</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 3 months</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/205" class="font-medium hover:underline" up-follow up-preload>Chapter 205</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 3 months</div>
+          </div>
+        </div>
+      </div>
+          
+            
+      <div class="grid grid-areas-advanced__container grid-cols-advanced gap-2">
+        <div class="grid-in-image">
+          <div x-data class="aspect-w-3 aspect-h-4 rounded overflow-hidden">
+                          <img x-ref="art" src="/public/images/2026/08/resource.jpe" alt="Surviving as the Villainess’s Servant in a Martial Arts Novel Thumbnail" class="object-cover rounded-md shadow-md">
+            
+            <div @click="$dispatch('enlarge', $refs.art)" class="absolute flex w-full h-full items-center justify-center opacity-0 transition duration-300 hover:bg-black/50 hover:opacity-100 cursor-pointer z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 48 48"><path stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="m6 6 10 10M6 42l10-10M42 42 32 32M42 6 32 16M33 6h9v9M42 33v9h-9M15 42H6v-9M6 15V6h9"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-in-details grid-areas-advanced-two-row grid-cols-advanced-rows border-b border-b-accent-2-border auto-rows-min">
+          <div class="grid-in-title">
+            <a href="https://readhive.org/series/204382/" class="text-lg font-medium line-clamp-3 hover:text-red" up-follow up-preload>Surviving as the Villainess’s Servant in a Martial Arts Novel</a>
+          </div>
+
+          <div class="grid-in-release">
+            <a href="https://readhive.org/series/204382/204" class="font-medium hover:underline" up-follow up-preload>Chapter 204</a>
+          </div>
+
+          <div class="grid-in-author self-end text-right">
+            <small class="font-medium truncated">Cireng</small>
+          </div>
+
+          <div class="grid-in-info">
+            <div class="text-sm truncated">in 3 months</div>
+          </div>
+        </div>
+      </div>
+          </div>
+    </div>
+
+  </div>
+
+  <div
+    x-data="{show:false}"
+    @enlarge.window="show = true; src = $event.detail.src"
+    x-show="show"
+    x-cloak
+  >
+    <template x-if="show">
+      <div class="w-full h-full p-8 grid fixed top-0 left-0 place-items-center z-20">
+        <div class="w-full max-w-[27rem] aspect-w-9 aspect-h-4">
+          <img @click.outside="show = false" :src="src" alt="The Reason Why the Forsaken Fake Returned enlarged cover" class="overlay">
+        </div>
+      </div>
+    </template>
+  </div>
+      </main>
+
+      <div
+  x-ignore
+  ax-load="idle"
+  x-data="toast"
+  class="fixed right-0 z-10 flex flex-col top-16"
+  @toast.window="add($event.detail)"
+  >
+  <template x-for="toast of toasts" :key="toast.id">
+    <button
+      x-show="visibles.includes(toast)"
+      x-transition:enter="transition ease-in duration-200"
+			x-transition:enter-start="transform opacity-0 translate-y-2"
+			x-transition:enter-end="transform opacity-100"
+			x-transition:leave="transition ease-out duration-500"
+			x-transition:leave-start="transform translate-x-0 opacity-100"
+			x-transition:leave-end="transform translate-x-full opacity-0"
+      @click="remove(toast.id)"
+      type="button"
+      :class="toast.success ? 'bg-green-400 hover:bg-green-500' : 'bg-red-400 hover:bg-red-500'"
+      class="max-w-xs px-4 py-2 mx-4 mb-4 text-white transition rounded-md"
+      >
+      <div class="flex space-x-2">
+        <template x-if="toast.success">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" fill="none" stroke="currentcolor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="flex-shrink-0"><path d="M14 21.414l-5-5.001L10.413 15 14 18.586 21.585 11 23 12.415l-9 8.999zM16 2a14 14 0 1 0 14 14A14 14 0 0 0 16 2zm0 26a12 12 0 1 1 12-12 12 12 0 0 1-12 12z"/></svg>
+        </template>
+
+        <template x-if="!toast.success">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M20.618 5.984A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016zM12 9v2m0 4h.01"></path></svg>
+        </template>
+        <p class="font-medium text-left" x-text="toast.message"></p>
+      </div>
+    </button>
+  </template>
+</div>
+
+<div x-data="{fixed:true}" x-ref="bottom" class="fixed z-20 m-1 bottom-0 transform translate-x-1/2 right-1/2">
+  <div class="relative text-center">
+    
+  </div>
+</div>
+    </div>
+  </div>
+</div>
+    </div>
+
+        <script defer>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-5865C8H');</script><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-5865C8H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript><script>
+(()=>{"use strict";var e,r,t,o={},a={};function n(e){var r=a[e];if(void 0!==r)return r.exports;var t=a[e]={exports:{}};return o[e].call(t.exports,t,t.exports,n),t.exports}n.m=o,e=[],n.O=(r,t,o,a)=>{if(!t){var i=1/0;for(u=0;u<e.length;u++){t=e[u][0],o=e[u][1],a=e[u][2];for(var s=!0,d=0;d<t.length;d++)(!1&a||i>=a)&&Object.keys(n.O).every((e=>n.O[e](t[d])))?t.splice(d--,1):(s=!1,a<i&&(i=a));if(s){e.splice(u--,1);var l=o();void 0!==l&&(r=l)}}return r}a=a||0;for(var u=e.length;u>0&&e[u-1][2]>a;u--)e[u]=e[u-1];e[u]=[t,o,a]},n.n=e=>{var r=e&&e.__esModule?()=>e.default:()=>e;return n.d(r,{a:r}),r},n.d=(e,r)=>{for(var t in r)n.o(r,t)&&!n.o(e,t)&&Object.defineProperty(e,t,{enumerable:!0,get:r[t]})},n.f={},n.e=e=>Promise.all(Object.keys(n.f).reduce(((r,t)=>(n.f[t](e,r),r)),[])),n.u=e=>772===e?"js/772.ba4d0e.js":"js/dynamic/"+e+"."+{32:"716a61",73:"d535b9",86:"5b2d4e",145:"3cc9da",246:"ce0b33",268:"991629",283:"aba12c",309:"e2be43",319:"16e296",443:"184eb6",596:"53c3b2",602:"c3199a",655:"3b83f1",699:"1b8347",733:"684600",738:"49b7c5",767:"095260",805:"c5b481",900:"612ec9",945:"2d137d",949:"5c2b6d"}[e]+".chunk.js",n.miniCssF=e=>{},n.o=(e,r)=>Object.prototype.hasOwnProperty.call(e,r),r={},t="@roots/bud/sage/nzoseries:",n.l=(e,o,a,i)=>{if(r[e])r[e].push(o);else{var s,d;if(void 0!==a)for(var l=document.getElementsByTagName("script"),u=0;u<l.length;u++){var c=l[u];if(c.getAttribute("src")==e||c.getAttribute("data-webpack")==t+a){s=c;break}}s||(d=!0,(s=document.createElement("script")).charset="utf-8",s.timeout=120,n.nc&&s.setAttribute("nonce",n.nc),s.setAttribute("data-webpack",t+a),s.src=e),r[e]=[o];var f=(t,o)=>{s.onerror=s.onload=null,clearTimeout(p);var a=r[e];if(delete r[e],s.parentNode&&s.parentNode.removeChild(s),a&&a.forEach((e=>e(o))),t)return t(o)},p=setTimeout(f.bind(null,void 0,{type:"timeout",target:s}),12e4);s.onerror=f.bind(null,s.onerror),s.onload=f.bind(null,s.onload),d&&document.head.appendChild(s)}},n.r=e=>{"undefined"!=typeof Symbol&&Symbol.toStringTag&&Object.defineProperty(e,Symbol.toStringTag,{value:"Module"}),Object.defineProperty(e,"__esModule",{value:!0})},n.p="/app/themes/nzoseries/public/",(()=>{var e={666:0};n.f.j=(r,t)=>{var o=n.o(e,r)?e[r]:void 0;if(0!==o)if(o)t.push(o[2]);else if(666!=r){var a=new Promise(((t,a)=>o=e[r]=[t,a]));t.push(o[2]=a);var i=n.p+n.u(r),s=new Error;n.l(i,(t=>{if(n.o(e,r)&&(0!==(o=e[r])&&(e[r]=void 0),o)){var a=t&&("load"===t.type?"missing":t.type),i=t&&t.target&&t.target.src;s.message="Loading chunk "+r+" failed.\n("+a+": "+i+")",s.name="ChunkLoadError",s.type=a,s.request=i,o[1](s)}}),"chunk-"+r,r)}else e[r]=0},n.O.j=r=>0===e[r];var r=(r,t)=>{var o,a,i=t[0],s=t[1],d=t[2],l=0;if(i.some((r=>0!==e[r]))){for(o in s)n.o(s,o)&&(n.m[o]=s[o]);if(d)var u=d(n)}for(r&&r(t);l<i.length;l++)a=i[l],n.o(e,a)&&e[a]&&e[a][0](),e[a]=0;return n.O(u)},t=self.webpackChunk_roots_bud_sage_nzoseries=self.webpackChunk_roots_bud_sage_nzoseries||[];t.forEach(r.bind(null,0)),t.push=r.bind(null,t.push.bind(t))})()})();
+</script><script src="/public/js/116.5674a7.js"></script><script src="/public/js/667.f6a505.js"></script><script src="/public/js/303.fa1d40.js"></script><script src="/public/js/app.be7c92.js"></script>  </body>
+</html>
