@@ -2,18 +2,29 @@ package app.xreader.ui.reader
 
 import android.content.Context
 import androidx.compose.animation.core.animate
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToUp
@@ -21,10 +32,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import app.xreader.core.motion.SpringMotionEngine
 import app.xreader.core.motion.toSpec
 import coil.compose.AsyncImage
+import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
 import coil.size.Dimension
 import coil.size.Size
@@ -231,20 +245,164 @@ object ReaderImageDecode {
     const val MAX_WIDTH_PX = 2048
 
     /** A sized request for [model]; an already-built
-     * [ImageRequest] passes through untouched. */
-    fun request(context: Context, model: Any?): ImageRequest =
+     * [ImageRequest] passes through untouched. [widthPx] is
+     * the decode width — the 1× width normally, or
+     * [SlicePlan152]'s §6.3 zoom target past the trigger. */
+    fun request(
+        context: Context,
+        model: Any?,
+        widthPx: Int = MAX_WIDTH_PX
+    ): ImageRequest =
         if (model is ImageRequest) {
             model
         } else {
             ImageRequest.Builder(context)
                 .data(model)
-                .size(Size(Dimension.Pixels(MAX_WIDTH_PX), Dimension.Undefined))
-                // v1.5.1 (item 6 rider): the same tall-strip
-                // guard as the scroll reader — a paged strip
-                // decoded whole hits the same texture limit.
+                .size(Size(Dimension.Pixels(widthPx), Dimension.Undefined))
+                // v1.5.1 (item 6 rider): the tall-strip guard —
+                // a paged strip decoded whole hits the texture
+                // limit. (The strip pipeline does NOT use this
+                // request; it slices instead — §6.2.)
                 .transformations(TallStripGuardTransformation)
                 .build()
         }
+}
+
+/**
+ * v1.5.4 (WS-5, item 21): the pinned words of the failed-image
+ * slot. A chapter image whose download failed (dead host, 530,
+ * timeout — any cause) is bound by the fetch layer to the shared
+ * placeholder file, and the reader renders THIS label in its
+ * place, with the image's own alt text under it when the page
+ * carried one. The copy is pinned by the build spec; do not
+ * paraphrase it.
+ */
+internal const val FAILED_IMAGE_COPY =
+    "Picture unavailable — this source's image server didn't answer."
+
+/**
+ * The placeholder's stored file name inside a book's content dir.
+ * Mirrors `PlaceholderImage.STORED_FILE_NAME` in
+ * data/extension/ExtensionChapterResolver.kt (the fetch layer's
+ * name for the file it writes); the two must never drift — a
+ * unit test pins them equal.
+ */
+internal const val FAILED_IMAGE_STORED_FILE_NAME =
+    "img-picture-unavailable.png"
+
+/** The bundled placeholder graphic (assets/picture-unavailable.png). */
+internal const val FAILED_IMAGE_ASSET_URI =
+    "file:///android_asset/picture-unavailable.png"
+
+/** True when [model] is the failed-image placeholder's file —
+ * the fetch layer binds failed chapter images to it, so the
+ * slot decision is a pure file-name check. */
+internal fun isFailedImageSlot(model: Any?): Boolean =
+    (model as? java.io.File)?.name == FAILED_IMAGE_STORED_FILE_NAME
+
+/** The labelled slot shows exactly when the slot IS the
+ * placeholder, or when a real image's file failed to load
+ * (stored but corrupt/undecodable) — never while it is merely
+ * still loading. */
+internal fun failedImageLabelVisible(
+    isPlaceholderSlot: Boolean,
+    loadFailed: Boolean
+): Boolean = isPlaceholderSlot || loadFailed
+
+/**
+ * A reader image (v1.2.0, WS2; v1.5.4 WS-5 dispatch): the
+ * failed-image placeholder renders as the labelled
+ * [FailedImageSlot] — there is nothing to zoom in a placeholder —
+ * and every other model goes to the zoom surface below, which
+ * additionally shows the same label over its error painter when
+ * a stored file turns out unloadable, so no image slot in any
+ * reader is ever a silent blank.
+ */
+@Composable
+fun ZoomableImage(
+    model: Any?,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.FillWidth,
+    imageModifier: Modifier = Modifier.fillMaxWidth(),
+    doubleTapToZoom: Boolean = true,
+    disableZoomOut: Boolean = false,
+    lowRam: Boolean = false,
+    onZoomActiveChanged: (Boolean) -> Unit = {},
+    colorFilter: androidx.compose.ui.graphics.ColorFilter? = null
+) {
+    if (isFailedImageSlot(model)) {
+        FailedImageSlot(
+            alt = contentDescription,
+            modifier = modifier
+                .then(imageModifier)
+                .aspectRatio(3f / 2f)
+        )
+    } else {
+        ZoomableImageSurface(
+            model = model,
+            contentDescription = contentDescription,
+            modifier = modifier,
+            contentScale = contentScale,
+            imageModifier = imageModifier,
+            doubleTapToZoom = doubleTapToZoom,
+            disableZoomOut = disableZoomOut,
+            lowRam = lowRam,
+            onZoomActiveChanged = onZoomActiveChanged,
+            colorFilter = colorFilter
+        )
+    }
+}
+
+/**
+ * v1.5.4 (WS-5, item 21): the failed image's slot — the bundled
+ * placeholder graphic as the card, the pinned words and the
+ * image's alt text centred over it. If the graphic itself ever
+ * failed to paint, the card colour and the words still render:
+ * the slot is never blank and never silent.
+ */
+@Composable
+private fun FailedImageSlot(alt: String?, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.background(Color(0xFF262233)),
+        contentAlignment = Alignment.Center
+    ) {
+        AsyncImage(
+            model = FAILED_IMAGE_ASSET_URI,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.matchParentSize()
+        )
+        FailedImageWords(alt = alt)
+    }
+}
+
+/** The slot's words: the pinned line, plus the image's alt text
+ * under it where the page carried one. */
+@Composable
+private fun FailedImageWords(alt: String?) {
+    Column(
+        modifier = Modifier
+            .background(Color(0x730D0B14), RoundedCornerShape(16.dp))
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = FAILED_IMAGE_COPY,
+            color = Color(0xFFEDEAF6),
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center
+        )
+        if (!alt.isNullOrBlank()) {
+            Text(
+                text = alt,
+                color = Color(0xFFB9B2CC),
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+        }
+    }
 }
 
 /**
@@ -305,7 +463,7 @@ object ReaderImageDecode {
  *   wraps the height (aspect preserved by [contentScale]).
  */
 @Composable
-fun ZoomableImage(
+private fun ZoomableImageSurface(
     model: Any?,
     contentDescription: String?,
     modifier: Modifier = Modifier,
@@ -313,18 +471,64 @@ fun ZoomableImage(
     imageModifier: Modifier = Modifier.fillMaxWidth(),
     doubleTapToZoom: Boolean = true,
     disableZoomOut: Boolean = false,
+    /** v1.5.2 fix (FIX-4, §6.3): the MINIMAL tier marker for
+     * the zoom re-decode carve-out. */
+    lowRam: Boolean = false,
     onZoomActiveChanged: (Boolean) -> Unit = {},
     /** v1.5.0 (Part C): the manga reader's colour matrix
      * (greyscale / invert) when one is in force. */
     colorFilter: androidx.compose.ui.graphics.ColorFilter? = null
 ) {
     val context = LocalContext.current
-    val request = remember(context, model) { ReaderImageDecode.request(context, model) }
+    // v1.5.2 fix (FIX-4, §6.3): past the ≥1.5× trigger the page
+    // RE-DECODES at SlicePlan152's zoom target width instead of
+    // magnifying the 1× decode — bounded by the source's native
+    // width (Coil never upscales), with the MINIMAL carve-out:
+    // when the re-decoded region cannot be held inside the
+    // MINIMAL resident ceiling, MINIMAL keeps the 1× decode and
+    // magnifies (designed fallback, §6.3).
+    var redecodeWidthPx by remember(model) {
+        mutableStateOf(ReaderImageDecode.MAX_WIDTH_PX)
+    }
+    // v1.5.4 (WS-5, item 21): a stored file that fails to decode
+    // (corrupt bytes, a truncated write) must surface as the
+    // labelled slot too — the bundled graphic stands in while
+    // loading and behind the label on error, so the slot is
+    // never a silent blank.
+    var loadFailed by remember(model) { mutableStateOf(false) }
+    val slotPainter = rememberAsyncImagePainter(FAILED_IMAGE_ASSET_URI)
+    val request = remember(context, model, redecodeWidthPx) {
+        ReaderImageDecode.request(context, model, redecodeWidthPx)
+    }
     val animationScope = rememberCoroutineScope()
 
     val zoomState = remember { mutableStateOf(ZoomState()) }
     val gesturing = remember { mutableStateOf(false) }
     val containerSize = remember { mutableStateOf(IntSize.Zero) }
+
+    // §6.3 trigger watch: crossing 1.5× swaps the decode width
+    // once (the request above rebuilds and Coil re-decodes).
+    LaunchedEffect(zoomState.value.scale, containerSize.value) {
+        val scale = zoomState.value.scale
+        if (scale >= SlicePlan152.ZOOM_REDECODE_TRIGGER &&
+            redecodeWidthPx == ReaderImageDecode.MAX_WIDTH_PX
+        ) {
+            val target = SlicePlan152.zoomTargetWidthPx(
+                ReaderImageDecode.MAX_WIDTH_PX, Int.MAX_VALUE
+            )
+            val size = containerSize.value
+            val regionHeight = if (size.width > 0) {
+                (target.toLong() * size.height / size.width).toInt()
+            } else {
+                target
+            }
+            val fallsBack = lowRam &&
+                SlicePlan152.minimalZoomFallsBack(target, regionHeight)
+            if (!fallsBack) {
+                redecodeWidthPx = target
+            }
+        }
+    }
     val doubleTapEnabledState = rememberUpdatedState(doubleTapToZoom)
     val disableZoomOutState = rememberUpdatedState(disableZoomOut)
     val activeCallback = rememberUpdatedState(onZoomActiveChanged)
@@ -551,6 +755,11 @@ fun ZoomableImage(
             contentDescription = contentDescription,
             contentScale = contentScale,
             colorFilter = colorFilter,
+            placeholder = slotPainter,
+            error = slotPainter,
+            onLoading = { loadFailed = false },
+            onSuccess = { loadFailed = false },
+            onError = { loadFailed = true },
             modifier = imageModifier.graphicsLayer {
                 val zoom = zoomState.value
                 scaleX = zoom.scale
@@ -559,5 +768,16 @@ fun ZoomableImage(
                 translationY = zoom.offsetY
             }
         )
+        // v1.5.4 (WS-5, item 21): the load failed — the pinned
+        // words (and the alt text) label the slot, over the
+        // error painter's graphic.
+        if (failedImageLabelVisible(isPlaceholderSlot = false, loadFailed = loadFailed)) {
+            Box(
+                modifier = Modifier.matchParentSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                FailedImageWords(alt = contentDescription)
+            }
+        }
     }
 }

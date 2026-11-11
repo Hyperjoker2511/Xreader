@@ -248,12 +248,75 @@ fun ExtensionDetailScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                 } else if (sourceIds.size > 1) {
-                    sourceIds.forEach { sourceId ->
-                        TextButton(
-                            onClick = { onOpenSource(sourceId) },
-                            enabled = ext.enabled && ext.trustState == TrustState.TRUSTED,
+                    // v1.5.9 (Finding 6): the instances,
+                    // LABELLED ("MangaFire (EN)") — never a
+                    // raw id. The list is the switcher: a
+                    // primary pill for the current instance
+                    // heads it, and tapping any instance opens
+                    // it AND remembers it as this package's
+                    // instance (the Sources-list default then
+                    // follows the pick). Until the ViewModel's
+                    // join lands, a quiet loading line stands
+                    // here — a raw id is never rendered as a
+                    // stand-in.
+                    val instances = state.instances
+                    if (instances.isEmpty()) {
+                        Text(
+                            "Loading…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        val canOpenInstances =
+                            ext.enabled && ext.trustState == TrustState.TRUSTED
+                        val current = instances.firstOrNull {
+                            it.sourceId == state.currentInstanceId
+                        } ?: instances.first()
+                        PrimaryPill(
+                            text = "Open ${current.label}",
+                            onClick = {
+                                viewModel.openInstance(current.sourceId)
+                                onOpenSource(current.sourceId)
+                            },
+                            enabled = canOpenInstances,
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text("Open $sourceId") }
+                        )
+                        // One shared host, named once — never
+                        // repeated on every row.
+                        InstanceLabels.sharedHostOf(instances)?.let { host ->
+                            Text(
+                                host,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                        instances.forEach { instance ->
+                            TextButton(
+                                onClick = {
+                                    viewModel.openInstance(instance.sourceId)
+                                    onOpenSource(instance.sourceId)
+                                },
+                                enabled = canOpenInstances,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(Modifier.fillMaxWidth()) {
+                                    Text(instance.label)
+                                    // Per-instance host lines
+                                    // exist only when the
+                                    // instances differ by host.
+                                    instance.hostLine?.let { hostLine ->
+                                        Text(
+                                            hostLine,
+                                            style = MaterialTheme
+                                                .typography.bodySmall,
+                                            color = MaterialTheme.colorScheme
+                                                .onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -264,6 +327,39 @@ fun ExtensionDetailScreen(
             GlassCard {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     SectionHeader(title = "Health", eyebrow = "Test-drive")
+                    // v1.5.2 (§8.2): the update pass's verdict —
+                    // this source's saved rules no longer re-derive
+                    // cleanly; the record is KEPT (books attached)
+                    // and Repair is the way back.
+                    if (ext?.needsRepair == true) {
+                        // v1.5.2 (round-15, §2 UI truth): the state
+                        // line names the state the source is
+                        // ACTUALLY in. A source saved from an
+                        // unproven probe carries "added, reading
+                        // not proven" — it never went through an
+                        // update, so the update wording below must
+                        // not describe it. Any other needs-repair
+                        // mark is the §8.2 update-pass verdict.
+                        val notProven = ext.needsRepairReason
+                            ?.startsWith("reading not proven") == true
+                        Text(
+                            if (notProven) {
+                                "Added, reading not proven — Xreader " +
+                                    "found rules for this site but " +
+                                    "couldn't prove reading yet " +
+                                    "(${ext.needsRepairReason}). " +
+                                    "Tap Repair to try proving it again."
+                            } else {
+                                "Needs repair — an update couldn't rebuild " +
+                                    "this source's rules, so the old ones " +
+                                    "were kept. Your books stay attached. " +
+                                    "Tap Repair to rebuild them." +
+                                    (ext.needsRepairReason?.let { " ($it)" } ?: "")
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                     val health = state.health
                     if (health == null) {
                         Text(

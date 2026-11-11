@@ -32,9 +32,14 @@ class SchemaSmokeTest {
         // bundle — indices only, the table set is unchanged). The
         // 6.json file is exported by KSP during the build; on the
         // v5 tree this test fails because the file does not exist.
+        // v1.5.6: the pin moves to schema 10 (§3: reading_memory +
+        // local_outline join the set; books/progress/bookmarks/
+        // highlights gain their locator columns) — same exact-set
+        // discipline, the expected tables still come from
+        // XreaderDatabase itself.
         val candidates = listOf(
-            File("schemas/app.xreader.data.db.XreaderDatabase/6.json"),
-            File("app/schemas/app.xreader.data.db.XreaderDatabase/6.json")
+            File("schemas/app.xreader.data.db.XreaderDatabase/10.json"),
+            File("app/schemas/app.xreader.data.db.XreaderDatabase/10.json")
         )
         val file = candidates.firstOrNull { it.isFile }
         assertTrue(
@@ -48,7 +53,7 @@ class SchemaSmokeTest {
     fun `database declares every planned table`() {
         val root = Json.parseToJsonElement(schemaJson()).jsonObject
         val database = root.getValue("database").jsonObject
-        assertEquals(6, database.getValue("version").jsonPrimitive.content.toInt())
+        assertEquals(10, database.getValue("version").jsonPrimitive.content.toInt())
         val tables = database.getValue("entities").jsonArray
             .map { it.jsonObject.getValue("tableName").jsonPrimitive.content }
             .toSet()
@@ -109,7 +114,8 @@ class SchemaSmokeTest {
         val daoMethods = XreaderDatabase::class.java.methods
             .map { it.name }
             .filter { it.endsWith("Dao") }
-        assertEquals(24, daoMethods.size)
+        // v1.5.6: + readingMemoryDao + localOutlineDao over v9's 27.
+        assertEquals(29, daoMethods.size)
     }
 
     @Test

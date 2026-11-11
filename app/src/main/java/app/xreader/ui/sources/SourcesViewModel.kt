@@ -47,7 +47,12 @@ data class LoginRequest(
      * — e.g. a source's READER page, where its human check
      * widget lives (FenrirRealm's read-token check). Null =
      * the site root ([url]), exactly as before. */
-    val targetUrl: String? = null
+    val targetUrl: String? = null,
+    /** v1.5.2 fix (FIX-2, §1 residue a): the source's configured
+     * hosts — the capture candidate set is widened to these, so a
+     * session whose cookies live on a configured host the login
+     * page never visited is captured too. */
+    val configuredHosts: List<String> = emptyList()
 )
 
 /** One row of the Legado import report (v1.0.1). */
@@ -160,8 +165,64 @@ data class SourcesUiState(
      * download and the user's answer. */
     val keiyoushiConsent:
         app.xreader.data.extension.player.KeiyoushiConsentPrompt? =
-        null
+        null,
+    /** v1.5.9 (Finding 6): the browsing DEFAULT per installed
+     * multi-source package, extension row id → sourceId —
+     * the remembered pick when one exists, else the package's
+     * primary-language instance, else its first declared one
+     * ([MultiSourceDefault]). A multi-source row's tap opens
+     * this instance's catalogue directly. Absent = no default
+     * could be resolved (the package's handles didn't load);
+     * the row then keeps the Details route, where the labelled
+     * instance list lives. Single-source packages never appear
+     * here — their one source is the default by construction. */
+    val defaultSourceIds: Map<Long, String> = emptyMap(),
+    /** v1.5.39 (item 4): how many installed Keiyoushi
+     * packages have an update waiting (available > installed
+     * in the player's PERSISTED records) — the Explore tab's
+     * badge and the Explore banner read this one number. */
+    val keiyoushiPendingUpdateCount: Int = 0,
+    /** v1.5.39 (item 4): each installed Keiyoushi package's
+     * signer (its verified cert SHA-256), package name →
+     * cert — the shelf row's quiet signer line reads it. */
+    val keiyoushiInstalledSigners: Map<String, String> = emptyMap()
 )
+
+/**
+ * v1.5.8 (C4 / F7 F4): the Done-tap solve-quality record.
+ * Writes ONE DiagnosticLog line stating whether the cookie
+ * jar, as captured at Done-tap, held a clearance cookie
+ * (`cf_clearance` — the name the challenge machinery itself
+ * checks) for the source's host: the fallback host's own
+ * captured set first, then any captured origin (the capture
+ * is per-origin and the solve's page may sit on a sibling
+ * host). Pure record — no behaviour change. Split out as a
+ * plain function so the gate can drive it without a
+ * ViewModel.
+ */
+internal fun recordSolveQuality(
+    sessionKey: String,
+    cookiesByHost: Map<String, Map<String, String>>,
+    fallbackHost: String
+) {
+    val clearanceName = "cf_clearance"
+    val held = cookiesByHost[fallbackHost]
+        ?.containsKey(clearanceName) == true ||
+        cookiesByHost.values.any { it.containsKey(clearanceName) }
+    app.xreader.data.extension.DiagnosticLog.record(
+        "solve-quality",
+        "session saved for $sessionKey: clearance cookie for " +
+            "host '${fallbackHost.ifBlank { "?" }}' " +
+            if (held) {
+                "HELD at Done-tap (cf_clearance present in the jar)"
+            } else {
+                "NOT held at Done-tap (no cf_clearance in the jar) — " +
+                    "the save certifies a capture ran, not that a " +
+                    "clearance was earned"
+            },
+        sessionKey
+    )
+}
 
 /**
  * Sources (PLAN §5, Stitch "Sources" screen): repositories, installs,
@@ -206,6 +267,14 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
     private val _keiyoushiConsent = MutableStateFlow<
         app.xreader.data.extension.player.KeiyoushiConsentPrompt?
     >(null)
+    /** v1.5.9 (Finding 6): the resolved browsing defaults
+     * (see [SourcesUiState.defaultSourceIds]) + the tick that
+     * re-resolves them when the screen returns to the
+     * foreground — a pick made on a Details page in between
+     * must move the Sources-list default. */
+    private val _defaultSourceIds =
+        MutableStateFlow<Map<Long, String>>(emptyMap())
+    private val _instanceDefaultsTick = MutableStateFlow(0)
 
     val state: StateFlow<SourcesUiState> = combine(
         container.database.extensionRepoDao().observeAll(),
@@ -223,11 +292,18 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         _sourceRatings,
         container.libraryPrefs.librarySide,
         _sourceKinds, _keiyoushiRows, _keiyoushiConsent,
-        _keiyoushiBusy
+        _keiyoushiBusy, _defaultSourceIds,
+        container.keiyoushiPlayerManager.records
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val rawExtensions = values[1] as List<InstalledExtension>
         val (orderedExtensions, twinIds) = arrangeSourceTwins(rawExtensions)
+        // v1.5.39 (item 4): the player's persisted records —
+        // the pending-update count and the installed signers
+        // derive from them in the state below.
+        @Suppress("UNCHECKED_CAST")
+        val keiyoushiRecords = values[26] as Map<String,
+            app.xreader.data.extension.player.KeiyoushiPlayerRecord>
         SourcesUiState(
             repos = values[0] as List<ExtensionRepo>,
             extensions = orderedExtensions,
@@ -265,7 +341,20 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
             keiyoushiConsent =
                 values[23] as
                     app.xreader.data.extension.player.KeiyoushiConsentPrompt?,
-            keiyoushiBusyPackages = values[24] as Set<String>
+            keiyoushiBusyPackages = values[24] as Set<String>,
+            defaultSourceIds = values[25] as Map<Long, String>,
+            keiyoushiPendingUpdateCount = keiyoushiRecords.values
+                .count {
+                    it.isInstalled &&
+                        it.availableVersionCode >
+                        it.installedVersionCode
+                },
+            keiyoushiInstalledSigners = keiyoushiRecords.values
+                .mapNotNull { record ->
+                    record.certSha256
+                        ?.takeIf { record.isInstalled }
+                        ?.let { record.packageName to it }
+                }.toMap()
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SourcesUiState())
 
@@ -327,71 +416,214 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                 }
             }
         }
-        // v1.3.2 (R1): the plain session word per source row,
-        // recomputed when the sources or their verdicts change.
+        // v1.5.10 (B2): ONE joined background pass replaces the
+        // five separate observeAll() collectors that used to
+        // sit here (session words, ratings, kinds, defaults,
+        // Keiyoushi rows — Finding 7's Main-thread passes).
+        // Collection stays on the collecting thread (cheap
+        // flow plumbing); ALL computation runs inside the
+        // pass on Dispatchers.Default; the five derived maps
+        // publish together as one state write. The
+        // fingerprint (ids + the fields the computations
+        // actually read + picks-map hash + the
+        // instance-defaults tick) gates recomputation: an
+        // emission that changes nothing the maps read does
+        // not recompute, while a pick change (seen via the
+        // tick and the cached picks hash) and the tick both
+        // force one — refreshInstanceDefaults() keeps working
+        // by construction. Every compute body is
+        // runCatching-wrapped per A2: a failure keeps the
+        // last good map and logs; it never blanks the screen
+        // and never kills the collector.
         viewModelScope.launch {
             combine(
                 container.database.installedExtensionDao().observeAll(),
-                container.sourcePrefs.sourceHealth
-            ) { exts, health -> exts to health }
-                .collect { (exts, health) ->
-                    _sessionWords.value = computeSessionWords(exts, health)
-                }
-        }
-        // Manga programme (M1): each installed source's
-        // content rating, recomputed when the installed set
-        // changes — the Explore list's hide/badge input.
-        // v1.5.1 (item 6): the player's package states are a
-        // second trigger — a restore settling or an install
-        // landing changes what the rating read can answer
-        // (the durable stamp), and the snapshot must not stay
-        // frozen at the fail-closed value it computed while
-        // the player was still starting.
-        viewModelScope.launch {
-            combine(
-                container.database.installedExtensionDao().observeAll(),
-                container.keiyoushiPlayerManager.packageStates
-            ) { exts, _ -> exts }
-                .collect { exts ->
-                    _sourceRatings.value = computeSourceRatings(exts)
-                }
-        }
-        // Manga programme (M3): each installed source's media
-        // kind — Explore's split input, same recompute rhythm.
-        viewModelScope.launch {
-            container.database.installedExtensionDao().observeAll()
-                .collect { exts ->
-                    _sourceKinds.value = computeSourceKinds(exts)
-                }
-        }
-        // M3: the Keiyoushi catalogue rows — rebuilt when the
-        // repo list, the loaded site lists, the installed set
-        // (a conversion landing changes READY states), the
-        // content preference or the player's per-package
-        // states (K3: an install landing flips its rows to
-        // Ready) change. KeiyoushiIndex.rows() does the
-        // filtering/stating; this only feeds it.
-        viewModelScope.launch {
-            combine(
+                container.sourcePrefs.sourceHealth,
+                container.keiyoushiPlayerManager.packageStates,
                 container.database.extensionRepoDao().observeAll(),
-                container.database.installedExtensionDao().observeAll(),
                 _foreignRepos,
                 container.sourcePrefs.contentVisibility,
-                container.keiyoushiPlayerManager.packageStates
-            ) { repos, exts, foreign, visibility, playerStates ->
-                KeiyoushiInputs(
-                    repos, exts, foreign, visibility, playerStates
+                _instanceDefaultsTick
+            ) { values ->
+                @Suppress("UNCHECKED_CAST")
+                JoinedPassInputs(
+                    extensions = values[0] as List<InstalledExtension>,
+                    health = values[1] as Map<String, app.xreader.data.extension.SourceHealthRecord>,
+                    playerStates = values[2] as Map<String, app.xreader.data.extension.KeiyoushiIndex.PlayerPackageState>,
+                    repos = values[3] as List<ExtensionRepo>,
+                    foreignRepos = values[4] as Map<Long, app.xreader.data.extension.RepoFormat.ForeignRepo>,
+                    visibility = values[5] as app.xreader.data.extension.ContentVisibility,
+                    tick = values[6] as Int
                 )
             }.collect { inputs ->
-                _keiyoushiRows.value = computeKeiyoushiRows(inputs)
+                val fingerprint = sourcesPassFingerprint(
+                    extensions = inputs.extensions,
+                    health = inputs.health,
+                    playerStates = inputs.playerStates,
+                    repos = inputs.repos,
+                    foreignRepos = inputs.foreignRepos,
+                    visibility = inputs.visibility,
+                    tick = inputs.tick,
+                    picksHash = joinedPassPicksHash
+                )
+                val maps = joinedPass.run(
+                    fingerprint, container.defaultDispatcher
+                ) {
+                    // Inside the pass (Default dispatcher):
+                    // the picks read is memory-served (B3) and
+                    // its hash joins the NEXT fingerprint, so a
+                    // pick change forces the following pass —
+                    // no file read ever runs on the collecting
+                    // thread (C2 proxy).
+                    joinedPassPicksHash =
+                        container.extensionStore.readInstancePicks()
+                            .hashCode()
+                    SourcesDerivedMaps(
+                        kinds = runCatching {
+                            computeSourceKinds(inputs.extensions)
+                        }.getOrElse {
+                            logPassFailure("kinds", it); _sourceKinds.value
+                        },
+                        ratings = runCatching {
+                            computeSourceRatings(inputs.extensions)
+                        }.getOrElse {
+                            logPassFailure("ratings", it); _sourceRatings.value
+                        },
+                        sessionWords = runCatching {
+                            computeSessionWords(inputs.extensions, inputs.health)
+                        }.getOrElse {
+                            logPassFailure("sessionWords", it); _sessionWords.value
+                        },
+                        defaultSourceIds = runCatching {
+                            computeDefaultSourceIds(inputs.extensions)
+                        }.getOrElse {
+                            logPassFailure("defaults", it); _defaultSourceIds.value
+                        },
+                        keiyoushiRows = runCatching {
+                            computeKeiyoushiRows(
+                                KeiyoushiInputs(
+                                    inputs.repos, inputs.extensions,
+                                    inputs.foreignRepos, inputs.visibility,
+                                    inputs.playerStates
+                                )
+                            )
+                        }.getOrElse {
+                            logPassFailure("keiyoushiRows", it); _keiyoushiRows.value
+                        }
+                    )
+                } ?: return@collect
+                // One publish block: all five maps move
+                // together, no suspension between them.
+                _sourceKinds.value = maps.kinds
+                _sourceRatings.value = maps.ratings
+                _sessionWords.value = maps.sessionWords
+                _defaultSourceIds.value = maps.defaultSourceIds
+                _keiyoushiRows.value = maps.keiyoushiRows
             }
         }
     }
+
+    /** v1.5.10 (B2): the joined pass's gate + counters. */
+    private val joinedPass = JoinedSourcesPass()
+
+    /** v1.5.10 (B2): hash of the picks map as last read
+     * INSIDE the pass (Default thread, memory-served post-B3)
+     * — part of the next emission's fingerprint, so a pick
+     * change forces recompute without any file read ever
+     * happening on the collecting thread (C2 proxy). */
+    @Volatile
+    private var joinedPassPicksHash: Int = 0
+
+    private fun logPassFailure(part: String, error: Throwable) {
+        if (error is kotlinx.coroutines.CancellationException) throw error
+        app.xreader.data.extension.DiagnosticLog.record(
+            "sources-pass",
+            "joined derived pass: $part failed — last good " +
+                "state kept",
+            error.javaClass.simpleName
+        )
+    }
+
+    /** The joined pass's combined inputs (B2). */
+    private data class JoinedPassInputs(
+        val extensions: List<InstalledExtension>,
+        val health: Map<String, app.xreader.data.extension.SourceHealthRecord>,
+        val playerStates: Map<String, app.xreader.data.extension.KeiyoushiIndex.PlayerPackageState>,
+        val repos: List<ExtensionRepo>,
+        val foreignRepos: Map<Long, app.xreader.data.extension.RepoFormat.ForeignRepo>,
+        val visibility: app.xreader.data.extension.ContentVisibility,
+        val tick: Int
+    )
 
     /** M3: flip the shared Novels | Manga switch (the Library
      * reads the same preference). */
     fun setLibrarySide(side: app.xreader.data.extension.MediaKind) {
         viewModelScope.launch { container.libraryPrefs.setLibrarySide(side) }
+    }
+
+    /** v1.5.9 (Finding 6): re-resolve the browsing defaults —
+     * the Sources screen calls this when it returns to the
+     * foreground, so a remembered pick made on a Details page
+     * moves this list's default without waiting for the
+     * installed set to change. */
+    fun refreshInstanceDefaults() {
+        _instanceDefaultsTick.value++
+    }
+
+    /** v1.5.9 (Finding 6): extension row id → the sourceId a
+     * multi-source row's tap should open ([MultiSourceDefault]
+     * over the same label join the Details page uses — handles
+     * and declarative configs; the catalogue stubs aren't
+     * needed here because the default turns on language,
+     * which the handles and configs carry identically). A
+     * package whose handles don't load resolves no default:
+     * its row keeps the Details route rather than guessing. */
+    private suspend fun computeDefaultSourceIds(
+        extensions: List<InstalledExtension>
+    ): Map<Long, String> {
+        val defaults = HashMap<Long, String>()
+        for (ext in extensions) {
+            val declaredIds = ext.sourceIds.split(",")
+                .map { it.trim() }.filter { it.isNotBlank() }
+            if (declaredIds.size <= 1) continue
+            val handles = container.extensionService
+                .sourcesOf(ext.id).getOrNull().orEmpty()
+            if (handles.isEmpty()) continue
+            val configs = container.extensionStore.readText(
+                container.extensionStore.definitionFile(ext.packageId)
+            )?.let {
+                app.xreader.data.extension.DeclarativeFingerprints
+                    .decode(it)
+            }.orEmpty()
+            val instances = InstanceLabels.join(
+                declaredIds = declaredIds,
+                stubs = emptyMap(),
+                handles = handles.map { handle ->
+                    InstanceSeed(
+                        sourceId = container.extensionService
+                            .mihonAdapterOf(handle)?.mihonId?.toString()
+                            ?: handle.source.id,
+                        name = handle.source.name,
+                        lang = handle.source.lang,
+                        homeUrl = handle.source.baseUrl
+                    )
+                },
+                configs = configs.map { config ->
+                    InstanceSeed(
+                        sourceId = config.id,
+                        name = config.name,
+                        lang = config.lang,
+                        homeUrl = config.baseUrl
+                    )
+                }
+            )
+            val pick = container.extensionStore
+                .instancePick(ext.packageId)
+            MultiSourceDefault.resolve(instances, pick)?.let {
+                defaults[ext.id] = it
+            }
+        }
+        return defaults
     }
 
     /** M3: "extId:sourceId" → media kind for every installed
@@ -783,6 +1015,8 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                     }
                     is LinkProber.Outcome.LoginRequired ->
                         say("“${site.name}” asks you to sign in first. Use Add from link and sign in there, then it can be added.")
+                    is LinkProber.Outcome.NotProven ->
+                        say("“${site.name}” was added, reading not proven — Xreader found rules for it but couldn't prove reading yet (${outcome.missingLegs.joinToString()}). It is marked as needing a check.")
                     is LinkProber.Outcome.Failed ->
                         say("Xreader couldn't read “${site.name}” on its own. ${outcome.message}")
                 }
@@ -1149,6 +1383,15 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                 val updateWaiting = record != null &&
                     record.availableVersionCode >
                     record.installedVersionCode
+                // v1.5.39 (item 4): the INSTALLED copy's
+                // signer, captured BEFORE staging — the
+                // staged file's verification overwrites the
+                // record's cert field with its own, so this
+                // pre-staging value is the only honest
+                // "same signer as your copy" witness for the
+                // two-tap apply below.
+                val installedCertBefore = record
+                    ?.takeIf { it.isInstalled }?.certSha256
                 val result = if (
                     record != null && record.isInstalled &&
                     !updateWaiting && record.consentedSha256 != null
@@ -1164,7 +1407,70 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
                         val prompt = player.consentPrompt(packageName)
                         val rec = result.value
                         if (prompt != null) {
-                            _keiyoushiConsent.value = prompt
+                            // v1.5.39 (item 4): TWO-TAP APPLY —
+                            // an already-installed package whose
+                            // staged update carries the SAME
+                            // signer as the installed copy
+                            // confirms straight through the
+                            // player's own consent entry point
+                            // (the stage/verify pipeline is
+                            // unchanged; confirmInstall
+                            // re-verifies the staged bytes
+                            // against the fingerprint). First
+                            // installs, signer changes and any
+                            // doubt keep the full consent sheet
+                            // — and a failed fast confirm falls
+                            // back to it too.
+                            val sameSignerUpdate = updateWaiting &&
+                                installedCertBefore != null &&
+                                prompt.signerSha256 != null &&
+                                prompt.signerSha256.equals(
+                                    installedCertBefore,
+                                    ignoreCase = true
+                                )
+                            if (sameSignerUpdate) {
+                                when (
+                                    val confirmed =
+                                        player.confirmInstall(
+                                            packageName,
+                                            prompt.fingerprint
+                                        )
+                                ) {
+                                    is AppResult.Ok -> {
+                                        val done = confirmed.value
+                                        if (done.status ==
+                                            app.xreader.data.extension
+                                                .player
+                                                .KeiyoushiExtStatus
+                                                .READY
+                                        ) {
+                                            say(
+                                                "“${done.displayName}” updated"
+                                            )
+                                        } else {
+                                            say(
+                                                "“${done.displayName}”: " +
+                                                    (done.failureReason
+                                                        ?: "couldn't be started")
+                                            )
+                                        }
+                                    }
+                                    is AppResult.Err -> {
+                                        say(
+                                            ErrorText.displayText(
+                                                confirmed.error
+                                            )
+                                        )
+                                        player.consentPrompt(
+                                            packageName
+                                        )?.let {
+                                            _keiyoushiConsent.value = it
+                                        }
+                                    }
+                                }
+                            } else {
+                                _keiyoushiConsent.value = prompt
+                            }
                         } else {
                             say(
                                 "“${rec.displayName}”: " +
@@ -1407,8 +1713,57 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         mode: LoginMode = LoginMode.SIGN_IN,
         targetUrl: String? = null
     ) {
+        // v1.5.2 (challenge re-prompt cooldown): this tap IS the
+        // explicit user-initiated check — it clears the host's
+        // bridge cooldown, so a user who dismissed a check ten
+        // seconds ago and now taps sign-in/check themselves is
+        // never throttled by their own dismissal.
+        app.xreader.data.extension.CookieParsing.hostOf(url)?.let { host ->
+            runCatching { container.playerChallengeBridge.clearCooldown(host) }
+        }
+        // v1.5.2 fix (FIX-2, §1): EVERY sanctioned solve/sign-in
+        // registers its durable pending operation here — the one
+        // door catalogue, book page and reader all walk through —
+        // so their blocked actions are covered by the §1 guarantee,
+        // not only the link-add flow's.
+        viewModelScope.launch {
+            container.registerPendingOperation(
+                sessionKey = sessionKey,
+                flowKind = "SOURCE_LOGIN",
+                host = app.xreader.data.extension.CookieParsing.hostOf(url) ?: title,
+                category = if (mode == LoginMode.SITE_CHECK) "CHALLENGE" else "SIGN_IN"
+            )
+        }
         _loginRequest.value =
             LoginRequest(sessionKey, url, title, mode, targetUrl)
+    }
+
+    /** v1.5.2 fix (FIX-2, §1 residue a): the configured hosts for a
+     * session key's source (base + backups + declared extras), for
+     * the widened login capture. */
+    suspend fun configuredHosts(sessionKey: String): List<String> {
+        val rowId = sessionKey.removePrefix("ext-").toLongOrNull()
+        if (rowId != null) {
+            val handles = container.extensionService.sourcesOf(rowId)
+                .getOrNull().orEmpty()
+            val hosts = LinkedHashSet<String>()
+            for (handle in handles) {
+                val config = container.extensionService
+                    .declarativeConfigOf(handle) ?: continue
+                app.xreader.data.extension.CookieParsing.hostOf(config.baseUrl)
+                    ?.let { hosts += it }
+                config.backupHosts.forEach { raw ->
+                    (app.xreader.data.extension.CookieParsing.hostOf(raw)
+                        ?: raw)?.let { hosts += it }
+                }
+                hosts += config.extraDomains
+            }
+            return hosts.toList()
+        }
+        val linkHost = sessionKey.removePrefix("linkadd_")
+        return if (linkHost != sessionKey && linkHost.isNotBlank()) {
+            listOf(linkHost)
+        } else emptyList()
     }
 
     fun clearLoginRequest() {
@@ -1422,6 +1777,14 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
         fallbackHost: String,
         userAgent: String?
     ) {
+        // v1.5.8 (C4 / F7 F4): record the SOLVE QUALITY beside
+        // the capture — "Sign-in saved" certifies that a
+        // capture RAN, not that a clearance was earned. One
+        // DiagnosticLog line states whether the jar, at
+        // Done-tap, held a clearance cookie for the source's
+        // host, so a saved session that never earned
+        // clearance is visible as such. No behaviour change.
+        recordSolveQuality(sessionKey, cookiesByHost, fallbackHost)
         viewModelScope.launch {
             // v1.3.5 (P0): the captured cookies are stored PER
             // ORIGIN — the jar read for one host lands under that
@@ -1453,6 +1816,14 @@ class SourcesViewModel(private val container: AppContainer) : ViewModel() {
 
     suspend fun hasSession(sessionKey: String): Boolean =
         container.sessionStore.has(sessionKey)
+
+    /** v1.5.2 fix (FIX-10, §8.5): the one-time update-pass summary
+     * for Explore — real counts from the completed deferred phase. */
+    val updatePassSummary: StateFlow<String?> = container.updatePassSummary
+
+    fun dismissUpdatePassSummary() {
+        container.updatePassSummary.value = null
+    }
 
     fun sessionKeyFor(extensionRowId: Long): String =
         ExtensionHttpClient.sessionKeyFor(extensionRowId)
@@ -1493,3 +1864,115 @@ fun keiyoushiEntries(
             extensionLib = site.extensionLib
         )
     }
+
+/** The five derived maps the joined pass publishes (B2). */
+internal data class SourcesDerivedMaps(
+    val kinds: Map<String, app.xreader.data.extension.MediaKind>,
+    val ratings: Map<String, app.xreader.data.extension.ContentRating>,
+    val sessionWords: Map<String, String>,
+    val defaultSourceIds: Map<Long, String>,
+    val keiyoushiRows: List<app.xreader.data.extension.KeiyoushiIndex.PackageRow>
+)
+
+/**
+ * v1.5.10 (B2): the joined pass's gate — the single compute
+ * site for the Sources screen's five derived maps.
+ *
+ * [run] executes [compute] on [dispatcher] (production:
+ * Dispatchers.Default) ONLY when [fingerprint] differs from
+ * the last successful pass's; an unchanged fingerprint is a
+ * skip (returns null). A failed compute keeps the last good
+ * fingerprint UNSET, so the next emission retries, and the
+ * failure is logged — the caller keeps its last published
+ * maps either way (A2's rule). [computeCount] is the gate's
+ * counting seam: the B2/C2 tests assert exactly one compute
+ * per distinct fingerprint and zero expensive work on the
+ * collecting thread.
+ */
+internal class JoinedSourcesPass {
+    @Volatile
+    var lastFingerprint: String? = null
+        private set
+
+    var computeCount: Int = 0
+        private set
+
+    /** Thread the last compute body ran on (C2 proxy seam). */
+    @Volatile
+    var lastComputeThread: String? = null
+        private set
+
+    suspend fun <T> run(
+        fingerprint: String,
+        dispatcher: kotlinx.coroutines.CoroutineDispatcher,
+        compute: suspend () -> T
+    ): T? {
+        if (fingerprint == lastFingerprint) return null
+        val result = try {
+            kotlinx.coroutines.withContext(dispatcher) {
+                lastComputeThread = Thread.currentThread().name
+                compute()
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            app.xreader.data.extension.DiagnosticLog.record(
+                "sources-pass",
+                "joined derived pass failed — last good state kept",
+                e.javaClass.simpleName
+            )
+            return null
+        }
+        lastFingerprint = fingerprint
+        computeCount++
+        return result
+    }
+}
+
+/**
+ * v1.5.10 (B2): the joined pass's fingerprint — the emitted
+ * rows' ids + the fields the five computations actually
+ * read, plus the health map, the player states, the repo /
+ * foreign inputs, the content preference, the picks-map
+ * hash and the instance-defaults tick. Pure and cheap: it
+ * reads only values already in memory on the collecting
+ * thread (the picks hash is supplied by the caller from its
+ * in-pass read — no file IO happens here, C2 proxy).
+ */
+internal fun sourcesPassFingerprint(
+    extensions: List<InstalledExtension>,
+    health: Map<String, app.xreader.data.extension.SourceHealthRecord>,
+    playerStates: Map<String, app.xreader.data.extension.KeiyoushiIndex.PlayerPackageState>,
+    repos: List<ExtensionRepo>,
+    foreignRepos: Map<Long, app.xreader.data.extension.RepoFormat.ForeignRepo>,
+    visibility: app.xreader.data.extension.ContentVisibility,
+    tick: Int,
+    picksHash: Int
+): String = buildString {
+    append("tick=").append(tick)
+    append("|picks=").append(picksHash)
+    append("|vis=").append(visibility.name)
+    for (ext in extensions) {
+        append("|e:").append(ext.id).append(',')
+            .append(ext.packageId).append(',')
+            .append(ext.sourceIds).append(',')
+            .append(ext.kind.name).append(',')
+            .append(ext.enabled).append(',')
+            .append(ext.trustState.name).append(',')
+            .append(ext.permissionsJson.hashCode()).append(',')
+            .append(ext.needsRepair)
+    }
+    for ((key, value) in health.toSortedMap()) {
+        append("|h:").append(key).append('=').append(value.state.name)
+    }
+    for ((key, value) in playerStates.toSortedMap()) {
+        append("|p:").append(key).append('=').append(value.kind.name).append(',').append(value.reason)
+    }
+    for (repo in repos) {
+        append("|r:").append(repo.id).append(',')
+            .append(repo.name).append(',').append(repo.indexUrl)
+    }
+    for ((key, value) in foreignRepos.toSortedMap()) {
+        append("|f:").append(key).append('=').append(value.sites.size)
+    }
+}

@@ -375,13 +375,19 @@ private val LICENCES = listOf(
     "Mangayomi source index (site-reading recipes for Wordrain69 and " +
         "Web Novel Translations, re-implemented natively and verified live)" to
         "Apache Licence 2.0 — Copyright the Mangayomi contributors",
-    "Komikku (manga reader behaviour, tap-zone geometry, reader " +
-        "settings and colour-filter recipes — adapted and " +
-        "re-implemented natively in Xreader's own reader)" to
+    "Komikku (the manga reader — viewers, page view, chrome, " +
+        "settings — and its Keiyoushi source architecture, copied " +
+        "with changes noted in the copied files)" to
         "Apache Licence 2.0 — Copyright the Komikku contributors",
     "Mihon (Keiyoushi extension host: the mihon-api surface, " +
         "network stack and challenge handling — transplanted)" to
         "Apache Licence 2.0 — Copyright the Mihon contributors",
+    "Tachiyomi & TachiyomiSY (upstream of the Komikku/Mihon " +
+        "reader and source architecture)" to
+        "Apache Licence 2.0 — Copyright the Tachiyomi contributors",
+    "Subsampling Scale Image View (tachiyomiorg fork — the " +
+        "tiling manga page view)" to
+        "Apache Licence 2.0 — Copyright (c) Dave Morrissey",
     "Plus Jakarta Sans" to "SIL Open Font Licence 1.1",
     "Inter" to "SIL Open Font Licence 1.1",
     "Literata (TypeTogether)" to "SIL Open Font Licence 1.1"
@@ -391,6 +397,12 @@ private val LICENCES = listOf(
  * v1.0.6.2 (M1): "Copy app details" — version, every source's
  * plain health word and the session's recent problems, in one
  * paste (ProblemDetails.formatAppDetails).
+ *
+ * v1.5.13 (F0): the paste also carries the CrashGuard records
+ * (crash / contained / stall notes + imported system exit
+ * records, newest first, size-capped by
+ * CrashGuard.formatNotesSection), so a failed proof's own
+ * on-device evidence travels with the report.
  */
 @Composable
 private fun CopyAppDetailsButton(container: app.xreader.di.AppContainer) {
@@ -429,7 +441,13 @@ private fun CopyAppDetailsButton(container: app.xreader.di.AppContainer) {
                         appVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                         sourceLines = sourceLines,
                         recentProblems =
-                            app.xreader.data.extension.DiagnosticLog.entries()
+                            app.xreader.data.extension.DiagnosticLog.entries(),
+                        crashRecordsSection =
+                            app.xreader.core.error.CrashGuard.formatNotesSection(
+                                app.xreader.core.error.CrashGuard.recentNotes(
+                                    container.applicationContext.filesDir
+                                )
+                            )
                     )
                 )
             )

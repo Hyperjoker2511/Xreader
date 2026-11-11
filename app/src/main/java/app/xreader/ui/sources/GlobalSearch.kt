@@ -72,6 +72,11 @@ data class GlobalSearchUiState(
     val searched: Boolean = false,
     val groups: List<GlobalSearchGroup> = emptyList(),
     val failedSources: List<String> = emptyList(),
+    /** v1.5.2 (§4): the two footnotes, kept distinct — sources ASKED
+     * that exceeded their budget vs sources never asked because
+     * the aggregate deadline closed the queue first. */
+    val didntAnswerSources: List<String> = emptyList(),
+    val notReachedSources: List<String> = emptyList(),
     /** v1.3.2 (scope D): live fan-out progress — sources settled
      * out of the total, for the "Searching source N of M" line. */
     val progressDone: Int = 0,
@@ -212,6 +217,15 @@ class GlobalSearchViewModel(private val container: AppContainer) : ViewModel() {
     fun search() {
         val query = _state.value.query.trim()
         if (query.isBlank()) return
+        // v1.5.2 (FIX-15, round-9): dirty the state
+        // SYNCHRONOUSLY, before the launch below. A caller
+        // (or a test) waiting for "searched && !searching"
+        // must only ever be satisfied by THIS run — before
+        // this line, the previous run's settled state could
+        // satisfy the wait before the new run even started.
+        _state.value = _state.value.copy(
+            searching = true, searched = false, groups = emptyList()
+        )
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
             container.sourcePrefs.recordSearch(query)
@@ -235,6 +249,14 @@ class GlobalSearchViewModel(private val container: AppContainer) : ViewModel() {
             val visibility = container.sourcePrefs
                 .contentVisibility.first()
             val handles = container.extensionService.allSources()
+                // v1.5.2 (FIX-15): a source the user switched
+                // OFF in Manage sources is out of the fan-out
+                // entirely — hidden means hidden everywhere,
+                // global search included. (Before this line the
+                // fan-out never consulted the enabled flag, so
+                // a switched-off source still answered global
+                // searches.) This line is the fan-out gate.
+                .filter { it.extension.enabled }
                 .filter { handle ->
                     val rating = container.extensionService
                         .contentRatingOf(handle)
@@ -322,13 +344,27 @@ class GlobalSearchViewModel(private val container: AppContainer) : ViewModel() {
                 StreamingSearch.run(
                 items = handles,
                 parallelism = 5,
+                // v1.5.2 (round-15 closure, §4): the envelope's
+                // time sources are stated HERE, at the production
+                // call site — the real dispatcher and the real
+                // wall clock, injected explicitly rather than
+                // inherited from a default buried in the
+                // coordinator. Tests inject a
+                // StandardTestDispatcher's scheduler and its
+                // virtual clock through the same two parameters.
+                legDispatcher = kotlinx.coroutines.Dispatchers.Default,
+                nowMs = System::currentTimeMillis,
                 search = { handle ->
                     // v1.5.1 (item 2): a fan-out search NEVER
                     // waits on a render tier — each source
                     // answers statically (or not at all) inside
                     // StreamingSearch's strict per-source slice.
+                    // v1.5.2 fix (FIX-3, §4): the leg runs in the
+                    // search call scope, so its HTTP calls carry
+                    // the 15 s search-scoped call timeout.
                     kotlinx.coroutines.withContext(
-                        app.xreader.data.extension.RenderSuppression
+                        app.xreader.data.extension.RenderSuppression +
+                            app.xreader.data.extension.SearchCallScope
                     ) {
                         container.extensionService.guarded(handle) {
                             it.search(query, 1)
@@ -374,6 +410,14 @@ class GlobalSearchViewModel(private val container: AppContainer) : ViewModel() {
                 onProgress = { done, total ->
                     _state.value = _state.value.copy(
                         progressDone = done, progressTotal = total
+                    )
+                },
+                onFootnotes = { footnotes ->
+                    _state.value = _state.value.copy(
+                        didntAnswerSources = footnotes.didntAnswer
+                            .map { it.source.name },
+                        notReachedSources = footnotes.notReached
+                            .map { it.source.name }
                     )
                 }
                 )

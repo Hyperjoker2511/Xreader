@@ -77,6 +77,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import uy.kohesive.injekt.api.get
 
 /**
  * Customise (v1.0.1): the ONE home for every look-and-feel control —
@@ -106,6 +107,11 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
          * off means no Keiyoushi extension loads at all. */
         val keiyoushiPlayerEnabled: Boolean = true
     )
+
+    /** FIX-18: the Komikku manga reader's GLOBAL defaults,
+     * resolved from Injekt as the donor's settings do. */
+    val komikkuGlobalPrefs: app.xreader.komikku.setting.ReaderPreferences
+        get() = uy.kohesive.injekt.Injekt.get()
 
     val state: StateFlow<UiState> = combine(
         container.appearancePrefs.state,
@@ -139,6 +145,31 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
     val storage =
         kotlinx.coroutines.flow.MutableStateFlow<app.xreader.data.files.StorageBreakdown?>(null)
 
+    /** v1.5.2 fix (FIX-6c, §12.3): Clean cache's plain-words result —
+     * failures surface HERE, on the storage screen, never silently. */
+    val cacheClearNote =
+        kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
+    /** v1.5.6 (§3.5 R3): Clear Legacy Data's result line. The data
+     * op is MANUAL ONLY — this tap is its only caller. */
+    val legacyClearNote =
+        kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
+    fun clearLegacyData() {
+        viewModelScope.launch(container.ioDispatcher) {
+            val cleared = runCatching {
+                container.localBookDeletion.clearLegacyData()
+            }.getOrNull()
+            legacyClearNote.value = when {
+                cleared == null -> "Legacy data couldn't be cleared."
+                cleared == 0 -> "No legacy data to clear."
+                cleared == 1 -> "Legacy data cleared for 1 book."
+                else -> "Legacy data cleared for $cleared books."
+            }
+            refreshStorage()
+        }
+    }
+
     init {
         refreshStorage()
     }
@@ -146,7 +177,38 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
     fun refreshStorage() {
         viewModelScope.launch(container.ioDispatcher) {
             storage.value = runCatching {
-                app.xreader.data.files.StorageMeter.measure(container.bookStorage.filesDir)
+                val meter = app.xreader.data.files.StorageMeter
+                    .measure(container.bookStorage.filesDir)
+                // v1.5.2 fix (Track B, §12.9/§12.11): the meter's
+                // content/ total mixes USER downloads with
+                // AUTOMATIC read cache — the exhibited 29.2 MB
+                // showed as "Downloaded chapters". Split it by the
+                // chapter rows' origin (the ONE predicate's own
+                // facts): USER bodies are downloads; AUTOMATIC
+                // bodies — and content no chapter row owns
+                // (partials/orphans, temp-class) — are cache.
+                var userBytes = 0L
+                var autoBytes = 0L
+                for (book in container.database.bookDao().allBooks()) {
+                    for (chapter in container.database.chapterDao().forBook(book.id)) {
+                        val path = chapter.contentPath ?: continue
+                        val bytes = runCatching {
+                            container.bookStorage.resolve(path).length()
+                        }.getOrDefault(0L)
+                        when (chapter.bodyOrigin) {
+                            app.xreader.data.download.BodyOrigin152.USER ->
+                                userBytes += bytes
+                            app.xreader.data.download.BodyOrigin152.AUTOMATIC ->
+                                autoBytes += bytes
+                        }
+                    }
+                }
+                val unowned = (meter.downloadedTextBytes - userBytes - autoBytes)
+                    .coerceAtLeast(0L)
+                meter.copy(
+                    downloadedTextBytes = userBytes,
+                    cacheBodyBytes = autoBytes + unowned
+                )
             }.getOrNull()
         }
     }
@@ -156,14 +218,16 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
      * here (R07/G16 — different words, different confirmations). */
     fun clearCaches() {
         viewModelScope.launch(container.ioDispatcher) {
-            runCatching {
-                container.bookStorage.coversDir().listFiles()?.forEach { it.deleteRecursively() }
-                container.bookStorage.downloadsTempDir().listFiles()
-                    ?.forEach { it.deleteRecursively() }
-                // G6: stranded import staging is temp too — the
-                // meter counts it there, so clearing removes it.
-                container.bookStorage.importStagingRoot().listFiles()
-                    ?.forEach { it.deleteRecursively() }
+            // v1.5.2 fix (FIX-6c): THE shared Clean cache (§12.3) —
+            // same implementation as the Downloads screen: read
+            // chapter bodies + image cache + temp clear; stored
+            // covers and lore-art (per-book assets) survive.
+            val result = container.cleanCache()
+            cacheClearNote.value = if (result.failures.isEmpty()) {
+                "Cache cleared."
+            } else {
+                "Some cache couldn't be cleared: " +
+                    result.failures.joinToString("; ")
             }
             refreshStorage()
         }
@@ -1469,6 +1533,17 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             }
         }
 
+        // ── FIX-18: the Komikku manga reader's global defaults ──
+        // (option-scope tier 1: Settings = the default for ALL
+        // books; a series' own in-reader choices win for it only).
+        // The legacy ReaderConfig manga rows above remain for the
+        // text reader's image chapters; the manga reader itself
+        // reads these Komikku preferences.
+        CustomiseSection("Manga reader") {
+            app.xreader.komikku.presentation.settings
+                .KomikkuGlobalDefaultsSection(prefs = viewModel.komikkuGlobalPrefs)
+        }
+
         // ── Your themes: the full make-your-own editor (R04/R07) ──
         CustomiseSection("Your themes") {
             Text(
@@ -1793,11 +1868,18 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     app.xreader.data.files.StorageMeter.formatBytes(sizes.downloadedTextBytes)
                 )
                 StorageRow(
+                    "Reading cache (safe to clear)",
+                    app.xreader.data.files.StorageMeter.formatBytes(sizes.cacheBodyBytes)
+                )
+                StorageRow(
                     "Book files",
                     app.xreader.data.files.StorageMeter.formatBytes(sizes.bookFilesBytes)
                 )
                 StorageRow(
-                    "Cover cache (safe to clear)",
+                    // §12.1: stored covers are per-book assets —
+                    // they SURVIVE Clean cache; never label them
+                    // as clearable cache.
+                    "Stored covers",
                     app.xreader.data.files.StorageMeter.formatBytes(sizes.coverCacheBytes)
                 )
                 StorageRow(
@@ -1817,20 +1899,79 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     Text("Clear caches")
                 }
                 Text(
-                    "Clearing caches removes covers and half-finished downloads only. " +
-                        "Books, downloaded chapters and your place in them stay.",
+                    "Clearing caches removes read-chapter cache, the image " +
+                        "cache and temporary files. Stored covers, downloaded " +
+                        "chapters and your place in them stay.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                val clearNote by viewModel.cacheClearNote.collectAsStateWithLifecycle()
+                if (clearNote != null) {
+                    Text(
+                        clearNote!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                // v1.5.6 (§3.5 R3): Clear Legacy Data — manual
+                // only, never automatic. Converted chapter data of
+                // books that now read from their file goes; the
+                // books, places and bookmarks are kept.
+                var confirmLegacy by remember { mutableStateOf(false) }
+                TextButton(onClick = { confirmLegacy = true }) {
+                    Text("Clear Legacy Data")
+                }
+                Text(
+                    "Removes the converted chapter data left behind by " +
+                        "older imports for books that now read straight " +
+                        "from their file. The books themselves, your " +
+                        "places in them and your bookmarks are kept.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val legacyNote by viewModel.legacyClearNote
+                    .collectAsStateWithLifecycle()
+                if (legacyNote != null) {
+                    Text(
+                        legacyNote!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (confirmLegacy) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { confirmLegacy = false },
+                        title = { Text("Clear Legacy Data?") },
+                        text = {
+                            Text(
+                                "Converted chapter data of books that now " +
+                                    "read from their file will be deleted. " +
+                                    "Books, reading places and bookmarks " +
+                                    "are kept."
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                confirmLegacy = false
+                                viewModel.clearLegacyData()
+                            }) { Text("Clear Legacy Data") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { confirmLegacy = false }) {
+                                Text("Cancel")
+                            }
+                        }
+                    )
+                }
                 if (confirmClear) {
                     androidx.compose.material3.AlertDialog(
                         onDismissRequest = { confirmClear = false },
                         title = { Text("Clear caches?") },
                         text = {
                             Text(
-                                "Cover images and temporary download files will be removed " +
-                                    "and fetched again when needed. Nothing you are reading " +
-                                    "is deleted."
+                                "Read-chapter cache, image cache and temporary files " +
+                                    "will be removed and fetched again when needed. " +
+                                    "Stored covers and downloads stay."
                             )
                         },
                         confirmButton = {

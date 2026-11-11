@@ -9,11 +9,22 @@ package app.xreader.ui.shell
  * behind. The contract now: immersive routes get NO shell chrome
  * and the full screen height; the reader shows only its own chrome.
  * Pure and unit-tested so the route list can't silently drift.
+ *
+ * v1.5.8 (F1/F3, Finding 5): the contract stated generally — ANY
+ * destination whose primary surface is a reading surface owns the
+ * whole screen, and registration is part of creating the route.
+ * The local readers (EPUB + PDF, one route) and the Ask AI page
+ * (a reading-session surface launched from inside the novel
+ * reader) join the novel reader and the sanctioned sign-in
+ * screen. A reader route registered without immersion now fails
+ * ShellChromeTest's enumeration test the day it is born.
  */
 object ShellChrome {
     /** Destination route patterns (as declared in the NavHost). */
     private val IMMERSIVE_PATTERNS = listOf(
         "reader/{bookId}/{chapterIndex}",
+        "local/{bookId}?target={target}",
+        "ai/{bookId}/{chapterIndex}",
         "login"
     )
 
@@ -24,6 +35,8 @@ object ShellChrome {
     fun isImmersive(route: String?): Boolean {
         if (route == null) return false
         if (route == "login") return true
-        return route.startsWith("reader/")
+        return route.startsWith("reader/") ||
+            route.startsWith("local/") ||
+            route.startsWith("ai/")
     }
 }

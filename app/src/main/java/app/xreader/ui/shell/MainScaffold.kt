@@ -191,6 +191,9 @@ fun MainScaffold(
     val scope = rememberCoroutineScope()
     val onPhaseNote: (String) -> Unit = { msg -> scope.launch { snackbar.showSnackbar(msg) } }
     val context = androidx.compose.ui.platform.LocalContext.current
+    // v1.5.6 (§2): the ONE reader-route resolver every
+    // chapter-open entry point in this shell consults.
+    val routeResolver = remember(container) { readerRouteResolverFor(container) }
 
     // Phase 2 view models live at host level so their message flows
     // can feed the one snackbar.
@@ -293,6 +296,21 @@ fun MainScaffold(
     androidx.compose.runtime.LaunchedEffect(linkAddViewModel) {
         linkAddViewModel.messages.collect { msg -> snackbar.showSnackbar(msg) }
     }
+    // v1.5.2 fix (FIX-2, §1): promotion is reconciled on app
+    // foreground / surface resume — a solve that completed with
+    // zero collectors still promotes at this evaluation point.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                scope.launch {
+                    runCatching { container.evaluatePendingOperations() }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // Phase 6: opening the app settles EXP (idempotent) and honours
     // a home-screen widget tap that asked for a specific book.
@@ -316,12 +334,48 @@ fun MainScaffold(
             runCatching {
                 container.keiyoushiPlayerManager.restoreInstalled()
             }
+            // v1.5.2 (§8.5 Phase 0 — offline, local, bounded):
+            // favourites re-key, body demotion, History seeding,
+            // fossil-name repair, per-provider journal.
+            val phase0 = runCatching { container.updatePass152.runPhase0() }
+                .getOrNull()
+            // v1.5.2 fix (FIX-2, §1): process-start evaluation —
+            // RUNNING records return to READY and may be claimed
+            // again; terminal traces prune after 7 days.
+            runCatching { container.evaluatePendingOperations(processStart = true) }
+            // v1.5.2 fix (FIX-10, §8.5): the DEFERRED phase —
+            // post-interactive, per-provider, journaled: link-added
+            // re-derivation, cover backfill, rating index leg. On
+            // completion Explore shows the one-time summary once.
+            runCatching {
+                val deferred = container.updatePass152.runDeferred()
+                if (deferred.completed && !deferred.skippedOffline) {
+                    container.updatePassSummary.value = deferred.summaryLine(
+                        refreshedTotal = deferred.rederived +
+                            (phase0?.refreshed ?: 0),
+                        renamedTotal = phase0?.renamed ?: 0
+                    )
+                }
+            }
+            // v1.5.2 (§8.4): rating backfill for pre-stamp records.
+            runCatching {
+                container.keiyoushiPlayerManager.backfillRatings()
+            }
             // v1.3.5 (Cycle 1): the provider-pack channel's
             // throttled automatic check — at most once a day,
             // silent on failure, and it can only ever touch
             // pack-managed sources (ProviderPackManager).
             runCatching {
                 container.providerPackManager.checkForUpdates(manual = false)
+            }
+            // v1.5.39 (item 4): the Keiyoushi manga-source
+            // check rides beside it — same once-a-day
+            // throttle (its own SourcePrefs stamp), silent
+            // on failure; newly flagged updates notify once
+            // per set, and the persisted flags drive the
+            // Explore badge and banner (AppContainer).
+            runCatching {
+                container.checkKeiyoushiSourceUpdates()
             }
             // v1.3.1 (item 52): one source per canonical domain
             // — the built-in survives, older duplicates are
@@ -337,52 +391,73 @@ fun MainScaffold(
                 app.xreader.widget.XreaderWidget()
                     .updateAll(context)
             }
-            // v1.0.5 (E1): the heal-my-library sweep — once per
-            // app version, link sources are re-driven with the
-            // honest engine and the failures repaired quietly in
-            // the background. It gates itself on network, metering
-            // and battery; a skipped run retries on a later launch.
-            runCatching {
-                val installedCode = runCatching {
-                    @Suppress("DEPRECATION")
-                    container.applicationContext.packageManager.getPackageInfo(
-                        container.applicationContext.packageName, 0
-                    ).versionCode
-                }.getOrDefault(0)
-                if (installedCode > 0) {
-                    // v1.0.6 (W5.2): the sweep is background work —
-                    // its probes never render.
-                    container.renderRuntime.asBackgroundWork {
-                        container.healSweep.runIfNeeded(installedCode)
-                    }
-                    // v1.3.3 (scope S6): the stored-book repair
-                    // sweep — once per version, Library books
-                    // whose stored chapter lists/covers predate
-                    // the canonical merge are re-synced against
-                    // their sources (the 3,253-row store heals
-                    // to the source's own 3,229). Background
-                    // work likewise: its fetches never render.
-                    container.renderRuntime.asBackgroundWork {
-                        container.storedBookRepair
-                            .runUpgradeSweep(installedCode)
-                    }
-                    // v1.5.1 (item 1): the update-time source
-                    // migration — learned sources re-derived
-                    // with the current learner, duplicates of
-                    // shipped sites merged away (the user's
-                    // no-duplicates rule). NOT background work:
-                    // the re-derivation is owed the learner's
-                    // full escalation (the API road renders and
-                    // records), and it runs once per version
-                    // on this background scope, never blocking
-                    // first paint. Failure-isolated per source
-                    // inside; a failure here changes nothing.
-                    runCatching {
-                        container.sourceUpdateMigration
-                            .runIfNeeded(installedCode)
-                    }.getOrNull()?.forEach { line ->
-                        android.util.Log.i("XreaderMigrate", line)
-                    }
+            // v1.5.34 (item 1d): the per-version sweeps (heal,
+            // stored-book repair, source migration) no longer
+            // ride this sequential startup chain — they run on
+            // their own deferred effect below, after first frame,
+            // so a heavy install day's first launch does no
+            // sweep network work inside the shell's opening
+            // composition chain.
+        }
+    }
+    // v1.5.34 (item 1d): the per-version startup sweeps,
+    // deferred until after the first frame plus a settle beat
+    // (the Library is up and idle before any sweep network work
+    // starts). Discipline unchanged from where they lived in
+    // the startup chain: heal + stored-book repair run under
+    // asBackgroundWork (their book-sync paths take the
+    // details-only gate — no foreground chapter walks, the
+    // v1.5.26 toast lever); the source migration keeps its
+    // documented exception (its re-derivation is owed the
+    // learner's full escalation).
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        androidx.compose.runtime.withFrameNanos { }
+        kotlinx.coroutines.delay(2_500)
+        // v1.0.5 (E1): the heal-my-library sweep — once per
+        // app version, link sources are re-driven with the
+        // honest engine and the failures repaired quietly in
+        // the background. It gates itself on network, metering
+        // and battery; a skipped run retries on a later launch.
+        runCatching {
+            val installedCode = runCatching {
+                @Suppress("DEPRECATION")
+                container.applicationContext.packageManager.getPackageInfo(
+                    container.applicationContext.packageName, 0
+                ).versionCode
+            }.getOrDefault(0)
+            if (installedCode > 0) {
+                // v1.0.6 (W5.2): the sweep is background work —
+                // its probes never render.
+                container.renderRuntime.asBackgroundWork {
+                    container.healSweep.runIfNeeded(installedCode)
+                }
+                // v1.3.3 (scope S6): the stored-book repair
+                // sweep — once per version, Library books
+                // whose stored chapter lists/covers predate
+                // the canonical merge are re-synced against
+                // their sources (the 3,253-row store heals
+                // to the source's own 3,229). Background
+                // work likewise: its fetches never render.
+                container.renderRuntime.asBackgroundWork {
+                    container.storedBookRepair
+                        .runUpgradeSweep(installedCode)
+                }
+                // v1.5.1 (item 1): the update-time source
+                // migration — learned sources re-derived
+                // with the current learner, duplicates of
+                // shipped sites merged away (the user's
+                // no-duplicates rule). NOT background work:
+                // the re-derivation is owed the learner's
+                // full escalation (the API road renders and
+                // records), and it runs once per version,
+                // never blocking first paint (now deferred past
+                // it entirely). Failure-isolated per source
+                // inside; a failure here changes nothing.
+                runCatching {
+                    container.sourceUpdateMigration
+                        .runIfNeeded(installedCode)
+                }.getOrNull()?.forEach { line ->
+                    android.util.Log.i("XreaderMigrate", line)
                 }
             }
         }
@@ -394,7 +469,14 @@ fun MainScaffold(
                 val progress = runCatching {
                     container.database.readingProgressDao().getForBook(bookId)
                 }.getOrNull()
-                navigateContent("reader/$bookId/${progress?.chapterIndex ?: 0}")
+                // v1.5.6 (§2.2 entry point 5): the programmatic
+                // open bypasses every screen, so it consults the
+                // resolver like everything else — a manga book
+                // deep-linked here opens Komikku directly.
+                openReaderViaResolver(
+                    routeResolver, bookId,
+                    progress?.chapterIndex ?: 0, context, navigateContent
+                )
             }
         }
     }
@@ -405,6 +487,25 @@ fun MainScaffold(
             if (target != null) {
                 container.pendingOpenSource.value = null
                 navigateContent("source/${target.first}/${target.second}")
+            }
+        }
+    }
+    // v1.5.39 (item 4): a source-update notification tap
+    // opens the manga shelf (the Keiyoushi repo's own route)
+    // — the same shelf Explore's banner and Manga sources
+    // door lead to.
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        container.pendingOpenSourceShelf.collect { open ->
+            if (open) {
+                container.pendingOpenSourceShelf.value = false
+                val shelfRepo = sourcesViewModel.state.value.repos
+                    .firstOrNull { repo ->
+                        app.xreader.data.extension.KeiyoushiIndex
+                            .isKeiyoushiRepo(repo.name, repo.indexUrl)
+                    }
+                if (shelfRepo != null) {
+                    navController.navigate("repo/${shelfRepo.id}")
+                }
             }
         }
     }
@@ -479,7 +580,12 @@ fun MainScaffold(
                         .maxByOrNull { it.updatedAt }
                 }.getOrNull()
                 if (recent != null) {
-                    navigateContent("reader/${recent.bookId}/${recent.chapterIndex}")
+                    // v1.5.6 (§2.2 entry point 4): app-start
+                    // Continue Reading goes through the resolver.
+                    openReaderViaResolver(
+                        routeResolver, recent.bookId, recent.chapterIndex,
+                        context, navigateContent
+                    )
                 }
             }
             app.xreader.data.library.StartScreen.LIBRARY -> Unit
@@ -662,7 +768,14 @@ private fun MeshBackdrop(
                     )
                 }
             }
-            .let { if (haze != null) it.hazeSource(haze) else it }
+            // FIX-23: the haze source is applied ONLY when the
+            // FROSTED style is actually in effect. On both plain
+            // paths — the automatic below-API-31 resolution and
+            // the user's safe-appearance (TINTED) mode — no Haze
+            // node enters the composition at all (glass-free by
+            // construction); the effect sites in frostedGlass
+            // are gated on the same flag.
+            .let { if (haze != null && glass.frosted) it.hazeSource(haze) else it }
     ) {
         // v1.0.7 Liquid background: the user's own picture fills
         // the stage (the glass above still samples it through
@@ -751,12 +864,19 @@ private fun PhoneShell(
                 enter = fadeIn(fadeTween<Float>()),
                 exit = fadeOut(fadeTween<Float>())
             ) {
+                // v1.5.39 (item 4): the Explore tab carries
+                // the pending manga-source update count as a
+                // numeric badge (donor pattern).
+                val sourcesState by sourcesViewModel.state
+                    .collectAsStateWithLifecycle()
                 FloatingNavBar(
                     selected = selectedTab(navController),
                     reduceMotion = appearance.reduceMotion,
                     onSelect = { tab -> navigateToTab(navController, tab) },
                     barStyle = libraryState.navBarStyle,
-                    labelStyle = libraryState.tabLabelStyle
+                    labelStyle = libraryState.tabLabelStyle,
+                    exploreBadgeCount =
+                        sourcesState.keiyoushiPendingUpdateCount
                 )
             }
         }
@@ -840,12 +960,16 @@ private fun RailShell(
                     enter = fadeIn(fadeTween<Float>()),
                     exit = fadeOut(fadeTween<Float>())
                 ) {
+                val railSourcesState by sourcesViewModel.state
+                    .collectAsStateWithLifecycle()
                 NavRail(
                     selected = selectedTab(navController),
                     reduceMotion = appearance.reduceMotion,
                     onSelect = { tab -> navigateToTab(navController, tab) },
                     onAddBook = onAddBook,
-                    labelStyle = libraryState.tabLabelStyle
+                    labelStyle = libraryState.tabLabelStyle,
+                    exploreBadgeCount =
+                        railSourcesState.keiyoushiPendingUpdateCount
                 )
                 }
                 XreaderNavHost(
@@ -901,6 +1025,21 @@ private fun XreaderNavHost(
             lastContentNavRoute = route
             lastContentNavAt = now
             navController.navigate(route) { launchSingleTop = true }
+        }
+    }
+    // v1.5.6 (§2): the ONE chapter-open door for every destination
+    // in this host — book page, Library Continue Reading and
+    // History all resolve through ReaderRouteResolver before any
+    // reader opens (Komikku verdicts launch the Activity directly;
+    // Downloads/Explore reach the reader only through the book
+    // page, §2.2 entry points 6/7, so they inherit this door).
+    val routeResolver = remember(container) { readerRouteResolverFor(container) }
+    val hostContext = androidx.compose.ui.platform.LocalContext.current
+    val openReader: (Long, Int) -> Unit = { bookId, chapterIndex ->
+        scope.launch {
+            openReaderViaResolver(
+                routeResolver, bookId, chapterIndex, hostContext, navigateContent
+            )
         }
     }
     // v1.3.2 (scope D): the all-sources search VM, created at
@@ -961,7 +1100,11 @@ private fun XreaderNavHost(
         path?.let { container.bookStorage.resolve(it) }
     }
     val assetFile: (Long, String) -> File = { bookId, name ->
-        File(container.bookStorage.contentDir(bookId), "img-$name")
+        // v1.5.7 (scope F smoothness): contentDir() mkdirs on
+        // every call — a filesystem write on the composition
+        // thread for a read-side path. contentFile resolves
+        // the same path without creating anything.
+        container.bookStorage.contentFile(bookId, "img-$name")
     }
     // Phase 5: one sync brain for the whole shell — the Sync screen
     // uses it, and opening the app gives auto-sync its chance (it is
@@ -1022,8 +1165,10 @@ private fun XreaderNavHost(
                 reduceMotion = reduceMotion,
                 onAddBook = onAddBook,
                 onOpenBook = { bookId -> navigateContent("book/$bookId") },
+                // v1.5.6 (§2.2 entry point 2): Library Continue
+                // Reading resolves through the routing law.
                 onContinueReading = { bookId, chapterIndex ->
-                    navigateContent("reader/$bookId/$chapterIndex")
+                    openReader(bookId, chapterIndex)
                 },
                 onProfile = { navController.navigate("profile") },
                 onOpenAddList = { navController.navigate("addList") },
@@ -1080,6 +1225,26 @@ private fun XreaderNavHost(
                 onOpenOpdsServers = { navController.navigate("opdsServers") },
                 onAddSource = { navController.navigate("addSource") },
                 onOpenStore = { navController.navigate("sourceStore") },
+                onOpenManageSources = { navController.navigate("manageSources") },
+                // v1.5.39 (item 4): straight to the manga
+                // shelf — the Keiyoushi repo's own route,
+                // resolved by the same identity test the
+                // store uses; the store is the fallback if
+                // the row somehow isn't there yet.
+                onOpenMangaSources = {
+                    val shelfRepo = sourcesViewModel.state.value
+                        .repos.firstOrNull { repo ->
+                            app.xreader.data.extension
+                                .KeiyoushiIndex.isKeiyoushiRepo(
+                                    repo.name, repo.indexUrl
+                                )
+                        }
+                    if (shelfRepo != null) {
+                        navController.navigate("repo/${shelfRepo.id}")
+                    } else {
+                        navController.navigate("sourceStore")
+                    }
+                },
                 opdsServers = opdsServers,
                 onOpenOpdsServer = { server ->
                     opdsViewModel.openServer(server)
@@ -1089,6 +1254,20 @@ private fun XreaderNavHost(
                     navigateContent("book/$bookId")
                 },
                 coverFile = coverFile
+            )
+        }
+        composable("manageSources") {
+            // v1.5.2 (FIX-15, round-8 placement rule): no
+            // consumer outside this route, so the model is
+            // created HERE, localised — not threaded through
+            // the shells from the host.
+            val manageSourcesViewModel =
+                androidx.lifecycle.viewmodel.compose.viewModel<app.xreader.ui.sources.ManageSourcesViewModel>(
+                    factory = app.xreader.ui.sources.ManageSourcesViewModel.factory(container)
+                )
+            app.xreader.ui.sources.ManageSourcesScreen(
+                viewModel = manageSourcesViewModel,
+                onBack = { navController.popBackStack() }
             )
         }
         composable("addSource") {
@@ -1454,8 +1633,10 @@ private fun XreaderNavHost(
                 coverFile = coverFile,
                 reduceMotion = reduceMotion,
                 onBack = { navigateToTab(navController, Tab.Library) },
+                // v1.5.6 (§2.2 entry point 3): a History tap
+                // resolves through the routing law.
                 onOpenBook = { bookId, chapterIndex ->
-                    navigateContent("reader/$bookId/$chapterIndex")
+                    openReader(bookId, chapterIndex)
                 }
             )
         }
@@ -1579,8 +1760,24 @@ private fun XreaderNavHost(
                 onBack = { navController.popBackStack() },
                 onOpenLore = { navController.navigate("lore/$bookId") },
                 onOpenRelated = { relatedId -> navigateContent("book/$relatedId") },
+                // v1.5.6 (§2.2 entry point 1): the book page's
+                // chapter tap / Read button resolves through the
+                // routing law — a manga book opens Komikku
+                // directly from here, the novel reader never
+                // appears first.
                 onReadChapter = { chapterIndex ->
-                    navigateContent("reader/$bookId/$chapterIndex")
+                    openReader(bookId, chapterIndex)
+                },
+                // v1.5.6 (§3.2): a Contents tap on an in-place
+                // local book carries the outline entry's own
+                // target JSON straight to the local reader —
+                // the shared chapter door's index cannot express
+                // it (the LocalDoc verdict is book-scoped).
+                onReadLocalTarget = { id, targetJson ->
+                    navController.navigate(
+                        "local/$id?target=" +
+                            android.net.Uri.encode(targetJson)
+                    )
                 },
                 onExportEpub = {
                     val book = viewModel.state.value.book
@@ -1736,6 +1933,34 @@ private fun XreaderNavHost(
             )
         }
         composable(
+            "local/{bookId}?target={target}",
+            arguments = listOf(
+                androidx.navigation.navArgument("bookId") {
+                    type = androidx.navigation.NavType.LongType
+                },
+                androidx.navigation.navArgument("target") {
+                    type = androidx.navigation.NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            )
+        ) { entry ->
+            // v1.5.6 (§3): the render-the-file reader. LocalDoc
+            // verdicts land here (dispatchReaderRoute); the
+            // optional target is an outline target JSON (e.g.
+            // {"section": 4}) when the book page's Contents list
+            // was tapped. With no target the reader resumes from
+            // saved progress.
+            val bookId = entry.arguments?.getLong("bookId") ?: 0L
+            val target = entry.arguments?.getString("target")
+            app.xreader.ui.localreader.LocalDocReaderScreen(
+                container = container,
+                bookId = bookId,
+                startTargetJson = target,
+                onClose = { navController.popBackStack() }
+            )
+        }
+        composable(
             "ai/{bookId}/{chapterIndex}",
             arguments = listOf(
                 androidx.navigation.navArgument("bookId") {
@@ -1868,6 +2093,102 @@ private fun navigateToTab(navController: NavHostController, tab: Tab) {
 }
 
 /**
+ * v1.5.6 (§2): the shell's reader-route resolver, built from the
+ * container's own seams. (Hoisting this onto AppContainer as a
+ * lazy `readerRouteResolver` is the coordinator's wiring step;
+ * the construction here uses exactly the container's database
+ * DAOs + extension service, so both wirings are identical.)
+ */
+private fun readerRouteResolverFor(
+    container: AppContainer
+): app.xreader.domain.reader.ReaderRouteResolver =
+    app.xreader.domain.reader.ReaderRouteResolver(
+        bookDao = container.database.bookDao(),
+        chapterDao = container.database.chapterDao(),
+        extensionService = container.extensionService
+    )
+
+/**
+ * v1.5.6 (§2): dispatch ONE resolver verdict — the only way a
+ * chapter open leaves the shell. A Komikku verdict launches the
+ * Komikku reader Activity directly and NEVER transits the
+ * "reader/…" route; a novel verdict keeps the existing route;
+ * a local-document verdict navigates to "local/<bookId>" (the
+ * §3 destination, registered by the local-reader workstream —
+ * the route string is the contract).
+ */
+/**
+ * v1.5.8 (F1): the shell target ONE resolver verdict resolves to —
+ * the concrete NavHost route for in-shell verdicts, or null for
+ * the Komikku verdict, which leaves the shell entirely (its own
+ * Activity, so the shell can never put chrome around it: immersive
+ * by construction). This is the single source of the route
+ * strings [dispatchReaderRoute] navigates to, and ShellChromeTest's
+ * enumeration test drives every verdict shape through it: a future
+ * reader verdict that lands on a non-immersive route (or grows a
+ * route at all without registering it) fails that test.
+ */
+internal fun readerRouteShellTarget(
+    route: app.xreader.domain.reader.ReaderRoute
+): String? = when (route) {
+    is app.xreader.domain.reader.ReaderRoute.Komikku -> null
+    is app.xreader.domain.reader.ReaderRoute.NovelReader ->
+        "reader/${route.bookId}/${route.chapterIndex}"
+    is app.xreader.domain.reader.ReaderRoute.LocalDoc ->
+        "local/${route.bookId}"
+}
+
+private fun dispatchReaderRoute(
+    route: app.xreader.domain.reader.ReaderRoute,
+    context: android.content.Context,
+    navigateContent: (String) -> Unit
+) {
+    when (route) {
+        is app.xreader.domain.reader.ReaderRoute.Komikku ->
+            context.startActivity(
+                app.xreader.komikku.KomikkuReaderActivity.newIntent(
+                    context,
+                    mangaId = route.bookId,
+                    chapterId = route.chapterRowId
+                )
+            )
+        is app.xreader.domain.reader.ReaderRoute.NovelReader,
+        is app.xreader.domain.reader.ReaderRoute.LocalDoc ->
+            navigateContent(readerRouteShellTarget(route)!!)
+    }
+}
+
+/**
+ * v1.5.6 (§2): resolve + dispatch for one chapter open. A
+ * resolver failure falls back to the novel reader (the
+ * long-standing default) rather than stranding the tap; the
+ * novel reader's fail-closed guard (§2.1) backstops a manga
+ * book that ever lands there.
+ */
+private suspend fun openReaderViaResolver(
+    resolver: app.xreader.domain.reader.ReaderRouteResolver,
+    bookId: Long,
+    chapterIndex: Int,
+    context: android.content.Context,
+    navigateContent: (String) -> Unit
+) {
+    val route = try {
+        // v1.5.7 (scope F): resolve off the main thread — a cold
+        // ExtensionService.source() does blocking file IO + JSON
+        // decode (and rebuilds Keiyoushi adapters on every call),
+        // which froze book-open transitions when run on Main.
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            resolver.resolve(bookId, chapterIndex)
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        app.xreader.domain.reader.ReaderRoute.NovelReader(bookId, chapterIndex)
+    }
+    dispatchReaderRoute(route, context, navigateContent)
+}
+
+/**
  * The floating frosted bottom bar. Height is a CONSTANT (64 dp): the
  * Scaffold bottomBar slot permits full-screen height, so nothing in
  * here may size from the slot's constraints — the v1.1.1 lesson.
@@ -1880,7 +2201,10 @@ private fun FloatingNavBar(
     barStyle: app.xreader.data.library.NavBarStyle =
         app.xreader.data.library.NavBarStyle.FLOATING_PILL,
     labelStyle: app.xreader.data.library.TabLabelStyle =
-        app.xreader.data.library.TabLabelStyle.ALWAYS
+        app.xreader.data.library.TabLabelStyle.ALWAYS,
+    /** v1.5.39 (item 4): pending manga-source updates,
+     * badged numerically on the Explore tab (0 = no badge). */
+    exploreBadgeCount: Int = 0
 ) {
     val glass = LocalGlassSettings.current
     val density = LocalDensity.current
@@ -1967,7 +2291,12 @@ private fun FloatingNavBar(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight(),
-                            labelStyle = labelStyle
+                            labelStyle = labelStyle,
+                            badgeCount = if (tab == Tab.Browse) {
+                                exploreBadgeCount
+                            } else {
+                                0
+                            }
                         )
                     }
                 }
@@ -1986,7 +2315,9 @@ private fun NavRail(
     onSelect: (Tab) -> Unit,
     onAddBook: () -> Unit,
     labelStyle: app.xreader.data.library.TabLabelStyle =
-        app.xreader.data.library.TabLabelStyle.ALWAYS
+        app.xreader.data.library.TabLabelStyle.ALWAYS,
+    /** v1.5.39 (item 4): see [FloatingNavBar]. */
+    exploreBadgeCount: Int = 0
 ) {
     val glass = LocalGlassSettings.current
     val density = LocalDensity.current
@@ -2055,7 +2386,12 @@ private fun NavRail(
                             modifier = Modifier
                                 .width(RailWidth)
                                 .height(RailSlotHeight),
-                            labelStyle = labelStyle
+                            labelStyle = labelStyle,
+                            badgeCount = if (tab == Tab.Browse) {
+                                exploreBadgeCount
+                            } else {
+                                0
+                            }
                         )
                     }
                 }
@@ -2077,7 +2413,10 @@ private fun NavSlot(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     labelStyle: app.xreader.data.library.TabLabelStyle =
-        app.xreader.data.library.TabLabelStyle.ALWAYS
+        app.xreader.data.library.TabLabelStyle.ALWAYS,
+    /** v1.5.39 (item 4): a numeric badge over the icon
+     * (the Explore tab's pending source updates; 0 = none). */
+    badgeCount: Int = 0
 ) {
     val interaction = remember { MutableInteractionSource() }
     val contentColor =
@@ -2091,7 +2430,19 @@ private fun NavSlot(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
     ) {
-        Icon(tab.icon, contentDescription = tab.label, tint = contentColor)
+        if (badgeCount > 0) {
+            androidx.compose.material3.BadgedBox(
+                badge = {
+                    androidx.compose.material3.Badge {
+                        Text(badgeCount.toString())
+                    }
+                }
+            ) {
+                Icon(tab.icon, contentDescription = tab.label, tint = contentColor)
+            }
+        } else {
+            Icon(tab.icon, contentDescription = tab.label, tint = contentColor)
+        }
         // v1.0.1 tab-label choice: always / selected only / icons only.
         // The contentDescription always carries the label either way.
         val showLabel = when (labelStyle) {

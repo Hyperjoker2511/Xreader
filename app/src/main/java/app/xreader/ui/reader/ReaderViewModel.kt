@@ -58,10 +58,21 @@ data class ReaderUiState(
     val restoreHint: PageHint = PageHint.OFFSET,
     val restoreGeneration: Int = 0,
     val loading: Boolean = true,
+    /** v1.5.10 (B4): the chapter-text wait has crossed the
+     * honest bound (SourceBookSync.CHAPTER_PENDING_UI_BOUND_MS)
+     * — the loading surface says "Still loading — this chapter
+     * is taking long" instead of spinning inertly. Back still
+     * works: leaving cancels the wait exactly as before. */
+    val stalled: Boolean = false,
     val errorMessage: String? = null,
     /** v1.0.6.2 (F3): the error came from a live chapter fetch
      * that can simply be retried (the error block offers it). */
     val chapterFetchFailed: Boolean = false,
+    /** v1.5.5 (§4): the chapter belongs to a local import whose
+     * completion job is still extracting it — the screen shows
+     * the live "Preparing chapter…" state (not an error), and
+     * the load retries itself when the chapter lands. */
+    val preparingChapter: Boolean = false,
     /** v1.3.2 (A2): the fetch failed at a site check or a sign-in
      * gate — the error block offers the one-time hand-off screen
      * for this kind instead of only "Try again". */
@@ -190,6 +201,17 @@ class ReaderViewModel(
 
     private val _config = MutableStateFlow(ReaderConfig())
     val config: StateFlow<ReaderConfig> = _config
+
+    /** v1.5.5 (§3): the post-save retry gate — this surface
+     * counts as RESUMED while its state has subscribers (the
+     * shell collects it with collectAsStateWithLifecycle);
+     * a save that lands while the reader is in the backstack
+     * parks here and retries on the next resume instead of
+     * racing the foreground surface. */
+    private val sessionRetryGate =
+        app.xreader.data.extension.SurfaceRetryGate("reader") {
+            _state.subscriptionCount.value > 0
+        }
 
     /** v1.0.2 (R18): the two config layers behind [config]. */
     private var globalConfig: ReaderConfig = ReaderConfig()
@@ -375,6 +397,10 @@ class ReaderViewModel(
     private var currentChapterMaxOffset = 0
     private var saveJob: Job? = null
     private var loadJob: Job? = null
+    /** v1.5.10 (B4): generation counter for the chapter stall
+     * watcher — a newer load supersedes an older watcher. */
+    @Volatile
+    private var chapterStallSeq: Int = 0
 
     // -- v1.2.0 (Wave 3): position-pipeline indexes & coalescing --
     /** The chapter list indexed once per list change (id→index +
@@ -506,12 +532,16 @@ class ReaderViewModel(
         }
         viewModelScope.launch {
             val book = container.database.bookDao().getById(bookId)
-            bookConfig = book?.extensionId
+            // v1.5.10 (B5): book-aware resolution (stable
+            // identity + heal on a row-id miss).
+            bookConfig = book
                 ?.takeIf {
-                    book.sourceType == app.xreader.data.db.SourceType.EXTENSION
+                    it.sourceType == app.xreader.data.db.SourceType.EXTENSION &&
+                        it.extensionId != null
                 }
-                ?.let { extId ->
-                    container.extensionService.sourcesOf(extId).getOrNull()
+                ?.let { storedBook ->
+                    container.extensionService.resolveBookSources(storedBook)
+                        .getOrNull()
                         ?.firstNotNullOfOrNull { handle ->
                             container.extensionService
                                 .declarativeConfigOf(handle)
@@ -590,16 +620,54 @@ class ReaderViewModel(
         // the failure the gate caused — retry it automatically.
         // The user lands back on their chapter, not on a blank
         // screen or a false "isn't in the book anymore".
+        // v1.5.5 (§3): the broadcast replaced the claim — a
+        // parked (backstack) retry fires the moment this
+        // surface is resumed again.
         viewModelScope.launch {
-            container.sessionSavedEvents.collect { key ->
+            _state.subscriptionCount.collect { count ->
+                if (count > 0) {
+                    sessionRetryGate.onResumed()?.let { key ->
+                        retryAfterSessionSave(key)
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            container.sessionUpdateBus.events.collect { event ->
+                if (sessionRetryGate.onSessionUpdated(event.sessionKey)) {
+                    retryAfterSessionSave(event.sessionKey)
+                }
+            }
+        }
+    }
+
+    /** v1.5.5 (§3): this surface's OWN post-save retry — the
+     * v1.3.3 return path (refresh, identity re-resolve,
+     * failure retry) with the exactly-once claim REMOVED:
+     * every interested surface now retries its own blocked
+     * operation for the source; the durable record only notes
+     * that the reader's op ran. */
+    private suspend fun retryAfterSessionSave(key: String) {
                 val bookRow = container.database.bookDao()
-                    .getById(bookId) ?: return@collect
-                val extId = bookRow.extensionId ?: return@collect
+                    .getById(bookId) ?: return
+                val extId = bookRow.extensionId ?: return
                 if (key !=
                     app.xreader.data.extension.ExtensionHttpClient
                         .sessionKeyFor(extId)
                 ) {
-                    return@collect
+                    return
+                }
+                app.xreader.data.extension.DiagnosticLog.record(
+                    "fenrir-unlock",
+                    "[FenrirUnlock] surface=reader retried=true",
+                    key
+                )
+                val readerHasOp = container.database.pendingOperationDao()
+                    .getByKey(key) != null
+                if (readerHasOp) {
+                    viewModelScope.launch {
+                        container.finishPendingOperation(key, true)
+                    }
                 }
                 val intended = _state.value.chapters
                     .getOrNull(_state.value.chapterIndex)
@@ -648,8 +716,6 @@ class ReaderViewModel(
                     }
                     launchLoad { loadChapter(target, 0, 0f) }
                 }
-            }
-        }
     }
 
     private fun computeTier(config: ReaderConfig): PageTurnTier {
@@ -840,6 +906,10 @@ class ReaderViewModel(
         // no-op on the very first load, when there is no chapter).
         flushProgressNow()
         flushSession()
+        // v1.5.2 (§15.5): a read START writes the book's History
+        // record (per-book, QuickNovel copy) — best effort, never
+        // allowed to block the chapter itself.
+        runCatching { container.recordHistoryStart(bookId) }
         val chapters = _state.value.chapters
         var chapter = chapters.getOrNull(index)
         if (chapter == null) {
@@ -913,14 +983,50 @@ class ReaderViewModel(
         _state.value = _state.value.copy(
             chapterIndex = index,
             loading = _state.value.chapterText == null,
+            stalled = false,
             errorMessage = null,
             chapterFetchFailed = false,
+            // v1.5.5 (§4): a fresh load supersedes any Preparing
+            // state the previous chapter was showing.
+            preparingChapter = false,
             // v1.3.4 (U3): a new load clears the old failure's
             // classification and hand-off with its message.
             sessionNeed = null,
             sessionTargetUrl = null,
             fetchKind = null
         )
+        // v1.5.10 (B4): arm the stall watcher for this load —
+        // past the bound, a still-running text wait surfaces
+        // the honest stall state + a DiagnosticLog record.
+        // The watcher never touches the fetch itself.
+        val stallChapterId = chapter.id
+        val stallStartedAt = System.currentTimeMillis()
+        val stallSeq = ++chapterStallSeq
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(
+                app.xreader.data.extension.SourceBookSync
+                    .CHAPTER_PENDING_UI_BOUND_MS
+            )
+            if (stallSeq != chapterStallSeq) return@launch
+            if (!_state.value.loading ||
+                _state.value.chapter?.id != stallChapterId
+            ) {
+                return@launch
+            }
+            _state.value = _state.value.copy(stalled = true)
+            val stallBook = container.database.bookDao()
+                .getById(bookId)
+            val stallSourceId = stallBook?.let {
+                app.xreader.data.extension.SourceBookIds
+                    .decode(it.remoteId)?.first
+            } ?: "book $bookId"
+            app.xreader.data.extension.ReaderStall.recordIfStalled(
+                sourceId = stallSourceId,
+                awaited = "chapter $stallChapterId text",
+                startedAtMs = stallStartedAt,
+                nowMs = System.currentTimeMillis()
+            )
+        }
         if (chapter.contentPath == null) {
             // v1.0.6.2 (F3): read live — fetch the chapter
             // through the same download queue downloads use, so
@@ -949,6 +1055,32 @@ class ReaderViewModel(
             }
         }
         val content: ChapterContent = text.content
+        // v1.5.2 fix (FIX-5, §7): tier-2 chapter-content evidence at
+        // open — an image chapter is MANGA evidence, a prose chapter
+        // is TEXT evidence. The resolver applies the both-kinds gate
+        // + hysteresis; a single-kind source's pin can never move.
+        // Also the §12 eviction caller on the reading path: caps are
+        // enforced after a body lands, current+next pinned.
+        viewModelScope.launch {
+            runCatching {
+                val bookRow = container.database.bookDao().getById(bookId)
+                if (bookRow != null) {
+                    container.bookKindResolver.applyTier2Evidence(
+                        bookRow,
+                        if (content.isImageChapter) {
+                            app.xreader.data.extension.BookKind152.MANGA
+                        } else {
+                            app.xreader.data.extension.BookKind152.TEXT
+                        }
+                    )
+                }
+            }
+            runCatching {
+                container.cacheEviction152.enforce(
+                    openBookId = bookId, openChapterId = chapter.id
+                )
+            }
+        }
         tracker.begin()
         currentChapterMaxOffset = restoreOffset
         visibleTextChapterIndex = index
@@ -1081,6 +1213,25 @@ class ReaderViewModel(
                 val checkTargetUrl = bookConfig?.credentials
                     ?.operationToken
                     ?.checkUrlFor(chapter.remoteId ?: "")
+                    // v1.5.37 (combined build): a source with
+                    // no operation-token contract (Xnovel) can
+                    // still meet its first-ever check on the
+                    // chapter road — with no declared check
+                    // page the hand-off would fall back to the
+                    // source root, an unchallenged page with
+                    // nothing to solve
+                    // (XNOVEL-403-ESCALATION-FORENSICS, fix 2).
+                    // For a SITE_CHECK need only, target the
+                    // chapter's own page — the challenged
+                    // route itself. SIGN_IN keeps the null
+                    // target it has always had; a declared
+                    // token target (Fenrir) still wins.
+                    ?: chapter.remoteId?.takeIf {
+                        effectiveNeed ==
+                            app.xreader.data.extension.SessionNeed
+                                .Kind.SITE_CHECK &&
+                            it.startsWith("http")
+                    }
                 when {
                     outcome.detail.contains("paid or locked", ignoreCase = true) &&
                         !signInConfig -> {
@@ -1193,6 +1344,39 @@ class ReaderViewModel(
                 )
                 null
             }
+            app.xreader.data.download.ChapterTextLoader.Outcome.Preparing -> {
+                // v1.5.5 (§4): a local import is still extracting
+                // this chapter in the background. Live non-error
+                // state: show "Preparing chapter…" and re-run the
+                // load when the completion publishes that the
+                // chapter landed (or the job ended — the re-load
+                // then resolves to the chapter or its honest
+                // failure, never to Preparing again).
+                _state.value = _state.value.copy(
+                    loading = false,
+                    errorMessage = null,
+                    chapterFetchFailed = false,
+                    preparingChapter = true
+                )
+                val waitingChapterId = chapter.id
+                val waitingIndex = _state.value.chapterIndex
+                viewModelScope.launch {
+                    app.xreader.data.importer.ImportCompletionState
+                        .statusFlow(bookId)
+                        .first { status ->
+                            val row = container.database.chapterDao()
+                                .getById(waitingChapterId)
+                            row?.contentPath != null ||
+                                status == null || !status.running
+                        }
+                    if (_state.value.chapterIndex == waitingIndex &&
+                        _state.value.preparingChapter
+                    ) {
+                        launchLoad { loadChapter(waitingIndex, 0, 0f) }
+                    }
+                }
+                null
+            }
         }
     }
 
@@ -1238,9 +1422,20 @@ class ReaderViewModel(
         ) {
             return null
         }
-        if (container.sourceBookSync.refresh(book)
-                !is AppResult.Ok
+        // v1.5.39 (item 1): containment — a storage throw
+        // out of the refresh reads as a failed refresh
+        // (null), never as a crash on this dispatcher
+        // (V1538-CRASH-FORENSICS §4).
+        val refreshed = try {
+            container.sourceBookSync.refresh(book)
+        } catch (
+            e: android.database.sqlite.SQLiteConstraintException
         ) {
+            null
+        } catch (e: java.sql.SQLException) {
+            null
+        }
+        if (refreshed !is AppResult.Ok) {
             return null
         }
         val rows = container.database.chapterDao().forBook(bookId)
@@ -1311,8 +1506,16 @@ class ReaderViewModel(
                         imagePrefetchChapterId != chapter.id
                     ) {
                         runCatching {
+                            // v1.5.2 fix (FIX-6d, §12.4): neighbour
+                            // warm is an AUTOMATIC producer — stamped
+                            // at enqueue so its bodies are cache,
+                            // never phantom downloads.
                             container.downloadController
-                                .enqueueChapter(bookId, chapter.id)
+                                .enqueueChapter(
+                                    bookId, chapter.id,
+                                    origin = app.xreader.data.download
+                                        .BodyOrigin152.AUTOMATIC
+                                )
                         }
                     }
                     continue
@@ -1830,20 +2033,24 @@ class ReaderViewModel(
             )
         )
         container.database.bookDao().getById(bookId)?.let { book ->
-            // v1.3.1 (item 45): actually READING a chapter is
-            // one of the three acts that make a preview row a
-            // Library member — it flips here, unthrottled,
-            // alongside the (throttled) lastOpenedAt stamp.
-            val flip = !book.inLibrary
-            if (flip || book.lastOpenedAt == null ||
+            // v1.5.3 (finding #9, owner decision 2026-11-04):
+            // saving progress stamps recency ONLY — reading no
+            // longer makes a preview row a Library member. The
+            // v1.3.1 (item 45) doctrine that lived here ("reading
+            // is one of the acts that shelve a book", §15.1) is
+            // SUPERSEDED by the owner's rule: "library is only
+            // books that I add" — membership flips only on Add,
+            // Favourite, Download or a status-set. The (throttled)
+            // lastOpenedAt stamp stays: History/Recents and the
+            // Continue hero read it, membership-free.
+            if (book.lastOpenedAt == null ||
                 now - (book.lastOpenedAt ?: 0) > 30_000L
             ) {
                 container.database.bookDao()
                     .update(
                         book.copy(
                             lastOpenedAt = now,
-                            updatedAt = now,
-                            inLibrary = true
+                            updatedAt = now
                         )
                     )
             }
@@ -1965,6 +2172,14 @@ class ReaderViewModel(
         if (overlayPlayerLazy.isInitialized()) overlayPlayer.release()
         if (soundscapePlayerLazy.isInitialized()) soundscapePlayer.stop()
         if (eyeTrackerLazy.isInitialized()) eyeTracker.stop()
+        // v1.5.38 (§B mitigation): leaving the reader retires
+        // any fetch-bridge attempt its loads set running — a
+        // dead attempt must not hold the shared fetcher mutex
+        // (and, behind it, other sources' renders) out to its
+        // own timeout (V1537-PROOF-FORENSICS §B).
+        runCatching {
+            container.renderedPageFetcher.cancelInFlightBridge()
+        }
         super.onCleared()
     }
 
@@ -2411,7 +2626,9 @@ class ReaderViewModel(
             return null
         }
         if (extensionId in browserNoticeShownFor) return null
-        val marked = container.extensionService.sourcesOf(extensionId)
+        // v1.5.10 (B5): book-aware resolution (stable
+        // identity + heal on a row-id miss).
+        val marked = container.extensionService.resolveBookSources(book)
             .getOrNull()
             ?.any { handle ->
                 container.extensionService.declarativeConfigOf(handle)

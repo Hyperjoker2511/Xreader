@@ -74,16 +74,58 @@ class FakeChapterDao : ChapterDao {
     private val ids = AtomicLong(1)
     val chapters = MutableStateFlow<List<Chapter>>(emptyList())
 
+    override suspend fun setBodyOrigin(id: Long, origin: String?) {
+        chapters.value = chapters.value.map {
+            if (it.id == id) it.copy(bodyOrigin = origin) else it
+        }
+    }
+
+    override suspend fun downloadedCount(bookId: Long): Int =
+        chapters.value.count {
+            it.bookId == bookId && it.downloadState == DownloadState.READY &&
+                it.bodyOrigin == "USER"
+        }
+
+    override suspend fun unstampedBodies(): List<Chapter> =
+        chapters.value.filter { it.bodyOrigin == null && it.contentPath != null }
+
+    override suspend fun setBodyOriginForIds(ids: List<Long>, origin: String?) {
+        val wanted = ids.toSet()
+        chapters.value = chapters.value.map {
+            if (it.id in wanted) it.copy(bodyOrigin = origin) else it
+        }
+    }
+
+    override suspend fun clearBody(id: Long) {
+        chapters.value = chapters.value.map {
+            if (it.id == id) {
+                it.copy(
+                    contentPath = null,
+                    downloadState = DownloadState.NONE,
+                    bodyOrigin = null,
+                    wordCount = 0
+                )
+            } else {
+                it
+            }
+        }
+    }
+
+    override suspend fun storedBodies(bookId: Long): List<Chapter> =
+        chapters.value.filter { it.bookId == bookId && it.contentPath != null }
+
     override fun observeDownloadCounts(): Flow<List<BookDownloadCount>> =
         chapters.map { list ->
             list.groupBy { it.bookId }.map { (bookId, bookChapters) ->
                 BookDownloadCount(
                     bookId = bookId,
                     downloaded = bookChapters.count {
-                        it.downloadState == DownloadState.READY
+                        it.downloadState == DownloadState.READY &&
+                            it.bodyOrigin == "USER"
                     },
                     readDownloaded = bookChapters.count {
-                        it.downloadState == DownloadState.READY && it.read
+                        it.downloadState == DownloadState.READY &&
+                            it.bodyOrigin == "USER" && it.read
                     }
                 )
             }
@@ -155,6 +197,58 @@ class FakeChapterDao : ChapterDao {
         chapters.value.firstOrNull { it.bookId == bookId && it.index == index }
 
     override suspend fun readCount(): Int = chapters.value.count { it.read }
+
+    override suspend fun deleteForBook(bookId: Long): Int {
+        val before = chapters.value.size
+        chapters.value = chapters.value.filterNot { it.bookId == bookId }
+        return before - chapters.value.size
+    }
+}
+
+/** v1.5.6 (§3): in-memory fakes for the v10 stores. */
+class FakeReadingMemoryDao : app.xreader.data.db.ReadingMemoryDao {
+    val memories = MutableStateFlow<List<app.xreader.data.db.ReadingMemory>>(emptyList())
+
+    override suspend fun upsert(memory: app.xreader.data.db.ReadingMemory) {
+        memories.value = memories.value.filterNot { it.fingerprint == memory.fingerprint } + memory
+    }
+
+    override suspend fun get(fingerprint: String): app.xreader.data.db.ReadingMemory? =
+        memories.value.firstOrNull { it.fingerprint == fingerprint }
+
+    override suspend fun delete(fingerprint: String): Int {
+        val before = memories.value.size
+        memories.value = memories.value.filterNot { it.fingerprint == fingerprint }
+        return before - memories.value.size
+    }
+
+    override suspend fun all(): List<app.xreader.data.db.ReadingMemory> = memories.value
+}
+
+class FakeLocalOutlineDao : app.xreader.data.db.LocalOutlineDao {
+    private val ids = AtomicLong(1)
+    val rows = MutableStateFlow<List<app.xreader.data.db.LocalOutline>>(emptyList())
+
+    override suspend fun insertAll(newRows: List<app.xreader.data.db.LocalOutline>) {
+        for (row in newRows) {
+            val id = ids.getAndIncrement()
+            rows.value = rows.value + row.copy(id = id)
+        }
+    }
+
+    override suspend fun forBook(bookId: Long): List<app.xreader.data.db.LocalOutline> =
+        rows.value.filter { it.bookId == bookId }.sortedBy { it.idx }
+
+    override fun observeForBook(
+        bookId: Long
+    ): Flow<List<app.xreader.data.db.LocalOutline>> =
+        rows.map { list -> list.filter { it.bookId == bookId }.sortedBy { it.idx } }
+
+    override suspend fun deleteForBook(bookId: Long): Int {
+        val before = rows.value.size
+        rows.value = rows.value.filterNot { it.bookId == bookId }
+        return before - rows.value.size
+    }
 }
 
 class FakeChapterSourceMapDao : ChapterSourceMapDao {
@@ -226,6 +320,15 @@ class FakeDownloadQueueDao : DownloadQueueDao {
 
     override suspend fun getById(id: Long): DownloadQueueItem? =
         items.value.firstOrNull { it.id == id }
+
+    override suspend fun deleteForBook(bookId: Long): Int {
+        val before = items.value.size
+        items.value = items.value.filterNot { it.bookId == bookId }
+        return before - items.value.size
+    }
+
+    override suspend fun allForBook(bookId: Long): List<DownloadQueueItem> =
+        items.value.filter { it.bookId == bookId }
 
     override suspend fun nextQueued(limit: Int): List<DownloadQueueItem> =
         items.value.filter { it.state == QueueState.QUEUED }
@@ -343,6 +446,26 @@ class FakeInstalledExtensionDao : InstalledExtensionDao {
 
     override suspend fun allNow(): List<InstalledExtension> =
         extensions.value.sortedBy { it.displayName }
+
+    override suspend fun setNeedsRepair(id: Long, reason: String?) {
+        extensions.value = extensions.value.map {
+            if (it.id == id) {
+                it.copy(needsRepair = true, needsRepairReason = reason)
+            } else {
+                it
+            }
+        }
+    }
+
+    override suspend fun clearNeedsRepair(id: Long) {
+        extensions.value = extensions.value.map {
+            if (it.id == id) {
+                it.copy(needsRepair = false, needsRepairReason = null)
+            } else {
+                it
+            }
+        }
+    }
 }
 
 /**

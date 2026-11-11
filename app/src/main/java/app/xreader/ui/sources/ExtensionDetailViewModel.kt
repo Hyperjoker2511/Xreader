@@ -12,6 +12,7 @@ import app.xreader.data.extension.CleanerRuleData
 import app.xreader.data.extension.ExtensionPermissions
 import app.xreader.data.extension.ExtensionPermissions.Companion.encode
 import app.xreader.data.extension.PendingUpdate
+import app.xreader.data.extension.normaliseHost
 import app.xreader.data.extension.toRecord
 import app.xreader.di.AppContainer
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -80,7 +81,17 @@ data class ExtensionDetailUiState(
      * source's session ("Last page received: …"), redacted by
      * construction — shape only, no bodies or credentials.
      * Null when no fetch has been recorded this session. */
-    val pageShapeSummary: String? = null
+    val pageShapeSummary: String? = null,
+    // ── v1.5.9 (Finding 6): multi-source instances ──────────
+    /** Every instance of a multi-source package, LABELLED
+     * ("MangaFire (EN)") by [InstanceLabels.join] — never a
+     * raw id. Empty until the join has run (init) and for
+     * single-source packages whose screen never reads it. */
+    val instances: List<SourceInstanceInfo> = emptyList(),
+    /** The instance the Details primary pill opens: the
+     * remembered pick when one exists, else the browsing
+     * default ([MultiSourceDefault]). Null = unresolved yet. */
+    val currentInstanceId: String? = null
 ) {
     val permissions: ExtensionPermissions
         get() = ExtensionPermissions.parse(extension?.permissionsJson)
@@ -163,6 +174,22 @@ class ExtensionDetailViewModel(
 
     private val _parser = MutableStateFlow(ParserLocal())
 
+    /** v1.5.9 (Finding 6): the labelled instances of this
+     * package + the current (remembered-or-default) instance —
+     * resolved once at load by [resolveInstances] from data
+     * already on device (catalog stubs → live handles →
+     * declarative configs), never from the row's bare ids. */
+    private val _instances = MutableStateFlow<List<SourceInstanceInfo>>(emptyList())
+    private val _currentInstanceId = MutableStateFlow<String?>(null)
+
+    /** The join inputs kept for the stub re-join: when the
+     * Keiyoushi catalogue lands after the first pass, the
+     * instances are re-joined with the stubs in hand. */
+    private var instanceConfigs: List<app.xreader.data.extension.DeclarativeConfig> =
+        emptyList()
+    private var instanceHandles: List<app.xreader.data.extension.SourceHandle> =
+        emptyList()
+
     /** The engine chip's text (v1.0.3) for the AI-match surface. */
     val engineLabel: StateFlow<String> = container.aiHub.chipLabel
         .stateIn(
@@ -191,7 +218,8 @@ class ExtensionDetailViewModel(
     val state: StateFlow<ExtensionDetailUiState> = combine(
         container.database.installedExtensionDao().observeById(extensionId),
         _sessionSaved, _rules, _test, _linkConfig, _health, _bring, _parser,
-        container.sourcePrefs.browserViewNeededIds, _rowShape
+        container.sourcePrefs.browserViewNeededIds, _rowShape,
+        _instances, _currentInstanceId
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val ext = values[0] as InstalledExtension?
@@ -241,7 +269,9 @@ class ExtensionDetailViewModel(
                 .lastFor(
                     app.xreader.data.extension.ExtensionHttpClient
                         .sessionKeyFor(extensionId)
-                )?.summary()
+                )?.summary(),
+            instances = values[10] as List<SourceInstanceInfo>,
+            currentInstanceId = values[11] as String?
         )
     }.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000),
@@ -250,7 +280,9 @@ class ExtensionDetailViewModel(
 
     init {
         viewModelScope.launch {
+            var loadedExt: InstalledExtension? = null
             container.database.installedExtensionDao().getById(extensionId)?.let { ext ->
+                loadedExt = ext
                 // v1.1.0 (Fix 5): the config load gate is the
                 // shared rebuildability helper, not the link.
                 // prefix — a repo row holding exactly one
@@ -275,13 +307,18 @@ class ExtensionDetailViewModel(
                     } else {
                         null
                     }
+                // v1.5.9 (Finding 6): EVERY config of the row,
+                // kept for the instance-label join — a multi-
+                // config declarative/pack row labels its
+                // instances from these display names.
+                instanceConfigs = raw?.let {
+                    app.xreader.data.extension.DeclarativeFingerprints.decode(it)
+                } ?: emptyList()
                 if (
                     app.xreader.data.extension.SourceRebuildability
                         .hasEditableRules(rebuildKind)
                 ) {
-                    _linkConfig.value = raw?.let {
-                        app.xreader.data.extension.DeclarativeFingerprints.decode(it)
-                    }?.firstOrNull()
+                    _linkConfig.value = instanceConfigs.firstOrNull()
                 }
                 _rules.value = container.cleanerRuleStore.extensionRules(ext.packageId)
                 _sessionSaved.value = container.sessionStore.has(
@@ -291,6 +328,11 @@ class ExtensionDetailViewModel(
             // R10: show the last known health immediately.
             val handles = container.extensionService.sourcesOf(extensionId)
                 .getOrNull()
+            // v1.5.9 (Finding 6): label this package's
+            // instances + resolve the current one, from the
+            // handles/configs already in hand.
+            instanceHandles = handles ?: emptyList()
+            loadedExt?.let { resolveInstances(it) }
             val firstSourceId = handles?.firstOrNull()?.source?.id
             if (firstSourceId != null) {
                 val key = app.xreader.data.extension.SourceHealthRecord
@@ -319,6 +361,89 @@ class ExtensionDetailViewModel(
                     _bring.value = _bring.value.copy(hasBookshelf = true)
                 }
             }
+        }
+    }
+
+    /**
+     * v1.5.9 (Finding 6, §7.1/§7.3): build this package's
+     * labelled instances and resolve the current one. First
+     * pass joins the live handles + the row's declarative
+     * configs; for a Keiyoushi package the player's catalogue
+     * stubs — the join's FIRST source — are folded in when the
+     * manager's catalogue answers (its warm cache in practice;
+     * a failed fetch simply leaves the handle labels standing,
+     * which carry the same names). The current instance is the
+     * remembered pick when one exists, else the browsing
+     * default ([MultiSourceDefault]).
+     */
+    private suspend fun resolveInstances(ext: InstalledExtension) {
+        val declaredIds = ext.sourceIds.split(",")
+            .map { it.trim() }.filter { it.isNotBlank() }
+        if (declaredIds.size <= 1) return
+        fun joinWith(
+            stubs: Map<String, app.xreader.data.extension.KeiyoushiIndex.SourceStub>
+        ): List<SourceInstanceInfo> = InstanceLabels.join(
+            declaredIds = declaredIds,
+            stubs = stubs,
+            handles = instanceHandles.map { handle ->
+                InstanceSeed(
+                    sourceId = container.extensionService
+                        .mihonAdapterOf(handle)?.mihonId?.toString()
+                        ?: handle.source.id,
+                    name = handle.source.name,
+                    lang = handle.source.lang,
+                    homeUrl = handle.source.baseUrl
+                )
+            },
+            configs = instanceConfigs.map { config ->
+                InstanceSeed(
+                    sourceId = config.id,
+                    name = config.name,
+                    lang = config.lang,
+                    homeUrl = config.baseUrl
+                )
+            }
+        )
+        val pick = container.extensionStore.instancePick(ext.packageId)
+        val firstPass = joinWith(emptyMap())
+        _instances.value = firstPass
+        _currentInstanceId.value =
+            MultiSourceDefault.resolve(firstPass, pick)
+        if (ext.kind == app.xreader.data.db.ExtensionKind.KEIYOUSHI) {
+            val catalog = (
+                container.keiyoushiPlayerManager.catalog()
+                    as? AppResult.Ok
+                )?.value
+            val stubs = catalog?.packages
+                ?.firstOrNull { it.packageName == ext.packageId }
+                ?.sources
+                ?.associateBy { it.id }
+                .orEmpty()
+            if (stubs.isNotEmpty()) {
+                val joined = joinWith(stubs)
+                _instances.value = joined
+                _currentInstanceId.value =
+                    MultiSourceDefault.resolve(joined, pick)
+            }
+        }
+    }
+
+    /**
+     * v1.5.9 (Finding 6, §7.3): the reader opened [sourceId]
+     * from this package's Details page — remember it as the
+     * package's instance (one string per package, in the
+     * extension store beside the player's own records), so the
+     * Sources-list default follows this pick from now on. The
+     * screen performs the navigation itself via its
+     * onOpenSource callback; this only records the choice.
+     */
+    fun openInstance(sourceId: String) {
+        _currentInstanceId.value = sourceId
+        viewModelScope.launch {
+            val ext = current() ?: return@launch
+            container.extensionStore.writeInstancePick(
+                ext.packageId, sourceId
+            )
         }
     }
 
@@ -432,8 +557,19 @@ class ExtensionDetailViewModel(
                 }
                 val book = scannedBooks[decision.account.remoteKey]
                     ?: continue
-                when (container.sourceBookSync.openBook(handle, book)) {
-                    is AppResult.Ok -> imported++
+                when (val opened = container.sourceBookSync.openBook(handle, book)) {
+                    is AppResult.Ok -> {
+                        imported++
+                        // v1.5.2 (§13.5): the planner's
+                        // setFavourite decision was DROPPED on the
+                        // floor pre-fix — wire it: imported
+                        // favourites favourites land favourited.
+                        if (decision.setFavourite) {
+                            container.bookMetaPrefs.setFavourite(
+                                opened.value.id, true
+                            )
+                        }
+                    }
                     is AppResult.Err -> failedCount++
                 }
             }
@@ -817,6 +953,18 @@ class ExtensionDetailViewModel(
                             }
                         }
                     }
+                    is app.xreader.data.extension.LinkProber.Outcome.NotProven -> {
+                        // v1.5.2 fix (FIX-1b): rules found but
+                        // reading unproven — Repair keeps the old
+                        // rules and says so in plain words.
+                        repairStageLines = outcome.stageLines.map { it.render() }
+                        repairNote =
+                            "Repair found new rules for this site but " +
+                                "couldn't prove reading yet (" +
+                                outcome.missingLegs.joinToString() +
+                                "). Your old rules were kept."
+                        say(repairNote)
+                    }
                     is app.xreader.data.extension.LinkProber.Outcome.LoginRequired -> {
                         repairNote =
                             "Repair needs you signed in first — use " +
@@ -1111,6 +1259,16 @@ class ExtensionDetailViewModel(
                         record = record, results = verdict.results
                     )
                     repairSaved = true
+                    // v1.5.2 (§8.2): a passing repair clears the
+                    // needs-repair mark the update pass set.
+                    if (ext.needsRepair) {
+                        container.database.installedExtensionDao().update(
+                            ext.copy(
+                                needsRepair = false,
+                                needsRepairReason = null
+                            )
+                        )
+                    }
                     repairNote = "Rebuilt how Xreader reads this site."
                     say(
                         "Rebuilt how Xreader reads this site — " +
@@ -1181,6 +1339,19 @@ class ExtensionDetailViewModel(
                                         say(repairNote)
                                     }
                                 }
+                            }
+                            is app.xreader.data.extension.LinkProber
+                                .Outcome.NotProven -> {
+                                repairStageLines = repairStageLines +
+                                    outcome.stageLines.map { it.render() }
+                                repairNote =
+                                    "Repair found new rules for this " +
+                                        "site but couldn't prove " +
+                                        "reading yet (" +
+                                        outcome.missingLegs
+                                            .joinToString() +
+                                        "). Nothing was changed."
+                                say(repairNote)
                             }
                             is app.xreader.data.extension.LinkProber
                                 .Outcome.LoginRequired -> {
@@ -1574,6 +1745,12 @@ class ExtensionDetailViewModel(
     fun uninstall() {
         viewModelScope.launch {
             val ext = current() ?: return@launch
+            // v1.5.2 fix (FIX-2, §1): deleting a source cancels any
+            // pending operation registered for its session key.
+            container.cancelPendingOperation(
+                app.xreader.data.extension.ExtensionHttpClient
+                    .sessionKeyFor(ext.id)
+            )
             // v1.3.5 (P0): removal leaves no session behind
             // either — same complete clear as sign-out.
             clearSourceSession()
@@ -1664,6 +1841,158 @@ class ExtensionDetailViewModel(
 /** Small helper so the VM doesn't reach for the client companion. */
 private fun AppContainer.repoManagerSessionKey(extensionId: Long): String =
     app.xreader.data.extension.ExtensionHttpClient.sessionKeyFor(extensionId)
+
+// ── v1.5.9 (Finding 6): the instance label/default seam ─────
+//
+// Pure, so the gate can pin it without a device: labels are
+// joined from data already on device, and the browsing
+// default is resolved by ONE rule shared by the Details page
+// (its primary pill) and the Sources list (its row tap).
+
+/** One label source for one instance: a field may be null —
+ * the join takes the first source that names it. */
+data class InstanceSeed(
+    val sourceId: String,
+    val name: String? = null,
+    val lang: String? = null,
+    val homeUrl: String? = null
+)
+
+/** One instance of a multi-source package, labelled for the
+ * reader: [label] is the donor's own display form — name +
+ * uppercase language ("MangaFire (EN)") — and [hostLine] is
+ * the quiet per-instance host line, present ONLY when the
+ * package's instances differ by host (when they share one
+ * host, [InstanceLabels.sharedHostOf] names it once for the
+ * whole list instead). [usedFallbackLabel] is true only when
+ * NO source on device named the instance and the raw id had
+ * to stand in — never expected; the gate census fails a
+ * digits-only label for any stubbed row. */
+data class SourceInstanceInfo(
+    val sourceId: String,
+    val name: String?,
+    val lang: String?,
+    val host: String,
+    val label: String,
+    val hostLine: String?,
+    val usedFallbackLabel: Boolean
+)
+
+/**
+ * The label join (Finding 6 §7.1), in the spec's order: the
+ * player's catalog stubs by id FIRST, then the live handle's
+ * name/lang/baseUrl, then the row's declarative configs
+ * (their display names ride the same seam) — the raw id only
+ * as a last-resort fallback. Field-wise: each field takes the
+ * first non-blank value down that order, so a source that
+ * names the instance but not its language still contributes
+ * its name.
+ */
+object InstanceLabels {
+
+    fun join(
+        declaredIds: List<String>,
+        stubs: Map<String, app.xreader.data.extension.KeiyoushiIndex.SourceStub>,
+        handles: List<InstanceSeed>,
+        configs: List<InstanceSeed>
+    ): List<SourceInstanceInfo> {
+        val handlesById = handles.associateBy { it.sourceId }
+        val configsById = configs.associateBy { it.sourceId }
+        // Host lines are decided against the WHOLE set: they
+        // appear per instance only when instances differ by
+        // host, so hosts are resolved before any label is.
+        val hosts = declaredIds.map { sourceId ->
+            val url = firstNamed(
+                stubs[sourceId]?.homeUrl,
+                handlesById[sourceId]?.homeUrl,
+                configsById[sourceId]?.homeUrl
+            )
+            url?.let { it.normaliseHost() }.orEmpty()
+        }
+        val distinctHosts = hosts.filter { it.isNotBlank() }.distinct()
+        return declaredIds.mapIndexed { index, sourceId ->
+            val name = firstNamed(
+                stubs[sourceId]?.name,
+                handlesById[sourceId]?.name,
+                configsById[sourceId]?.name
+            )
+            val lang = firstNamed(
+                stubs[sourceId]?.lang,
+                handlesById[sourceId]?.lang,
+                configsById[sourceId]?.lang
+            )
+            val host = hosts[index]
+            val label = when {
+                name != null && lang != null ->
+                    "$name (${lang.uppercase()})"
+                name != null -> name
+                else -> sourceId
+            }
+            SourceInstanceInfo(
+                sourceId = sourceId,
+                name = name,
+                lang = lang,
+                host = host,
+                label = label,
+                hostLine = if (distinctHosts.size > 1) {
+                    host.takeIf { it.isNotBlank() }
+                } else {
+                    null
+                },
+                usedFallbackLabel = name == null
+            )
+        }
+    }
+
+    /** The one host every instance shares, or null when the
+     * instances differ by host (or none names one) — the
+     * screen shows it ONCE above the list, never repeated. */
+    fun sharedHostOf(instances: List<SourceInstanceInfo>): String? {
+        val distinct = instances.map { it.host }
+            .filter { it.isNotBlank() }.distinct()
+        return distinct.singleOrNull()
+    }
+
+    private fun firstNamed(vararg values: String?): String? =
+        values.firstOrNull { !it.isNullOrBlank() }?.trim()
+}
+
+/**
+ * The browsing default (Finding 6 §7.2), in order: the
+ * remembered pick (when it still names an instance of this
+ * package) → the package's primary-language instance (the
+ * shelf's preference order — "all" first, then English, per
+ * KeiyoushiIndex.PackageRow.primaryLang) → the first declared
+ * instance. This is the `first()` rule
+ * ExtensionDetailViewModel's internals always applied,
+ * surfaced for browsing.
+ */
+object MultiSourceDefault {
+
+    fun resolve(
+        instances: List<SourceInstanceInfo>,
+        rememberedPick: String?
+    ): String? {
+        if (instances.isEmpty()) return null
+        if (rememberedPick != null &&
+            instances.any { it.sourceId == rememberedPick }
+        ) {
+            return rememberedPick
+        }
+        val langs = instances.map { it.lang?.trim()?.lowercase() }
+        val preferred = when {
+            langs.any { it == "all" } -> "all"
+            langs.any { it == "en" } -> "en"
+            else -> null
+        }
+        if (preferred != null) {
+            instances.firstOrNull {
+                it.lang?.trim()?.lowercase() == preferred
+            }?.let { return it.sourceId }
+        }
+        return instances.first().sourceId
+    }
+}
 
 /**
  * v1.3.5 (P0, session lifecycle): the WebView-jar half of a

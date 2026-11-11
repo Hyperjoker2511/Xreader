@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,6 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.KitEmptyState
+import app.xreader.ui.common.LoadingState
 import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SearchCapsule
@@ -186,7 +186,29 @@ fun SourceCatalogScreen(
             }
         }
         if (state.loading && state.books.isEmpty()) {
-            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 10.dp))
+            // v1.5.8 (J3/J15): the state kit, not a bare bar — a
+            // slow source (D1's budgets) shows what is happening
+            // and that it is STILL loading, never a verdict while
+            // its budget runs.
+            Spacer(Modifier.height(10.dp))
+            LoadingState(
+                whatIsHappening = "Loading books from this source… " +
+                    "some sources answer slowly — this is still loading, " +
+                    "not a failure."
+            )
+        }
+        if (state.loading && state.books.isNotEmpty()) {
+            // v1.5.10 (H3): the progressive rule — stored rows
+            // are already on screen; the pending refresh rides
+            // ALONGSIDE them as a slim "Updating…" line, never
+            // instead of them (catalogueSurfaceMode's
+            // CONTENT_UPDATING arm).
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Updating…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         Spacer(Modifier.height(10.dp))
         // Hoisted before the null check (the #54 lesson): the

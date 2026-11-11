@@ -73,6 +73,7 @@ import app.xreader.core.motion.animateProgressAsState
 import app.xreader.di.AppContainer
 import app.xreader.domain.game.Achievements
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.LoadingState
 import app.xreader.ui.common.RowItem
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.common.XreaderPrimaryButton
@@ -155,10 +156,12 @@ fun ProfileScreen(
             }
             val profile = state.profile
             if (state.loading || profile == null) {
-                Text(
-                    "Loading your progress…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(16.dp)
+                // v1.5.8 (J6/J15): the state kit — spinner + what
+                // is happening + "still loading", not a bare line.
+                LoadingState(
+                    whatIsHappening = "Loading your progress — " +
+                        "your books, streak and reading time…",
+                    modifier = Modifier.padding(top = 16.dp)
                 )
                 return@Column
             }

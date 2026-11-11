@@ -20,7 +20,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -34,14 +37,15 @@ import java.net.URI
  * v1.3.4 (U2): the sanctioned screen's invariants, as pure
  * constants a JVM test can pin.
  *
- * The user's phone (Galaxy M31) has a DEAD bottom screen
- * strip, and check widgets (Turnstile & friends) anchor near
- * the viewport bottom — so the web area must always be able
- * to scroll its widget into view, and the viewport's bottom
- * edge must sit well clear of the dead strip: the confirm
- * bar already lifts ~88dp off the screen's bottom edge, and
- * the web area carries ~40dp more of bottom inset on top of
- * that (total lift ≥ ~128dp).
+ * Check widgets (Turnstile & friends) anchor near the
+ * viewport bottom, and the phone's screen cover overlaps
+ * the lowest sliver of the display — so the web area must
+ * always be able to scroll its widget into view, and the
+ * viewport's bottom edge must sit well clear of the bottom
+ * edge: the confirm bar already lifts ~88dp off the
+ * screen's bottom edge, and the web area carries ~40dp
+ * more of bottom inset on top of that (total lift
+ * ≥ ~128dp).
  */
 object SanctionedScreenSpec {
     /** Extra bottom inset inside the web area, in dp. */
@@ -91,6 +95,19 @@ fun LoginScreen(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
+    // v1.5.2 fix (FIX-2): the widened capture set for this source,
+    // resolved once per request (request-carried hosts win; the
+    // view model's config lookup fills the rest).
+    var configuredHostsNow by remember(request.sessionKey) {
+        mutableStateOf(request.configuredHosts)
+    }
+    androidx.compose.runtime.LaunchedEffect(request.sessionKey) {
+        if (configuredHostsNow.isEmpty()) {
+            configuredHostsNow = runCatching {
+                viewModel.configuredHosts(request.sessionKey)
+            }.getOrDefault(emptyList())
+        }
+    }
     // v1.3.4 (U2/U3): open the failure's own page when one was
     // named (e.g. the source's reader page, where its check
     // widget lives); the site root otherwise, as before. The
@@ -113,7 +130,34 @@ fun LoginScreen(
             // scrolling stays enabled so a low-anchored check
             // widget can always be brought into view.
             isVerticalScrollBarEnabled = true
+            // v1.5.5 (§3.3): the read-token harvest hook rides
+            // the sanctioned page — when the site's own reader
+            // page fires its /api/read-token mint DURING the
+            // solve, the hook clones the answer into the
+            // process sink, and the post-save chapter fetch
+            // adopts that token instead of minting twice. The
+            // bridge is the same app-owned, results-only
+            // interface the rendered fetcher uses; the hook is
+            // injected at page start (the old-WebView fallback
+            // for document-start injection).
+            val tokenBridge =
+                app.xreader.data.extension.InContextBridge.Bridge()
+            addJavascriptInterface(
+                tokenBridge,
+                app.xreader.data.extension.InContextBridge.INTERFACE_NAME
+            )
             webViewClient = object : WebViewClient() {
+                override fun onPageStarted(
+                    view: WebView?,
+                    url: String?,
+                    favicon: android.graphics.Bitmap?
+                ) {
+                    view?.evaluateJavascript(
+                        app.xreader.data.extension.InContextBridge
+                            .tokenHarvestHookScript(),
+                        null
+                    )
+                }
                 // v1.5.1 (item 2, adopted steer): if the
                 // renderer process dies under the sanctioned
                 // screen, destroy the view and leave the
@@ -175,8 +219,8 @@ fun LoginScreen(
         // inset INSIDE its own bounds — the viewport's bottom
         // edge (where check widgets anchor) sits the inset
         // higher, on top of the confirm bar's own lift, so the
-        // widget is always clear of the phone's dead bottom
-        // strip and scrollable into view.
+        // widget is always clear of the screen's bottom edge
+        // and scrollable into view.
         AndroidView(
             factory = { webView },
             modifier = Modifier.weight(1f).fillMaxWidth()
@@ -199,10 +243,29 @@ fun LoginScreen(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        // v1.5.8 (J10/C4): the honest echo — saving certifies
+        // only that the session was SAVED. It does not claim
+        // the check is finished: if the site is still cycling
+        // its check, the words say so and name what happens
+        // next, instead of letting "saved" imply "solved".
+        Text(
+            if (request.mode == LoginMode.SITE_CHECK) {
+                "Saving keeps this session — it doesn't mean the check " +
+                    "is finished. If the site is still checking when you " +
+                    "open a book, Xreader will say so and ask you to " +
+                    "solve it once more here."
+            } else {
+                "Saving keeps only this session. If the site asks for " +
+                    "another check later, Xreader will say so plainly " +
+                    "when you open a book."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Spacer(Modifier.height(8.dp))
         // §5.9 chrome only: the bottom confirm bar is a PrimaryPill,
-        // lifted clear of the dead bottom strip by the spacer below.
-        // The WebView above is untouched.
+        // lifted clear of the screen's bottom edge by the spacer
+        // below. The WebView above is untouched.
         PrimaryPill(
             text = if (request.mode == LoginMode.SITE_CHECK) {
                 "Done — continue"
@@ -227,8 +290,12 @@ fun LoginScreen(
                 // cookies onto the final page's host).
                 val cookiesByHost = loginCookiesByOrigin(
                     currentUrl = currentUrl,
-                    originalUrl = effectiveUrl
-                ) { candidate -> cookieManager.getCookie(candidate) }
+                    originalUrl = effectiveUrl,
+                    cookieHeaderFor = { candidate ->
+                        cookieManager.getCookie(candidate)
+                    },
+                    configuredHosts = configuredHostsNow
+                )
                 viewModel.saveLoginSession(
                     sessionKey = request.sessionKey,
                     cookiesByHost = cookiesByHost,
@@ -245,14 +312,19 @@ fun LoginScreen(
             modifier = Modifier.fillMaxWidth()
         )
         // 12dp column padding + this spacer = the bottom action cluster sits
-        // 88dp clear of the screen's bottom edge.
+        // 88dp clear of the screen's bottom edge (deep bottom
+        // padding — the J10 fence, with the web area's own
+        // scroll above it).
         Spacer(Modifier.height(76.dp))
     }
 }
 
 /** URLs to ask the cookie jar about: the page itself, its origin, and
  * the original login URL's origin. */
-private fun cookieCandidateUrls(currentUrl: String, originalUrl: String): List<String> {
+private fun cookieCandidateUrls(
+    currentUrl: String, originalUrl: String,
+    configuredHosts: List<String> = emptyList()
+): List<String> {
     val urls = LinkedHashSet<String>()
     urls += currentUrl
     urls += originalUrl
@@ -261,6 +333,13 @@ private fun cookieCandidateUrls(currentUrl: String, originalUrl: String): List<S
             val uri = URI(url)
             urls += "${uri.scheme}://${uri.host}/"
         }
+    }
+    // v1.5.2 fix (FIX-2, §1 residue a): the candidate set is WIDENED
+    // to the source's configured hosts — a session whose cookies
+    // live on a configured host the login page never visited is
+    // captured too.
+    for (host in configuredHosts) {
+        urls += "https://$host/"
     }
     return urls.toList()
 }
@@ -276,10 +355,11 @@ private fun cookieCandidateUrls(currentUrl: String, originalUrl: String): List<S
 internal fun loginCookiesByOrigin(
     currentUrl: String,
     originalUrl: String,
-    cookieHeaderFor: (String) -> String?
+    cookieHeaderFor: (String) -> String?,
+    configuredHosts: List<String> = emptyList()
 ): Map<String, Map<String, String>> {
     val byHost = LinkedHashMap<String, LinkedHashMap<String, String>>()
-    for (candidate in cookieCandidateUrls(currentUrl, originalUrl)) {
+    for (candidate in cookieCandidateUrls(currentUrl, originalUrl, configuredHosts)) {
         val host = CookieParsing.hostOf(candidate) ?: continue
         val header = cookieHeaderFor(candidate) ?: continue
         val parsed = CookieParsing.parseCookieHeader(header)

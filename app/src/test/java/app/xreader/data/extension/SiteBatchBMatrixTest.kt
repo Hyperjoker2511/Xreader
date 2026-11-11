@@ -297,6 +297,9 @@ class SiteBatchBMatrixTest {
                     log.line("  OUTCOME Failed: ${outcome.message}")
                     log.line("  proposersTried=${outcome.proposersTried} renderWorthTrying=${outcome.renderWorthTrying}")
                 }
+                is LinkProber.Outcome.NotProven -> {
+                    log.line("  OUTCOME NotProven missing=${outcome.missingLegs}")
+                }
                 is LinkProber.Outcome.Ready -> {
                     val draft = outcome.draft
                     val td = draft.testDrive

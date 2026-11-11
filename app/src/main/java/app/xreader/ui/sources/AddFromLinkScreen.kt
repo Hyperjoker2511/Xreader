@@ -1,5 +1,4 @@
 package app.xreader.ui.sources
-import app.xreader.ui.theme.aiAccentColor
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -34,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.material.icons.filled.Home
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.LoadingState
 import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.QuickActionTile
@@ -132,36 +131,20 @@ fun AddFromLinkScreen(
                 )
             }
             is LinkAddUiState.Probing -> {
-                Column(
-                    Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    CircularProgressIndicator()
-                    Text(
-                        "Looking at the site and test-reading a chapter…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                // v1.5.8 (J9/J15): the state kit — spinner + what
+                // is happening + "still loading", never bare.
+                LoadingState(
+                    whatIsHappening = "Looking at the site and " +
+                        "test-reading a chapter…"
+                )
             }
             is LinkAddUiState.AiProbing -> {
-                Column(
-                    Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    CircularProgressIndicator(
-                        color = aiAccentColor()
-                    )
-                    Text(
-                        "The AI is studying the page — then Xreader test-reads " +
-                            "a chapter with what it proposes. Nothing is saved " +
-                            "unless the test passes.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                LoadingState(
+                    whatIsHappening = "The AI is studying the page — " +
+                        "then Xreader test-reads a chapter with what " +
+                        "it proposes. Nothing is saved unless the " +
+                        "test passes."
+                )
             }
             is LinkAddUiState.LoginRequired -> {
                 GlassCard {
@@ -285,23 +268,78 @@ fun AddFromLinkScreen(
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = current.sourceName,
-                        onValueChange = { viewModel.setSourceName(it) },
-                        label = { Text("Source name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                    // v1.5.2 loop 2 (owner decision): a proven
+                    // source adds ITSELF — pasting the link was
+                    // the decision. No Save tap, no rename step
+                    // (the name stays editable later from the
+                    // source's own edit dialog); this card is
+                    // the brief proof shown while the add lands.
+                    Text(
+                        "Adding “${current.sourceName}” now…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            is LinkAddUiState.RedirectChoice -> {
+                // v1.5.2 loop 2 (2D guard): the ONE pause in the
+                // auto-install path — the link proved a site on
+                // a different domain than the one pasted.
+                GlassCard {
+                    Text(
+                        "This link leads to a different site",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "You pasted ${current.pastedHost}, but the " +
+                            "check ended at ${current.finalHost} — a " +
+                            "different site. Nothing has been added yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(10.dp))
                     PrimaryPill(
-                        text = "Save this source",
-                        onClick = { viewModel.save() },
+                        text = "Add ${current.finalHost} instead",
+                        onClick = { viewModel.confirmRedirectedInstall() },
                         modifier = Modifier.fillMaxWidth()
                     )
                     GhostPill(
-                        text = "Don't save",
-                        onClick = { viewModel.reset() },
+                        text = "Cancel",
+                        onClick = { viewModel.cancelRedirect() },
                         modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+            is LinkAddUiState.NotProven -> {
+                // v1.5.2 fix (FIX-1b, §2): the honest state, in its
+                // exact words — the source can be saved in this
+                // state (marked needs-repair), never as proven.
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Added, reading not proven",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        "Xreader found rules for ${current.sourceName}, but " +
+                            "couldn't prove reading yet — these parts didn't " +
+                            "check out: ${current.outcome.missingLegs.joinToString()}. " +
+                            "You can save it now and it will be marked as " +
+                            "needing a check, or try again later.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    PrimaryPill(
+                        text = "Save it anyway",
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = true,
+                        onClick = { viewModel.saveNotProven() }
+                    )
+                    GhostPill(
+                        text = "Don't save",
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = true,
+                        onClick = { onBack() }
                     )
                 }
             }
@@ -397,22 +435,14 @@ fun AddFromLinkScreen(
                             detailsCopied = true
                         },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text(if (detailsCopied) "Copied ✓" else "Copy details") }
+                    ) { Text(if (detailsCopied) "Copied" else "Copy details") }
                 }
             }
             is LinkAddUiState.Saving -> {
-                Column(
-                    Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    CircularProgressIndicator()
-                    Text(
-                        "Saving the source and adding the book…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                LoadingState(
+                    whatIsHappening = "Saving the source and " +
+                        "adding the book…"
+                )
             }
             is LinkAddUiState.Saved -> {
                 GlassCard {
@@ -441,18 +471,9 @@ fun AddFromLinkScreen(
                 }
             }
             is LinkAddUiState.InstallingLive -> {
-                Column(
-                    Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    CircularProgressIndicator()
-                    Text(
-                        "Installing the Live Source…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                LoadingState(
+                    whatIsHappening = "Installing the Live Source…"
+                )
             }
             is LinkAddUiState.LiveInstalled -> {
                 val context = androidx.compose.ui.platform.LocalContext.current

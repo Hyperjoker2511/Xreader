@@ -17,8 +17,37 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class CatalogMode { POPULAR, LATEST, SEARCH }
+
+/**
+ * v1.5.10 (H3): the catalogue surface's progressive shape —
+ * the standing rule made a pure verdict: stored rows render
+ * in the FIRST frame; a pending fetch rides ALONGSIDE them
+ * ("updating…"), never INSTEAD of them; and no empty/failed
+ * verdict is possible while a fetch is merely pending. The
+ * screen's branches are this function's arms, and the gate
+ * (V1510ProgressiveSurfaceTest) pins the table — including
+ * the hang-fixture arm: books present + loading forever =
+ * CONTENT_UPDATING, never ERROR or EMPTY.
+ */
+enum class CatalogueSurfaceMode {
+    LOADING_EMPTY, CONTENT, CONTENT_UPDATING, ERROR_EMPTY, EMPTY
+}
+
+fun catalogueSurfaceMode(state: CatalogUiState): CatalogueSurfaceMode =
+    when {
+        state.books.isNotEmpty() && state.loading ->
+            CatalogueSurfaceMode.CONTENT_UPDATING
+        state.books.isNotEmpty() ->
+            CatalogueSurfaceMode.CONTENT
+        state.loading ->
+            CatalogueSurfaceMode.LOADING_EMPTY
+        state.errorMessage != null ->
+            CatalogueSurfaceMode.ERROR_EMPTY
+        else -> CatalogueSurfaceMode.EMPTY
+    }
 
 data class CatalogUiState(
     val sourceName: String = "",
@@ -92,6 +121,28 @@ data class CatalogUiState(
  * source states the reason as UNKNOWN.
  */
 object CatalogueCopy {
+
+    /** v1.5.3 (finding #2, item 6): the shape-miss words —
+     * the load DID answer, and its page carried data; the
+     * app's declared shape just couldn't read it. Distinct
+     * from every empty-catalogue state above. */
+    const val SHAPE_MISS_MESSAGE =
+        "This source's page shape isn't understood yet — " +
+            "its page carried data the app couldn't read."
+
+    /** v1.5.3 (finding #6, item 19): the catalogue-load
+     * backstop's words — the load was given every budget the
+     * transport owns and still didn't finish. */
+    const val TIMEOUT_MESSAGE =
+        "This source took too long to answer — try again."
+
+    /** True when a failure's detail carries the engine's
+     * shape-miss marker (item 6: the typed detail the view
+     * model maps to [SHAPE_MISS_MESSAGE]). */
+    fun isShapeMiss(detail: String?): Boolean =
+        detail != null &&
+            app.xreader.data.extension.DeclarativeSource
+                .SHAPE_MISS_MARKER in detail
 
     fun emptyMessage(
         need: app.xreader.data.extension.SessionNeed.Kind?,
@@ -199,6 +250,14 @@ class SourceCatalogViewModel(
     private val sourceId: String
 ) : ViewModel() {
 
+    /** v1.5.5 (§3): the post-save retry gate for this surface
+     * — RESUMED while its state has subscribers (the shell
+     * collects it with collectAsStateWithLifecycle). */
+    private val sessionRetryGate =
+        app.xreader.data.extension.SurfaceRetryGate("catalogue") {
+            _state.subscriptionCount.value > 0
+        }
+
     private val _state = MutableStateFlow(CatalogUiState(loading = true))
     val state: StateFlow<CatalogUiState> = _state.asStateFlow()
 
@@ -253,16 +312,61 @@ class SourceCatalogViewModel(
         // one-time solve/sign-in screen for THIS source, the
         // catalogue retries itself — the hand-off is a
         // round trip, not a dead end with homework.
+        // v1.5.5 (§3): the session-update broadcast — the
+        // catalogue re-issues its OWN blocked load for the
+        // saved source; the durable record no longer gates it
+        // (and can no longer starve the reader or book page
+        // of their retries). A save landing while this
+        // catalogue is in the backstack parks on the gate.
         viewModelScope.launch {
-            container.sessionSavedEvents.collect { key ->
-                if (key ==
-                    app.xreader.data.extension.ExtensionHttpClient
-                        .sessionKeyFor(extensionId)
-                ) {
-                    if (handle != null) load(reset = true)
+            _state.subscriptionCount.collect { count ->
+                if (count > 0) {
+                    sessionRetryGate.onResumed()?.let { key ->
+                        retryAfterSessionSave(key)
+                    }
                 }
             }
         }
+        viewModelScope.launch {
+            container.sessionUpdateBus.events.collect { event ->
+                if (sessionRetryGate.onSessionUpdated(event.sessionKey)) {
+                    retryAfterSessionSave(event.sessionKey)
+                }
+            }
+        }
+        // v1.5.5 (§3): evaluation on (re)creation — a solve
+        // that completed while NO surface was subscribed still
+        // re-issues the blocked load here (the durable record
+        // says WHAT was blocked; this surface retries its own).
+        viewModelScope.launch {
+            val key = app.xreader.data.extension.ExtensionHttpClient
+                .sessionKeyFor(extensionId)
+            if (container.database.pendingOperationDao().getByKey(key) != null &&
+                handle != null
+            ) {
+                load(reset = true)
+                container.finishPendingOperation(key, true)
+            }
+        }
+    }
+
+    /** v1.5.5 (§3): this surface's OWN post-save retry. */
+    private suspend fun retryAfterSessionSave(key: String) {
+        if (key !=
+            app.xreader.data.extension.ExtensionHttpClient
+                .sessionKeyFor(extensionId)
+        ) {
+            return
+        }
+        app.xreader.data.extension.DiagnosticLog.record(
+            "fenrir-unlock",
+            "[FenrirUnlock] surface=catalogue retried=true",
+            key
+        )
+        val hasOp = container.database.pendingOperationDao()
+            .getByKey(key) != null
+        if (handle != null) load(reset = true)
+        if (hasOp) container.finishPendingOperation(key, true)
     }
 
     fun setMode(mode: CatalogMode) {
@@ -406,19 +510,60 @@ class SourceCatalogViewModel(
             }
         )
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                container.extensionService.guarded(current) { source ->
-                    when (snapshot.mode) {
-                        CatalogMode.POPULAR -> source.popular(page)
-                        CatalogMode.LATEST -> source.latest(page)
-                        CatalogMode.SEARCH -> source.search(snapshot.query, page)
+            // v1.5.3 (finding #6, item 19): the catalogue-load
+            // BACKSTOP. The transport's per-fetch deadline
+            // (item 18) is the primary fix; this bound sits
+            // above every fetcher budget (75 s standard, 105 s
+            // rendered) so a load that somehow still wedges
+            // settles into the honest error state — with its
+            // Retry — instead of spinning forever.
+            val result = withTimeoutOrNull(CATALOGUE_LOAD_TIMEOUT_MS) {
+                withContext(Dispatchers.IO) {
+                    container.extensionService.guarded(current) { source ->
+                        when (snapshot.mode) {
+                            CatalogMode.POPULAR -> source.popular(page)
+                            CatalogMode.LATEST -> source.latest(page)
+                            CatalogMode.SEARCH -> source.search(snapshot.query, page)
+                        }
                     }
                 }
+            }
+            if (result == null) {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    errorMessage = if (reset) {
+                        CatalogueCopy.TIMEOUT_MESSAGE
+                    } else {
+                        null
+                    },
+                    fetchClassification = if (reset) {
+                        null
+                    } else {
+                        _state.value.fetchClassification
+                    },
+                    sessionNeed = if (reset) {
+                        null
+                    } else {
+                        _state.value.sessionNeed
+                    }
+                )
+                return@launch
             }
             _state.value = when (result) {
                 is AppResult.Err -> _state.value.copy(
                     loading = false,
-                    errorMessage = if (reset) ErrorText.displayText(result.error) else null,
+                    // v1.5.3 (item 6): a shape-miss failure gets
+                    // its own plain words — never the generic
+                    // display text with its raw marker detail.
+                    errorMessage = if (reset) {
+                        if (CatalogueCopy.isShapeMiss(result.error.detail)) {
+                            CatalogueCopy.SHAPE_MISS_MESSAGE
+                        } else {
+                            ErrorText.displayText(result.error)
+                        }
+                    } else {
+                        null
+                    },
                     // v1.3.4 (U4): classification v2 for the
                     // failure — availability/DNS get honest
                     // words on the card (CatalogueCopy), raw
@@ -614,6 +759,12 @@ class SourceCatalogViewModel(
          * a slow source's details fetch, finite so a wedged
          * source path can never hold a navigation hostage. */
         const val OPEN_BOOK_TIMEOUT_MS = 30_000L
+
+        /** v1.5.3 (item 19): the catalogue-load backstop —
+         * above the transport's own per-fetch budgets (75 s
+         * standard / 105 s rendered), so it fires only when
+         * every layer below has already had its full chance. */
+        const val CATALOGUE_LOAD_TIMEOUT_MS = 150_000L
 
         fun factory(
             container: AppContainer,

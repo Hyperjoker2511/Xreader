@@ -464,6 +464,37 @@ private fun KeiyoushiShelfRow(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+                // v1.5.39 (item 4): the quiet signer line on
+                // an update row — the key that signed the
+                // copy already installed, shown BEFORE the
+                // tap, in the consent sheet's own words. The
+                // staged update is still verified against the
+                // catalogue key in the player; an update
+                // whose signer differs from this one falls
+                // back to the full consent sheet (the two-tap
+                // apply lives in SourcesViewModel
+                // .installKeiyoushi).
+                if (row.state ==
+                    KeiyoushiIndex.State.UPDATE_AVAILABLE
+                ) {
+                    val signer =
+                        state.keiyoushiInstalledSigners[
+                            row.packageName
+                        ]
+                    Text(
+                        if (signer != null) {
+                            "Signed by the Keiyoushi key " +
+                                signer.take(16) + "…"
+                        } else {
+                            "Signed by the Keiyoushi key"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme
+                            .onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
             Column(
                 horizontalAlignment = Alignment.End,

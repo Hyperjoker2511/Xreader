@@ -228,13 +228,19 @@ object MangaPreload {
  */
 object MangaDecode {
 
-    /** The pixel width a page should be decoded at. */
+    /** The pixel width a page should be decoded at.
+     * v1.5.2 fix (FIX-4, §6.2): the width IS [SlicePlan152]'s
+     * printed per-tier decode width — MINIMAL decodes at screen
+     * width, STANDARD/FULL at the reader-wide cap. */
     fun widthPx(lowRam: Boolean, screenWidthPx: Int): Int =
-        if (lowRam) {
-            screenWidthPx.coerceAtLeast(1)
-        } else {
-            ReaderImageDecode.MAX_WIDTH_PX
-        }
+        SlicePlan152.decodeWidthPx(
+            if (lowRam) {
+                app.xreader.data.prefs.PerfTier.MINIMAL
+            } else {
+                app.xreader.data.prefs.PerfTier.STANDARD
+            },
+            screenWidthPx
+        )
 }
 
 /**
@@ -564,4 +570,153 @@ object BorderTrim {
         }
         return Insets(left, top, right, bottom)
     }
+}
+
+// ── FIX-18: pipeline transformations relocated from the removed
+// MangaReader.kt surface (ZoomableImage and the Komikku reader
+// both consume them; they are decode pipeline, not a reader). ──
+
+/**
+ * v1.5.1 (item 6 rider): the tall-strip guard as a Coil
+ * transformation — any page bitmap taller than
+ * [TallStripPolicy.MAX_HEIGHT_PX] is scaled down to that
+ * height (aspect preserved) before it can reach a texture.
+ * Pages at or under the cap pass through untouched.
+ */
+object TallStripGuardTransformation : coil.transform.Transformation {
+
+    override val cacheKey: String = "xreader-tall-strip-guard-v1"
+
+    override suspend fun transform(
+        input: android.graphics.Bitmap,
+        size: coil.size.Size
+    ): android.graphics.Bitmap {
+        if (!TallStripPolicy.needsGuard(input.height)) return input
+        return android.graphics.Bitmap.createScaledBitmap(
+            input,
+            TallStripPolicy.guardedWidth(input.width, input.height),
+            TallStripPolicy.guardedHeight(input.height),
+            true
+        )
+    }
+}
+
+/**
+ * v1.5.0 (Part C): Komikku's crop-borders, Xreader-native —
+ * a Coil transformation that trims each page's uniform
+ * margins per [BorderTrim]'s sampled scan (the donor trims
+ * in its native decoder; the behaviour — uniform border
+ * lines removed, content untouched — is the same). A page
+ * whose scan finds nothing passes through unchanged.
+ */
+object CropBordersTransformation : coil.transform.Transformation {
+
+    override val cacheKey: String = "xreader-crop-borders-v1"
+
+    override suspend fun transform(
+        input: android.graphics.Bitmap,
+        size: coil.size.Size
+    ): android.graphics.Bitmap {
+        val insets = BorderTrim.scan(
+            width = input.width,
+            height = input.height,
+            pixelAt = { x, y -> input.getPixel(x, y) }
+        )
+        if (insets.isEmpty) return input
+        val width = input.width - insets.left - insets.right
+        val height = input.height - insets.top - insets.bottom
+        if (width <= 0 || height <= 0) return input
+        return android.graphics.Bitmap.createBitmap(
+            input, insets.left, insets.top, width, height
+        )
+    }
+}
+
+/** v1.5.0 (Part C): the page colour matrix for the
+ * greyscale / invert switches (the donor's combined-paint
+ * recipe): saturation 0 and/or the −1 invert matrix. Null
+ * when neither is in force (the common case costs nothing). */
+internal fun mangaColorFilter(
+    grayscale: Boolean,
+    invert: Boolean
+): androidx.compose.ui.graphics.ColorFilter? {
+    if (!grayscale && !invert) return null
+    // The luminance row Android's saturation-0 matrix uses;
+    // inversion after greyscale negates it and adds the
+    // 255 offset (the two matrices composed by hand, so the
+    // result is exact and allocation-free).
+    val lr = 0.213f
+    val lg = 0.715f
+    val lb = 0.072f
+    val values = when {
+        grayscale && invert -> floatArrayOf(
+            -lr, -lg, -lb, 0f, 255f,
+            -lr, -lg, -lb, 0f, 255f,
+            -lr, -lg, -lb, 0f, 255f,
+            0f, 0f, 0f, 1f, 0f
+        )
+        grayscale -> floatArrayOf(
+            lr, lg, lb, 0f, 0f,
+            lr, lg, lb, 0f, 0f,
+            lr, lg, lb, 0f, 0f,
+            0f, 0f, 0f, 1f, 0f
+        )
+        else -> floatArrayOf(
+            -1f, 0f, 0f, 0f, 255f,
+            0f, -1f, 0f, 0f, 255f,
+            0f, 0f, -1f, 0f, 255f,
+            0f, 0f, 0f, 1f, 0f
+        )
+    }
+    return androidx.compose.ui.graphics.ColorFilter.colorMatrix(
+        androidx.compose.ui.graphics.ColorMatrix(values)
+    )
+}
+
+// ── FIX-18: webtoon position maths relocated from the removed
+// MangaReader.kt surface (pure policy; its tests stand). ──
+
+/** One visible item of the webtoon strip, reduced to the
+ * numbers the position maths needs (so the maths is
+ * unit-testable without Compose layout types). */
+internal data class VisiblePageItem(
+    val index: Int,
+    val offset: Int,
+    val size: Int
+)
+
+/** (current page, fractional page position) from one layout
+ * snapshot of the webtoon strip: the visible PAGE item with
+ * the largest on-screen height wins; the fractional position
+ * adds the part of it above the viewport's top edge. The end
+ * card is not a page and never counts. An empty snapshot
+ * reads as the first page. */
+internal fun webtoonReadingPosition(
+    items: List<VisiblePageItem>,
+    viewportStart: Int,
+    viewportEnd: Int,
+    pageCount: Int
+): Pair<Int, Float> {
+    if (pageCount <= 0) return 0 to 0f
+    var bestIndex = -1
+    var bestVisible = -1
+    var bestPosition = 0f
+    for (item in items) {
+        if (item.index >= pageCount) continue
+        val visibleTop = maxOf(item.offset, viewportStart)
+        val visibleBottom = minOf(item.offset + item.size, viewportEnd)
+        val visible = visibleBottom - visibleTop
+        if (visible > bestVisible) {
+            bestVisible = visible
+            bestIndex = item.index
+            bestPosition = if (item.size > 0) {
+                item.index + ((viewportStart - item.offset).toFloat() / item.size)
+                    .coerceIn(0f, 1f)
+            } else {
+                item.index.toFloat()
+            }
+        }
+    }
+    if (bestIndex < 0) return 0 to 0f
+    return bestIndex to bestPosition
 }

@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -45,6 +46,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import app.xreader.core.motion.SpringMotionEngine
 import app.xreader.core.motion.toSpec
+import app.xreader.ui.common.frostedGlass
+import app.xreader.ui.theme.LocalGlassSettings
 import app.xreader.ui.theme.aiAccentColor
 import coil.compose.AsyncImage
 import java.io.File
@@ -449,6 +452,19 @@ fun IdentityCard3D(
                 )
             }
         }
+        // v1.5.8 (J6): the card's faces join the token system —
+        // the fill is the shared glass surface (REAL Haze
+        // backdrop blur under FROSTED via the same frostedGlass
+        // path GlassCard uses; the user's glass settings
+        // otherwise), the radius is the glass card radius
+        // (24dp at scale 1), and the hairline is the scheme
+        // outline — replacing the old surfaceVariant→surface
+        // linear-gradient wash (slop tell 1). The flip, tilt,
+        // glare and stage glows behind the card are the
+        // preserved showpiece spirit, unchanged.
+        val cardGlass = LocalGlassSettings.current
+        val cardShape = androidx.compose.foundation.shape
+            .RoundedCornerShape(cardGlass.cardRadius)
         Box(
             Modifier
                 .fillMaxWidth()
@@ -459,14 +475,20 @@ fun IdentityCard3D(
                     rotationY = flip + tiltY.value
                     cameraDistance = 14f * density
                 }
-                .clip(androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
+                .frostedGlass(
+                    cardGlass,
+                    MaterialTheme.colorScheme.surface
+                )
+                .clip(cardShape)
                 .background(
-                    Brush.linearGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.surfaceVariant,
-                            MaterialTheme.colorScheme.surface
-                        )
+                    cardGlass.glassSurface(
+                        MaterialTheme.colorScheme.surface
                     )
+                )
+                .border(
+                    1.dp,
+                    MaterialTheme.colorScheme.outline,
+                    cardShape
                 )
                 .pointerInput(reduceMotion, motionTiltEnabled) {
                     if (reduceMotion) return@pointerInput

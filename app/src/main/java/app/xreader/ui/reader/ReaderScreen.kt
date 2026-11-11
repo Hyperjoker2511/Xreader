@@ -486,6 +486,32 @@ fun ReaderScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 CircularProgressIndicator(color = palette.accent)
+                // v1.5.10 (B4): past the bound the surface stops
+                // being inert — it says the chapter is taking
+                // long. Back works as always (leaving cancels
+                // the wait); no fake failure verdict.
+                if (state.stalled) {
+                    androidx.compose.material3.Text(
+                        text = app.xreader.data.extension.ReaderStall.STALL_MESSAGE,
+                        modifier = Modifier.padding(top = 16.dp)
+                    )
+                }
+            }
+
+            // v1.5.5 (§4): a chapter of a local import that is
+            // still being extracted in the background — a live
+            // progress state, never an error. It fills in by
+            // itself when the chapter lands.
+            state.preparingChapter -> Column(
+                Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                CircularProgressIndicator(color = palette.accent)
+                androidx.compose.material3.Text(
+                    text = "Preparing chapter…",
+                    modifier = Modifier.padding(top = 16.dp)
+                )
             }
 
             state.errorMessage != null -> Column(
@@ -514,6 +540,38 @@ fun ReaderScreen(
                         null
                     }
                 )
+                // v1.5.8 (K5): where ensureStored recorded a
+                // failure detail for THIS chapter, it is one
+                // tap deeper under "Details" — the headline
+                // above stays plain words.
+                val errorDetail = remember(state.chapterIndex, state.errorMessage) {
+                    val chapterId = state.chapters
+                        .getOrNull(state.chapterIndex)?.id
+                    chapterId?.let {
+                        app.xreader.komikku.ReaderErrorDetail.fromLog(
+                            app.xreader.data.extension.DiagnosticLog.entries(),
+                            it
+                        )
+                    }
+                }
+                if (errorDetail != null) {
+                    var detailsOpen by remember { mutableStateOf(false) }
+                    androidx.compose.material3.TextButton(
+                        onClick = { detailsOpen = !detailsOpen }
+                    ) {
+                        androidx.compose.material3.Text(
+                            if (detailsOpen) "Hide details" else "Details"
+                        )
+                    }
+                    if (detailsOpen) {
+                        androidx.compose.material3.Text(
+                            text = errorDetail,
+                            modifier = Modifier.padding(horizontal = 24.dp),
+                            style = androidx.compose.material3
+                                .MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
                 if (state.sessionNeed != null) {
                     app.xreader.ui.common.XreaderPrimaryButton(
                         text = if (
@@ -546,63 +604,54 @@ fun ReaderScreen(
                 }
             }
 
-            // Manga programme (slice M2): an image chapter
-            // (its content carries a page list) opens the
-            // IMAGE reader — never the text renderers below,
-            // never the stream. The pages were set in the same
-            // state copy as the chapter text, so a chapter
-            // turn keeps showing the outgoing chapter's pages
-            // until the incoming chapter's land, exactly like
-            // the text path's keep-previous rule.
+            // v1.5.6 (§2.1 FAIL-CLOSED GUARD — this branch is a
+            // guard, NOT a routing mechanism): routing is decided
+            // BEFORE any reader opens, by ReaderRouteResolver at
+            // every entry point, so a manga book should never
+            // arrive here at all. If one does — a chapter this
+            // reader loaded turns out to be an image chapter for
+            // a book the resolver did not route to Komikku — the
+            // novel reader does NOT render the pages as in-text
+            // pictures (the silent-rendering fallback that was
+            // the §1.1 defect, removed here): it hands off to
+            // KomikkuReaderActivity as an explicit wrong-reader
+            // correction and pops itself. Text chapters render
+            // through the branches below, untouched.
             state.mangaPages != null -> {
-                MangaReader(
-                    pages = state.mangaPages!!,
-                    chapterKey = state.mangaChapterId,
-                    mode = state.imageMode,
-                    lowRam = state.imageLowRam,
-                    palette = palette,
-                    bookTitle = state.bookTitle,
-                    chapterTitle = ReaderCounters.headerLine(
-                        chapterTitle = state.chapter?.title ?: "",
-                        chapterIndex = state.chapterIndex,
-                        chapterCount = state.chapters.size,
-                        ownNumber = state.chapter?.let {
-                            app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
-                        }
-                    ),
-                    chapterFooter = ReaderCounters.footerLine(
-                        state.chapterIndex,
-                        state.chapters.size,
-                        state.chapter?.let {
-                            app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
-                        }
-                    ),
-                    hasPrevious = state.hasPrevious,
-                    hasNext = state.hasNext,
-                    chromeVisible = chromeVisible,
-                    restoreOffset = state.restoreOffset,
-                    restoreScrollFraction = state.restoreScrollFraction,
-                    restoreHint = state.restoreHint,
-                    restoreGeneration = state.restoreGeneration,
-                    settings = state.mangaSettings,
-                    externalTurns = viewModel.externalTurns,
-                    assetFile = { assetFile(bookId, it) },
-                    onPosition = { page, fraction ->
-                        viewModel.onPosition(page, fraction)
-                    },
-                    onNextChapter = { viewModel.nextChapter() },
-                    onPreviousChapter = { viewModel.previousChapter() },
-                    onReachedEnd = { viewModel.onScrollReachedEnd() },
-                    onModeChange = { viewModel.setImageMode(it) },
-                    onBack = onBack,
-                    onOpenToc = { activeSheet = ActiveSheet.TOC },
-                    onOpenSettings = {
-                        settingsInitialPage = "index"
-                        activeSheet = ActiveSheet.SETTINGS
-                    },
-                    onToggleChrome = { chromeVisible = !chromeVisible },
-                    reduceMotion = reduceMotion
-                )
+                val mangaContext = androidx.compose.ui.platform
+                    .LocalContext.current
+                LaunchedEffect(state.mangaChapterId) {
+                    android.util.Log.i(
+                        "XreaderRouting",
+                        "wrong-reader correction: image chapter " +
+                            "for book $bookId reached the novel " +
+                            "reader; handing off to Komikku"
+                    )
+                    mangaContext.startActivity(
+                        app.xreader.komikku.KomikkuReaderActivity
+                            .newIntent(
+                                mangaContext,
+                                mangaId = bookId,
+                                chapterId = state.mangaChapterId
+                                    ?: state.chapter?.id
+                            )
+                    )
+                    onBack()
+                }
+                // No page rendering on this surface, ever: while
+                // the correction is in flight the screen says what
+                // is happening instead of drawing the chapter's
+                // pages as pictures inside a text page.
+                Column(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    androidx.compose.material3.Text(
+                        text = "Opening in the manga reader…",
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    )
+                }
             }
 
             // v1.0.2 (R17): the endless stream — scroll mode with

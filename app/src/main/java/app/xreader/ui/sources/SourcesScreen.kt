@@ -41,6 +41,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.core.motion.pressBounce
@@ -84,6 +86,16 @@ fun SourcesScreen(
     /** v1.0.5 (C3): the Add-a-source screen and the Source store. */
     onAddSource: () -> Unit = {},
     onOpenStore: () -> Unit = {},
+    /** v1.5.2 (FIX-15): the dedicated source-management
+     * screen — every source (shown + hidden), its show/hide
+     * toggle and the filters. One tap from the add door. */
+    onOpenManageSources: () -> Unit = {},
+    /** v1.5.39 (item 4): the manga shelf's direct door —
+     * the banner's Update button and the Manga-side
+     * "Manga sources" card both land here; the shell
+     * resolves the Keiyoushi repo and navigates to its
+     * route (≤2 taps from Explore to the shelf). */
+    onOpenMangaSources: () -> Unit = {},
     /** v1.0.5 (C3/D23): OPDS servers fold into this list. */
     opdsServers: List<OpdsServer> = emptyList(),
     onOpenOpdsServer: (OpdsServer) -> Unit = {},
@@ -92,6 +104,15 @@ fun SourcesScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val searchState by searchViewModel.state.collectAsStateWithLifecycle()
+    // v1.5.9 (Finding 6): returning here from a Details page
+    // may carry a fresh remembered pick — re-resolve the
+    // browsing defaults so a multi-source row's next tap opens
+    // the picked instance, not the stale default.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.refreshInstanceDefaults()
+    }
+    // v1.5.2 fix (FIX-10, §8.5): the one-time update summary.
+    val passSummary by viewModel.updatePassSummary.collectAsStateWithLifecycle()
     // v1.4.3: Recent searches show only while the search
     // field has focus (part of the search flow), never as
     // permanent page furniture.
@@ -119,6 +140,19 @@ fun SourcesScreen(
     // The badge a listed row wears: the strongest rating still
     // visible across the extension's sources (null = no badge).
     fun ratingBadgeOf(ext: InstalledExtension): String? {
+        // v1.5.2 (§8.4): an unstamped Keiyoushi source wears
+        // "Rating pending" — visible, never hidden as adult.
+        if (ext.kind == app.xreader.data.db.ExtensionKind.KEIYOUSHI) {
+            val anyUnstamped = ext.sourceIds.split(",")
+                .map { it.trim() }.filter { it.isNotBlank() }
+                .any { sourceId ->
+                    state.sourceRatings[
+                        app.xreader.data.extension.SourceHealthRecord
+                            .key(ext.id, sourceId)
+                    ] == null
+                }
+            if (anyUnstamped) return "Rating pending"
+        }
         val ratings = ext.sourceIds.split(",")
             .map { it.trim() }.filter { it.isNotBlank() }
             .map { sourceId ->
@@ -152,20 +186,28 @@ fun SourcesScreen(
                     ]
                 }
         }
+    // v1.5.2 (FIX-15): Explore is the browse view of SHOWN
+    // sources only — a switched-off extension leaves the
+    // browse list and the side counts (it stays in state for
+    // the restore card, and lives with its toggle on the
+    // Manage sources screen).
     val sideExtensions = visibleExtensions.filter { ext ->
-        app.xreader.data.library.LibrarySplit.extensionOnSide(
-            kindsOf(ext), state.librarySide
-        )
+        ext.enabled &&
+            app.xreader.data.library.LibrarySplit.extensionOnSide(
+                kindsOf(ext), state.librarySide
+            )
     }
     val novelsSideCount = visibleExtensions.count { ext ->
-        app.xreader.data.library.LibrarySplit.extensionOnSide(
-            kindsOf(ext), app.xreader.data.extension.MediaKind.TEXT
-        )
+        ext.enabled &&
+            app.xreader.data.library.LibrarySplit.extensionOnSide(
+                kindsOf(ext), app.xreader.data.extension.MediaKind.TEXT
+            )
     } + opdsServers.size
     val mangaSideCount = visibleExtensions.count { ext ->
-        app.xreader.data.library.LibrarySplit.extensionOnSide(
-            kindsOf(ext), app.xreader.data.extension.MediaKind.MANGA
-        )
+        ext.enabled &&
+            app.xreader.data.library.LibrarySplit.extensionOnSide(
+                kindsOf(ext), app.xreader.data.extension.MediaKind.MANGA
+            )
     }
 
     Column(
@@ -227,11 +269,54 @@ fun SourcesScreen(
             onSelect = { viewModel.setLibrarySide(it) }
         )
         Spacer(Modifier.height(12.dp))
+        // v1.5.39 (item 4): the source-update banner — fixed
+        // above the list so it can't scroll away unseen,
+        // plain words, one Update button straight to the
+        // shelf. It reads the same persisted count as the
+        // Explore tab's badge (SourcesUiState).
+        if (state.keiyoushiPendingUpdateCount > 0) {
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (state.keiyoushiPendingUpdateCount == 1) {
+                            "Source update available"
+                        } else {
+                            "${state.keiyoushiPendingUpdateCount} " +
+                                "source updates available"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    PrimaryPill(
+                        text = "Update",
+                        onClick = onOpenMangaSources
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
         LazyColumn(
             Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 88.dp)
         ) {
+            // v1.5.2 fix (FIX-10, §8.5): the one-time plain-words
+            // update summary — real counts, shown once, dismissible.
+            if (passSummary != null) {
+                item {
+                    GlassCard(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            passSummary!!,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        TextButton(onClick = { viewModel.dismissUpdatePassSummary() }) {
+                            Text("Got it")
+                        }
+                    }
+                }
+            }
             // ── ONE add door, at the TOP (v1.4.4) ───────────────
             // The user's order (2026-11-02): the add door sat at
             // the very bottom of a long list — "It's very bottom
@@ -267,6 +352,59 @@ fun SourcesScreen(
                             text = "Add a source",
                             onClick = onAddSource,
                             modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // v1.5.2 (FIX-15): the management door —
+                    // one tap, plainly labelled, right in the
+                    // add door card (never an overflow menu).
+                    app.xreader.ui.common.GhostPill(
+                        text = "Manage sources",
+                        onClick = onOpenManageSources,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+            // ── Manga sources: the shelf's own door (v1.5.39,
+            // item 4) ────────────────────────────────────────
+            // On the Manga side only: one labelled door to the
+            // Keiyoushi shelf, where manga sources are
+            // installed, updated and switched on or off.
+            // Before this, the shelf's only roads were five
+            // taps through the store, or a dead end in
+            // Customise (the owner's word: "buried deep").
+            if (state.librarySide ==
+                app.xreader.data.extension.MediaKind.MANGA
+            ) {
+                item {
+                    GlassCard(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "Manga sources",
+                            style = MaterialTheme.typography
+                                .titleMedium
+                        )
+                        Text(
+                            when (
+                                val n =
+                                    state.keiyoushiPendingUpdateCount
+                            ) {
+                                0 -> "Install, update and " +
+                                    "manage the manga catalogue."
+                                1 -> "1 source update waiting " +
+                                    "on the shelf."
+                                else -> "$n source updates " +
+                                    "waiting on the shelf."
+                            },
+                            style = MaterialTheme.typography
+                                .bodyMedium,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        PrimaryPill(
+                            text = "Open manga sources",
+                            onClick = onOpenMangaSources,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
@@ -553,6 +691,37 @@ fun SourcesScreen(
                         )
                     }
                 }
+                // v1.5.2 (§4): the two footnotes, distinctly worded —
+                // "didn't answer" (asked, over budget) is never
+                // conflated with "not reached" (never asked).
+                if (searchState.didntAnswerSources.isNotEmpty() &&
+                    !searchState.searching
+                ) {
+                    item {
+                        Text(
+                            "Some sources didn't answer in time: " +
+                                searchState.didntAnswerSources
+                                    .joinToString(", ") + ".",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                }
+                if (searchState.notReachedSources.isNotEmpty() &&
+                    !searchState.searching
+                ) {
+                    item {
+                        Text(
+                            "Not reached in this search: " +
+                                searchState.notReachedSources
+                                    .joinToString(", ") + ".",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                }
                 item {
                     TextButton(
                         onClick = { searchViewModel.clearSearch() }
@@ -695,10 +864,33 @@ fun SourcesScreen(
                     hasPending = state.pendings.containsKey(ext.packageId),
                     addedByYou = ext.id in state.addedByYouIds,
                     onOpen = {
-                        if (firstSource == null || ext.sourceIds.contains(",")) {
-                            onOpenExtension(ext.id)
-                        } else {
-                            onOpenSource(ext.id, firstSource)
+                        // v1.5.9 (Finding 6): a multi-source
+                        // row opens its DEFAULT instance's
+                        // catalogue directly — the same door
+                        // single-source packages always had.
+                        // Details (with the labelled instance
+                        // switcher) is the fallback only when
+                        // no default could be resolved.
+                        val decision = SourcesRowRouting.decide(
+                            sourceIds = ext.sourceIds.split(",")
+                                .map { it.trim() }
+                                .filter { it.isNotBlank() },
+                            defaultSourceId =
+                                state.defaultSourceIds[ext.id]
+                        )
+                        when (decision.destination) {
+                            SourcesRowRouting.Destination.CATALOGUE ->
+                                // v1.5.10 (B2): null-safe read —
+                                // the pre-fix !! could throw a
+                                // KotlinNullPointerException on
+                                // the Main thread when a decision
+                                // carried no source id; a missing
+                                // id keeps the Details route.
+                                decision.sourceId?.let { sourceId ->
+                                    onOpenSource(ext.id, sourceId)
+                                } ?: onOpenExtension(ext.id)
+                            SourcesRowRouting.Destination.DETAILS ->
+                                onOpenExtension(ext.id)
                         }
                     },
                     onDetails = { onOpenExtension(ext.id) },
@@ -737,6 +929,41 @@ fun SourcesScreen(
             }
             }
         }
+    }
+}
+
+/**
+ * v1.5.9 (Finding 6): where a Sources-row tap lands, as pure
+ * data so the gate can pin it without a device. Single-source
+ * rows open their one catalogue (unchanged behaviour);
+ * multi-source rows open the DEFAULT instance's catalogue
+ * when a default was resolved ([MultiSourceDefault] via the
+ * ViewModel's state), and fall back to the Details page —
+ * where the labelled instance switcher lives — only when no
+ * default could be resolved. A default that no longer names
+ * one of the row's instances is never trusted.
+ */
+internal object SourcesRowRouting {
+
+    enum class Destination { DETAILS, CATALOGUE }
+
+    data class Decision(
+        val destination: Destination,
+        /** The catalogue's sourceId — non-null exactly when
+         * [destination] is CATALOGUE. */
+        val sourceId: String?
+    )
+
+    fun decide(
+        sourceIds: List<String>,
+        defaultSourceId: String?
+    ): Decision = when {
+        sourceIds.isEmpty() -> Decision(Destination.DETAILS, null)
+        sourceIds.size == 1 ->
+            Decision(Destination.CATALOGUE, sourceIds.first())
+        defaultSourceId != null && defaultSourceId in sourceIds ->
+            Decision(Destination.CATALOGUE, defaultSourceId)
+        else -> Decision(Destination.DETAILS, null)
     }
 }
 
@@ -819,7 +1046,11 @@ private fun SourceRow(
                         // the meta line — the two same-name rows
                         // are never confusable, and nothing was
                         // deleted to achieve it.
-                        if (addedByYou) "Added by you" else null,
+                        // v1.5.2 (§8.6): provenance at a glance —
+                        // read-time derived, never stored: shipped /
+                        // provider pack / added-by-link / Keiyoushi.
+                        app.xreader.data.extension.SourceProvenance
+                            .label(ext),
                         languageLabel, healthWord,
                         // M1: the rating badge, same quiet
                         // line — a listed Mixed / 18+ source
