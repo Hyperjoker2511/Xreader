@@ -76,14 +76,29 @@ object ChapterMatcher {
         return 0f
     }
 
+    // v1.5.16: the normaliseTitle patterns, compiled ONCE.
+    // Pre-fix every call constructed five fresh Regex objects —
+    // each one an ICU Pattern.compile — and the reconciler
+    // calls normaliseTitle per title comparison, so a large
+    // chapter-list reconcile fired thousands of compiles on
+    // whatever thread ran it (the device ANR that convicted
+    // this: main thread, foreground KomikkuReaderActivity,
+    // 2026-11-06). Regex is immutable and safe to share; these
+    // are the same pattern strings, compiled once per process.
+    private val chapterWordPattern = Regex("(?i)chapter\\s*\\d+(\\.\\d+)?")
+    private val chWordPattern = Regex("(?i)\\bch\\.?\\s*\\d+(\\.\\d+)?")
+    private val cjkChapterPattern = Regex("第\\s*\\d+\\s*[章话話节節回]")
+    private val nonWordPattern = Regex("[^\\p{L}\\p{N}]+")
+    private val whitespacePattern = Regex("\\s+")
+
     /** Chapter titles compare without their numbers/punctuation:
      * "Chapter 12: The Fall!" ≡ "the fall". */
     fun normaliseTitle(name: String): String =
         name.lowercase()
-            .replace(Regex("(?i)chapter\\s*\\d+(\\.\\d+)?"), " ")
-            .replace(Regex("(?i)\\bch\\.?\\s*\\d+(\\.\\d+)?"), " ")
-            .replace(Regex("第\\s*\\d+\\s*[章话話节節回]"), " ")
-            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .replace(chapterWordPattern, " ")
+            .replace(chWordPattern, " ")
+            .replace(cjkChapterPattern, " ")
+            .replace(nonWordPattern, " ")
             .trim()
-            .replace(Regex("\\s+"), " ")
+            .replace(whitespacePattern, " ")
 }

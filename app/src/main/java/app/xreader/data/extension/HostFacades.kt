@@ -40,7 +40,7 @@ class HostHttpImpl(
     constructor(client: ExtensionHttpClient) : this(client as PageFetcher)
 
     override fun get(url: String, headers: Map<String, String>): HostResponse =
-        unwrap(runBlocking { fetcher.get(url, headers) })
+        unwrap(runBlocking(capContext()) { fetcher.get(url, headers) })
 
     override fun post(
         url: String,
@@ -48,7 +48,24 @@ class HostHttpImpl(
         contentType: String,
         headers: Map<String, String>
     ): HostResponse =
-        unwrap(runBlocking { fetcher.post(url, body, contentType, headers) })
+        unwrap(runBlocking(capContext()) { fetcher.post(url, body, contentType, headers) })
+
+    /** v1.5.12 (Front 1, S1): the chapter-content render cap
+     * crosses this bridge as a coroutine-context element —
+     * [ContentRoadCap] is the blocking road's thread-local
+     * mark (set by DeclarativeSource's chapter-content
+     * entry); when it is set on the calling thread, the
+     * fetcher call carries [ContentFetchCap] and the
+     * escalating fetcher caps the fetch to the static road +
+     * the fetch bridge. Every other fetch (catalogue, book,
+     * chapter list) runs with an empty context, exactly as
+     * before. */
+    private fun capContext(): kotlin.coroutines.CoroutineContext =
+        if (ContentRoadCap.isActive()) {
+            ContentFetchCap
+        } else {
+            kotlin.coroutines.EmptyCoroutineContext
+        }
 
     private fun unwrap(result: AppResult<HostResponse>): HostResponse =
         when (result) {
@@ -197,9 +214,17 @@ class HostContextFactory(
          * shell band) and Browse showed an empty catalogue for a
          * source that had added perfectly. */
         waitForSelector: () -> String? = { null },
+        /** v1.5.8 (D1/F2): live read of the source's declared
+         * render budget (`renderBudgetMs`) — threaded exactly
+         * like [waitForSelector], one hop further into the
+         * escalating fetcher's budget parameter. */
+        renderBudgetMs: () -> Long? = { null },
         /** v1.3.4 (T1): live read of the source's declared
          * header bindings (see [CredentialSpec]). */
         credentialBindings: () -> List<HeaderBinding> = { emptyList() },
+        /** v1.5.2 (§10 item 1): live read of the source's
+         * declared static replay headers (see [CredentialSpec]). */
+        staticHeaders: () -> List<StaticHeaderBinding> = { emptyList() },
         /** v1.3.4 (T6): live read of the source's declared
          * backup hosts (mirror failover). */
         backupHosts: () -> List<String> = { emptyList() }
@@ -216,6 +241,7 @@ class HostContextFactory(
             rateLimiter = limiter,
             byteRateLimiter = byteLimiterFor(extensionRowId),
             credentialBindings = credentialBindings,
+            staticHeaders = staticHeaders,
             backupHosts = backupHosts
         )
         val fetcher: PageFetcher = escalatingFetcherOrNull(
@@ -226,7 +252,8 @@ class HostContextFactory(
             permissions = permissions,
             rateLimiter = limiter,
             onRuntimeShell = { onRuntimeShell(extensionRowId) },
-            waitForSelector = waitForSelector
+            waitForSelector = waitForSelector,
+            renderBudgetMs = renderBudgetMs
         ) ?: client
         return object : SourceContext {
             override val http: HostHttp = HostHttpImpl(fetcher)
@@ -252,7 +279,8 @@ class HostContextFactory(
         rateLimiter: RateLimiter,
         onRuntimeShell: (() -> Unit)? = null,
         forceRender: Boolean = false,
-        waitForSelector: () -> String? = { null }
+        waitForSelector: () -> String? = { null },
+        renderBudgetMs: () -> Long? = { null }
     ): EscalatingPageFetcher? {
         val renderer = renderedFetcher ?: return null
         val runtime = renderRuntime ?: return null
@@ -268,6 +296,7 @@ class HostContextFactory(
             onRuntimeShell = onRuntimeShell,
             forceRender = forceRender,
             waitForSelector = waitForSelector,
+            renderBudgetMs = renderBudgetMs,
             shellHosts = shellHostMemory
         )
     }
@@ -289,7 +318,14 @@ class HostContextFactory(
         label: String,
         permissions: ExtensionPermissions,
         rateLimiter: RateLimiter = RateLimiter(minIntervalMs = 0),
-        byteRateLimiter: RateLimiter? = null
+        byteRateLimiter: RateLimiter? = null,
+        /** v1.5.2 (§10 item 1): a probe driving a config that
+         * declares credentials must replay them during the
+         * drive too — the drive is the proof the saved source
+         * will work, and a road that only works WITH its
+         * declared headers must be driven WITH them. */
+        credentialBindings: () -> List<HeaderBinding> = { emptyList() },
+        staticHeaders: () -> List<StaticHeaderBinding> = { emptyList() }
     ): ExtensionHttpClient = ExtensionHttpClient(
         transport = transport,
         sessionStore = sessionStore,
@@ -297,7 +333,9 @@ class HostContextFactory(
         label = label,
         whitelist = { permissions },
         rateLimiter = rateLimiter,
-        byteRateLimiter = byteRateLimiter
+        byteRateLimiter = byteRateLimiter,
+        credentialBindings = credentialBindings,
+        staticHeaders = staticHeaders
     )
 
     /**

@@ -31,6 +31,16 @@
             </intent-filter>
         </activity>
 
+        <!-- FIX-18: the transplanted Komikku manga reader. Its own
+             Activity at the settled boundary (donor ReaderActivity
+             kept): manga books open here through its newIntent
+             contract; novels never leave MainActivity's reader. -->
+        <activity
+            android:name="app.xreader.komikku.KomikkuReaderActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/Theme.Xreader" />
+
         <!-- Quote-card sharing (Phase 6): hands the rendered PNG to
              the share sheet; exposes only the quote-cards cache dir. -->
         <provider

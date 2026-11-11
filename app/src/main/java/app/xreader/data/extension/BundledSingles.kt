@@ -54,6 +54,10 @@ internal object BundledSingles {
                 // its DOM is the payload text, so details ride
                 // the catalogue row (title + cover) and the
                 // chapter machinery below does the real work.
+                // v1.5.3 (finding #3): the payload's own cover
+                // field, so a stored coverless book can heal
+                // from its book document (class C).
+                jsonCover = "cover_url",
                 chapters = ChapterListSpec(
                     list = "a",
                     name = "@text",
@@ -130,7 +134,11 @@ internal object BundledSingles {
             jsonPath = "data",
             jsonLinkTemplate =
                 "https://fenrirealm.com/api/new/v2/series/{value}",
-            jsonCoverTemplate = "https://fenrirealm.com/{value}"
+            jsonCoverTemplate = "https://fenrirealm.com/{value}",
+            // v1.5.2 (§7): tier-1 per-item kind evidence — the
+            // API's own `type` field, live-evidenced 2026-11-02.
+            kindField = "type",
+            kindValueMap = app.xreader.data.extension.BookKind152.FENRIR_TYPE_MAP
         )
         return DeclarativeConfig(
             id = id,
@@ -147,6 +155,23 @@ internal object BundledSingles {
                     "?page={page}&per_page=24"
             ),
             details = DetailsSpec(
+                // v1.5.3 (finding #3, fix A4.2): the series
+                // endpoint's payload IS the book document, and
+                // its `cover` field (a bare storage path — the
+                // template expands it exactly as the listing
+                // spec's does) is the only cover that document
+                // can ever declare; without it a stored
+                // coverless Fenrir book could never heal.
+                jsonCover = "cover",
+                jsonCoverTemplate = "https://fenrirealm.com/{value}",
+                // v1.5.8 (B1 / F3 Fix 1): the series payload's
+                // own `type` — the SAME tier-1 evidence the
+                // listing declares, read from the book's own
+                // document at every refresh so a kindless row
+                // heals without a re-add (and a novel payload
+                // files TEXT, the value it already carries).
+                kindField = "type",
+                kindValueMap = app.xreader.data.extension.BookKind152.FENRIR_TYPE_MAP,
                 chapters = ChapterListSpec(
                     list = "a",
                     name = "@text",
@@ -169,6 +194,25 @@ internal object BundledSingles {
             ),
             chapter = ChapterSpec(
                 content = "body",
+                // v1.5.37 (combined build): the site plants
+                // anti-scrape DECOY elements inside the html
+                // content payload (aria-hidden scramble divs,
+                // attribution marks) — rendered raw, they were
+                // the gibberish blocks between the real
+                // paragraphs in the owner's v1.5.35 proof
+                // (FENRIR-TEXT-GIBBERISH-FORENSICS §5). Both
+                // working readers strip exactly these markers
+                // (LNReader's Fenrir cleaner; QuickNovel's
+                // FenrirRealProvider); the selectors key on
+                // site-applied non-content markers only, never
+                // on prose, so the story text cannot match.
+                remove = listOf(
+                    "[aria-hidden=\"true\"]",
+                    ".reader-attribution",
+                    "[data-fr-attr]",
+                    "style",
+                    "script"
+                ),
                 ajax = ChapterTextAjax(
                     urlTemplate = "https://fenrirealm.com/api/new/v2" +
                         "/series/{seg-3}/chapters/{seg-1}",
@@ -331,6 +375,9 @@ internal object BundledSingles {
             search = listing,
             popular = listing,
             details = DetailsSpec(
+                // v1.5.3 (finding #3): the payload's own cover
+                // field heals stored coverless books (class C).
+                jsonCover = "cover",
                 chapters = ChapterListSpec(
                     list = "a",
                     name = "@text",
@@ -368,7 +415,15 @@ internal object BundledSingles {
             id = id,
             name = name,
             baseUrl = "https://www.royalroad.com",
-            extraDomains = listOf("api.royalroad.com"),
+            // v1.5.3 (finding #3 sweep, item 14): covers serve
+            // from www.royalroadcdn.com (covers-large/covers-
+            // full on the recorded listing/book captures in
+            // fixtures-capture/royalroad.com/) — a different
+            // host from the site and its API, so cover FILES
+            // need it permitted explicitly.
+            extraDomains = listOf(
+                "api.royalroad.com", "www.royalroadcdn.com"
+            ),
             search = cards.copy(
                 url = "https://www.royalroad.com/fictions/search?title={query}"
             ),
@@ -481,18 +536,32 @@ internal object BundledSingles {
     /** NoBadNovel (nobadnovel.com) — plain server-rendered site:
      * inline chapter list (737/737), text in `div.text-base`
      * (the selectors in the research notes don't exist on the
-     * live site; the capture corrected them). */
+     * live site; the capture corrected them).
+     *
+     * v1.5.3 (finding #3, Part B): the cards spec now roots at
+     * the CARD (the results grid's direct <div> children — the
+     * grid's Tailwind classes, never the site's astro-… build
+     * hashes) so the cover <img> in the card's sibling cover
+     * block is reachable: the v1.5.2 spec rooted at the title
+     * anchor itself and declared no cover at all, so every
+     * card was born coverless. Covers serve from
+     * cdn.nobadnovel.com — a sibling host, not a subdomain of
+     * www.nobadnovel.com — hence extraDomains (and the
+     * install-path permissions refresh that lets existing
+     * installs receive it). */
     fun noBadNovel(id: String, name: String): DeclarativeConfig {
         val cards = ListSpec(
             url = "https://www.nobadnovel.com/series?sort=popularity",
-            results = "h4 a[href^='https://www.nobadnovel.com/series/']",
-            title = "@text",
-            link = "@href"
+            results = "div.grid > div",
+            title = "h4 a@text",
+            link = "h4 a@href",
+            cover = "img@src"
         )
         return DeclarativeConfig(
             id = id,
             name = name,
             baseUrl = "https://www.nobadnovel.com",
+            extraDomains = listOf("cdn.nobadnovel.com"),
             search = cards.copy(
                 url = "https://www.nobadnovel.com/series?keyword={query}"
             ),
@@ -514,23 +583,28 @@ internal object BundledSingles {
         )
     }
 
-    /** FaqWiki (faqwiki.us) — the novels live under /novel/ (the
-     * bare domain is a games portal now, so the base carries the
-     * path). The chapter list is a category listing whose rows
-     * are "<Book> Chapter N" (635/635 = the stated RAW total). */
+    /** FaqWiki — CORRECTED in v1.5.2 (FIX-16): faqwiki.us is
+     * dead; faqwiki.xyz is the same site, all five legs proven
+     * live in the conversion probe
+     * (build-logs/V152-QN-CONVERSION-PROBE.md §2). The
+     * correction is a host change PLUS dropping the old
+     * /novel prefix (books at /{slug}/, chapters at
+     * /{slug}-chapter-{n}/); every selector from the shipped
+     * recipe works unchanged. The chapter list on the drive
+     * book is exactly the stated 200 RAW chapters. */
     fun faqWiki(id: String, name: String): DeclarativeConfig = DeclarativeConfig(
         id = id,
         name = name,
-        baseUrl = "https://faqwiki.us/novel",
+        baseUrl = "https://faqwiki.xyz",
         search = ListSpec(
-            url = "https://faqwiki.us/novel/?s={query}",
+            url = "https://faqwiki.xyz/?s={query}",
             results = "article.hitmag-post",
             title = "h3.entry-title a",
             link = "h3.entry-title a@href",
             cover = "img@src"
         ),
         popular = ListSpec(
-            url = "https://faqwiki.us/novel/",
+            url = "https://faqwiki.xyz/",
             results = "div.plt-page-item",
             title = "h3.plt-title a",
             link = "h3.plt-title a@href",
@@ -548,6 +622,146 @@ internal object BundledSingles {
         ),
         chapter = ChapterSpec(content = "main > article > div")
     )
+
+    /** ScrollersPub (www.scrollerspub.com) — v1.5.2 (FIX-16),
+     * converted from the QuickNovel set; full JSON-API chain
+     * proven live in the conversion probe (§1): catalogue and
+     * search over /api/novels, the book via the SINGULAR
+     * /api/novel/{UUID} (the plural is not an API route),
+     * chapters via /api/novel/{id}/chapters with offset
+     * paging (the UUID is the only key — slug addressing
+     * returns total 0), text via /api/chapter/{id}/read.
+     * Title/author/cover ride the listing row — declarative
+     * details are DOM-only (Chikari/Fenrir precedent). */
+    fun scrollersPub(id: String, name: String): DeclarativeConfig {
+        val listing = ListSpec(
+            url = "https://www.scrollerspub.com/api/novels?search=&offset=0&limit=24",
+            results = "", title = "title", link = "id",
+            cover = "cover_url", author = "authors",
+            jsonPath = "items",
+            jsonLinkTemplate = "https://www.scrollerspub.com/api/novel/{value}"
+        )
+        return DeclarativeConfig(
+            id = id, name = name,
+            baseUrl = "https://www.scrollerspub.com",
+            search = listing.copy(
+                url = "https://www.scrollerspub.com/api/novels?search={query}&offset=0&limit=24"
+            ),
+            popular = listing,
+            details = DetailsSpec(
+                // v1.5.3 (finding #3): the payload's own cover
+                // field heals stored coverless books (class C).
+                jsonCover = "cover_url",
+                chapters = ChapterListSpec(
+                    list = "a", name = "@text", link = "@href",
+                    reverse = false,
+                    pagination = ChapterListPagination(
+                        urlTemplate = "https://www.scrollerspub.com/api/novel/{bookSlug}/chapters?limit={limit}&offset={offset}",
+                        bookIdPattern = "",
+                        jsonArrayPath = "items",
+                        jsonTotalPath = "total",
+                        pageSize = 50
+                    ),
+                    jsonNameField = "title", jsonLinkField = "id",
+                    jsonDateField = "created_at",
+                    jsonLinkTemplate = "https://www.scrollerspub.com/read/{value}"
+                )
+            ),
+            chapter = ChapterSpec(
+                content = "body",
+                ajax = ChapterTextAjax(
+                    urlTemplate = "https://www.scrollerspub.com/api/chapter/{seg-1}/read",
+                    jsonContentField = "content",
+                    plainTextField = false
+                )
+            )
+        )
+    }
+
+    /** ReadHive (readhive.org) — v1.5.2 (FIX-16), converted
+     * from the QuickNovel set; all five legs proven live in
+     * the conversion probe (§4). Search is the site's own
+     * contract, read off its JS: POST /ajax with
+     * action=search&query=… (the endpoint accepts the
+     * urlencoded body the declarative POST spec sends);
+     * catalogue cards are the home page's swiper slides;
+     * chapter rows ride the book page (newest first, hence
+     * reverse = true); text in div.prose. Chapter names
+     * arrive doubled ("Chapter 25 - Chapter 25") — the
+     * site's own data. */
+    fun readHive(id: String, name: String): DeclarativeConfig =
+        DeclarativeConfig(
+            id = id, name = name, baseUrl = "https://readhive.org",
+            search = ListSpec(
+                url = "https://readhive.org/ajax",
+                method = "POST", body = "action=search&query={query}",
+                results = "", title = "title", link = "url",
+                cover = "thumb",
+                jsonPath = "data",
+                jsonCoverTemplate = "https://readhive.org{value}"
+            ),
+            popular = ListSpec(
+                url = "https://readhive.org/",
+                results = "div.swiper-slide.w-32",
+                title = "h6", link = "a@href", cover = "img@src"
+            ),
+            details = DetailsSpec(
+                title = "h1",
+                description = "h2 + div",
+                chapters = ChapterListSpec(
+                    list = "a.bg-accent", name = "span.ml-1",
+                    link = "@href", date = "span.text-xs",
+                    reverse = true
+                )
+            ),
+            chapter = ChapterSpec(content = "div.prose")
+        )
+
+    /** WuxiaClick (wuxia.click) — v1.5.2 (FIX-16), converted
+     * from the QuickNovel set; all five legs proven live in
+     * the conversion probe (§5c). Next.js site: the chapter
+     * list is the book page's DOM rows plus the ranged walk
+     * (?page={n} on the book URL, 100 rows per range, the
+     * short final range is the stop). The embedded payload's
+     * ToC is deliberately NOT declared: its rows duplicate
+     * the DOM range (same URLs — the merge keeps one entry
+     * per URL, DOM first), so the block would add nothing
+     * here; DOM + pagination enumerate the complete list
+     * (the probe's pre-decided fallback shape). Chapter
+     * names are the site's own glued form (number + title
+     * spans; the date rides its own field via
+     * time@datetime). Description is omitted: it exists
+     * only inside the JSON payload with no stable DOM
+     * selector (Fenrir precedent). */
+    fun wuxiaClick(id: String, name: String): DeclarativeConfig {
+        val cards = ListSpec(
+            url = "https://wuxia.click/",
+            results = "a.group",
+            title = "h3", link = "@href", cover = "img@src",
+            author = "p.truncate",
+            linkPattern = "/novel/[^/]+$"
+        )
+        return DeclarativeConfig(
+            id = id, name = name, baseUrl = "https://wuxia.click",
+            search = cards.copy(
+                url = "https://wuxia.click/search/{query}"
+            ),
+            popular = cards,
+            details = DetailsSpec(
+                title = "h1",
+                chapters = ChapterListSpec(
+                    list = "li.h-11 a", name = "@text",
+                    link = "@href", date = "time@datetime",
+                    reverse = false,
+                    pagination = ChapterListPagination(
+                        urlTemplate = "{bookUrl}?page={page}",
+                        bookIdPattern = ""
+                    )
+                )
+            ),
+            chapter = ChapterSpec(content = "div.reader-text")
+        )
+    }
 
     /** AsianNovel (asianovel.net — single-s; the double-s domain
      * is dead) — a Fictioneer WordPress site: story cards,
@@ -662,6 +876,10 @@ internal object BundledSingles {
                 // The web book page is an app shell; the honest
                 // metadata rides the catalogue row, and the
                 // chapter machinery below speaks to the API.
+                // v1.5.3 (finding #3): the API book payload's
+                // own cover field heals stored coverless books
+                // (class C).
+                jsonCover = "cover_image",
                 chapters = ChapterListSpec(
                     list = "a",
                     name = "@text",
@@ -792,6 +1010,9 @@ internal object BundledSingles {
             popular = listing,
             latest = listing,
             details = DetailsSpec(
+                // v1.5.3 (finding #3): the payload's own cover
+                // field heals stored coverless books (class C).
+                jsonCover = "thumbnail",
                 chapters = ChapterListSpec(
                     list = "a",
                     name = "@text",
@@ -851,7 +1072,12 @@ internal object BundledSingles {
             results = "ul.novel-list li.novel-item",
             title = "a@title",
             link = "a@href",
-            cover = "img@src"
+            // v1.5.3 (finding #3, addendum D1): the real cover
+            // rides the LAZY attribute — every working reader
+            // of this site reads data-src first, src second;
+            // the shipped src-only bind read a non-blank
+            // placeholder and never fell through.
+            cover = "img@data-src || img@src"
         )
         return DeclarativeConfig(
             id = id,
@@ -863,7 +1089,7 @@ internal object BundledSingles {
                 results = "ul.novel-list li.novel-item",
                 title = "a@title",
                 link = "a@href",
-                cover = "img@src"
+                cover = "img@data-src || img@src"
             ),
             popular = cards,
             latest = cards.copy(
@@ -873,6 +1099,11 @@ internal object BundledSingles {
                 title = "div.main-head h1.novel-title",
                 author = "span[itemprop='author']",
                 description = "meta[itemprop='description']@content",
+                // v1.5.3 (finding #3, addendum D1): the book
+                // page's own cover, donor-evidenced
+                // (QuickNovel/Mangayomi/lncrawl agree), so a
+                // stored book can heal from its own page.
+                cover = "figure.cover img@src",
                 chapters = ChapterListSpec(
                     list = "ul.chapter-list li a",
                     name = "@text",
@@ -891,55 +1122,112 @@ internal object BundledSingles {
     }
 
     /** BrightNovel (brightnovels.com — the plural host; the
-     * singular is a parked domain) — RENDER-BACKED bundled
-     * default under the same Cloudflare decision as the
-     * NovelFire family: every route answers this egress with
-     * Cloudflare's "Attention Required!" wall, so the config
-     * carries QuickNovel's provider claims (catalogue /series
-     * anchors, JSON search at /api/search?query=, JSON chapter
-     * list at /series/{slug}/chapters/free, text in article /
-     * div.chapter-content) implemented natively and flagged
-     * needsRendering + maintainerVerified. DEVICE-PROOF-
-     * PENDING — not a live-verified pass. */
+     * singular is a parked domain) — v1.5.3 (finding #2): the
+     * config REWRITTEN to the site's real wire, read off
+     * QuickNovel's working provider for this site (facts
+     * only). The site is an Inertia.js app: every payload
+     * rides the page's `div#app[data-page]` JSON, there are
+     * no /series anchors and no `url` fields — the v1.5.2
+     * transcription named shapes the site never had, so the
+     * catalogue read nothing. The shapes below are the
+     * provider's own: catalogue records at
+     * props.seriesList.data of the /series page, search
+     * records at data.series of /api/search, links built
+     * from `slug`, covers at cover.url; the chapter list is
+     * the chapters/free endpoint's top-level `chapters`
+     * array ({name, slug, updated_at, is_premium} — the
+     * provider reads it newest-first and reverses, hence
+     * reverse = true), chapter links
+     * /series/{bookSlug}/{chapterSlug}; chapter text is the
+     * chapter page payload's props.chapter.content, named
+     * here as the content spec's embedded-JSON path (engine
+     * item 5b). Details metadata rides the catalogue/search
+     * rows (Noveli precedent for app-shell sites). The
+     * render wait names the payload root itself, so a
+     * render that lands before the payload exists is a
+     * failed render, not an empty catalogue (§4 step 1).
+     * These shapes are fixture-proven at mechanism level
+     * (WS-2's item 7 suite); the on-device leg is still
+     * owed and is NOT claimed here. */
     fun brightNovel(id: String, name: String): DeclarativeConfig =
         DeclarativeConfig(
             id = id,
             name = name,
             baseUrl = "https://brightnovels.com",
             needsRendering = true,
+            renderWaitSelector = "div#app[data-page]",
+            renderBudgetMs = 60_000,
             search = ListSpec(
                 url = "https://brightnovels.com/api/search?query={query}",
                 results = "",
                 title = "title",
-                link = "url",
-                jsonPath = "data"
+                link = "slug",
+                cover = "cover.url",
+                jsonPath = "data.series",
+                jsonLinkTemplate = "/series/{value}"
             ),
             popular = ListSpec(
                 url = "https://brightnovels.com/series",
-                results = "a[href^='/series/']",
-                title = "@text",
-                link = "@href"
+                results = "",
+                title = "title",
+                link = "slug",
+                cover = "cover.url",
+                jsonPath = "props.seriesList.data",
+                jsonLinkTemplate = "/series/{value}"
             ),
             details = DetailsSpec(
-                title = "h1",
-                description = "meta[name=description]@content",
                 chapters = ChapterListSpec(
                     list = "a",
                     name = "@text",
                     link = "@href",
                     reverse = true,
+                    // v1.5.12 (Front 1, S3): the suspicious-empty
+                    // FLOOR. This config previously declared NO
+                    // chapter-count hint of any kind (no
+                    // jsonTotalPath, no totalCount, no
+                    // totalCountPattern), so the strict road's
+                    // suspicious-empty tier could NEVER fire and
+                    // a literal {"chapters":[]} from the endpoint
+                    // was stamped proven-complete with 0 chapters
+                    // (the v1.5.11 proof conviction). Neither
+                    // wire hint is real for this site: the working
+                    // provider's endpoint model carries ONLY the
+                    // chapters array (no total field for
+                    // jsonTotalPath to name), and the book page
+                    // states no total in its visible text (its
+                    // payload rides a data attribute, not body
+                    // text, so totalCountPattern has nothing true
+                    // to match). What IS true of this endpoint's
+                    // shape: it is the chapter list of a published
+                    // series that the book page itself resolved —
+                    // a real book here always has at least one
+                    // chapter (the endpoint's own records carry
+                    // premium flags, so even a fully-premium book
+                    // lists rows). totalCount = 1 is therefore
+                    // declared as the floor: its ONLY live effect
+                    // for this config (no urlPattern is declared,
+                    // so pattern completion never reads it) is
+                    // the chapterCountHint it feeds — an endpoint
+                    // [] now fires suspicious-empty and the refresh
+                    // surfaces the honest unproven state instead
+                    // of stamping 0/complete, while any non-empty
+                    // answer parses exactly as before.
+                    totalCount = 1,
                     pagination = ChapterListPagination(
                         urlTemplate = "https://brightnovels.com/series/{bookSlug}/chapters/free?loaded=0&sort_order=desc",
                         bookIdPattern = "",
-                        jsonArrayPath = "data",
+                        jsonArrayPath = "chapters",
                         pageSize = 1000
                     ),
-                    jsonNameField = "title",
-                    jsonLinkField = "url"
+                    jsonNameField = "name",
+                    jsonLinkField = "slug",
+                    jsonLinkTemplate =
+                        "https://brightnovels.com/series/{bookSlug}/{value}",
+                    jsonDateField = "updated_at"
                 )
             ),
             chapter = ChapterSpec(
-                content = "article || div.chapter-content || div.prose || main"
+                content = "props.chapter.content"
             )
         )
 
@@ -975,6 +1263,10 @@ internal object BundledSingles {
             popular = listing,
             latest = listing,
             details = DetailsSpec(
+                // v1.5.3 (finding #3): the payload's own cover
+                // field heals stored coverless books (class C).
+                // The catalogue/chapter recipe is unchanged.
+                jsonCover = "cover_url",
                 chapters = ChapterListSpec(
                     list = "a",
                     name = "@text",
@@ -993,6 +1285,142 @@ internal object BundledSingles {
                     jsonContentPath = "chapter.content",
                     plainTextField = true
                 )
+            )
+        )
+    }
+
+    /** Lnori (lnori.com) — v1.5.2 (FIX-14): English editions
+     * of Japanese light novels, modelled as the site actually
+     * is — SERIES → VOLUMES (the learner's chapter-link model
+     * never fit it; see build-logs/V152-LNORI-PROBE.md).
+     * Catalogue = the single /library page (884 article.card
+     * rows carrying data-id/data-t/data-a/data-v), book page =
+     * /series/{id}/{slug}, the chapter list = the series
+     * page's volume cards in reading order.
+     *
+     * SHAPE — QUICKNOVEL'S, BY THE OWNER'S CALL (2026-11-03,
+     * "Let's just use quicknovel"; QUICKNOVEL-RESEARCH.md §5
+     * is the facts record): the volume page's main article
+     * HTML is served WHOLE as one chapter, with <picture>
+     * elements unwrapped to plain <img> by the engine.
+     * QuickNovel's own selector names the article's sections
+     * (main > article > section, concatenated by its
+     * loader); this engine serves the content selector's
+     * FIRST match, so the same served body is declared one
+     * level up — main > article, the single element whose
+     * content is exactly those sections (fixture-verified:
+     * the article's children are the volume's sections and
+     * nothing else). An earlier design split volumes at
+     * their EPUB heading wrappers into reader chapters; the
+     * owner cut it — do not revive it without his word.
+     * Search has no
+     * server side: the site's own search is a client-side
+     * filter over the catalogue, declared here as
+     * [ListSpec.localFilter] (title OR author substring —
+     * the probe's replicated semantics, a superset of
+     * QuickNovel's title-only filter). Covers ride
+     * cdn.lnori.com; volume illustrations ride img.lnori.com
+     * (observed 530/1016 at probe time — prose unaffected).
+     * Rating MIXED: a general licensed-LN list with a small
+     * mature tail (probe §4). */
+    /** Light Novel Translations (lightnovelstranslations.com) —
+     * v1.5.2 (FIX-17), owner-ruled MUST-WORK. Five legs proven in
+     * the conversion probe (§5a) on unlocked/completed books:
+     * catalogue/search on /browse/ (the site's real search field
+     * is `field-search`; the generic /?s= shape returns zero),
+     * book content proven (the page h1 is site chrome, so the
+     * details title stays null and the listing title stands —
+     * Fenrir precedent), text in div.text_story. Chapters ride
+     * the FIX-17 PANELLED mode: the book page links each volume
+     * panel (?tab=table_contents&lnt_volume=<id>) and the list
+     * is every panel's rows concatenated in panel order.
+     * Unlock-economy books mark their rows with the `lock`
+     * class; those chapters surface through the engine's locked
+     * detection (ChapterLocks / lockedChapterIds) and the
+     * reader's honest LOCKED state — never as preview text
+     * served as a chapter (the §14.5 stub refusal). */
+    fun lightNovelTranslations(id: String, name: String): DeclarativeConfig {
+        val cards = ListSpec(
+            url = "https://lightnovelstranslations.com/browse/?paged={page}",
+            results = "article.read_list-story-item",
+            title = "h3 a",
+            link = "h3 a@href",
+            cover = "div.item_thumb img@src"
+        )
+        return DeclarativeConfig(
+            id = id, name = name,
+            baseUrl = "https://lightnovelstranslations.com",
+            // v1.5.3 (finding #4, item 17): series with no
+            // cover art get the site's membership-plugin
+            // banner in the cover slot — a resolved cover URL
+            // carrying this path is site chrome, not a cover,
+            // and is treated as no cover at ingestion.
+            coverDenyPatterns = listOf("/plugins/lnt-membership/"),
+            search = cards.copy(
+                url = "https://lightnovelstranslations.com/browse/?field-search={query}"
+            ),
+            popular = cards,
+            details = DetailsSpec(
+                description = "meta[name=description]@content",
+                // v1.5.3 (finding #4): the book page's own
+                // cover slot (finding #3's sweep candidate),
+                // so stored books heal from their own page.
+                cover = "div.novel-image img@src",
+                chapters = ChapterListSpec(
+                    // The ROW is the <li> (it carries the lock
+                    // class the engine's lock detection reads);
+                    // name/link resolve on its anchor.
+                    list = "ul.lnt-chapter-rows li.chapter-item",
+                    name = "a@text",
+                    link = "a@href",
+                    reverse = false,
+                    panelSelector =
+                        "a[href*='tab=table_contents'][href*='lnt_volume=']"
+                )
+            ),
+            chapter = ChapterSpec(content = "div.text_story")
+        )
+    }
+
+    // NovLove (novelnice.com) config REMOVED from v1.5.2 by
+    // owner ruling 2026-11-03 (~17:58) — banked for the next
+    // update; the exact recipe is saved in
+    // build-logs/V152-NOVLOVE-BANKED.md §3.
+
+    fun lnori(id: String, name: String): DeclarativeConfig {
+        val listing = ListSpec(
+            url = "https://lnori.com/library",
+            results = "article.card",
+            title = "h2.card-title span",
+            link = "figure.card-cover a@href",
+            cover = "figure.card-cover img@src",
+            author = "@data-a",
+            linkPattern = "^/series/\\d+/[^/]+$"
+        )
+        return DeclarativeConfig(
+            id = id,
+            name = name,
+            baseUrl = "https://lnori.com",
+            extraDomains = listOf("cdn.lnori.com", "img.lnori.com"),
+            contentRating = ContentRating.MIXED,
+            search = listing.copy(localFilter = true),
+            popular = listing,
+            latest = listing,
+            details = DetailsSpec(
+                title = "h1.s-title",
+                author = ".hero-section p.author",
+                description = "section.desc-box p.description",
+                cover = ".cover-wrap img@src",
+                chapters = ChapterListSpec(
+                    list = "section.vol-grid > article.card",
+                    name = "h3.card-title",
+                    link = "a.stretched-link@href",
+                    reverse = false
+                )
+            ),
+            chapter = ChapterSpec(
+                content = "main > article",
+                title = "h1#book-title"
             )
         )
     }

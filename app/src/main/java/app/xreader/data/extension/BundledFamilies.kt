@@ -247,6 +247,8 @@ internal object BundledFamilies {
                 title = detailsTitle,
                 author = ".author-content a",
                 description = detailsDescription,
+                cover = ".summary_image img@data-lazy-src || " +
+                    ".summary_image img@data-src || .summary_image img@src",
                 chapters = chapters
             ),
             chapter = ChapterSpec(content = "div.text-left")

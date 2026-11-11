@@ -116,6 +116,12 @@ class EscalatingPageFetcher(
      * [needsRendering]; the probe's lane drive supplies the
      * lane's declared selector. Null = no hint. */
     private val waitForSelector: () -> String? = { null },
+    /** v1.5.8 (D1/F2): the source's DECLARED render budget — a
+     * live read, threaded exactly like [waitForSelector]
+     * (ExtensionService's config lambda → HostContextFactory →
+     * here → fetchRendered's budget parameter). Null = no
+     * declared budget: the progress-extended default governs. */
+    private val renderBudgetMs: () -> Long? = { null },
     /** v1.2.1 (Defect 4): the shared road memory — hosts that
      * have proven they serve shells render first under the
      * escalate-on-shell mode, without a static re-probe. A
@@ -164,8 +170,31 @@ class EscalatingPageFetcher(
         // is the one forbidden outcome.
         val suppressed =
             kotlinx.coroutines.currentCoroutineContext()[RenderSuppression.Key] != null
-        val budgeted = kotlinx.coroutines.withTimeoutOrNull(budgetMs()) {
-            getEscalated(url, headers, suppressed)
+        // v1.5.12 (Front 1, S1): the content-road render cap —
+        // a chapter CONTENT fetch (the read path) carrying
+        // [ContentFetchCap] never enters render-first or
+        // full-render escalation through the shared WebView:
+        // a reading tap must never place a 60–105 s WebView
+        // load on the main thread. The capped road is the
+        // static road plus the fetch bridge (see
+        // [getContentCapped]); catalogue / book / chapter-list
+        // fetches never carry the marker and keep their
+        // existing escalation (they are how walled sites get
+        // read at all).
+        val contentCapped =
+            kotlinx.coroutines.currentCoroutineContext()[ContentFetchCap.Key] != null
+        // v1.5.8 (D1): the outer cap rises in step with a
+        // declared render budget (effective ceiling + 45 s),
+        // or it would silently re-impose the old limit over a
+        // budget the render itself was granted.
+        val declaredBudget = renderBudgetMs()
+        val effectiveBudgetMs = if (declaredBudget != null) {
+            maxOf(budgetMs(), declaredBudget + 45_000L)
+        } else {
+            budgetMs()
+        }
+        val budgeted = kotlinx.coroutines.withTimeoutOrNull(effectiveBudgetMs) {
+            getEscalated(url, headers, suppressed, contentCapped)
         }
         return budgeted ?: AppResult.Err(
             AppError.ProviderDown(
@@ -179,8 +208,17 @@ class EscalatingPageFetcher(
     private suspend fun getEscalated(
         url: String,
         headers: Map<String, String>,
-        suppressed: Boolean = false
+        suppressed: Boolean = false,
+        contentCapped: Boolean = false
     ): AppResult<HostResponse> {
+        // v1.5.12 (Front 1, S1): the content road never
+        // renders — see [getContentCapped]. This branch runs
+        // before every render-first / escalation decision
+        // below, so no code path from a capped fetch can
+        // reach [render] (and therefore fetchRendered).
+        if (contentCapped) {
+            return getContentCapped(url, headers)
+        }
         val mode = RenderPolicy.mode(inputs(suppressed))
         if (forceRender && mode != RenderMode.STATIC_ONLY) {
             return render(url)
@@ -336,6 +374,124 @@ class EscalatingPageFetcher(
         return render(url)
     }
 
+    /**
+     * v1.5.12 (Front 1, S1): the CAPPED content road — static
+     * fetch first, the WebView FETCH BRIDGE as the only
+     * escalation, and NO full render ever (no [render] call,
+     * so `fetchRendered` is unreachable from here by
+     * construction). The bridge fetches through the parked
+     * page's own network context with the saved session —
+     * it builds no page for the target — so a walled or
+     * shell-served chapter can still be read without a
+     * 60–105 s main-thread WebView load.
+     *
+     * The honest states survive exactly as on the static-only
+     * road: an availability park (429/503) is terminal, and
+     * when the bridge cannot answer, the static road's own
+     * answer stands — a block stays a block (the callers'
+     * check-needed / sign-in-needed classification reads it
+     * exactly as it reads a failed render's fallback on the
+     * uncapped road, which also returns the static result).
+     */
+    private suspend fun getContentCapped(
+        url: String,
+        headers: Map<String, String>
+    ): AppResult<HostResponse> {
+        val staticResult = staticFetcher.get(url, headers)
+        if (staticResult !is AppResult.Ok) {
+            // The same block-shaped transport escalation as
+            // the uncapped road (scope A1), minus the render:
+            // the bridge is the only second road.
+            if ((staticResult as AppResult.Err).error
+                    is AppError.RateLimited
+            ) {
+                return staticResult
+            }
+            val detail = (staticResult as AppResult.Err).error.detail ?: ""
+            if (BLOCK_STATUS.containsMatchIn(detail)) {
+                bridgeFetch(url)?.let { return it }
+            }
+            return staticResult
+        }
+        val response = staticResult.value
+        // STATUS BEFORE BODY (T3), unchanged: a non-challenge
+        // 429/503 is the site's availability answer — terminal
+        // on every road, never escalated.
+        if ((response.status == 429 || response.status == 503) &&
+            !SiteCheck.isChallengePage(response.body)
+        ) {
+            val retryAfter = response.headers.entries
+                .firstOrNull {
+                    it.key.equals("Retry-After", ignoreCase = true)
+                }?.value?.trim()?.toLongOrNull()
+            if (retryAfter != null) {
+                SharedAvailability.cooldowns.record(
+                    sessionKey, retryAfter, status = response.status
+                )
+            } else if (response.status == 429) {
+                SharedAvailability.cooldowns.record(
+                    sessionKey, ExtensionHttpClient.DEFAULT_429_COOLDOWN_SECONDS,
+                    status = 429
+                )
+            }
+            return AppResult.Err(
+                AppError.RateLimited(
+                    "source",
+                    retryAfterSeconds = retryAfter,
+                    detail = "the site is " +
+                        "${FetchClassification.AVAILABILITY_MARKER} " +
+                        "(HTTP ${response.status})"
+                )
+            )
+        }
+        val blocked = response.status in BLOCK_STATUSES ||
+            SiteCheck.isChallengePage(response.body)
+        if (blocked) {
+            // v1.5.38 (Fix A, V1537-PROOF-FORENSICS §A): the
+            // static answer is ALREADY a convicted challenge
+            // and NO session exists for this key — the
+            // bridge leg can only re-ask the same URL with
+            // an empty cookie jar and harvest the same
+            // challenge body, up to 30 s later. Return the
+            // static answer NOW: the source throws its
+            // challenge detail and the check offer surfaces
+            // in ~1–3 s. With a session in existence, or a
+            // block that is not a challenge, the bridge runs
+            // exactly as before (the FenrirRealm pattern).
+            if (SiteCheck.isChallengePage(response.body) &&
+                !renderedFetcher.hasSavedSession(sessionKey)
+            ) {
+                return staticResult
+            }
+            bridgeFetch(url)?.let { return it }
+            return staticResult
+        }
+        val isShell = withContext(Dispatchers.Default) {
+            runCatching {
+                LinkInference.isJsShell(
+                    Jsoup.parse(staticResult.value.body, url)
+                )
+            }.getOrDefault(false)
+        }
+        if (isShell) {
+            // The host has proven it serves shells — the road
+            // memory still records it (the catalogue roads of
+            // this host may render-first later, exactly as on
+            // the uncapped road), and the runtime-shell signal
+            // still fires; the CONTENT answer itself comes
+            // from the bridge or stands as the shell (the
+            // caller's parse then fails honestly, never a
+            // silently empty chapter).
+            shellHosts.record(url)
+            if (purpose == RenderPurpose.SOURCE && !needsRendering()) {
+                onRuntimeShell?.invoke()
+            }
+            bridgeFetch(url)?.let { return it }
+            return staticResult
+        }
+        return staticResult
+    }
+
     override suspend fun post(
         url: String,
         body: String,
@@ -474,8 +630,10 @@ class EscalatingPageFetcher(
         hint: String?
     ): AppResult<HostResponse> {
         rateLimiter.awaitTurn()
+        // v1.5.8 (D1/F2): the declared budget reaches the
+        // fetcher's timeout parameter on every render.
         return renderedFetcher.fetchRendered(
-            url, sessionKey, permissions(), hint
+            url, sessionKey, permissions(), hint, renderBudgetMs()
         )
     }
 
@@ -494,13 +652,7 @@ class EscalatingPageFetcher(
         url: String,
         selector: String
     ): Boolean = withContext(Dispatchers.Default) {
-        runCatching {
-            Jsoup.parse(body, url).select(selector).any { node ->
-                node.text().isNotBlank() ||
-                    node.attr("href").isNotBlank() ||
-                    node.select("a[href]").isNotEmpty()
-            }
-        }.getOrDefault(true)
+        renderCarriesHintCheck(body, url, selector)
     }
 
     /** v1.0.7: could a render actually happen through this
@@ -524,9 +676,46 @@ class EscalatingPageFetcher(
         val bridged = runCatching {
             renderedFetcher.fetchViaBridge(url, sessionKey, permissions())
         }.getOrNull() ?: return null
+        // v1.5.8 (D1 observability rider): a bridge-served
+        // answer is one of the render road's three outcomes —
+        // it is recorded under the source's session key like
+        // the fetcher's own settled / timed-out records.
+        if (bridged is AppResult.Ok) {
+            DiagnosticLog.record("render", "bridge-served", sessionKey)
+        }
         return bridged as? AppResult.Ok
     }
 }
+
+/** Attribute names NAMED IN a selector itself (`[data-page]`,
+ * `[href~=x]` → data-page, href) — K4's guard set. */
+private val SELECTOR_ATTRIBUTE = Regex("""\[\s*([A-Za-z0-9_-]+)""")
+
+/**
+ * v1.5.8 (K4): the render-carries check, pure for JVM proofs.
+ * A matched node carries content when it has non-blank text, an
+ * href of its own, a descendant anchor — OR an attribute NAMED
+ * IN THE SELECTOR ITSELF present and non-blank on it (a payload
+ * like BrightNovel's rides `data-page` with no text at all).
+ * Selector-named attributes ONLY: no general attribute
+ * acceptance. An unparseable body/selector is NOT evidence the
+ * wait failed — the page is accepted (returns true).
+ */
+internal fun renderCarriesHintCheck(
+    body: String,
+    url: String,
+    selector: String
+): Boolean = runCatching {
+    val namedAttributes = SELECTOR_ATTRIBUTE.findAll(selector)
+        .map { it.groupValues[1] }
+        .toList()
+    Jsoup.parse(body, url).select(selector).any { node ->
+        node.text().isNotBlank() ||
+            node.attr("href").isNotBlank() ||
+            node.select("a[href]").isNotEmpty() ||
+            namedAttributes.any { name -> node.attr(name).isNotBlank() }
+    }
+}.getOrDefault(true)
 
 /**
  * v1.5.1 (item 2): a coroutine-context marker meaning "this
@@ -544,4 +733,100 @@ object RenderSuppression : kotlin.coroutines.CoroutineContext.Element {
         get() = Key
 
     object Key : kotlin.coroutines.CoroutineContext.Key<RenderSuppression>
+}
+
+/**
+ * v1.5.12 (Front 1, S1): a coroutine-context marker meaning
+ * "this fetch is a chapter CONTENT fetch — cap it to the
+ * static road + the fetch bridge; never full-render". The
+ * Fenrir fetch-road forensics' fix-shape 1: a reading tap
+ * must never place a 60–105 s WebView load on the main
+ * thread, while catalogue / book / chapter-list fetches
+ * (which never carry this marker) keep the full escalation
+ * that walled sites are read through at all.
+ * [EscalatingPageFetcher] reads the marker exactly like
+ * [RenderSuppression]; [HostHttpImpl] installs it from
+ * [ContentRoadCap] for the blocking source road.
+ */
+object ContentFetchCap : kotlin.coroutines.CoroutineContext.Element {
+    override val key: kotlin.coroutines.CoroutineContext.Key<ContentFetchCap>
+        get() = Key
+
+    object Key : kotlin.coroutines.CoroutineContext.Key<ContentFetchCap>
+}
+
+/**
+ * v1.5.12 (Front 1, S1): the BLOCKING seam of the content
+ * cap. [DeclarativeSource.chapterContent] is blocking host
+ * code (the Source API is blocking), so its content road
+ * marks itself with this thread-local scope; [HostHttpImpl]
+ * — the one bridge every declarative fetch crosses — reads
+ * it on the calling thread and installs [ContentFetchCap]
+ * into the fetcher call's coroutine context. Scoped strictly
+ * to the chapter-content entry: details / catalogue /
+ * chapter-list calls never run inside the scope, so their
+ * roads are untouched. Nested scopes restore the outer
+ * value, so a content fetch inside a content fetch stays
+ * capped and nothing leaks past the chapter read.
+ */
+object ContentRoadCap {
+
+    private val active = ThreadLocal<Boolean>()
+
+    /** v1.5.12 gate fix (Group A): the learner's opt-out.
+     * While set on the calling thread, [isActive] reads
+     * false even inside a [runCapped] scope — the chapter
+     * read's own wrapper still enters its cap scope, but
+     * the bridge ([HostHttpImpl]) must not install the cap
+     * for a test-drive read. A separate thread-local (not a
+     * clearing of [active]) is what makes this work:
+     * [DeclarativeSource.chapterContent] unconditionally
+     * re-enters [runCapped], so merely clearing [active]
+     * around the call would be undone by the read itself. */
+    private val optedOut = ThreadLocal<Boolean>()
+
+    /** True when the calling thread is inside a chapter
+     * content read that has not opted out (see [runUncapped]). */
+    fun isActive(): Boolean = active.get() == true && optedOut.get() != true
+
+    /** Run [block] with the content cap marked on this
+     * thread. */
+    fun <T> runCapped(block: () -> T): T {
+        val previous = active.get()
+        active.set(true)
+        try {
+            return block()
+        } finally {
+            if (previous == null) {
+                active.remove()
+            } else {
+                active.set(previous)
+            }
+        }
+    }
+
+    /** v1.5.12 gate fix (Group A): run [block] OUTSIDE the
+     * content cap. The cap's target is the shipped reader's
+     * reading tap; the learner's explicit add-site test-drive
+     * (LinkProber) is not a reading tap — for JS-shell sites
+     * the rendered road is the ONLY way its test read can
+     * find chapter text, so a capped drive fails every such
+     * site as NotProven and breaks the universal-source rule
+     * (a pasted link must be provable). Only the drive's own
+     * chapter test-reads run inside this scope; the shipped
+     * reader's chapterContent stays capped. Nested scopes
+     * restore the outer value. */
+    fun <T> runUncapped(block: () -> T): T {
+        val previous = optedOut.get()
+        optedOut.set(true)
+        try {
+            return block()
+        } finally {
+            if (previous == null) {
+                optedOut.remove()
+            } else {
+                optedOut.set(previous)
+            }
+        }
+    }
 }

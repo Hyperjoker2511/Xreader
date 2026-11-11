@@ -126,32 +126,59 @@ object SiteCheck {
 
     /**
      * True when a whole PAGE is a challenge interstitial,
-     * not a content page that merely mentions a phrase:
-     *  - a challenge TITLE is conclusive at any size;
-     *  - Cloudflare's own markup (turnstile widgets, the
-     *    challenge form/platform) is conclusive at any size —
-     *    prose never carries it;
-     *  - the challenge PHRASES prove a check only when the
-     *    page carries almost no visible prose (an
-     *    interstitial is a few hundred characters of text;
-     *    a chapter that happens to say "just a moment" is
-     *    thousands — v1.3.2: the phrase alone on a small but
-     *    real prose page must not read as a check).
+     * not a content page that merely carries challenge
+     * markup or mentions a phrase.
+     *
+     * v1.5.6 (plan §4 — BOTI): markup markers stop being
+     * conclusive on their own. A normal SPA that merely
+     * loads Cloudflare's Turnstile library, or a content
+     * page carrying an embedded Turnstile widget, is not
+     * an interstitial. A page is a challenge only on
+     * STRUCTURAL evidence:
+     *  - a challenge phrase in the page TITLE is conclusive
+     *    at any size (a content page does not title itself
+     *    with check phrases), OR
+     *  - challenge-form / challenge-platform markup (or a
+     *    challenge phrase in the body) TOGETHER WITH the
+     *    page failing the content test below: it is under
+     *    the interstitial byte cap AND its visible prose,
+     *    measured after script/style stripping, is below
+     *    the interstitial threshold (an interstitial is a
+     *    few hundred characters of text; a chapter that
+     *    happens to say "just a moment", or a catalogue
+     *    that happens to load Turnstile, is thousands —
+     *    v1.3.2's guarded thresholds, unchanged).
+     *
+     * The third structural branch in plan §4 — the page's
+     * own URL being a cdn-cgi challenge path — cannot be
+     * judged here: this function receives only the body,
+     * no URL, and its signature is kept unchanged so
+     * callers are untouched. A "cdn-cgi/challenge-platform"
+     * string merely APPEARING inside a content page is
+     * therefore only a markup marker under branch two,
+     * never a conviction on its own.
+     *
+     * [hasChallengeMarkersIn] stays a cheap pre-filter
+     * signal for the fetch layer; it no longer convicts
+     * via this function.
      */
     fun isChallengePage(html: String): Boolean {
         val title = Regex("(?is)<title[^>]*>(.*?)</title>")
             .find(html)?.groupValues?.get(1)?.lowercase().orEmpty()
         if (CHALLENGE_PHRASES.any { it in title }) return true
         val text = html.lowercase()
-        if ("challenge-form" in text || "cf-turnstile" in text ||
+        val hasMarkup = "challenge-form" in text || "cf-turnstile" in text ||
             "challenges.cloudflare" in text ||
             "cdn-cgi/challenge-platform" in text ||
             "id=\"challenge-running\"" in text
-        ) {
-            return true
-        }
+        val hasPhrase = CHALLENGE_PHRASES.any { it in text }
+        if (!hasMarkup && !hasPhrase) return false
+        // Structural branch two: the marker/phrase evidence
+        // convicts only when the page also fails the content
+        // test the phrase branch has always used — same byte
+        // cap, same script/style stripping, same visible-prose
+        // threshold, all unchanged.
         if (html.length >= CHALLENGE_PAGE_MAX_BYTES) return false
-        if (CHALLENGE_PHRASES.none { it in text }) return false
         val visible = html
             .replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), " ")
             .replace(Regex("<[^>]+>"), " ")

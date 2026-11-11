@@ -161,6 +161,48 @@ class LiveSource(
     private val chapterConfigs: MutableMap<String, DeclarativeConfig> =
         boundedConfigCache(MAX_CHAPTER_CONFIGS)
 
+    /** v1.5.7 (Finding 5): the ephemeral delegate that ran the
+     * most recent chapter-list read ([chapters] /
+     * [detailsAndChapters]). A Live book's list is gathered by
+     * a throwaway [DeclarativeSource] the sync layer never
+     * sees, so without this record the delegate's
+     * walk-truncation flag died with it and the sync treated
+     * every Live list as proven complete — the same
+     * destructive-refresh shape the declarative road had. */
+    @Volatile
+    private var lastChapterDelegate: DeclarativeSource? = null
+
+    /** True when the last chapter-list walk (run by the
+     * ephemeral declarative delegate) was cut by its time
+     * budget — the list it returned is PARTIAL, not proven
+     * complete. Mirrors [DeclarativeSource.lastWalkTruncated];
+     * SourceBookSync reads completeness through here for Live
+     * books exactly as it reads the flag directly for
+     * declarative ones. */
+    val lastWalkTruncated: Boolean
+        get() = lastChapterDelegate?.lastWalkTruncated == true
+
+    /** v1.5.8 (D2 rule 3): which road supplied the last
+     * chapter-list walk (run by the ephemeral declarative
+     * delegate) — the provenance passthrough mirroring
+     * [lastWalkTruncated]; SourceBookSync reads it for Live
+     * books exactly as it reads
+     * [DeclarativeSource.lastWalkSuppliedBy] directly for
+     * declarative ones. DOM when no delegate has run (no
+     * harvest to judge). */
+    val lastWalkSuppliedBy: ChapterSuppliedBy
+        get() = lastChapterDelegate?.lastWalkSuppliedBy
+            ?: ChapterSuppliedBy.DOM
+
+    /** v1.5.37 (combined build, S3): the head-check snapshot,
+     * run on the same ephemeral delegate the chapter roads
+     * use — see [DeclarativeSource.headSnapshot]. Null when
+     * the delegate's road exposes no usable seed. */
+    fun headSnapshot(
+        book: SourceBook
+    ): DeclarativeSource.HeadSnapshot? =
+        bookDelegate(book).headSnapshot(book)
+
     // ── listings ────────────────────────────────────────────
 
     override fun popular(page: Int): SourceBookPage {
@@ -275,6 +317,7 @@ class LiveSource(
 
     override fun chapters(book: SourceBook): List<SourceChapter> {
         val delegate = bookDelegate(book)
+        lastChapterDelegate = delegate
         val chapters = delegate.chapters(book)
         val config = bookConfigs[book.id]
         if (config != null) {
@@ -291,6 +334,7 @@ class LiveSource(
         // fetched nothing, so it passes null and the delegate
         // fetches as before.
         val (delegate, prefetched) = bookDelegateWithPrefetch(book)
+        lastChapterDelegate = delegate
         val result = delegate.detailsAndChapters(book, prefetched)
         val config = bookConfigs[book.id]
         if (config != null) {

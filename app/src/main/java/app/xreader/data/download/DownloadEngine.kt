@@ -444,6 +444,14 @@ class DownloadEngine(
 
     // -- chapters -------------------------------------------------------------
 
+    /** v1.5.2 (§12.4): queue items created by [expandPrefetch] in
+     * THIS process are AUTOMATIC provenance; controller-enqueued
+     * items (book-page/chapter Download, Download-all) are USER.
+     * (Process-local by necessity: the §16 v8 total admits no new
+     * download_queue column.) */
+    private val prefetchExpandedItemIds =
+        java.util.Collections.synchronizedSet(mutableSetOf<Long>())
+
     private suspend fun processChapterItem(item: DownloadQueueItem) {
         val chapterId = item.chapterId ?: return
         val chapter = chapterDao.getById(chapterId)
@@ -467,13 +475,39 @@ class DownloadEngine(
         // record's pages to be complete (every page carrying
         // its file); an incomplete record falls through to the
         // fetch below, which lands only the missing pages.
-        if (chapter.contentPath != null &&
+        // v1.5.2 fix (Track B, §14.4): a stored STUB is not a body —
+        // it must never be PROMOTED to a READY download by a tap.
+        // A stub-shaped stored copy falls through to the live fetch
+        // below (which itself refuses stubs), so the honest locked
+        // state shows instead of a downloaded stub with a count.
+        val storedStub = if (chapter.contentPath != null) {
+            val stored = storage.readChapterContent(item.bookId, chapter.id)
+                .getOrNull()
+            stored != null && stored.pages == null &&
+                ChapterTruth152.isStubBody(stored.plainText())
+        } else {
+            false
+        }
+        if (!storedStub && chapter.contentPath != null &&
             storedPagesComplete(item.bookId, chapter) != false
         ) {
             if (chapter.downloadState != DownloadState.READY) {
                 chapterDao.setDownloadState(
                     chapterId, DownloadState.READY
                 )
+            }
+            // v1.5.2 fix (FIX-6d, §12.4): the origin stamped on the
+            // chapter ROW at enqueue governs — an AUTOMATIC-stamped
+            // row (reader neighbour warm, prefetch fan-out) stays
+            // cache even though a queue item carried it; only a
+            // USER-stamped (or unstamped legacy) row promotes.
+            val rowOrigin = chapterDao.getById(chapterId)?.bodyOrigin
+            if (item.id in prefetchExpandedItemIds ||
+                rowOrigin == BodyOrigin152.AUTOMATIC
+            ) {
+                chapterDao.setBodyOrigin(chapterId, BodyOrigin152.AUTOMATIC)
+            } else {
+                chapterDao.setBodyOrigin(chapterId, BodyOrigin152.USER)
             }
             queueDao.update(
                 item.copy(
@@ -580,6 +614,31 @@ class DownloadEngine(
                             chapterDao.setDownloadState(chapterId, DownloadState.NONE)
                             return
                         }
+                        // v1.5.2 fix (Track B, §14.4): a freshly
+                        // fetched STUB (login-wall / preview shape)
+                        // is REFUSED as a body on the engine road
+                        // too — ChapterTextLoader already refuses it
+                        // on the reader road, but the queue road
+                        // stored it WITH its word count and marked
+                        // it READY, so a stub could mint a phantom
+                        // "downloaded" chapter and publish its
+                        // ~64-word count. A stub is a failed fetch
+                        // with the gate's own reason: nothing is
+                        // written, no count is stored.
+                        val stubReason = app.xreader.data.extension
+                            .ChapterServeGate.loginWallRefusal(
+                                outcome.content.plainText()
+                            ) ?: app.xreader.data.extension
+                            .ChapterServeGate.refusalFor(
+                                outcome.content.plainText()
+                            )
+                        if (stubReason != null &&
+                            outcome.content.pages == null
+                        ) {
+                            lastError = AppError.BadFile(stubReason)
+                            roundFailedPermanently = true
+                            continue
+                        }
                         val saved = storage.writeChapterContent(
                             item.bookId, chapterId, outcome.content
                         )
@@ -622,6 +681,23 @@ class DownloadEngine(
                         chapterDao.setContent(
                             chapterId, relativePath,
                             outcome.content.wordCount, DownloadState.READY
+                        )
+                        // v1.5.2 fix (FIX-6d, §12.4): stamp the
+                        // origin the chapter ROW carried from
+                        // enqueue — READY alone no longer implies
+                        // "downloaded" (§12.9), and an automatic
+                        // producer's body can never be re-minted
+                        // as a USER download at write time.
+                        val rowOrigin = chapterDao.getById(chapterId)?.bodyOrigin
+                        chapterDao.setBodyOrigin(
+                            chapterId,
+                            if (item.id in prefetchExpandedItemIds ||
+                                rowOrigin == BodyOrigin152.AUTOMATIC
+                            ) {
+                                BodyOrigin152.AUTOMATIC
+                            } else {
+                                BodyOrigin152.USER
+                            }
                         )
                         try {
                             onChapterDownloaded(item.bookId, chapterId)
@@ -692,6 +768,29 @@ class DownloadEngine(
                     updatedAt = now
                 )
             })
+            // v1.5.2 (§12.4): remember these items as AUTOMATIC.
+            runCatching {
+                queueDao.activeForBook(item.bookId)
+                    .filter { it.enqueuedAt == now && it.kind == DownloadKind.CHAPTER }
+                    .forEach { prefetchExpandedItemIds += it.id }
+            }
+            // v1.5.2 fix (Track B, §12.4): ALSO stamp the chapter
+            // ROWS AUTOMATIC at enqueue — the process-local set
+            // above dies with the process, and a body completed
+            // after a restart was re-minted USER at write time.
+            // The row stamp is durable, so cache work can never
+            // mint a USER download. A row already stamped USER
+            // keeps its stamp (never demote a user's download).
+            runCatching {
+                val toStamp = wanted.filter {
+                    chapterDao.getById(it.id)?.bodyOrigin != BodyOrigin152.USER
+                }.map { it.id }
+                if (toStamp.isNotEmpty()) {
+                    chapterDao.setBodyOriginForIds(
+                        toStamp, BodyOrigin152.AUTOMATIC
+                    )
+                }
+            }
         }
         queueDao.update(item.copy(state = QueueState.DONE, updatedAt = clock()))
     }

@@ -9,11 +9,13 @@ import app.xreader.data.db.InstalledExtensionDao
 import app.xreader.data.db.TrustState
 import app.xreader.data.extension.ExtensionPermissions.Companion.encode
 import app.xreader.data.net.HttpTransport
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import java.io.File
 
 /**
  * Repositories and installs (PLAN §5/§9.1):
@@ -67,6 +69,15 @@ class RepoManager(
     }
 
     private val repoJson = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    /** v1.5.10 (C1) named test seam: how many times the epoch
+     * CURRENT branch has parsed a stored permissions blob.
+     * The gate (V1510EpochPreCheckTest) asserts a matching
+     * row costs ZERO parses under the string pre-check, and
+     * a drifted blob costs exactly one. Test scaffolding
+     * only — no production behaviour reads this. */
+    var epochCurrentParseCount: Int = 0
+        private set
 
     // ── repos ───────────────────────────────────────────────────────
 
@@ -913,7 +924,14 @@ class RepoManager(
                             ?: (it["short_name"] as? JsonPrimitive)?.contentOrNull
                     }?.ifBlank { null }
                     if (manifestName != null) {
-                        name = manifestName
+                        // v1.5.2 (§3): the manifest name rides the
+                        // og rung of the ONE precedence function —
+                        // a seed name still wins over it.
+                        name = SourceIdentity.resolve(
+                            seedName = SeedCatalog.nameFor(host),
+                            host = host,
+                            manifestName = manifestName
+                        )
                         namedByManifest = true
                     }
                     val icons = (manifest?.get("icons") as? kotlinx.serialization.json.JsonArray)
@@ -934,13 +952,17 @@ class RepoManager(
                     val siteName = doc.selectFirst("meta[property=og:site_name]")
                         ?.attr("content")?.ifBlank { null }
                     val title = doc.title().ifBlank { null }
-                    // v1.2.3: the raw <title> fallback used to
-                    // be the whole tagline, cut mid-word at 48
-                    // chars ("NovelBuddy— Read Web Novels &
-                    // Light Novels Onlin") — the exact defect
-                    // seen on-device. cleanSiteTitle keeps the
-                    // title's HEAD segment: the site's name.
-                    name = siteName ?: title?.let { cleanSiteTitle(it) } ?: name
+                    // v1.5.2 (§3): identity precedence is ONE
+                    // function — SeedCatalog → host-derived →
+                    // og:site_name → page title. A generic title
+                    // ("Home") can never become the display name
+                    // (Failure B: BOTI installed as "Home").
+                    name = SourceIdentity.resolve(
+                        seedName = SeedCatalog.nameFor(host),
+                        host = host,
+                        ogSiteName = siteName,
+                        pageTitle = title?.let { cleanSiteTitle(it) }
+                    )
                 }
                 val touchIcon = doc.selectFirst("link[rel=apple-touch-icon]")
                     ?.attr("abs:href")?.ifBlank { null }
@@ -1111,15 +1133,35 @@ class RepoManager(
      * - A bundled source that isn't installed is installed
      *   under the "Built-in sources" repo, exactly like a
      *   link source's row (declarative kind, trusted, enabled).
-     * - An installed bundled row refreshes to the newly
-     *   shipped rules ONLY while its stored fingerprint is
-     *   still one the app itself shipped for that source
-     *   ([BundledDefaults.SHIPPED_FINGERPRINTS]): the moment a
-     *   user Repairs or edits the source, its definition's
-     *   fingerprint leaves the shipped set and the row is
-     *   never touched again. Rows are NEVER deleted here, and
-     *   a row the user disabled stays disabled (a refresh
-     *   keeps its enabled state; only the rules move).
+     * - v1.5.4 (finding #3 close-out, spec §0.3): an installed
+     *   bundled row refreshes to the shipped rules when the
+     *   DEFINITIONS EPOCH recorded beside its package (the
+     *   [BUNDLED_EPOCH_FILE] sidecar in its package dir) is
+     *   older than [BundledDefaults.BUNDLED_DEFINITIONS_EPOCH]
+     *   — the epoch, never a reconstructed fingerprint, is
+     *   the decision. The v1.5.3 gate (the stored sha256 had
+     *   to sit in a hand-reconstructed set of historical
+     *   hashes) stranded the owner's BrightNovel row when its
+     *   stored hash matched no reconstructed value, and the
+     *   catalogue kept shape-missing on a definition the app
+     *   itself had shipped. Provenance is the boundary
+     *   instead: this pass only ever touches rows under
+     *   bundled package ids, so a bundled-provenance row IS
+     *   the app's own to move; link-added, learned and pack
+     *   rows never enter the loop. Within eligibility, a row
+     *   whose stored definition already IS the shipped one is
+     *   only stamped (no rewrite, no version bump); any other
+     *   is replaced wholesale — rules AND permissions
+     *   re-derived exactly as at first insert. Rows are NEVER
+     *   deleted here (the sole exception: the retired-package
+     *   step at the end of the pass, v1.5.39 item 2), and a
+     *   row the user disabled stays disabled (a refresh keeps
+     *   its enabled state; only the rules move).
+     * - One config's failure never blocks the rest: each is
+     *   isolated, logged loudly in [DiagnosticLog], and a
+     *   pass summary is recorded whenever anything was
+     *   replaced or failed — a silent half-applied pass is
+     *   the failure shape this build exists to end.
      *
      * Returns how many rows were installed or refreshed.
      */
@@ -1129,67 +1171,251 @@ class RepoManager(
         val repo = bundledRepo()
         val now = nowMs()
         var changed = 0
+        var replaced = 0
+        var alreadyCurrent = 0
+        val failed = mutableListOf<String>()
         for (config in configs) {
-            val packageId = "bundled.${config.id}"
-            val fingerprint = DeclarativeFingerprints.of(listOf(config))
-            val existing = extensionDao.getByPackageId(packageId)
-            if (existing == null) {
-                store.writeText(
-                    store.definitionFile(packageId),
-                    DeclarativeFingerprints.encode(listOf(config))
+            try {
+                when (installOneBundledDefault(repo, config, now)) {
+                    BundledPassOutcome.INSTALLED -> changed++
+                    BundledPassOutcome.REPLACED -> {
+                        changed++
+                        replaced++
+                    }
+                    BundledPassOutcome.CURRENT -> alreadyCurrent++
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed += config.id
+                DiagnosticLog.record(
+                    "bundled-defaults",
+                    "bundled definition update failed for " +
+                        "${config.id}: ${e.javaClass.simpleName}",
+                    config.id
                 )
-                val permissions = ExtensionPermissions(
-                    domains = listOf(config.baseUrl.normaliseHost()) +
-                        config.extraDomains
-                )
-                val row = InstalledExtension(
-                    repoId = repo.id,
-                    displayName = config.name,
-                    packageId = packageId,
-                    versionName = "1.0",
-                    versionCode = 1,
-                    kind = app.xreader.data.db.ExtensionKind.DECLARATIVE,
-                    artifactPath = null,
-                    sha256 = fingerprint,
-                    apiLevel = app.xreader.extensionapi.ExtensionApi.API_LEVEL,
-                    languages = config.lang,
-                    sourceIds = config.id,
-                    enabled = true,
-                    trustState = TrustState.TRUSTED,
-                    permissionsJson = permissions.encode(),
-                    installedAt = now,
-                    updatedAt = now
-                )
-                extensionDao.insert(row)
-                changed++
-            } else if (existing.sha256 != fingerprint &&
-                existing.sha256 in
-                (BundledDefaults.SHIPPED_FINGERPRINTS[config.id]
-                    ?: emptySet())
-            ) {
-                // An untouched bundled row from an older app
-                // version: move its rules to the shipped ones.
-                store.writeText(
-                    store.definitionFile(packageId),
-                    DeclarativeFingerprints.encode(listOf(config))
-                )
-                extensionDao.update(
-                    existing.copy(
-                        displayName = config.name,
-                        versionCode = existing.versionCode + 1,
-                        sha256 = fingerprint,
-                        sourceIds = config.id,
-                        updatedAt = now
-                    )
-                )
-                service.invalidate(existing.id)
-                changed++
             }
-            // Otherwise the row is current, or the user's own
-            // version of it — either way it is left exactly as
-            // it is.
+        }
+        // v1.5.39 (item 2): retire bundled packages the app
+        // no longer ships (BundledDefaults
+        // .RETIRED_BUNDLED_PACKAGE_IDS — Xnovel is the first).
+        // The ONE deliberate exception to this pass's
+        // never-delete rule, reaching only rows under the
+        // retired bundled ids: each leaves through the
+        // ordinary uninstall cascade (session cleared, row
+        // and definition files removed, service invalidated).
+        // The user's books on the source stay in
+        // Library/History with their downloaded chapters;
+        // opening one meets the existing source-gone answer.
+        // Idempotent: an absent row is a no-op, so the step
+        // costs nothing on later launches.
+        for (retiredId in BundledDefaults.RETIRED_BUNDLED_PACKAGE_IDS) {
+            try {
+                val stale = extensionDao.getByPackageId(retiredId)
+                if (stale != null) {
+                    uninstall(stale)
+                    changed++
+                    DiagnosticLog.record(
+                        "bundled-defaults",
+                        "retired bundled source removed: $retiredId",
+                        retiredId
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                DiagnosticLog.record(
+                    "bundled-defaults",
+                    "retiring $retiredId failed: " +
+                        e.javaClass.simpleName,
+                    retiredId
+                )
+            }
+        }
+        if (replaced > 0 || failed.isNotEmpty()) {
+            DiagnosticLog.record(
+                "bundled-defaults",
+                "bundled definitions epoch " +
+                    "${BundledDefaults.BUNDLED_DEFINITIONS_EPOCH} " +
+                    "pass: $replaced replaced, $alreadyCurrent " +
+                    "already current, ${failed.size} failed",
+                failed.joinToString(",")
+            )
         }
         return changed
+    }
+
+    /** What one config's step of the bundled pass did. */
+    private enum class BundledPassOutcome {
+        INSTALLED, REPLACED, CURRENT
+    }
+
+    /** One bundled config's install / epoch-refresh step —
+     * see [installBundledDefaults] for the contract. */
+    private suspend fun installOneBundledDefault(
+        repo: ExtensionRepo,
+        config: DeclarativeConfig,
+        now: Long
+    ): BundledPassOutcome {
+        val packageId = "bundled.${config.id}"
+        val fingerprint = DeclarativeFingerprints.of(listOf(config))
+        val existing = extensionDao.getByPackageId(packageId)
+        if (existing == null) {
+            store.writeText(
+                store.definitionFile(packageId),
+                DeclarativeFingerprints.encode(listOf(config))
+            )
+            val permissions = bundledPermissions(config)
+            val row = InstalledExtension(
+                repoId = repo.id,
+                displayName = config.name,
+                packageId = packageId,
+                versionName = "1.0",
+                versionCode = 1,
+                kind = app.xreader.data.db.ExtensionKind.DECLARATIVE,
+                artifactPath = null,
+                sha256 = fingerprint,
+                apiLevel = app.xreader.extensionapi.ExtensionApi.API_LEVEL,
+                languages = config.lang,
+                sourceIds = config.id,
+                enabled = true,
+                trustState = TrustState.TRUSTED,
+                permissionsJson = permissions.encode(),
+                installedAt = now,
+                updatedAt = now
+            )
+            extensionDao.insert(row)
+            stampBundledEpoch(packageId)
+            return BundledPassOutcome.INSTALLED
+        }
+        if (recordedBundledEpoch(packageId) >=
+            BundledDefaults.BUNDLED_DEFINITIONS_EPOCH
+        ) {
+            // v1.5.9 (Finding 2 §5.3): close the epoch gate's
+            // permissions blind spot. The CURRENT verdict used
+            // to return before any permissions comparison, so
+            // a row whose permissionsJson was written wrong by
+            // any earlier version — while its definition has
+            // since matched the shipped one — kept the wrong
+            // permissions forever, and the allowed-hosts guard
+            // judged the source's own pages as foreign.
+            // Bundled rows' permissions are system-managed
+            // (the REPLACE branch's own doctrine below), so
+            // re-derive them from the config here too and
+            // rewrite the stored blob when the PARSED set
+            // differs. A row whose permissions already ARE the
+            // derived set is left byte-identical — no update,
+            // no invalidation.
+            val derived = bundledPermissions(config)
+            // v1.5.10 (C1, Finding 7's own fix shape): the
+            // string-equality PRE-CHECK. The stored blob was
+            // written by encode() on every bundled write
+            // path, so a row already holding the derived set
+            // holds these exact bytes: equal strings skip the
+            // parse AND the drift check entirely (the CURRENT
+            // branch never decodes a definition — the parse
+            // was its per-launch waste). Any inequality runs
+            // today's exact path below (parse, compare,
+            // write-on-drift), so outcomes are byte-identical
+            // by construction: an equal-meaning blob in a
+            // different byte shape still parses, compares
+            // equal, and is left untouched.
+            val storedMatchesDerived =
+                existing.permissionsJson == derived.encode()
+            if (!storedMatchesDerived) {
+                epochCurrentParseCount++
+                if (ExtensionPermissions.parse(existing.permissionsJson) !=
+                    derived
+                ) {
+                    extensionDao.update(
+                        existing.copy(
+                            permissionsJson = derived.encode(),
+                            updatedAt = now
+                        )
+                    )
+                    service.invalidate(existing.id)
+                }
+            }
+            return BundledPassOutcome.CURRENT
+        }
+        // Epoch-eligible. The stored definition itself decides
+        // whether anything must move: one that already IS the
+        // shipped definition (its fingerprint matches — a fact
+        // read off the bytes on disk, never a membership test
+        // against reconstructed history) is only stamped.
+        val storedText = store.readText(store.definitionFile(packageId))
+        val storedFingerprint = storedText?.let { text ->
+            DeclarativeFingerprints.of(
+                DeclarativeFingerprints.decode(text)
+            )
+        }
+        if (storedFingerprint == fingerprint) {
+            stampBundledEpoch(packageId)
+            return BundledPassOutcome.CURRENT
+        }
+        // Replace wholesale: the definition file is rewritten
+        // and the row's PERMISSIONS move with its rules —
+        // re-derived exactly as at first insert (base host +
+        // the config's extraDomains), the v1.5.3 item-12 shape
+        // (a config that gains an extra domain must reach
+        // existing installs, or the new host's files stay
+        // refused). Bundled rows' permissions are
+        // system-managed; link/learned rows never pass
+        // through here.
+        store.writeText(
+            store.definitionFile(packageId),
+            DeclarativeFingerprints.encode(listOf(config))
+        )
+        val permissions = bundledPermissions(config)
+        extensionDao.update(
+            existing.copy(
+                displayName = config.name,
+                versionCode = existing.versionCode + 1,
+                sha256 = fingerprint,
+                sourceIds = config.id,
+                permissionsJson = permissions.encode(),
+                updatedAt = now
+            )
+        )
+        service.invalidate(existing.id)
+        stampBundledEpoch(packageId)
+        return BundledPassOutcome.REPLACED
+    }
+
+    /** The permissions a bundled config declares: its base
+     * host plus its extraDomains — THE derivation every
+     * bundled write path (first insert, epoch REPLACE, and
+     * the v1.5.9 CURRENT-branch heal) shares, and the one
+     * DeclarativeSource's stored-URL heal mirrors
+     * (DeclarativeSource.derivedPermissions; a test pins the
+     * two in agreement). */
+    private fun bundledPermissions(
+        config: DeclarativeConfig
+    ): ExtensionPermissions = ExtensionPermissions(
+        domains = listOf(config.baseUrl.normaliseHost()) +
+            config.extraDomains
+    )
+
+    /**
+     * The definitions epoch recorded for one bundled package:
+     * the integer in its [BUNDLED_EPOCH_FILE] sidecar, or 0
+     * when the sidecar is absent or unreadable. Every install
+     * from before the epoch existed (≤ v1.5.3) therefore reads
+     * as epoch 0 — eligible for exactly one epoch pass, after
+     * which its own stamp keeps it untouched.
+     */
+    private fun recordedBundledEpoch(packageId: String): Int =
+        store.readText(
+            File(store.packageDir(packageId), BUNDLED_EPOCH_FILE)
+        )?.trim()?.toIntOrNull() ?: 0
+
+    /** Stamp the current definitions epoch beside a bundled
+     * package (see [recordedBundledEpoch]). */
+    private fun stampBundledEpoch(packageId: String) {
+        store.writeText(
+            File(store.packageDir(packageId), BUNDLED_EPOCH_FILE),
+            BundledDefaults.BUNDLED_DEFINITIONS_EPOCH.toString()
+        )
     }
 
     // ── internals ───────────────────────────────────────────────────
@@ -1364,6 +1590,17 @@ class RepoManager(
         /** v1.3.0: the synthetic repo the built-in default
          * sources live under (see [installBundledDefaults]). */
         const val BUNDLED_REPO_URL = "xreader://bundled-sources"
+
+        /** v1.5.4 (spec §0.3): the sidecar file inside a
+         * bundled package's dir recording the definitions
+         * epoch the pass has applied to it (see
+         * [BundledDefaults.BUNDLED_DEFINITIONS_EPOCH]). It
+         * lives in the package dir — the per-package home the
+         * store already keeps the definition file in — so it
+         * is keyed by package id by construction and is
+         * deleted with the package on uninstall. Absent =
+         * epoch 0 (every pre-epoch install). */
+        const val BUNDLED_EPOCH_FILE = "bundled-epoch"
         const val MAX_INDEX_BYTES = 4 * 1024 * 1024
         const val MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 

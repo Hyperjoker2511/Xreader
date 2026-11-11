@@ -1,3 +1,6 @@
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -24,12 +27,24 @@ android {
         applicationId = "app.xreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 43
-        versionName = "1.5.1"
+        versionCode = 81
+        versionName = "1.5.39"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
+        }
+        // v1.5.7 (size cap): ship ARM ABIs only. The Komikku SSIV
+        // fork's transitive image-decoder native library added
+        // ~21.5 MB across four ABIs and pushed the APK to
+        // 106.4 MB, over the 100 MB cap. Both proof phones (and
+        // effectively every real phone) are ARM; the x86/x86_64
+        // libs only ever served emulators, and the emulator
+        // programme is closed (2026-11-02). Dropping them takes
+        // the APK back under the cap with zero change to what
+        // runs on ARM devices — the SSIV native decoder included.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
     }
 
@@ -72,6 +87,8 @@ android {
         }
     }
     compileOptions {
+        // v1.5.6 (§3): Readium requires core library desugaring.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -94,6 +111,26 @@ android {
     }
     testOptions {
         unitTests {
+            // v1.5.2 loop 2 (DELTA 3): the live-network proof
+            // classes carry @Category(LiveSmoke::class) and are
+            // EXCLUDED from the deterministic gate by default;
+            // the smoke set runs them explicitly with
+            // -PliveSmoke. Site downtime must neither fail nor
+            // pass the wiring gate. (Class-pattern exclusion:
+            // runner-independent, unlike tag filtering under
+            // the JUnit4/vintage mix this suite runs on.)
+            all {
+                if (!project.hasProperty("liveSmoke")) {
+                    it.exclude(
+                        "**/BotiLiveProofTest.class",
+                        "**/FenrirLiveFilingTest.class",
+                        "**/LiveRealSetSearchSmokeTest.class",
+                        "**/LnoriLiveSmokeTest.class",
+                        "**/QnConvertsLiveSmokeTest.class",
+                        "**/WattpadLearnerLiveProbeTest.class"
+                    )
+                }
+            }
             // Android stubs (Log, Keystore) are inert on the JVM by default.
             isReturnDefaultValues = true
             // v1.4.2: Robolectric (ProductionDatabaseTest) locates the
@@ -152,6 +189,24 @@ dependencies {
     implementation(libs.pdfbox.android)
     implementation(libs.junrar)
 
+    // v1.5.6 (§3): the render-the-file EPUB carrier — Readium Kotlin
+    // 3.1.2 (BSD-3). Transitves (media3, kotlin-reflect, …) are taken
+    // as they come; exclusions are NOT gambled on (carrier verdict).
+    implementation(libs.readium.shared)
+    implementation(libs.readium.streamer)
+    implementation(libs.readium.navigator)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
+    // v1.5.6: real Guava over the empty listenablefuture stub that
+    // media3's graph otherwise selects (ML Kit/CameraX break).
+    implementation(libs.guava)
+
+    // v1.5.7 (Komikku full): SSIV tiling page view for the manga
+    // reader (donor ReaderPageImageView) — pages decode as tiles
+    // at the visible region's resolution instead of one capped
+    // whole-page Coil bitmap. Apache-2.0, © Dave Morrissey /
+    // Tachiyomi contributors; see assets/THIRD_PARTY_NOTICES.md.
+    implementation(libs.subsampling.scale.image.view)
+
     // Phase 3 extension sandbox (PLAN §5): the stable source API both
     // the host and Dex extensions link against; jsoup is the host-side
     // HTML engine behind the API's HtmlParser facade and the
@@ -201,4 +256,65 @@ dependencies {
     // the app APK.
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.runner)
+}
+
+// ---------------------------------------------------------------------------
+// TEMP-CAPTURE harness (v1.5.2 re-scan, BigTxtStreamingTest one-off failure;
+// adopted in build-logs/V152-SECOND-OPINION-10-ASSESSMENT.md Q3/Q5):
+// failing unit-test reports are AUTO-ARCHIVED before any re-run can
+// overwrite them — the original BigTxt failure was lost exactly that way.
+// The archive task runs as a finalizer of every Test task and copies the
+// JUnit XMLs (reports.junitXml.outputLocation = build/test-results/<task>)
+// plus the HTML reports into a timestamped dir under
+// <repo>/build-logs/test-archives/, but ONLY when some result XML records
+// failures/errors > 0, so green runs leave no clutter. Test-side stdout/
+// stderr reaches the console log when -PshowTestStreams is passed (the
+// XMLs carry it either way). To be reviewed at BigTxt closure.
+// ---------------------------------------------------------------------------
+val archiveFailedTestReports = tasks.register("archiveFailedTestReports") {
+    description = "TEMP-CAPTURE: archive failing unit-test reports under build-logs/test-archives/."
+    doLast {
+        val resultsRoot = layout.buildDirectory.dir("test-results").get().asFile
+        if (!resultsRoot.isDirectory) return@doLast
+        val failingXml = resultsRoot.walkTopDown()
+            .filter { it.isFile && it.name.startsWith("TEST-") && it.extension == "xml" }
+            .firstOrNull { Regex("""(failures|errors)="[1-9]""").containsMatchIn(it.readText()) }
+        if (failingXml == null) return@doLast
+        val stamp = LocalDateTime.now()
+            .format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"))
+        val dest = File(rootProject.projectDir, "../build-logs/test-archives/$stamp")
+            .canonicalFile
+        dest.mkdirs()
+        resultsRoot.copyRecursively(File(dest, "test-results"), overwrite = true)
+        val reportsRoot = layout.buildDirectory.dir("reports/tests").get().asFile
+        if (reportsRoot.isDirectory) {
+            reportsRoot.copyRecursively(File(dest, "reports-tests"), overwrite = true)
+        }
+        println("TEMP-CAPTURE: failing test reports archived to $dest")
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    // v1.5.3 (poison-hunt, build-logs/V153-POISON-HUNT-REPORT.md):
+    // one worker JVM per test class. The default forkEvery = 0
+    // runs all ~350 classes in a single JVM, where cross-class
+    // residue has bitten three times this release — most severely
+    // a wedged write path on the sandbox-shared settings
+    // DataStore singleton (the preferencesDataStore delegate is
+    // one instance per classloader, shared by every AppContainer
+    // a JVM accumulates): gate run 1 parked ~105 min on it, and
+    // both DataStore-writing victims (V153LibraryStatusTest,
+    // V152HistoryJourneyTest) failed non-deterministically —
+    // identical predecessor sets flip green/red between runs, so
+    // no forkEvery > 1 bound closes the window. Per-class forks
+    // restore the isolation every class was written and validated
+    // under; no assertion, timeout or production code changes.
+    forkEvery = 1
+    finalizedBy(archiveFailedTestReports)
+    if (project.hasProperty("showTestStreams")) {
+        testLogging {
+            showStandardStreams = true
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        }
+    }
 }

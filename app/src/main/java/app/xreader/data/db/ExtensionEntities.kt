@@ -53,7 +53,13 @@ data class InstalledExtension(
     /** Declared domains + toggles as JSON (parsed at the boundary, §9.1). */
     val permissionsJson: String = "{}",
     val installedAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** v1.5.2 (§8.2): set when an update-pass re-derivation failed and
+     * the record was KEPT (settled ruling ii) — the source stays
+     * listed, books stay attached, Repair is offered. */
+    val needsRepair: Boolean = false,
+    /** v1.5.2 (§8.2): the §9 failure class of the failed re-derivation. */
+    val needsRepairReason: String? = null
 )
 
 /**

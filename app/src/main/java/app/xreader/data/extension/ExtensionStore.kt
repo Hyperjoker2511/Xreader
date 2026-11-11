@@ -1,6 +1,7 @@
 package app.xreader.data.extension
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.InputStream
@@ -90,6 +91,101 @@ class ExtensionStore(private val filesDir: File) {
      * pack state, so no Room migration rides this slice). */
     fun keiyoushiPlayerStateFile(): File =
         File(root, "keiyoushi-player.json")
+
+    // ── Finding 6 (v1.5.9): remembered instance picks ──────
+    //
+    // One string per PACKAGE: the source instance the reader
+    // last opened from a multi-source package's Details page,
+    // so the Sources list can open that instance's catalogue
+    // directly instead of demanding the choice again. It rides
+    // THIS store — the same file-backed record store the
+    // Keiyoushi player persists its records through (above) —
+    // as a sibling JSON file, so no Room schema change rides
+    // this fix. Keyed by packageId (the row's stable identity),
+    // never by row id: a reinstalled package keeps its pick.
+
+    /** The remembered-picks file, beside the player's own
+     * record file in the extension store root. */
+    fun instancePicksFile(): File =
+        File(root, "instance-picks.json")
+
+    private val instancePicksLock = Any()
+
+    /** v1.5.10 (B3): the parsed picks, served from memory after
+     * the first read — the file is parsed ONCE per process.
+     * This store is the file's only writer (verified), so the
+     * cache can never go stale behind another writer's back:
+     * [writeInstancePick] updates memory and file together.
+     * Null = not read yet. Guarded by [instancePicksLock]. */
+    private var instancePicksCache: Map<String, String>? = null
+
+    /** v1.5.10 (B3) named test seam: how many times the picks
+     * file has actually been read from disk by this store.
+     * The gate (V1510InstancePicksCacheTest) asserts N logical
+     * reads cost exactly 1 file read. Test scaffolding only —
+     * no production behaviour reads this. */
+    var instancePicksFileReadCount: Int = 0
+        private set
+
+    /** The ONE parse site for the picks file (B3 census):
+     * reads + parses the file and fills the memory cache.
+     * A missing or corrupt file caches as empty — a pick is
+     * a convenience, never a reason to fail a surface.
+     * Caller must hold [instancePicksLock]. */
+    private fun loadInstancePicksLocked(): Map<String, String> {
+        instancePicksCache?.let { return it }
+        instancePicksFileReadCount++
+        val raw = readText(instancePicksFile())
+        val parsed = if (raw == null) {
+            emptyMap()
+        } else {
+            runCatching {
+                pendingJson.decodeFromString(
+                    kotlinx.serialization.builtins.MapSerializer(
+                        String.serializer(),
+                        String.serializer()
+                    ),
+                    raw
+                )
+            }.getOrDefault(emptyMap())
+        }
+        instancePicksCache = parsed
+        return parsed
+    }
+
+    /** Every remembered pick, packageId → sourceId. A missing
+     * or corrupt file reads as "nothing remembered" — a pick
+     * is a convenience, never a reason to fail a surface.
+     * v1.5.10 (B3): served from memory after the first read. */
+    fun readInstancePicks(): Map<String, String> =
+        synchronized(instancePicksLock) { loadInstancePicksLocked() }
+
+    /** The remembered instance for [packageId], or null when
+     * the reader has never picked one for this package. */
+    fun instancePick(packageId: String): String? =
+        readInstancePicks()[packageId]
+
+    /** Remember [sourceId] as [packageId]'s instance. Other
+     * packages' picks are untouched (one key per package).
+     * v1.5.10 (B3): memory and file move together, so the next
+     * read answers from memory with no re-read. */
+    fun writeInstancePick(packageId: String, sourceId: String) {
+        if (packageId.isBlank() || sourceId.isBlank()) return
+        synchronized(instancePicksLock) {
+            val updated = loadInstancePicksLocked() + (packageId to sourceId)
+            writeText(
+                instancePicksFile(),
+                pendingJson.encodeToString(
+                    kotlinx.serialization.builtins.MapSerializer(
+                        String.serializer(),
+                        String.serializer()
+                    ),
+                    updated
+                )
+            )
+            instancePicksCache = updated
+        }
+    }
 
     /** v1.3.5 (Cycle 1, provider packs): one pack channel's
      * persisted state (active/previous pack documents + check

@@ -46,7 +46,20 @@ object ChapterReconciler {
          * fetched chapter's date when it carries one, otherwise
          * the stored row's (a refresh that stops printing dates
          * must not erase the ones already known). */
-        val newDateText: String? = null
+        val newDateText: String? = null,
+        /** v1.5.8 (E1): the scanlator after this refresh — the
+         * fetched chapter's credit when it carries one,
+         * otherwise the stored row's (same never-erase rule as
+         * [newDateText]). */
+        val newScanlator: String? = null,
+        /** v1.5.11 (transplant, Verdict 1): the memo after this
+         * refresh — the fetched chapter's memo (JSON text of
+         * the donor SChapter.memo) when it carries one,
+         * otherwise the stored row's (same never-erase rule as
+         * [newScanlator]: a refresh from a road that carries
+         * no memo must not erase the stored state an extension
+         * needs back at page-list time). */
+        val newMemo: String? = null
     )
 
     data class Insert(val index: Int, val fetched: SourceChapter)
@@ -75,7 +88,9 @@ object ChapterReconciler {
                     newIndex = fetched.size + keptStale.size,
                     newTitle = row.title,
                     newRemoteId = row.remoteId ?: "",
-                    newDateText = row.dateText
+                    newDateText = row.dateText,
+                    newScanlator = row.scanlator,
+                    newMemo = row.memo
                 )
             }
         }
@@ -101,6 +116,26 @@ object ChapterReconciler {
         return Plan(updates, inserts, emptyList(), emptyList())
     }
 
+    /** The stored rows' match keys, built ONCE per reconcile
+     * call (v1.5.37, combined build, S5): rungs 2–5 of
+     * [findMatch] used to re-canonicalise, re-normalise and
+     * re-parse every stored row on EVERY comparison — at a
+     * 1,400-chapter book that is ~2M row visits and up to
+     * ~4M title normalisations per refresh
+     * (BIG-BOOK-REFRESH-FORENSICS Q2). Same keys, same
+     * values; computed once per row instead. */
+    private class StoredKeys(existing: List<Chapter>) {
+        val canonicalByRowId: Map<Long, String> = existing.associate {
+            it.id to ChapterIdentity.canonicalKey(it.remoteId ?: "")
+        }
+        val titleByRowId: Map<Long, String> = existing.associate {
+            it.id to ChapterMatcher.normaliseTitle(it.title)
+        }
+        val numberByRowId: Map<Long, Float?> = existing.associate {
+            it.id to ChapterNumbers.parse(it.title)
+        }
+    }
+
     /** The shared matching loop: pairs every fetched chapter
      * with at most one stored row (multi-key, see [findMatch])
      * and reports which stored rows were claimed. */
@@ -114,15 +149,19 @@ object ChapterReconciler {
 
         fun free(row: Chapter) = row.id !in used
 
+        val keys = StoredKeys(existing)
+
         fetched.forEachIndexed { index, chapter ->
-            val match = findMatch(existing, chapter, index, ::free)
+            val match = findMatch(existing, keys, chapter, index, ::free)
             if (match == null) {
                 inserts += Insert(index, chapter)
             } else {
                 used += match.id
                 updates += Update(
                     match, index, chapter.name, chapter.id,
-                    newDateText = chapter.dateText ?: match.dateText
+                    newDateText = chapter.dateText ?: match.dateText,
+                    newScanlator = chapter.scanlator ?: match.scanlator,
+                    newMemo = chapter.memo ?: match.memo
                 )
             }
         }
@@ -138,6 +177,7 @@ object ChapterReconciler {
 
     private fun findMatch(
         existing: List<Chapter>,
+        keys: StoredKeys,
         fetched: SourceChapter,
         fetchedIndex: Int,
         free: (Chapter) -> Boolean
@@ -147,14 +187,14 @@ object ChapterReconciler {
             ?.let { return it }
         // 2. Canonicalised remoteId (URL-ish ids: case/slash drift).
         val canonical = canonicalId(fetched.id)
-        existing.firstOrNull { free(it) && canonicalId(it.remoteId) == canonical }
+        existing.firstOrNull { free(it) && keys.canonicalByRowId[it.id] == canonical }
             ?.let { return it }
         // 3. Same position, same normalised title.
         val fetchedTitle = ChapterMatcher.normaliseTitle(fetched.name)
         if (fetchedTitle.isNotEmpty()) {
             existing.firstOrNull {
                 free(it) && it.index == fetchedIndex &&
-                    ChapterMatcher.normaliseTitle(it.title) == fetchedTitle
+                    keys.titleByRowId[it.id] == fetchedTitle
             }?.let { return it }
         }
         // 4. Same chapter number.
@@ -162,7 +202,7 @@ object ChapterReconciler {
         if (fetchedNumber != null) {
             existing.firstOrNull {
                 free(it) &&
-                    (ChapterNumbers.parse(it.title)?.let { n ->
+                    (keys.numberByRowId[it.id]?.let { n ->
                         kotlin.math.abs(n - fetchedNumber) < 0.001f
                     } == true)
             }?.let { return it }
@@ -170,7 +210,7 @@ object ChapterReconciler {
         // 5. Same normalised title anywhere.
         if (fetchedTitle.isNotEmpty()) {
             existing.firstOrNull {
-                free(it) && ChapterMatcher.normaliseTitle(it.title) == fetchedTitle
+                free(it) && keys.titleByRowId[it.id] == fetchedTitle
             }?.let { return it }
         }
         return null

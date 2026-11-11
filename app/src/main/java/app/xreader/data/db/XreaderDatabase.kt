@@ -40,9 +40,17 @@ import androidx.room.TypeConverters
         Tag::class,
         BookTag::class,
         TagFollow::class,
-        VocabWord::class
+        VocabWord::class,
+        HistoryRecord::class,
+        PendingOperation::class,
+        UpdatePassJournalEntry::class,
+        // v10 (v1.5.6, §3): reading-memory notes + in-place outlines.
+        ReadingMemory::class,
+        LocalOutline::class
     ],
-    version = 7,
+    // v12 (v1.5.11, transplant Verdict 1): chapters.memo —
+    // see MIGRATION_11_12.
+    version = 12,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -71,6 +79,11 @@ abstract class XreaderDatabase : RoomDatabase() {
     abstract fun shelfDao(): ShelfDao
     abstract fun tagDao(): TagDao
     abstract fun vocabDao(): VocabDao
+    abstract fun historyRecordDao(): HistoryRecordDao
+    abstract fun pendingOperationDao(): PendingOperationDao
+    abstract fun updatePassJournalDao(): UpdatePassJournalDao
+    abstract fun readingMemoryDao(): ReadingMemoryDao
+    abstract fun localOutlineDao(): LocalOutlineDao
 
     companion object {
         const val NAME = "xreader.db"
@@ -87,7 +100,11 @@ abstract class XreaderDatabase : RoomDatabase() {
             "exp_events", "achievements",
             // v3 (v1.0.2): library organisation — shelves, tags, vocab.
             "shelves", "shelf_books", "tags", "book_tags", "tag_follows",
-            "vocab_words"
+            "vocab_words",
+            // v8 (v1.5.2, §16 total).
+            "history_records", "pending_operations", "update_pass_journal",
+            // v10 (v1.5.6, §3).
+            "reading_memory", "local_outline"
         )
     }
 }

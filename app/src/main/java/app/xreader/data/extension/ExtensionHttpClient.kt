@@ -37,6 +37,55 @@ class RateLimiter(
 }
 
 /**
+ * v1.5.2 fix (FIX-3, §4): marks a coroutine as running on behalf of
+ * SEARCH. Requests issued inside it carry the search-scoped 15 s
+ * call timeout ([app.xreader.data.net.OkHttpTransport
+ * .SEARCH_CALL_TIMEOUT_SECONDS]) instead of the 300 s reading
+ * budget — the printed §4 mechanism, wired into the actual search
+ * path (GlobalSearch wraps every fan-out leg in this element).
+ */
+object SearchCallScope : kotlin.coroutines.CoroutineContext.Element,
+    kotlinx.coroutines.ThreadContextElement<Unit> {
+    override val key: kotlin.coroutines.CoroutineContext.Key<SearchCallScope>
+        get() = Key
+    object Key : kotlin.coroutines.CoroutineContext.Key<SearchCallScope>
+
+    /**
+     * The blocking-bridge twin (found by the FIX-3 real-set leg):
+     * declarative sources reach this client through HostHttpImpl's
+     * `runBlocking` bridges, which start a FRESH coroutine context —
+     * a plain context element never reaches
+     * `currentCoroutineContext()` on the far side, so the 15 s
+     * stamp silently never landed for declarative legs. As a
+     * [kotlinx.coroutines.ThreadContextElement] this object also
+     * stamps the marker onto the thread for as long as a leg
+     * executes on it; the nested runBlocking runs on that same
+     * thread, so the stamp survives the bridge. Restored on
+     * dispatch-out — pooled threads never leak the mark.
+     */
+    private val onThread = ThreadLocal<Boolean>()
+
+    override fun updateThreadContext(
+        context: kotlin.coroutines.CoroutineContext
+    ) {
+        onThread.set(true)
+    }
+
+    override fun restoreThreadContext(
+        context: kotlin.coroutines.CoroutineContext,
+        oldState: Unit
+    ) {
+        onThread.remove()
+    }
+
+    /** True when the current coroutine carries the element OR the
+     * current thread is executing a search leg (the bridge case). */
+    suspend fun isActive(): Boolean =
+        kotlinx.coroutines.currentCoroutineContext()[Key] != null ||
+            onThread.get() == true
+}
+
+/**
  * THE security-critical class of Phase 3 (§9.1): every byte of network
  * traffic an extension causes goes through here, and the whitelist is
  * enforced inside it — checked before the request AND on every
@@ -69,6 +118,11 @@ class ExtensionHttpClient(
      * (cookie → header, exact hosts) — attached per attempt
      * host below. Empty for every source that declares none. */
     private val credentialBindings: () -> List<HeaderBinding> = { emptyList() },
+    /** v1.5.2 (§10 item 1): the source's declared static replay
+     * headers (harvested interceptor headers, exact hosts) —
+     * attached per attempt host below, under the bindings so a
+     * live session binding wins a same-name clash. */
+    private val staticHeaders: () -> List<StaticHeaderBinding> = { emptyList() },
     /** v1.3.4 (T6): the source's declared backup hosts, in
      * order — the failover list for transport failures. */
     private val backupHosts: () -> List<String> = { emptyList() },
@@ -402,6 +456,29 @@ class ExtensionHttpClient(
             // on its web host while the API host must receive
             // it. The binding's value replaces any caller
             // header of the same name on its hosts.
+            // v1.5.2 (§10 item 1): the declared static replay
+            // headers for THIS host — the site's own interceptor
+            // headers, harvested when the source was learned
+            // (BOTI's lang / site-domain to its API host). Same
+            // discipline as the bindings: exact hosts only, and
+            // the declared value replaces any caller header of
+            // the same name on those hosts. Applied BEFORE the
+            // bindings so a live cookie binding wins a clash.
+            // v1.5.3 (round-16 amendment B): a static binding's
+            // pinned scheme is checked against THIS attempt's
+            // URL — a header learned over https never rides an
+            // http attempt (or redirect hop) to the same host.
+            val requestScheme = runCatching {
+                URI(currentUrl).scheme
+            }.getOrNull()
+            for (header in staticHeaders()) {
+                if (!header.appliesTo(host, requestScheme)) continue
+                if (header.value.isBlank()) continue
+                requestHeaders.keys
+                    .firstOrNull { it.equals(header.headerName, ignoreCase = true) }
+                    ?.let { requestHeaders.remove(it) }
+                requestHeaders[header.headerName] = header.value
+            }
             for (binding in credentialBindings()) {
                 if (!binding.appliesTo(host)) continue
                 val value = binding.headerValue(
@@ -415,8 +492,17 @@ class ExtensionHttpClient(
             if (contentType != null && currentMethod == "POST") {
                 requestHeaders.putIfAbsent("Content-Type", contentType)
             }
+            // v1.5.2 fix (FIX-3, §4): a request issued on behalf of
+            // search carries the 15 s search-scoped call timeout so
+            // it fits inside the 20 s per-source leg budget. The
+            // failover attempts of one leg share the leg budget via
+            // StreamingSearch's timeout, which cancels this call.
+            val inSearchScope = SearchCallScope.isActive()
             val response = transport.execute(
                 HttpTransport.Request(
+                    callTimeoutSeconds = if (inSearchScope) {
+                        app.xreader.data.net.OkHttpTransport.SEARCH_CALL_TIMEOUT_SECONDS
+                    } else null,
                     url = currentUrl,
                     method = currentMethod,
                     body = currentBody,
@@ -468,9 +554,9 @@ class ExtensionHttpClient(
                     // never on the caller's thread — on a
                     // trickling connection this loop is where a
                     // main-thread caller used to park.
-                    val parsed = kotlinx.coroutines.withContext(
-                        kotlinx.coroutines.Dispatchers.IO
-                    ) { readBody(resp) }
+                    // v1.5.3 (finding #6): the read is also
+                    // cancellable — see readBodyCancellable.
+                    val parsed = readBodyCancellable(resp, readBody)
                         ?: return AppResult.Err(
                             AppError.ExtensionFailed(label, tooLargeMessage)
                         )
@@ -500,6 +586,36 @@ class ExtensionHttpClient(
                         )
                     )
                 }
+            }
+        }
+    }
+
+    /**
+     * v1.5.3 (finding #6, spec item 18): run one of the body
+     * readers ([readBody] / [readByteBody]) with cancellation able
+     * to bite DURING the blocking read. The transport hands out a
+     * live stream and returns at headers, so the caller's budget
+     * (the fetcher's 75 s) used to expire while this read sat in a
+     * plain `input.read()` loop that coroutine cancellation cannot
+     * interrupt — a drip-feeding body then ran to OkHttp's 300 s
+     * call timeout with the screen spinning silently. Here the
+     * read runs inside a [kotlinx.coroutines.suspendCancellableCoroutine]
+     * whose cancellation handler closes the body stream: closing
+     * the stream makes the parked read throw at once, so the
+     * budget regains authority. The read itself is untouched —
+     * same IO dispatcher, same 8 MB cap, same decoding.
+     */
+    private suspend fun <T> readBodyCancellable(
+        response: HttpTransport.Response,
+        reader: (HttpTransport.Response) -> T?
+    ): T? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        kotlinx.coroutines.suspendCancellableCoroutine<T?> { cont ->
+            cont.invokeOnCancellation {
+                runCatching { response.body?.close() }
+            }
+            val outcome = runCatching { reader(response) }
+            if (cont.isActive) {
+                cont.resumeWith(outcome)
             }
         }
     }

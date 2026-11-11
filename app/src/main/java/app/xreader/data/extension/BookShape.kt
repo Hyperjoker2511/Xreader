@@ -325,7 +325,8 @@ enum class RebuildKind {
     /** Repo packageId, DECLARATIVE, exactly one stored config. */
     REPO_DECLARATIVE_SINGLE,
 
-    /** Repo packageId, DECLARATIVE, zero or several configs. */
+    /** Repo packageId, DECLARATIVE, zero or several configs
+     * — or any `bundled.*` row, whatever its count (F3). */
     REPO_DECLARATIVE_MULTI,
 
     /** Foreign code (JS/DEX) — no declarative rules exist. */
@@ -371,6 +372,21 @@ object SourceRebuildability {
         kind == app.xreader.data.db.ExtensionKind.JS ||
             kind == app.xreader.data.db.ExtensionKind.DEX ->
             RebuildKind.REPO_CODE
+        // v1.5.36 (F3): bundled rows are system-managed —
+        // the bundled-definitions epoch pass is their only
+        // writer (RepoManager's own stated doctrine for that
+        // pass). Whatever their stored config count, a
+        // `bundled.*` row classifies as MULTI here, so every
+        // gate that asks this helper — Repair, the
+        // parser-rules editor, the book page's Repair door —
+        // gives it the test-drive-only treatment and can
+        // never re-probe-and-overwrite the shipped lane
+        // (v1.5.35: a Repair on bundled.xnovel replaced its
+        // hand-built q-data and /n2 rules in place). Link-added,
+        // repo-pack and Live rows never carry the prefix;
+        // their repair behaviour is untouched.
+        packageId.startsWith("bundled.") ->
+            RebuildKind.REPO_DECLARATIVE_MULTI
         kind == app.xreader.data.db.ExtensionKind.DECLARATIVE ->
             if (configCount == 1) {
                 RebuildKind.REPO_DECLARATIVE_SINGLE

@@ -41,7 +41,18 @@ class DownloadController(
     private val clock: () -> Long = System::currentTimeMillis
 ) {
 
-    suspend fun enqueueChapter(bookId: Long, chapterId: Long): Long {
+    /**
+     * Enqueue one chapter. [origin] is stamped on the CHAPTER ROW at
+     * enqueue time (v1.5.2 fix, FIX-6d, §12.4): USER for the user's
+     * own download taps, AUTOMATIC for automatic producers (reader
+     * neighbour warm above all). Stamping at creation — not at body
+     * write — means a later re-read can never re-mint a phantom USER
+     * download, and no new queue column was needed (§16 total).
+     */
+    suspend fun enqueueChapter(
+        bookId: Long, chapterId: Long,
+        origin: String = app.xreader.data.download.BodyOrigin152.USER
+    ): Long {
         val now = clock()
         val id = queueDao.insert(
             DownloadQueueItem(
@@ -50,6 +61,14 @@ class DownloadController(
             )
         )
         chapterDao.setDownloadState(chapterId, DownloadState.QUEUED)
+        // A USER tap promotes a cached row's stamp; an AUTOMATIC
+        // producer never demotes a USER stamp.
+        val row = chapterDao.getById(chapterId)
+        if (row != null && row.bodyOrigin != BodyOrigin152.USER) {
+            chapterDao.setBodyOrigin(chapterId, origin)
+        } else if (row != null && origin == BodyOrigin152.USER) {
+            chapterDao.setBodyOrigin(chapterId, BodyOrigin152.USER)
+        }
         enqueuer.enqueueDrain()
         return id
     }
@@ -88,6 +107,12 @@ class DownloadController(
                 })
                 chapterDao.setDownloadStateForIds(
                     toEnqueue.map { it.id }, DownloadState.QUEUED
+                )
+                // Download-all is a USER action (§12.4): stamp the
+                // rows at enqueue, like enqueueChapter does.
+                chapterDao.setBodyOriginForIds(
+                    toEnqueue.map { it.id },
+                    app.xreader.data.download.BodyOrigin152.USER
                 )
             }
         }

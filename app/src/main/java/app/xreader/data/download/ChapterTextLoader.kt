@@ -8,6 +8,7 @@ import app.xreader.data.db.ChapterDao
 import app.xreader.data.db.ChapterSourceMapDao
 import app.xreader.data.extension.DiagnosticLog
 import app.xreader.data.files.BookStorage
+import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import kotlinx.coroutines.CancellationException
 
@@ -67,6 +68,18 @@ class ChapterTextLoader(
          * fetch always resolves to Stored or Failed, so this is
          * no longer produced. */
         data object TimedOut : Outcome
+
+        /**
+         * v1.5.5 (§4): the chapter belongs to a local import
+         * whose background completion job is still extracting
+         * it. NOT an error: the reader shows the live
+         * "Preparing chapter…" state and re-reads when the
+         * chapter lands (the completion publishes through
+         * ImportCompletionState's flow). Produced only while
+         * the job is actually running — a finished job's
+         * chapters resolve to Stored or Failed as always.
+         */
+        data object Preparing : Outcome
     }
 
     /** Ensures the chapter's text is stored on this device. */
@@ -75,7 +88,56 @@ class ChapterTextLoader(
         // landed since the caller read it, and a stale row must
         // not trigger a second fetch of a stored chapter.
         val current = chapterDao.getById(chapter.id) ?: chapter
-        if (current.contentPath != null) return Outcome.Stored(current)
+        // v1.5.5 (§4): a local import still being extracted —
+        // the chapter's row exists (the file-first registration
+        // created it) but its content is being written by the
+        // completion job. Preparing, not a fetch failure: no
+        // source candidates are consulted for a book whose text
+        // is arriving from its own file.
+        if (current.contentPath == null &&
+            app.xreader.data.importer.ImportCompletionState
+                .isPreparing(bookId, current.index)
+        ) {
+            return Outcome.Preparing
+        }
+        if (current.contentPath != null) {
+            // v1.5.2 (§14.4): a stored body that fails the integrity
+            // rule (a declared-lock / login-wall stub stored before
+            // sign-in) is treated as NOT stored — it must not be
+            // immortal. The re-fetch below runs when a session
+            // exists; the stub file is replaced by the real body.
+            val storedContent = storage.readChapterContent(bookId, current.id)
+                .getOrNull()
+            val stub = storedContent?.let {
+                app.xreader.data.extension.ChapterServeGate
+                    .loginWallRefusal(it.plainText())
+            }
+            if (stub == null) {
+                // v1.5.5 (§4): the stored heading-only hollow —
+                // a chapter the completed import job flagged as
+                // under the prose floor (a title over pages whose
+                // text couldn't be extracted) is NOT served as a
+                // successfully-read empty chapter. Once the job
+                // is DONE, it is labelled honestly instead. The
+                // flag comes from the job's own record, so a
+                // genuinely short divider chapter of any other
+                // book is never mislabelled.
+                val completion = app.xreader.data.importer
+                    .ImportCompletionState.status(bookId)
+                if (completion != null && !completion.running &&
+                    current.index in completion.hollowChapterIndexes &&
+                    storedContent != null && isHeadingOnly(storedContent)
+                ) {
+                    return Outcome.Failed(
+                        "This chapter's text couldn't be extracted from the file."
+                    )
+                }
+                return Outcome.Stored(current)
+            }
+            // Fall through to the live fetch; a success overwrites
+            // the stub, a failure reports honestly (the stub is
+            // never served as the chapter).
+        }
         // The engine's own no-source wording (its processChapterItem
         // empty-candidates case): a chapter nothing can serve
         // fails with exactly this reason.
@@ -84,6 +146,19 @@ class ChapterTextLoader(
         for (source in resolver.candidatesFor(current)) {
             when (val fetched = source.fetcher.fetch(source.candidate)) {
                 is FetchOutcome.Success -> {
+                    // v1.5.2 fix (FIX-8c, §14.4): a freshly fetched
+                    // stub (login-wall / preview shape) is REFUSED
+                    // as a body — never stored, never counted. It
+                    // falls through as a failure with the gate's
+                    // own reason so no surface can render its count.
+                    val stubReason = app.xreader.data.extension
+                        .ChapterServeGate.loginWallRefusal(
+                            fetched.content.plainText()
+                        )
+                    if (stubReason != null) {
+                        lastError = AppError.BadFile(stubReason)
+                        continue
+                    }
                     val saved = storage.writeChapterContent(
                         bookId, current.id, fetched.content
                     )
@@ -108,6 +183,14 @@ class ChapterTextLoader(
                         current.id, relativePath, fetched.content.wordCount,
                         freshRow?.downloadState ?: current.downloadState
                     )
+                    // v1.5.2 (§12.4): this loader is a READING path
+                    // (incl. DownloadController.ensureStored and
+                    // reader neighbour warm-up) — its bodies are
+                    // AUTOMATIC cache, never user downloads. A row
+                    // already stamped USER keeps its stamp.
+                    if (freshRow?.bodyOrigin != BodyOrigin152.USER) {
+                        chapterDao.setBodyOrigin(current.id, BodyOrigin152.AUTOMATIC)
+                    }
                     try {
                         onChapterDownloaded(bookId, current.id)
                     } catch (cancelled: CancellationException) {
@@ -154,4 +237,12 @@ class ChapterTextLoader(
     /** The stored copy only — never fetches. */
     suspend fun storedContent(bookId: Long, chapterId: Long): ChapterContent? =
         storage.readChapterContent(bookId, chapterId).getOrNull()
+
+    /** v1.5.5 (§4): a stored chapter with a heading (or nothing)
+     * but no paragraph, no image and no page list — the hollow
+     * shape the prose floor flags at import. */
+    private fun isHeadingOnly(content: ChapterContent): Boolean =
+        !content.isImageChapter &&
+            content.blocks.none { it is ChapterBlock.Paragraph } &&
+            content.blocks.none { it is ChapterBlock.Image }
 }

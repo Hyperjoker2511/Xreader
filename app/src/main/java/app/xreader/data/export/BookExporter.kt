@@ -33,6 +33,30 @@ class BookExporter(
 ) {
 
     suspend fun exportEpub(book: Book, out: OutputStream): AppResult<Unit> {
+        // v1.5.6 (audit §12.4): an in-place local book has no
+        // chapter rows to rebuild from — it must never hard-error
+        // "no chapters yet". A retained-file EPUB exports as the
+        // original file itself; a document-URI book's file lives
+        // outside the app's reach here, so the honest answer is
+        // that the file on the device already IS the book.
+        if (book.sourceType == app.xreader.data.db.SourceType.LOCAL_FILE &&
+            (book.documentUri != null || book.filePath != null)
+        ) {
+            val retained = book.filePath?.let { storage.resolve(it) }
+            if (book.localFormat == BookFormat.EPUB &&
+                retained != null && retained.isFile
+            ) {
+                return guardExport {
+                    retained.inputStream().use { it.copyTo(out) }
+                }
+            }
+            return AppResult.Err(
+                AppError.ExportFailed(
+                    "this book reads straight from its file on your " +
+                        "device — that file is already the whole book"
+                )
+            )
+        }
         val chapters = chapterDao.forBook(book.id)
         if (chapters.isEmpty()) {
             return AppResult.Err(AppError.ExportFailed("this book has no chapters yet"))

@@ -21,7 +21,7 @@ import java.net.URI
  */
 object KnownSites {
 
-    enum class Family { MADARA, NOVELFULL, NOVELIGHT, CHIKARI, BOTI }
+    enum class Family { MADARA, NOVELFULL, NOVELIGHT, CHIKARI, BOTI, XNOVEL }
 
     data class Entry(
         val domains: List<String>,
@@ -87,17 +87,41 @@ object KnownSites {
         // own bundle (route table + card templates) and the
         // user's on-device screenshots (v1.2.1 round); the
         // lane's config is driven like any other candidate
-        // before it can save. No search shape is derivable from
-        // the bundle, so the hint stays off and Health says so
-        // honestly (the chikari precedent).
+        // before it can save.
+        // v1.5.7 (Scope E): the lane's recipe is now the
+        // site's own JSON API (see botiConfig) — the rendered
+        // /mobile/ road never completed a catalogue on the
+        // owner's phone (v1.5.5/v1.5.6 proofs: the false wall
+        // fell, the catalogue stayed empty), while the API
+        // answers every leg anonymously and carries the
+        // search endpoint the old lane predates, so the
+        // search hint is finally true.
         Entry(
             domains = listOf("botitranslation.com", "www.botitranslation.com"),
             family = Family.BOTI,
-            canSearch = false,
+            canSearch = true,
             // v1.3.0 (E4): verified end-to-end by the
             // maintainers (catalogue + book + chapters + text
             // on the rendered /mobile/ road); the on-device
             // drive may not veto it on a slow connection.
+            maintainerVerified = true
+        ),
+        // v1.5.35 (Item 5): xnovel.me — a Qwik City app whose
+        // data channel is q-data.json on every route (see
+        // xnovelConfig + build-logs/XNOVEL-SOURCE-SPEC.md).
+        // Catalogue, search, details and the FULL chapter
+        // list are proven live, anonymous, over plain HTTP;
+        // the chapter TEXT routes are Cloudflare
+        // managed-challenged from bare HTTP and ride the
+        // app's standard gated-source road (one in-app check
+        // solve, session cookies after) — hence verified
+        // end-to-end by the maintainers on every leg this
+        // lane declares, with the text leg's on-device proof
+        // still the owner's.
+        Entry(
+            domains = listOf("xnovel.me", "www.xnovel.me"),
+            family = Family.XNOVEL,
+            canSearch = true,
             maintainerVerified = true
         )
         // MADARA is claimed by page markers, not by domain —
@@ -142,6 +166,15 @@ object KnownSites {
                 // /mobile/book/<id> is a book; /mobile/chapter/
                 // <id> is a chapter — never a book page.
                 path.startsWith("/mobile/book/")
+            Family.XNOVEL -> {
+                // /{bookId}-{slug} is a book (one segment,
+                // digit-led); /{bookId}-{slug}/{chapterId}-
+                // {slug} is a chapter — never a book page.
+                val segment = path.trim('/')
+                !segment.contains('/') && segment.contains('-') &&
+                    segment.substringBefore('-')
+                        .all { it.isDigit() }
+            }
         }
     }
 
@@ -163,6 +196,7 @@ object KnownSites {
             Family.NOVELIGHT -> novelightConfig(id, name, baseUrl)
             Family.CHIKARI -> chikariConfig(id, name, baseUrl)
             Family.BOTI -> botiConfig(id, name, baseUrl)
+            Family.XNOVEL -> xnovelConfig(id, name, baseUrl)
             Family.NOVELFULL, Family.MADARA -> null
         } ?: return null
         // v1.3.0 (E4): the lane's verification travels with the
@@ -187,6 +221,7 @@ object KnownSites {
             Family.NOVELIGHT -> config
             Family.CHIKARI -> config
             Family.BOTI -> config
+            Family.XNOVEL -> config
             Family.NOVELFULL -> config.copy(
                 details = config.details.copy(
                     chapters = ChapterListSpec(
@@ -404,23 +439,69 @@ object KnownSites {
     }
 
     /**
-     * v1.2.3: BotiTranslation's shape. The site is a Vite SPA —
-     * the static HTML is an empty shell, so the config reads
-     * the RENDERED document (needsRendering) and its catalogue
-     * is the /mobile/ home's book rails: cards that are anchors
-     * to /mobile/book/<id> with the cover's alt as the title.
-     * Chapters are /mobile/chapter/<id> rows on the book page;
-     * prose sits in <article>. Search: none derivable — the
-     * lane ships search-less and Health labels it honestly.
+     * BotiTranslation's shape — v1.5.7 (Scope E) REWRITE.
      *
-     * Verification status, stated plainly: the rendered DOM
-     * cannot be captured from the build environment (the
-     * site's app only renders in a real browser), so this
-     * shape is verified against fixtures modelled from the
-     * site's own JS bundle (its route table and card
-     * templates) and the user's on-device screenshots — the
-     * same evidence base as the v1.2.1 Live-catalogue fix,
-     * which the user confirmed working on-device.
+     * History: v1.2.3 shipped this lane as a RENDERED-DOM
+     * recipe (the /mobile/ SPA: catalogue cards, chapter
+     * anchors, prose in <article>, needsRendering with a
+     * wait selector). That road never completed on the
+     * owner's phone — v1.5.5's proof met a false human-check
+     * wall, v1.5.6 removed the wall and the listed catalogue
+     * still came back empty (the honest signed-in-empty):
+     * every leg depended on the hidden browser rendering a
+     * Vite shell whose data lives behind the site's API.
+     *
+     * The recipe below is the site's OWN JSON API — the
+     * story-wave backend the site's client (and the
+     * maintained Keiyoushi novel extension for this site)
+     * calls — driven through the declarative engine's
+     * existing JSON machinery, the FenrirRealm/Chikari
+     * pattern, with NO rendering anywhere:
+     *
+     *  - catalogue: GET {api}/books?pageNumber={page} —
+     *    records at `data.list` ({id, title, authorPseudonym,
+     *    coverImgUrl, synopsis}); a book's id IS its API
+     *    detail URL (jsonLinkTemplate), so the details leg
+     *    below reads the same record the catalogue row came
+     *    from;
+     *  - search: GET {api}/books/search?keyWord={query} —
+     *    the endpoint the v1.2.3 lane predates;
+     *  - book: GET {api}/books/{id} — the envelope's
+     *    `data.coverImgUrl` heals the cover, the payload
+     *    ladder reads `data.synopsis` as the description,
+     *    title/author ride the catalogue row;
+     *  - chapters: the pagination endpoint walk over
+     *    {api}/chapters/page?bookId={bookSlug} — the book
+     *    URL's last segment IS the book id for BOTH id
+     *    shapes this source has ever issued (the API detail
+     *    URL and the legacy /mobile/book/<id> page), so
+     *    books stored by the old lane keep working; rows
+     *    carry {id, title, chapterOrder, paywallStatus},
+     *    addressed ASC, totals at `data.totalCount`;
+     *  - text: the chapter-text ajax road over
+     *    {api}/chapters/{id} — {id} is the chapter URL's
+     *    trailing numeric segment, which the legacy
+     *    /mobile/chapter/<id> ids also carry, so old
+     *    chapters heal too; the prose is the HTML string
+     *    at `data.content`. A charged chapter answers
+     *    with no readable content and surfaces as the
+     *    engine's paid/locked failure, never an empty
+     *    chapter and never a fake success.
+     *
+     * Every leg is a plain HTTP call through the source's
+     * own client, so the session contract below (the
+     * userToken header binding + the site's static
+     * interceptor headers) applies exactly as declared —
+     * anonymously the API answers all five legs (live-
+     * probed 2026-11-05 from the build sandbox: catalogue
+     * totalCount 19901 under the site-domain header,
+     * search/book/chapters/text all 200 with the recorded
+     * envelope), and a signed-in session's token unlocks
+     * whatever the site reserves for accounts. No leg
+     * needs the browser view, so needsRendering and the
+     * render wait selector are GONE: a bare-JSON answer
+     * could never satisfy a rendered-HTML wait selector,
+     * which was the old road's structural dead end.
      */
     private fun botiConfig(
         id: String,
@@ -428,39 +509,71 @@ object KnownSites {
         baseUrl: String
     ): DeclarativeConfig {
         val base = baseUrl.trimEnd('/')
-        val grid = ListSpec(
-            url = "$base/mobile/",
-            results = "a[href*='/mobile/book/']",
-            title = "img@alt",
-            link = "@href",
-            cover = "img@src",
-            linkPattern = "/mobile/book/[^/]+$"
+        val api = "https://api.mystorywave.com" +
+            "/story-wave-backend/api/v1/content"
+        val listing = ListSpec(
+            url = "$api/books?pageNumber={page}&pageSize=20",
+            results = "",
+            title = "title",
+            link = "id",
+            cover = "coverImgUrl",
+            author = "authorPseudonym",
+            jsonPath = "data.list",
+            jsonLinkTemplate = "$api/books/{value}"
         )
         return DeclarativeConfig(
             id = id,
             name = name,
             lang = "en",
             baseUrl = base,
-            search = null,
-            popular = grid,
+            search = listing.copy(
+                url = "$api/books/search" +
+                    "?keyWord={query}&pageNumber={page}&pageSize=20"
+            ),
+            popular = listing,
             latest = null,
-            needsRendering = true,
-            renderWaitSelector = "a[href*='/mobile/book/'], article",
+            needsRendering = false,
+            renderWaitSelector = null,
             details = DetailsSpec(
-                title = "h1",
+                title = null,
                 author = null,
                 description = null,
-                cover = "img.cover@src",
+                cover = null,
+                jsonCover = "data.coverImgUrl",
                 chapters = ChapterListSpec(
+                    // The DOM row spec is the fallback for
+                    // the one book-page shape that still has
+                    // a DOM: a legacy /mobile/book/<id> page
+                    // a pre-v1.5.7 install stored, whose
+                    // rendered rows the endpoint walk then
+                    // dedupes against (the endpoint is the
+                    // road whenever it answers).
                     list = "a[href*='/mobile/chapter/']",
                     name = "@text",
                     link = "@href",
-                    reverse = false
+                    reverse = false,
+                    pagination = ChapterListPagination(
+                        urlTemplate = "$api/chapters/page" +
+                            "?bookId={bookSlug}" +
+                            "&pageNumber={page}&pageSize=100" +
+                            "&sortDirection=ASC",
+                        bookIdPattern = "",
+                        jsonArrayPath = "data.list",
+                        jsonTotalPath = "data.totalCount",
+                        pageSize = 100
+                    ),
+                    jsonNameField = "title",
+                    jsonLinkField = "id",
+                    jsonLinkTemplate = "$api/chapters/{value}"
                 )
             ),
             chapter = ChapterSpec(
-                content = "article",
-                title = null
+                content = "body",
+                title = null,
+                ajax = ChapterTextAjax(
+                    urlTemplate = "$api/chapters/{id}",
+                    jsonContentPath = "data.content"
+                )
             ),
             // v1.3.4 (T1, session v2 — TOKEN-SESSION-RESEARCH
             // §2): BOTI's own client keeps its login token in
@@ -472,10 +585,22 @@ object KnownSites {
             // the missing half. Origin-exact: the token goes
             // to api.mystorywave.com ONLY (declared in
             // extraDomains so the whitelist can reach it),
-            // never to any other host. The lane's rendered
-            // legs are unaffected — the browser view runs the
-            // site's own client, which authenticates itself;
-            // the binding serves the native fetches.
+            // never to any other host. Since v1.5.7 every
+            // leg is a native fetch, so the binding now
+            // serves the whole source, not a side road.
+            // v1.5.7 (Scope E): the site's own interceptor
+            // headers ride along as static bindings — the
+            // API answers a DIFFERENT catalogue without them
+            // (live-probed 2026-11-05: no site-domain header
+            // → totalCount 17825 across all orgs; with
+            // site-domain: botitranslation.com → 19901, the
+            // site's own catalogue; lang pins the locale).
+            // The harvest-derived road has carried these
+            // since v1.5.2 (§10 item 1); the lane now
+            // declares them itself. site-domain is the
+            // config's own web host, so a www paste declares
+            // the www spelling the probe verified answers
+            // the same org.
             extraDomains = listOf("api.mystorywave.com"),
             credentials = CredentialSpec(
                 headerBinding = HeaderBinding(
@@ -483,6 +608,187 @@ object KnownSites {
                     headerName = "Authorization",
                     prefix = "",
                     hosts = listOf("api.mystorywave.com")
+                ),
+                staticHeaders = listOf(
+                    StaticHeaderBinding(
+                        headerName = "lang",
+                        value = "en_US",
+                        hosts = listOf("api.mystorywave.com")
+                    ),
+                    StaticHeaderBinding(
+                        headerName = "site-domain",
+                        value = base.normaliseHost(),
+                        hosts = listOf("api.mystorywave.com")
+                    )
+                )
+            )
+        )
+    }
+
+    /**
+     * Xnovel's shape — v1.5.35 (Item 5, per
+     * build-logs/XNOVEL-SOURCE-SPEC.md + its addendum; every
+     * leg below live-probed from the build VM 2026-11-07 and
+     * re-verified at build time).
+     *
+     * The site is a Qwik City app: every page route R serves
+     * its loader data at R/q-data.json in Qwik's `_objs`
+     * graph form. The engine's one native addition for this
+     * lane is the fetch pre-step ([QDataResolve]): payloads
+     * are resolved and re-emitted as a plain envelope —
+     * `books` / `book` / `chapters` / `content` / `paging` —
+     * and every mapping below reads that envelope with the
+     * engine's ordinary JSON machinery, exactly as BOTI
+     * reads its API.
+     *
+     *  - catalogue: GET /popular|latest/q-data.json?page=N —
+     *    20 records a page; a book's link IS its data twin
+     *    (jsonLinkTemplate appends /q-data.json), so the
+     *    book id the app stores is the details URL itself,
+     *    the BOTI shape;
+     *  - search: GET /search/q-data.json?word={query} —
+     *    page size 36, same record shape;
+     *  - book: GET {book}/q-data.json — title/author ride
+     *    the listing row (BOTI pattern); the details leg
+     *    heals the cover from the payload's own record and
+     *    the description from the envelope's book record;
+     *  - chapters: page 1 is the book payload's own window
+     *    (newest 45, `jsonEndpointPath` seeds it), pages
+     *    2..N come from the site's own data API —
+     *    POST /n2/, GraphQL get_NovelsChaptersList,
+     *    PLAINTEXT body (no crypto header; replay-proven
+     *    byte-identical to the encrypted form, session-free)
+     *    — walked by the declared pagination until the
+     *    stated total (paging.total) is gathered; rows are
+     *    the endpoint's `items[].data` records, merged and
+     *    de-duped by chapter URL, ordered by the numbers
+     *    their titles carry;
+     *  - text: GET {chapter}/q-data.json, the record's
+     *    `content` field hoisted by the shim. The chapter
+     *    routes are Cloudflare managed-challenged from bare
+     *    HTTP (403, "Just a moment…", verified twice while
+     *    sibling routes stayed 200): the leg rides the
+     *    app's standard gated-source road — the fetch layer
+     *    escalates a block to the browser view, the owner
+     *    solves the check once in-app, and the session's
+     *    cookies replay on this same fetch afterwards. No
+     *    bypass, no solver, no stored password.
+     *
+     * Rating: the site's per-book genre slugs carry the
+     * adult signal (adult/mature/ecchi/smut — the proof book
+     * carries four of them), and the app's rating model is
+     * per-SOURCE (the Mihon model, ContentRatings): a
+     * catalogue that mixes general and adult books is MIXED,
+     * which is what this source declares.
+     */
+    private fun xnovelConfig(
+        id: String,
+        name: String,
+        baseUrl: String
+    ): DeclarativeConfig {
+        val base = baseUrl.trimEnd('/')
+        val listing = ListSpec(
+            url = "$base/popular/q-data.json?page={page}",
+            results = "",
+            title = "N_title",
+            link = "N_Path",
+            cover = "urlCoverOri",
+            author = "info_meta_Author.0",
+            jsonPath = "books",
+            jsonLinkTemplate = "$base{value}/q-data.json",
+            jsonCoverTemplate = "$base{value}",
+            // Books live at /{id}-{slug}; anything else the
+            // payload classifies as a record is not a book row.
+            linkPattern = "^/\\d+-[^/]+/q-data\\.json$"
+        )
+        return DeclarativeConfig(
+            id = id,
+            name = name,
+            lang = "en",
+            baseUrl = base,
+            search = listing.copy(
+                url = "$base/search/q-data.json" +
+                    "?word={query}&page={page}"
+            ),
+            popular = listing,
+            latest = listing.copy(
+                url = "$base/latest/q-data.json?page={page}"
+            ),
+            needsRendering = false,
+            renderWaitSelector = null,
+            // The catalogue mixes general and adult books
+            // (genre evidence above) — the per-source model's
+            // MIXED.
+            contentRating = ContentRating.MIXED,
+            details = DetailsSpec(
+                title = null,
+                author = null,
+                description = null,
+                cover = null,
+                jsonCover = "book.urlCoverOri",
+                jsonCoverTemplate = "$base{value}",
+                chapters = ChapterListSpec(
+                    // No DOM road exists on a q-data page (the
+                    // document is the payload itself); the bare
+                    // selector is deliberately UNSCOPED, so the
+                    // endpoint road can never be "substituted"
+                    // by a furniture sweep — it answers or the
+                    // list honestly fails.
+                    list = "a",
+                    name = "@text",
+                    link = "@href",
+                    reverse = false,
+                    // Page 1: the book payload's own chapter
+                    // window (newest 45 + the first chapter),
+                    // resolved into the envelope's `chapters`
+                    // in ch_index order by the shim.
+                    jsonEndpointPath = "chapters",
+                    jsonNameField = "ch_title",
+                    jsonLinkField = "ChPath",
+                    jsonLinkTemplate = "$base{value}",
+                    pagination = ChapterListPagination(
+                        urlTemplate = "$base/n2/",
+                        // The book id out of the envelope the
+                        // shim made of the book payload.
+                        bookIdPattern = "\"N_id\"\\s*:\\s*\"(\\d+)\"",
+                        headers = mapOf(
+                            "Content-Type" to "application/json"
+                        ),
+                        method = "POST",
+                        body = "{\"query\":\"query " +
+                            "get_NovelsChaptersList(\$select: " +
+                            "NovelsChaptersList_Select) { " +
+                            "get_NovelsChaptersList(select: " +
+                            "\$select) { paging { total pages " +
+                            "page init size skip limit prev " +
+                            "next } items { id data { N_id " +
+                            "N_title ch_id status dbStatus " +
+                            "ch_index ch_title content ChPath " +
+                            "is_new date_create date_update " +
+                            "isFinal comments_topic " +
+                            "comments_total views_login " +
+                            "views_guest } } } }\"" +
+                            ",\"variables\":{\"select\":" +
+                            "{\"N_id\":\"{bookId}\",\"init\":45," +
+                            "\"size\":45,\"page\":{page}," +
+                            "\"sortBy\":\"desc\"}}}",
+                        jsonArrayPath =
+                            "data.get_NovelsChaptersList.items",
+                        jsonTotalPath =
+                            "data.get_NovelsChaptersList.paging.total",
+                        pageSize = 45
+                    )
+                )
+            ),
+            chapter = ChapterSpec(
+                content = "body",
+                title = null,
+                ajax = ChapterTextAjax(
+                    // {seg-2}/{seg-1} are the chapter URL's own
+                    // book and chapter segments — the data twin
+                    // of the chapter page itself.
+                    urlTemplate = "$base/{seg-2}/{seg-1}/q-data.json",
+                    jsonContentPath = "content"
                 )
             )
         )

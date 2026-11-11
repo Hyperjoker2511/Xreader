@@ -49,14 +49,126 @@ object EmbeddedJson {
     }
 
     /**
+     * v1.5.3 (finding #2): the Inertia.js payload — Laravel apps
+     * (brightnovels.com is the proven case) server-render their
+     * whole page model as JSON inside the `data-page` attribute
+     * of the page's `div#app` element, while the DOM carries no
+     * catalogue anchors at all. The attribute value is the page
+     * object ({component, props, url, version}), entity-decoded
+     * by the HTML parser and, on some stacks, URL-encoded on top
+     * of that. Returns the parsed object, or null when the page
+     * carries none (or it doesn't parse) — never throws.
+     *
+     * v1.5.4 (item 12): the extraction is a four-stage ladder,
+     * first success wins, each stage's output must parse as a
+     * JSON object or the ladder falls through — mirroring the
+     * maintained BrightNovels extension's own extraction
+     * order:
+     *  1. the `div#app[data-page]` attribute value, raw;
+     *  2. the attribute value URL-decoded;
+     *  3. every `data-page` value a regex finds in the
+     *     document's HTML (the attribute may ride on another
+     *     carrier, or survive only as a stashed copy the
+     *     parsed-DOM attribute read can't reach);
+     *  4. each regex value retried through JSON-string
+     *     unescape, for stacks that embed the payload as an
+     *     escaped string (\" and \/ sequences).
+     */
+    fun inertiaData(doc: Document): JsonObject? {
+        val raw = runCatching {
+            doc.selectFirst("div#app[data-page]")?.attr("data-page")
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+        if (raw != null) {
+            // Stage 1: the attribute value as parsed.
+            runCatching { json.parseToJsonElement(raw) as? JsonObject }
+                .getOrNull()?.let { return it }
+            // Stage 2: URL-decoded.
+            val decoded = runCatching {
+                java.net.URLDecoder.decode(raw, Charsets.UTF_8.name())
+            }.getOrNull()
+            if (decoded != null) {
+                runCatching {
+                    json.parseToJsonElement(decoded) as? JsonObject
+                }.getOrNull()?.let { return it }
+            }
+        }
+        // Stages 3–4: the raw-body regex road.
+        val candidates = dataPageCandidates(doc)
+        for (candidate in candidates) {
+            runCatching {
+                json.parseToJsonElement(candidate) as? JsonObject
+            }.getOrNull()?.let { return it }
+        }
+        for (candidate in candidates) {
+            val unescaped = jsonStringUnescape(candidate) ?: continue
+            runCatching {
+                json.parseToJsonElement(unescaped) as? JsonObject
+            }.getOrNull()?.let { return it }
+        }
+        return null
+    }
+
+    private val DATA_PAGE_DOUBLE_QUOTED = Regex(
+        "data-page\\s*=\\s*\"([^\"]*)\"",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+
+    private val DATA_PAGE_SINGLE_QUOTED = Regex(
+        "data-page\\s*=\\s*'([^']*)'",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+
+    /**
+     * Every `data-page` attribute value the document's HTML
+     * carries, in the maintained extension's candidate order —
+     * all double-quoted matches in document order, then all
+     * single-quoted ones — blanks dropped, duplicates
+     * collapsed. The scan text is the document's serialised
+     * HTML: the closest thing to the raw body the engine
+     * still holds once a page has been parsed (carriers the
+     * DOM preserves verbatim — comments, raw-text elements,
+     * template contents — are exactly the ones the attribute
+     * read can't reach).
+     */
+    private fun dataPageCandidates(doc: Document): List<String> {
+        val html = runCatching { doc.outerHtml() }.getOrNull()
+            ?: return emptyList()
+        val found = LinkedHashSet<String>()
+        for (match in DATA_PAGE_DOUBLE_QUOTED.findAll(html)) {
+            match.groupValues[1].takeIf { it.isNotBlank() }
+                ?.let { found += it }
+        }
+        for (match in DATA_PAGE_SINGLE_QUOTED.findAll(html)) {
+            match.groupValues[1].takeIf { it.isNotBlank() }
+                ?.let { found += it }
+        }
+        return found.toList()
+    }
+
+    /**
+     * The JSON-string unescape of [value]: the value read as
+     * the CONTENTS of a JSON string literal, so `\"` becomes
+     * `"` and `\/` becomes `/` — the escapes the donor's
+     * decoder handles. Null when the value can't be a string
+     * body at all (an unescaped quote or control character
+     * ends the attempt; the ladder then gives up cleanly).
+     */
+    private fun jsonStringUnescape(value: String): String? =
+        runCatching {
+            (json.parseToJsonElement("\"$value\"") as? JsonPrimitive)
+                ?.contentOrNull
+        }.getOrNull()
+
+    /**
      * Every embedded-JSON root the document carries, in the
      * order the engine should prefer them: the `__NEXT_DATA__`
-     * object first, then each parseable React flight row from
-     * the RSC stream.
+     * object first, then the Inertia `data-page` object, then
+     * each parseable React flight row from the RSC stream.
      */
     fun roots(doc: Document): List<JsonElement> {
         val out = mutableListOf<JsonElement>()
         nextData(doc)?.let { out += it }
+        inertiaData(doc)?.let { out += it }
         out += rscRoots(doc)
         return out
     }
@@ -85,10 +197,129 @@ object EmbeddedJson {
      * bare-JSON body FIRST (a page that is pure JSON is an API
      * answer — its payload is the data, not a container for
      * it), then the embedded roots ([roots]).
+     *
+     * v1.5.4 (finding #3 close-out, item 11): each root is
+     * followed by its wrapped-envelope forms. A payload may
+     * wrap the page object one level down — `{"page": {…}}`
+     * or `{"data": {…}}`, the two wrappings the maintained
+     * BrightNovels extension reads props through
+     * (`root.page.props`, `root.data.props`) — and a declared
+     * path written against the bare page object
+     * (`props.seriesList.data`) must still resolve. So the
+     * wrapper object AND its props object join the root set
+     * immediately after their bare root: the declared path
+     * resolves against the wrapper unchanged, the props
+     * object gives the envelope scan its descent, and every
+     * read that consumes this root set (listings, chapter
+     * rows, chapter content, the shape-miss check) gains the
+     * tolerance at family level — every embedded-JSON
+     * source, never one source by name. Deterministic
+     * precedence: bare root first, then `page`, then `data`
+     * — the order the extension itself tries them. Discovery
+     * ([roots]) is untouched: inference still names paths
+     * against the bare roots it observed.
      */
     fun rootsForRead(doc: Document): List<JsonElement> {
         val body = bodyJson(doc)
-        return if (body != null) listOf(body) + roots(doc) else roots(doc)
+        val base =
+            if (body != null) listOf(body) + roots(doc) else roots(doc)
+        val out = mutableListOf<JsonElement>()
+        for (root in base) {
+            out += root
+            val obj = root as? JsonObject ?: continue
+            for (wrapperKey in listOf("page", "data")) {
+                val wrapper = obj[wrapperKey] as? JsonObject
+                    ?: continue
+                out += wrapper
+                (wrapper["props"] as? JsonObject)?.let { out += it }
+            }
+        }
+        return out
+    }
+
+    /**
+     * v1.5.4 (item 14): the key NAMES a document's embedded
+     * payloads carry — every root's top-level keys and every
+     * props object's keys (the bare root's own `props`, and
+     * the `page`/`data` wrappers'), in first-seen order,
+     * each set capped so a payload can't flood a log line.
+     * NAMES ONLY, by construction: this string is built from
+     * key sets alone, so no value, URL or body text can ever
+     * enter it. It exists for the shape-miss log record (see
+     * DeclarativeSource.listingShapeMissed) — the dividend
+     * that turns the NEXT payload drift from a guess into a
+     * fact: the key the definition should have named is
+     * right there in the owner's own problem report.
+     */
+    fun keyNamesSummary(doc: Document): String {
+        val top = LinkedHashSet<String>()
+        val props = LinkedHashSet<String>()
+        val rawRoots = listOfNotNull(bodyJson(doc)) + roots(doc)
+        for (root in rawRoots) {
+            val obj = root as? JsonObject ?: continue
+            top += obj.keys
+            val holders = listOfNotNull(
+                obj,
+                obj["page"] as? JsonObject,
+                obj["data"] as? JsonObject
+            )
+            for (holder in holders) {
+                (holder["props"] as? JsonObject)?.let {
+                    props += it.keys
+                }
+            }
+        }
+        fun render(label: String, names: LinkedHashSet<String>): String =
+            if (names.isEmpty()) {
+                "$label: (none)"
+            } else {
+                "$label: " + names.take(12).joinToString(", ") +
+                    if (names.size > 12) " …" else ""
+            }
+        return render("top", top) + " · " + render("props", props)
+    }
+
+    /**
+     * v1.5.5 (§2): the [keyNamesSummary] discipline for a
+     * payload already parsed as JSON — the chapters endpoint's
+     * answers never become a Document, but a zero-row first
+     * page owes diagnostics the same names-only key summary:
+     * the root object's top-level keys plus any `props`
+     * object's keys (the root's own, or a `page`/`data`
+     * wrapper's), capped exactly as above. NAMES ONLY, by
+     * construction.
+     */
+    fun keyNamesSummary(root: JsonElement): String {
+        val top = LinkedHashSet<String>()
+        val props = LinkedHashSet<String>()
+        val obj = root as? JsonObject
+        if (obj != null) {
+            top += obj.keys
+            val holders = listOfNotNull(
+                obj,
+                obj["page"] as? JsonObject,
+                obj["data"] as? JsonObject
+            )
+            for (holder in holders) {
+                (holder["props"] as? JsonObject)?.let {
+                    props += it.keys
+                }
+            }
+        }
+        fun render(label: String, names: LinkedHashSet<String>): String =
+            if (names.isEmpty()) {
+                "$label: (none)"
+            } else {
+                "$label: " + names.take(12).joinToString(", ") +
+                    if (names.size > 12) " …" else ""
+            }
+        val rootKind = when (root) {
+            is JsonObject -> "object"
+            is kotlinx.serialization.json.JsonArray -> "array"
+            else -> "scalar"
+        }
+        return render("top", top) + " · " + render("props", props) +
+            " · root: $rootKind"
     }
 
     // ── v1.3.0 (E3): API discovery seed ─────────────────────
@@ -289,21 +520,88 @@ object EmbeddedJson {
 
     // ── paths ───────────────────────────────────────────────
 
+    /**
+     * v1.5.4 (item 13): the segment alias table — the ONLY
+     * aliases [resolve] may substitute, tried in order when
+     * the declared segment is ABSENT on the object being
+     * read. Both entries are the BrightNovels wire's own
+     * drift shapes, read off the maintained extension (its
+     * listing paginator is `seriesList` OR `series`), and
+     * they apply at family level: any embedded-JSON source
+     * whose payload drifts the same way reads on. No other
+     * aliases exist — a payload shape not named here is a
+     * shape-miss, not a guessing game.
+     *
+     * The cover entry is deliberately NOT in this map: it is
+     * parent-guarded in [aliasesFor], because `url` is far
+     * too common a field name to alias anywhere but under a
+     * `cover` parent.
+     */
+    private val SEGMENT_ALIASES: Map<String, List<String>> = mapOf(
+        "seriesList" to listOf("series")
+    )
+
+    /** The aliases for an absent [segment], where [parent]
+     * is the segment that produced the object being read
+     * (null at the path's first hop). `url` aliases to
+     * `thumbnail_url` ONLY under a `cover` parent — the
+     * extension's cover read (`cover.url` else
+     * `cover.thumbnail_url`); every other parent gets none. */
+    private fun aliasesFor(
+        segment: String,
+        parent: String?
+    ): List<String> {
+        if (segment == "url") {
+            return if (parent == "cover") {
+                listOf("thumbnail_url")
+            } else {
+                emptyList()
+            }
+        }
+        return SEGMENT_ALIASES[segment] ?: emptyList()
+    }
+
     /** Resolve a dot path (`props.pageProps.items`) over a
      * parsed payload; numeric segments index into arrays.
-     * Null when any hop is absent or the wrong shape. */
+     * Null when any hop is absent or the wrong shape.
+     *
+     * v1.5.4 (item 13): when a segment is ABSENT on the
+     * current object (a present key — even a null one —
+     * always wins, exactly as before), the resolver tries
+     * the segment's declared aliases ([aliasesFor]) in
+     * order before giving up; the walk then continues from
+     * the aliased node with the remaining segments. No
+     * backtracking: an alias that exists but whose subtree
+     * misses ends the resolution, like any other miss. */
     fun resolve(root: JsonElement, path: String): JsonElement? {
         if (path.isBlank()) return root
         var current: JsonElement = root
+        var parent: String? = null
         for (segment in path.split('.')) {
             current = when (current) {
-                is JsonObject -> current[segment] ?: return null
+                is JsonObject -> {
+                    val direct = current[segment]
+                    if (direct != null) {
+                        direct
+                    } else {
+                        var aliased: JsonElement? = null
+                        for (alias in aliasesFor(segment, parent)) {
+                            val candidate = current[alias]
+                            if (candidate != null) {
+                                aliased = candidate
+                                break
+                            }
+                        }
+                        aliased ?: return null
+                    }
+                }
                 is JsonArray -> {
                     val index = segment.toIntOrNull() ?: return null
                     current.getOrNull(index) ?: return null
                 }
                 else -> return null
             }
+            parent = segment
         }
         return current
     }

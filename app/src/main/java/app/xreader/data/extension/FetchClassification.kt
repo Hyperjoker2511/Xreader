@@ -56,6 +56,16 @@ object FetchClassification {
     const val STAYED_LOCKED_MARKER = "stayed locked after a token mint"
     const val ENCRYPTED_MARKER = "served in a protected format"
 
+    /** v1.5.5 (§3): the chapter arrived in a form the parser
+     * does not support (an undeclared content_format, a
+     * scrambled/obfuscated payload marker) — the honest
+     * "this chapter type isn't supported yet" state, distinct
+     * from locked (a mint cannot fix it) and from encrypted
+     * (the T2 terminal shape above). Classified as LOCKED
+     * below: an honest non-generic state, never a sign-in or
+     * check demand. */
+    const val UNSUPPORTED_MARKER = "chapter format not supported yet"
+
     fun classify(config: DeclarativeConfig?, error: AppError): Result =
         classifyDetail(config, error.detail, error)
 
@@ -97,7 +107,9 @@ object FetchClassification {
         if (sessionKind == SessionNeed.Kind.SITE_CHECK) {
             return Result(Kind.SESSION_CHECK)
         }
-        if (ENCRYPTED_MARKER in text || STAYED_LOCKED_MARKER in text) {
+        if (ENCRYPTED_MARKER in text || STAYED_LOCKED_MARKER in text ||
+            UNSUPPORTED_MARKER in text
+        ) {
             return Result(Kind.LOCKED)
         }
         if (sessionKind == SessionNeed.Kind.SIGN_IN) {

@@ -98,6 +98,44 @@ object BundledWave1 {
             KnownSites.fullConfig(entry, id, name, "https://novelight.net")
                 ?: error("novelight lane config missing")
         },
+        // v1.5.5 (§6, owner's decision 2026-11-04): BotiTranslation
+        // is PROMOTED from known-site lane to bundled listed
+        // source. Like Novelight above, it ships the very config
+        // its KnownSites lane (Family.BOTI) builds — one recipe,
+        // two doors, so the listed source and the link-add lane
+        // can never drift apart.
+        // v1.5.7 (Scope E): the recipe itself changed — the
+        // lane now declares the site's own JSON API (catalogue,
+        // /v1/content/books/search, book detail, chapter list
+        // and chapter text as direct API calls through the
+        // token-header session; see KnownSites.botiConfig).
+        // The old render-backed shape is retired for the reason
+        // this comment used to state: a bare-JSON answer could
+        // never satisfy the /mobile/ render wait selector, and
+        // on the owner's phone the rendered catalogue never
+        // completed (v1.5.5 false wall, v1.5.6 honest empty).
+        // The source is no longer search-less: search ships,
+        // and Health labels it so. Installed bundled rows pick
+        // the new recipe up through the definitions epoch
+        // (BundledDefaults.BUNDLED_DEFINITIONS_EPOCH = 2).
+        BundledDefaults.Spec("botitranslation", "BotiTranslation") { id, name ->
+            val entry = KnownSites.entryFor("botitranslation.com")
+                ?: error("boti lane entry missing")
+            KnownSites.fullConfig(
+                entry, id, name, "https://botitranslation.com"
+            ) ?: error("boti lane config missing")
+        },
+        // v1.5.39 (item 2): Xnovel's bundled Spec is REMOVED
+        // (owner's executed order — its chapter text never
+        // read on device across v1.5.35–v1.5.38). The
+        // KnownSites lane (Family.XNOVEL) stays as a
+        // tombstone: it is reachable only by deliberately
+        // pasting an xnovel.me link, never from Browse or
+        // search, and removing the family would be engine
+        // surgery with no benefit. Existing installs lose
+        // the stored row through the bundled pass's
+        // retirement step (BundledDefaults
+        // .RETIRED_BUNDLED_PACKAGE_IDS, epoch 6).
         BundledDefaults.Spec("sonicmtl", "SonicMTL") { id, name ->
             BundledFamilies.madara(
                 id, name, "https://www.sonicmtl.com",
@@ -176,6 +214,47 @@ object BundledWave1 {
         BundledDefaults.Spec("fenrirealm", "FenrirRealm") { id, name ->
             BundledSingles.fenrirRealm(id, name)
         },
+        // v1.5.2 (FIX-14): Lnori — series→volumes light novels;
+        // catalogue/book/volumes/text proven live in the probe
+        // (build-logs/V152-LNORI-PROBE.md), search via the new
+        // localFilter mechanism (the site's own client-side
+        // filter semantics); volume text served WHOLE as one
+        // chapter (QuickNovel's shape, owner-ruled 2026-11-03).
+        BundledDefaults.Spec("lnori", "Lnori") { id, name ->
+            BundledSingles.lnori(id, name)
+        },
+        // v1.5.2 (FIX-16): the QuickNovel-set converts, all
+        // five legs proven live in the conversion probe
+        // (build-logs/V152-QN-CONVERSION-PROBE.md) — three
+        // adds plus the FaqWiki host correction (faqwiki.us
+        // is dead; faqwiki.xyz is the same site, prefix
+        // dropped; its OLD-definition fingerprint already
+        // sits in SHIPPED_FINGERPRINTS, so untouched legacy
+        // rows refresh onto the corrected definition).
+        BundledDefaults.Spec("scrollerspub", "ScrollersPub") { id, name ->
+            BundledSingles.scrollersPub(id, name)
+        },
+        BundledDefaults.Spec("readhive", "ReadHive") { id, name ->
+            BundledSingles.readHive(id, name)
+        },
+        BundledDefaults.Spec("wuxiaclick", "WuxiaClick") { id, name ->
+            BundledSingles.wuxiaClick(id, name)
+        },
+        BundledDefaults.Spec("faqwiki", "FaqWiki") { id, name ->
+            BundledSingles.faqWiki(id, name)
+        },
+        // v1.5.2 (FIX-17): Light Novel Translations — the
+        // panelled chapter-list mode's first bundled user;
+        // five legs proven on unlocked/completed books in the
+        // conversion probe §5a; locked rows surface as the
+        // honest LOCKED state.
+        BundledDefaults.Spec("lnt", "Light Novel Translations") { id, name ->
+            BundledSingles.lightNovelTranslations(id, name)
+        },
+        // NovLove (novelnice.com) was REMOVED from v1.5.2 by
+        // owner ruling 2026-11-03 (~17:58) — banked for the
+        // next update with its research pack
+        // (build-logs/V152-NOVLOVE-BANKED.md). Not a gap.
         // ── Render-backed (Cloudflare) defaults — the user's
         // 2026-11-01 01:17 decision: needsRendering +
         // maintainerVerified under the E4 proof-pending

@@ -5,11 +5,17 @@ import app.xreader.core.error.AppResult
 import app.xreader.data.db.InstalledExtension
 import app.xreader.data.db.InstalledExtensionDao
 import app.xreader.data.db.TrustState
+import app.xreader.data.extension.player.BridgeCallContext
 import app.xreader.data.extension.player.MihonSourceAdapter
 import app.xreader.extensionapi.Source
 import app.xreader.extensionapi.SourceContext
 import app.xreader.extensionapi.SourceException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.concurrent.ConcurrentHashMap
@@ -79,6 +85,32 @@ class ExtensionService(
      * a library book on a player source shows exactly why
      * its source is off and where to turn it back on. */
     private val keiyoushiPlayerEnabled: () -> Boolean = { true },
+    /** v1.5.4 (WS-1 item 7b, closed at integration): the
+     * cover-host sink for player packages — the adapter
+     * reports the hosts of the covers a package's own
+     * sources return, and production wires
+     * KeiyoushiPlayerManager.noteCoverHosts, which folds
+     * them into the package's derived permission domains.
+     * Declared with the other player providers, before
+     * [jsRuntimeFactory] (trailing-lambda rule). */
+    private val keiyoushiCoverHostSink:
+        (packageName: String, hosts: Set<String>) -> Unit =
+        { _, _ -> },
+    /** v1.5.7 (Finding 4, §6): the hosts the Keiyoushi
+     * catalogue claims — the normalised homeUrl hosts of
+     * the player manager's CACHED catalogue (production
+     * wires KeiyoushiPlayerManager.claimedHosts). A
+     * link-added DECLARATIVE config whose baseUrl host is
+     * claimed is stamped MANGA at materialisation (see
+     * [stampKeiyoushiClaimedKind]): Keiyoushi entries are
+     * manga sources by construction, so a claimed host IS
+     * a manga site whatever the learner filed the link
+     * under. Empty (the default, and whenever the
+     * catalogue was never fetched) = today's behaviour,
+     * exactly — the same honest-limit shape as the rating
+     * provider's null. */
+    private val keiyoushiClaimedHosts: () -> Set<String> =
+        { emptySet() },
     /** v1.3.4 (T1): the session store read-token
      * coordinators persist through (optional so test
      * constructions stay as they were; production wires the
@@ -86,6 +118,16 @@ class ExtensionService(
      * purpose: tests pass the runtime factory as a trailing
      * lambda, which binds to the LAST parameter. */
     private val sessionStore: SessionStore? = null,
+    /** v1.5.10 (B5): the book store the stable-identity
+     * resolver heals through — when a book's stored row id
+     * is stale, [resolveBookSource] rewrites the book's
+     * extensionId to the re-found row's id via this DAO.
+     * Optional so existing test constructions stay as they
+     * were; when absent, resolution still succeeds and the
+     * heal is left to callers that hold a DAO (the chapter
+     * resolver does exactly that). Declared BEFORE
+     * [jsRuntimeFactory] for the trailing-lambda rule. */
+    private val bookDao: app.xreader.data.db.BookDao? = null,
     private val jsRuntimeFactory: () -> JsRuntime
 ) {
 
@@ -115,12 +157,200 @@ class ExtensionService(
         }
     }
 
-    suspend fun sourcesOf(extensionId: Long): AppResult<List<SourceHandle>> {
+    suspend fun sourcesOf(extensionId: Long): AppResult<List<SourceHandle>> =
+        sourcesOf(extensionId, sourceNameHint = null)
+
+    /**
+     * v1.5.10 (B5): [sourcesOf] with an honest name for the
+     * row-miss error. The pre-fix miss branch hardcoded the
+     * literal "source" as the source's NAME, so every stale
+     * pointer rendered as 'The source "source" ran into a
+     * problem'. A caller that knows the book's stored
+     * sourceId passes it as [sourceNameHint]; book-aware
+     * callers use [resolveBookSource] / [resolveBookSources],
+     * which name the error from the book itself.
+     */
+    suspend fun sourcesOf(
+        extensionId: Long,
+        sourceNameHint: String?
+    ): AppResult<List<SourceHandle>> {
         val row = extensionDao.getById(extensionId)
             ?: return AppResult.Err(
-                AppError.ExtensionFailed("source", "the source is no longer installed")
+                AppError.ExtensionFailed(
+                    sourceNameHint?.takeIf { it.isNotBlank() }
+                        ?: "extension #$extensionId",
+                    "the source is no longer installed"
+                )
             )
         return loadExtension(row)
+    }
+
+    /**
+     * v1.5.10 (B5): resolve THE source a stored book belongs
+     * to, by stable identity. Convicted design flaw (see
+     * V1510-FINDING-ASURA-SOURCE): a book's stored
+     * extensionId is the mirror row's AUTOGENERATED primary
+     * key — any row re-creation (an earlier release's row
+     * regeneration, an uninstall→reinstall cycle) orphans
+     * every bound book while catalogue roads, which resolve
+     * by the CURRENT row, keep working.
+     *
+     *  (i) Fast path unchanged: [source] on the stored row
+     *      id + the book's decoded sourceId.
+     *  (ii) On a ROW-ID MISS only (the row itself is gone —
+     *      a present row's own verdicts, e.g. switched off,
+     *      stand untouched): decode the book's sourceId from
+     *      its stored remoteId ([SourceBookIds]) and scan
+     *      installed rows whose declared sourceIds contain
+     *      it — player rows match on the bare Mihon id,
+     *      mirroring [source]'s existing fallback, and a
+     *      namespaced stored id also matches its package.
+     *  (iii) A candidate that resolves HEALS the book: its
+     *      stored extensionId is rewritten to the found
+     *      row's id (via the injected book DAO when present)
+     *      and a DiagnosticLog line records old → new.
+     *      A candidate that exists but refuses (disabled /
+     *      needs repair) surfaces ITS state through the
+     *      existing load path — switched off is not "no
+     *      longer installed".
+     *  (iv) No installed row declares the book's sourceId:
+     *      the source is genuinely gone — the error NAMES it
+     *      by the book's stored sourceId, never the bare
+     *      word "source".
+     */
+    suspend fun resolveBookSource(
+        book: app.xreader.data.db.Book
+    ): AppResult<SourceHandle> {
+        val storedSourceId = SourceBookIds.decode(book.remoteId)?.first
+        val extensionId = book.extensionId
+            ?: return AppResult.Err(
+                AppError.ExtensionFailed(
+                    storedSourceId ?: "extension",
+                    "this book didn't come from a source"
+                )
+            )
+        if (storedSourceId == null) {
+            return AppResult.Err(
+                AppError.ExtensionFailed(
+                    "extension #$extensionId",
+                    "the book's source link is damaged"
+                )
+            )
+        }
+        val fast = source(extensionId, storedSourceId)
+        if (fast is AppResult.Ok) return fast
+        // Only a ROW-ID MISS earns the stable-identity scan:
+        // a present row already gave its verdict above.
+        if (extensionDao.getById(extensionId) != null) return fast
+        val rows = extensionDao.observeAll().first()
+        val candidates = rows.filter { row ->
+            rowDeclaresSource(row, storedSourceId)
+        }
+        var firstRefusal: AppResult.Err? = null
+        for (candidate in candidates) {
+            when (val resolved = source(candidate.id, storedSourceId)) {
+                is AppResult.Ok -> {
+                    healBookExtensionId(book, resolved.value.extension.id)
+                    return resolved
+                }
+                is AppResult.Err -> {
+                    if (firstRefusal == null) firstRefusal = resolved
+                }
+            }
+        }
+        // A declaring row exists but refused (e.g. switched
+        // off): its own state is the honest answer.
+        firstRefusal?.let { return it }
+        return AppResult.Err(
+            AppError.ExtensionFailed(
+                storedSourceId,
+                "the source is no longer installed"
+            )
+        )
+    }
+
+    /** v1.5.10 (B5): the [sourcesOf] twin of
+     * [resolveBookSource] — every handle of the book's
+     * source, healing the stored row id on a miss. */
+    suspend fun resolveBookSources(
+        book: app.xreader.data.db.Book
+    ): AppResult<List<SourceHandle>> {
+        val extensionId = book.extensionId
+            ?: return AppResult.Err(
+                AppError.ExtensionFailed(
+                    SourceBookIds.decode(book.remoteId)?.first
+                        ?: "extension",
+                    "this book didn't come from a source"
+                )
+            )
+        val fast = sourcesOf(extensionId)
+        if (fast is AppResult.Ok) return fast
+        if (extensionDao.getById(extensionId) != null) return fast
+        val storedSourceId = SourceBookIds.decode(book.remoteId)?.first
+            ?: return fast
+        val rows = extensionDao.observeAll().first()
+        val candidate = rows.firstOrNull { row ->
+            rowDeclaresSource(row, storedSourceId)
+        } ?: return AppResult.Err(
+            AppError.ExtensionFailed(
+                storedSourceId,
+                "the source is no longer installed"
+            )
+        )
+        val loaded = loadExtension(candidate)
+        if (loaded is AppResult.Ok && loaded.value.isNotEmpty()) {
+            healBookExtensionId(book, candidate.id)
+        }
+        return loaded
+    }
+
+    /** Does [row] declare [storedSourceId]? Declared ids are
+     * compared verbatim, and — mirroring [source]'s player
+     * fallback — a stored NAMESPACED id ("keiyoushi:<pkg>:
+     * <bare>") also matches a row declaring the bare Mihon
+     * id, and a row of the named package. */
+    private fun rowDeclaresSource(
+        row: InstalledExtension,
+        storedSourceId: String
+    ): Boolean {
+        val declared = row.sourceIds.split(",")
+            .map { it.trim() }.filter { it.isNotBlank() }
+        if (storedSourceId in declared) return true
+        val bare = storedSourceId.substringAfterLast(':')
+        if (bare != storedSourceId && bare in declared) return true
+        val namespacedPackage = storedSourceId
+            .removePrefix("keiyoushi:")
+            .let { rest ->
+                if (rest == storedSourceId) null
+                else rest.substringBeforeLast(':')
+                    .takeIf { it.isNotBlank() }
+            }
+        return namespacedPackage != null &&
+            namespacedPackage == row.packageId
+    }
+
+    /** v1.5.10 (B5): the heal — rewrite the book's stored
+     * row id to the row its stable identity actually found,
+     * and leave the DiagnosticLog line the census greps.
+     * No-op when the pointer already agrees or no book DAO
+     * was injected (callers holding a DAO heal themselves —
+     * the chapter resolver does). */
+    private suspend fun healBookExtensionId(
+        book: app.xreader.data.db.Book,
+        newExtensionId: Long
+    ) {
+        if (book.extensionId == newExtensionId) return
+        DiagnosticLog.record(
+            "source-resolve",
+            "book ${book.id} healed: stored extensionId " +
+                "${book.extensionId} pointed at a row that no " +
+                "longer exists; its source was found again by " +
+                "stable identity at row $newExtensionId",
+            "sourceId=${SourceBookIds.decode(book.remoteId)?.first ?: "?"}"
+        )
+        runCatching {
+            bookDao?.update(book.copy(extensionId = newExtensionId))
+        }
     }
 
     suspend fun source(extensionId: Long, sourceId: String): AppResult<SourceHandle> {
@@ -143,7 +373,11 @@ class ExtensionService(
             ?.let { AppResult.Ok(it) }
             ?: AppResult.Err(
                 AppError.ExtensionFailed(
-                    handles.firstOrNull()?.extension?.displayName ?: "source",
+                    // v1.5.10 (B5): never the bare word "source"
+                    // as a name — the row's display name, else
+                    // the id that was asked for.
+                    handles.firstOrNull()?.extension?.displayName
+                        ?: sourceId,
                     "the source wasn't found in its package"
                 )
             )
@@ -233,11 +467,27 @@ class ExtensionService(
                     it.renderWaitSelector != null
                 }?.renderWaitSelector
             },
+            // v1.5.8 (D1/F2): the same up-front decode supplies
+            // the declared render budget, threaded exactly like
+            // the wait-for selector above.
+            renderBudgetMs = {
+                declarativeConfigs.firstOrNull {
+                    it.renderBudgetMs != null
+                }?.renderBudgetMs
+            },
             // v1.3.4 (T1): the row's declared header bindings
             // ride its client (exact-host replay only).
             credentialBindings = {
                 declarativeConfigs.mapNotNull {
                     it.credentials?.headerBinding
+                }
+            },
+            // v1.5.2 (§10 item 1): the row's declared static
+            // replay headers ride its client too (exact-host
+            // replay only, like the bindings).
+            staticHeaders = {
+                declarativeConfigs.flatMap {
+                    it.credentials?.staticHeaders ?: emptyList()
                 }
             },
             // v1.3.4 (T6): the row's declared backup hosts —
@@ -260,10 +510,45 @@ class ExtensionService(
                             AppError.ExtensionFailed(row.displayName, "its rules file is missing")
                         )
                     }
-                    declarativeConfigs.map { config ->
+                    // v1.5.7 (Finding 4, §6): the claim stamp
+                    // runs HERE — the one materialisation seam
+                    // every declarative config passes on its
+                    // way to becoming a source — so mediaKindOf,
+                    // DeclarativeSource.chapterContent's own
+                    // dispatch and every kind filter read the
+                    // stamped kind and agree. Load-time only:
+                    // the stored definition is never rewritten,
+                    // so an existing link-added row (the owner's
+                    // Asura) self-heals on its next load with no
+                    // re-add and no migration.
+                    val claimedHosts = keiyoushiClaimedHosts()
+                    declarativeConfigs.map { rawConfig ->
+                        val config = stampKeiyoushiClaimedKind(
+                            rawConfig, claimedHosts
+                        )
                         DeclarativeSource(
                             config, context,
-                            readTokenStore = sessionStoreOrNull()
+                            readTokenStore = sessionStoreOrNull(),
+                            // v1.5.5 (§2/§3): the rendered-session
+                            // access — the render-backed endpoint
+                            // fetch and the post-solve in-WebView
+                            // mint ride it. Null when this host has
+                            // no renderer (tests/probes); every
+                            // road then keeps its plain path.
+                            sessionAccess = contextFactory.renderedFetcher
+                                ?.let { renderer ->
+                                    val key = ExtensionHttpClient
+                                        .sessionKeyFor(row.id)
+                                    DeclarativeSource.RenderedSessionAccess(
+                                        fetcher = renderer,
+                                        sessionKey = key,
+                                        permissions = permissions,
+                                        hasRecentSolve = {
+                                            SessionSolvedRegistry
+                                                .hasRecentSolve(key)
+                                        }
+                                    )
+                                }
                         )
                     }
                 }
@@ -304,6 +589,45 @@ class ExtensionService(
     }
 
     /**
+     * v1.5.7 (Finding 4, §6): the Keiyoushi claim stamp. A
+     * declarative config whose baseUrl host is claimed by a
+     * Keiyoushi catalogue entry is built as MANGA unless it
+     * already is: the catalogue is a manga-extension index
+     * by construction, so host ⇒ MANGA cannot misfire on a
+     * novel-only site. The match mirrors
+     * [KnownSites.entryFor]'s normalisation — the config's
+     * host, normalised, equal to a claimed host or a
+     * subdomain of one — with one addition: a leading
+     * "www." is ignored on both sides, because the index
+     * and a pasted link may spell the same site either way
+     * (entryFor's list carries both spellings explicitly;
+     * the catalogue carries one). Data-driven from the
+     * catalogue — no site is ever named here. NOT a row
+     * conversion: the row stays DECLARATIVE, no package is
+     * installed, and the Mihon branch is untouched.
+     */
+    private fun stampKeiyoushiClaimedKind(
+        config: DeclarativeConfig,
+        claimedHosts: Set<String>
+    ): DeclarativeConfig {
+        if (config.mediaKind.isManga) return config
+        if (claimedHosts.isEmpty()) return config
+        val host = config.baseUrl.normaliseHost()
+            .removePrefix("www.")
+        if (host.isEmpty()) return config
+        val claimed = claimedHosts.any { raw ->
+            val candidate = raw.normaliseHost().removePrefix("www.")
+            candidate.isNotEmpty() &&
+                (host == candidate || host.endsWith(".$candidate"))
+        }
+        return if (claimed) {
+            config.copy(mediaKind = MediaKind.MANGA)
+        } else {
+            config
+        }
+    }
+
+    /**
      * Keiyoushi player (K4): build the facade handles for one
      * player row from the manager's live registry. The rating
      * is the extension's index contentWarning, asked per load
@@ -318,15 +642,36 @@ class ExtensionService(
     ): List<Source> {
         val live = keiyoushiLiveSources(row.packageId)
         if (live.isEmpty()) return emptyList()
+        // v1.5.2 (§8.4, settled ruling i): a MISSING stamp is
+        // UNKNOWN — visible with a "rating pending" badge, never
+        // resolved to ADULT (the v1.5.1 fail-closed default hid a
+        // pre-stamp Asura forever). The handle carries SAFE as the
+        // transport value because the enum has no UNKNOWN; the
+        // pending state is tracked by the absent stamp itself
+        // (KeiyoushiPlayerManager.ratingOf == null), and Browse
+        // renders the badge from that absence.
         val rating = keiyoushiRatingProvider(row.packageId)
-            ?: ContentRating.ADULT
+            ?: ContentRating.SAFE
         return live.entries
             .map { (namespacedId, source) ->
                 MihonSourceAdapter(
                     packageName = row.packageId,
                     namespacedId = namespacedId,
                     mihon = source,
-                    contentRating = rating
+                    contentRating = rating,
+                    // v1.5.8 (B4): the kind comes from the
+                    // wrapped source's OWN type — a NovelSource
+                    // files TEXT, everything else MANGA.
+                    kind = if (
+                        source is eu.kanade.tachiyomi.source.NovelSource
+                    ) {
+                        MediaKind.TEXT
+                    } else {
+                        MediaKind.MANGA
+                    },
+                    onCoverHostsSeen = { hosts ->
+                        keiyoushiCoverHostSink(row.packageId, hosts)
+                    }
                 )
             }
             .sortedBy { it.name.lowercase() }
@@ -480,6 +825,32 @@ class ExtensionService(
         }
 
     /**
+     * v1.5.2 fix (FIX-5, §7): per-book resolution where a book
+     * exists — the book's stored tier-1/tier-2 kind wins over the
+     * source's single config kind; a book with no stored evidence
+     * on a both-kinds source resolves UNKNOWN → visual Novels
+     * (TEXT here), never the source stamp.
+     */
+    fun mediaKindOf(handle: SourceHandle, book: app.xreader.data.db.Book): MediaKind {
+        when (app.xreader.data.extension.BookKind152.verdictOf(book.kind)) {
+            BookKind152.Verdict.MANGA -> return MediaKind.MANGA
+            BookKind152.Verdict.TEXT -> return MediaKind.TEXT
+            BookKind152.Verdict.UNKNOWN -> Unit
+        }
+        // v1.5.8 (B4): a player book with no stored evidence
+        // takes the ADAPTER's kind — TEXT for a NovelSource
+        // extension, MANGA otherwise (pre-fix this returned
+        // MANGA unconditionally, the mirror hole beside the
+        // adapter's own hardcoded getter).
+        (handle.source as? MihonSourceAdapter)?.let { return it.mediaKind }
+        val config = (handle.source as? DeclarativeSource)?.config
+        val bothKinds = config != null && listOfNotNull(
+            config.popular, config.latest, config.search, config.related, config.bookshelf
+        ).any { it.kindField != null && it.kindValueMap.isNotEmpty() }
+        return if (bothKinds) MediaKind.TEXT else mediaKindOf(handle)
+    }
+
+    /**
      * The ONE content-rating read for a handle: a player
      * source carries its extension's index rating (stamped
      * on the adapter at load), a declarative source its
@@ -545,13 +916,43 @@ class ExtensionService(
      * health checks write health records only, and
      * [RepoManager.setEnabled] is called solely from the
      * source page's own switch.)
+     *
+     * v1.5.4 (WS-1 item 1 — the seam owns the thread, donor
+     * rule D1): the facade is blocking, so the call executes
+     * inside `withContext(Dispatchers.IO)` HERE, at the one
+     * door every source call passes through. No caller needs
+     * (or may rely on) its own dispatcher switch: a call site
+     * on the Main thread — the book page's enrichment, the
+     * other-sources fan-out, the link-add matcher — is safe by
+     * construction, which is the whole fix for the v1.5.3
+     * main-thread deadlock (diagnosis F2/K1).
+     *
+     * The calling coroutine's [Job] is published in
+     * [BridgeCallContext] for the call's duration, so the
+     * player adapter's bridge can carry THIS coroutine's
+     * cancellation across the blocking hop and stop the work
+     * (item 2) — a deadline that only stops the waiter is not
+     * a deadline (D2).
+     *
+     * Cancellation is never converted to an Err: it
+     * propagates, as coroutine discipline requires. Every
+     * other failure keeps the containment shape above.
      */
     suspend fun <T> guarded(
         handle: SourceHandle,
         block: (Source) -> T
     ): AppResult<T> {
         return try {
-            AppResult.Ok(block(handle.source))
+            val callerJob = currentCoroutineContext()[Job]
+            AppResult.Ok(
+                withContext(Dispatchers.IO) {
+                    BridgeCallContext.withJob(callerJob) {
+                        block(handle.source)
+                    }
+                }
+            )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             AppResult.Err(
                 AppError.ExtensionFailed(

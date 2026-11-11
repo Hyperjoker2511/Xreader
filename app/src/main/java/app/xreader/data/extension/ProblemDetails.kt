@@ -99,11 +99,20 @@ object ProblemDetails {
      * source with its plain health word, and the session's
      * recent problems. [sourceLines] arrive display-ready
      * ("Novelight — Working").
+     *
+     * v1.5.13 (F0): [crashRecordsSection] — the CrashGuard
+     * notes (stall captures + imported system exit records),
+     * pre-formatted and size-capped by
+     * `CrashGuard.formatNotesSection` — is appended after every
+     * existing section when non-blank, so a fault report also
+     * carries the on-device crash/stall evidence. Callers that
+     * pass nothing get byte-identical output to before.
      */
     fun formatAppDetails(
         appVersion: String,
         sourceLines: List<String>,
-        recentProblems: List<DiagnosticLog.Entry> = emptyList()
+        recentProblems: List<DiagnosticLog.Entry> = emptyList(),
+        crashRecordsSection: String = ""
     ): String {
         val lines = mutableListOf(
             "Xreader app details",
@@ -125,6 +134,9 @@ object ProblemDetails {
                     line
                 }
             }
+        }
+        if (crashRecordsSection.isNotBlank()) {
+            lines += crashRecordsSection.trim()
         }
         return lines.joinToString("\n")
     }

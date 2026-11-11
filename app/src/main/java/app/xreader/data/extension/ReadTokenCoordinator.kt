@@ -89,6 +89,16 @@ import java.util.concurrent.ConcurrentHashMap
  * Coordinators are per-source and process-wide
  * ([ReadTokenCoordinators]) because DeclarativeSource
  * instances are rebuilt per operation.
+ *
+ * v1.5.12 (Front 1, S4): every blocking entry now delegates
+ * to a suspend-native twin ([currentTokenAwaited],
+ * [tokenAwaited], [noteIssuedAwaited], [invalidateAwaited],
+ * [clearAwaited]) over the SAME state machinery — same
+ * [stateMutex], same mint gate, same single-flight. The
+ * declarative chapter road calls the suspend twins, so no
+ * coordinator runBlocking remains reachable from the fetch
+ * road; the blocking forms stay for genuinely
+ * non-coroutine callers (the sign-out hook).
  */
 class ReadTokenCoordinator(
     private val spec: OperationTokenSpec,
@@ -111,6 +121,62 @@ class ReadTokenCoordinator(
         data class RateLimited(val retryAfterSeconds: Long?) : MintOutcome
         /** The mint failed otherwise; [detail] is for diagnostics. */
         data class Unavailable(val detail: String) : MintOutcome
+    }
+
+    /**
+     * v1.5.5 (§3): the in-WebView mint provider — the seam the
+     * post-solve road rides. Implemented over the rendered
+     * session (WebViewRenderedFetcher) by the source that owns
+     * this coordinator; null in every other context, in which
+     * case the mint is OkHttp-only, exactly as before. The
+     * single-flight discipline is unchanged: the provider is
+     * only ever invoked from inside [gatedMint], so concurrent
+     * mints for one (source, chapter) still serialise behind
+     * the coordinator's own gates.
+     */
+    interface WebViewMintProvider {
+        /** Park on [parkUrl] with the harvest hook armed and
+         * wait for the page's own mint to report a token. */
+        suspend fun harvestToken(
+            parkUrl: String
+        ): TokenHarvestResult?
+
+        /** Run the mint as a fetch() inside the parked page's
+         * context ([parkUrl]'s origin) and return the wire
+         * answer, or null when the in-context road could not
+         * run at all. */
+        suspend fun mintInContext(
+            spec: OperationTokenSpec,
+            mintChapterId: String?,
+            parkUrl: String
+        ): InContextFetchResult?
+    }
+
+    /** v1.5.5 (§3.4): the last mint's wire facts — which road
+     * ran, its HTTP status, and a body prefix — so the
+     * post-save diagnostic line can separate "the mint never
+     * ran" from "the mint ran and the site said no". */
+    data class MintDiagnostic(
+        val road: String,
+        val status: Int,
+        val bodyPrefix: String,
+        val atMs: Long
+    )
+
+    @Volatile
+    private var lastMint: MintDiagnostic? = null
+
+    /** The most recent mint's wire facts, or null when this
+     * coordinator has not minted in this process. */
+    fun lastMintDiagnostic(): MintDiagnostic? = lastMint
+
+    private fun noteMint(road: String, status: Int, body: String) {
+        lastMint = MintDiagnostic(
+            road = road,
+            status = status,
+            bodyPrefix = body.replace('\n', ' ').take(150),
+            atMs = nowMs()
+        )
     }
 
     /** One chapter scope's credential state. Every field is
@@ -152,13 +218,21 @@ class ReadTokenCoordinator(
 
     /** The currently held token for [scopeKey] when it is
      * comfortably valid — no mint, no wait. Null otherwise.
-     * Only ever answers for the exact scope asked about. */
-    fun currentToken(scopeKey: String): StoredReadToken? = runBlocking {
+     * Only ever answers for the exact scope asked about.
+     * Blocking wrapper over [currentTokenAwaited], kept for
+     * genuinely non-coroutine callers. */
+    fun currentToken(scopeKey: String): StoredReadToken? =
+        runBlocking { currentTokenAwaited(scopeKey) }
+
+    /** v1.5.12 (Front 1, S4): the suspend-native form of
+     * [currentToken] — the declarative chapter road (itself
+     * coroutine-hosted) calls this, so no runBlocking sits
+     * on the fetch road for a token read. */
+    suspend fun currentTokenAwaited(scopeKey: String): StoredReadToken? =
         stateMutex.withLock {
             val state = states[scopeKey] ?: return@withLock null
             currentTokenLocked(state)
         }
-    }
 
     /** [stateMutex] must be held. */
     private fun currentTokenLocked(state: ScopeState): StoredReadToken? {
@@ -190,13 +264,36 @@ class ReadTokenCoordinator(
      * carries (the locked record's remint hint or the
      * chapter's own number) — a different concept from
      * [scopeKey], the identity the token is held under.
-     * Blocking.
+     * Blocking wrapper over [tokenAwaited], kept for
+     * genuinely non-coroutine callers.
      */
     fun token(
         http: HostHttp,
         scopeKey: String,
-        mintChapterId: String?
+        mintChapterId: String?,
+        webViewProvider: WebViewMintProvider? = null,
+        recentSolve: Boolean = false,
+        parkUrl: String? = null
     ): MintOutcome = runBlocking {
+        tokenAwaited(
+            http, scopeKey, mintChapterId, webViewProvider,
+            recentSolve, parkUrl
+        )
+    }
+
+    /** v1.5.12 (Front 1, S4): the suspend-native mint entry —
+     * the exact machinery of [token] (single-flight per
+     * scope, the source-wide mint gate, the shared 429
+     * cooldown, the clear-epoch rule) with no runBlocking:
+     * the declarative chapter road calls this form. */
+    suspend fun tokenAwaited(
+        http: HostHttp,
+        scopeKey: String,
+        mintChapterId: String?,
+        webViewProvider: WebViewMintProvider? = null,
+        recentSolve: Boolean = false,
+        parkUrl: String? = null
+    ): MintOutcome {
         val decision = stateMutex.withLock {
             val state = stateFor(scopeKey)
             ensureLoadedLocked(scopeKey, state)
@@ -222,13 +319,16 @@ class ReadTokenCoordinator(
                 Decision.Start(fresh, clearEpoch)
             }
         }
-        when (decision) {
+        return when (decision) {
             is Decision.Done -> decision.outcome
             is Decision.Join -> decision.deferred.await()
             is Decision.Start -> {
                 scope.launch {
                     val outcome = runCatching {
-                        gatedMint(http, scopeKey, mintChapterId, decision.epoch)
+                        gatedMint(
+                            http, scopeKey, mintChapterId, decision.epoch,
+                            webViewProvider, recentSolve, parkUrl
+                        )
                     }.getOrElse {
                         MintOutcome.Unavailable(
                             it.message ?: "the token request failed"
@@ -265,7 +365,10 @@ class ReadTokenCoordinator(
         http: HostHttp,
         scopeKey: String,
         mintChapterId: String?,
-        epoch: Long
+        epoch: Long,
+        webViewProvider: WebViewMintProvider? = null,
+        recentSolve: Boolean = false,
+        parkUrl: String? = null
     ): MintOutcome = mintGate.withLock {
         val recheck: MintOutcome? = stateMutex.withLock {
             val state = states[scopeKey]
@@ -283,30 +386,184 @@ class ReadTokenCoordinator(
                 }
             }
         }
-        recheck ?: doMint(http, scopeKey, mintChapterId, epoch)
+        recheck ?: doMint(
+            http, scopeKey, mintChapterId, epoch,
+            webViewProvider, recentSolve, parkUrl
+        )
     }
 
     /** The mint itself. Runs under [mintGate] on the
      * coordinator's scope; state transitions happen under
-     * [stateMutex]. */
+     * [stateMutex].
+     *
+     * v1.5.5 (§3.3, mint order): with NO recent solve the mint
+     * runs via OkHttp, as it always has. After a solve (the
+     * caller passes [recentSolve] from the solved-at
+     * registry), the mint routes INSIDE the WebView's context,
+     * in order: (1) a token the sanctioned page already minted
+     * and the hook harvested (the process sink) is adopted
+     * with no new mint at all; (2) an explicit in-context
+     * fetch() mint. Any in-context answer is classified by
+     * the SAME wire classifier as the OkHttp answer — and
+     * when the WebView road cannot run, the OkHttp mint still
+     * runs: a solve must never make a working mint worse.
+     *
+     * v1.5.12 (Front 1, S2): the sequence spends at most ONE
+     * Main-resident round-trip — step (2). The v1.5.5 shape
+     * also ran a fresh harvest VISIT before it (park + wait
+     * for the page's own mint), so one chapter open could
+     * serialise two full WebView round-trips on Main; that
+     * visit is gone (the sink in step (1) still adopts
+     * whatever the solve flow itself harvested). */
     private suspend fun doMint(
         http: HostHttp,
         scopeKey: String,
         mintChapterId: String?,
-        epoch: Long
+        epoch: Long,
+        webViewProvider: WebViewMintProvider? = null,
+        recentSolve: Boolean = false,
+        parkUrl: String? = null
     ): MintOutcome {
+        if (recentSolve && webViewProvider != null && parkUrl != null) {
+            val mintHost = runCatching {
+                java.net.URI(spec.mintUrl).host
+            }.getOrNull().orEmpty()
+            // (1) The solve page's own mint, already harvested.
+            // v1.5.8 (C3): expiry anchors at the harvest's
+            // OBSERVATION instant (the sink entry's timestamp),
+            // never at adoption time.
+            FenrirHarvestSink.recentObservedFor(mintHost, nowMs())
+                ?.let { (harvested, observedAtMs) ->
+                    noteMint("harvest", harvested.status, harvested.body)
+                    return adoptMintToken(
+                        scopeKey, epoch, harvested.token,
+                        expiresAtFromBody(
+                            harvested.body, observedAtMs = observedAtMs
+                        )
+                    )
+                }
+            // v1.5.12 (Front 1, S2): NO harvest VISIT here any
+            // more. The mint sequence is capped at ONE
+            // Main-resident round-trip per chapter open: the
+            // sink adoption above costs none (the token was
+            // observed on an earlier solve), and the explicit
+            // in-context mint below is the one round-trip.
+            // The old shape ran BOTH — a harvest visit (park +
+            // wait for the page's own mint) and then, when the
+            // page fired none, a second parked in-context
+            // mint — two sequential WebView round-trips on
+            // Main inside a single chapter open, the
+            // saturation shape the fetch-road forensics
+            // convicted. [WebViewMintProvider.harvestToken]
+            // stays on the interface (the solve flow's own
+            // harvest still feeds the sink the step above
+            // reads); the coordinator simply never spends a
+            // visit of its own.
+            // (2) The explicit in-context mint — the mint
+            // sequence's ONE WebView round-trip.
+            runCatching {
+                webViewProvider.mintInContext(spec, mintChapterId, parkUrl)
+            }.getOrNull()?.let { wire ->
+                val outcome = classifyMintWire(
+                    wire.status, emptyMap(), wire.body,
+                    scopeKey, epoch, road = "webview"
+                )
+                // v1.5.8 (C2 / F7 F2): a challenge CLASSIFICATION
+                // from the in-context mint is NOT terminal — one
+                // context's verdict must not convict the
+                // credential while the other context is untried.
+                // Fall through to ONE OkHttp mint below before
+                // ChallengeRequired is returned. (A transport
+                // failure / null result already falls through —
+                // the getOrNull above — and keeps today's
+                // behaviour; any other classification stands.)
+                if (outcome !is MintOutcome.ChallengeRequired) {
+                    return outcome
+                }
+            }
+            // The WebView road could not run (or its mint
+            // classified a challenge): fall through to the
+            // OkHttp mint below.
+        }
         val response: HostResponse = runCatching {
             http.post(
                 spec.mintUrl, spec.mintBody(mintChapterId),
                 contentType = "application/json"
             )
         }.getOrElse {
+            noteMint("okhttp", -1, it.message.orEmpty())
             return MintOutcome.Unavailable(
                 it.message ?: "the token request failed"
             )
         }
-        if (response.status == 429) {
-            val retryAfter = retryAfterSeconds(response.headers)
+        return classifyMintWire(
+            response.status, response.headers, response.body,
+            scopeKey, epoch, road = "okhttp"
+        )
+    }
+
+    /** The stated expiry in a mint answer body, when it
+     * carries one (seconds epoch → millis — already absolute,
+     * used as stated); else the spec's default lifetime
+     * counted from [observedAtMs] — the instant the answer
+     * was OBSERVED. v1.5.8 (C3): for an adopted harvest that
+     * instant is the harvest's own timestamp, never the
+     * adoption instant; for a fresh mint the two coincide. */
+    private fun expiresAtFromBody(
+        body: String,
+        observedAtMs: Long = nowMs()
+    ): Long {
+        val root = runCatching {
+            json.parseToJsonElement(body).jsonObject
+        }.getOrNull()
+        return root?.get("expires_at")?.jsonPrimitive?.content
+            ?.toLongOrNull()?.times(1000)
+            ?: (observedAtMs + spec.defaultLifetimeSeconds * 1000)
+    }
+
+    /** Adopt a minted [tokenValue] under the epoch rule —
+     * shared by every mint road. */
+    private suspend fun adoptMintToken(
+        scopeKey: String,
+        epoch: Long,
+        tokenValue: String,
+        expiresAtMs: Long
+    ): MintOutcome {
+        // Adopt + persist under the state lock, and only if
+        // no sign-out landed while the mint was on the wire
+        // (the epoch rule): a cleared source must never see
+        // this token resurrect.
+        val stored = stateMutex.withLock {
+            if (epoch != clearEpoch) return@withLock null
+            val state = stateFor(scopeKey)
+            val fresh = StoredReadToken(
+                value = tokenValue,
+                expiresAtMs = expiresAtMs,
+                generation = (state.held?.generation ?: 0) + 1
+            )
+            adoptLocked(state, fresh)
+            persistLocked(scopeKey, fresh)
+            fresh
+        } ?: return MintOutcome.Unavailable(
+            "the session was cleared while the token was issued"
+        )
+        return MintOutcome.Ready(stored.value, stored.generation)
+    }
+
+    /** ONE classifier for every mint wire answer (OkHttp and
+     * in-context alike), so a solve changes the mint's ROAD
+     * but never its verdicts. */
+    private suspend fun classifyMintWire(
+        status: Int,
+        headers: Map<String, String>,
+        body: String,
+        scopeKey: String,
+        epoch: Long,
+        road: String
+    ): MintOutcome {
+        noteMint(road, status, body)
+        if (status == 429) {
+            val retryAfter = retryAfterSeconds(headers)
             stateMutex.withLock {
                 cooldownUntilMs = elapsedMs() +
                     (retryAfter ?: DEFAULT_MINT_COOLDOWN_SECONDS) * 1000
@@ -314,53 +571,34 @@ class ReadTokenCoordinator(
             return MintOutcome.RateLimited(retryAfter)
         }
         val root = runCatching {
-            json.parseToJsonElement(response.body).jsonObject
+            json.parseToJsonElement(body).jsonObject
         }.getOrNull()
         val challenge = root?.get("challenge_required")
             ?.jsonPrimitive?.content?.toBooleanStrictOrNull() == true
-        if (response.status in 200..299) {
+        if (status in 200..299) {
             val tokenValue = root?.get("token")
                 ?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
                 ?: return MintOutcome.Unavailable(
                     "the site answered the token request without a token"
                 )
-            val expiresAt = root["expires_at"]?.jsonPrimitive?.content
-                ?.toLongOrNull()?.times(1000)
-                ?: (nowMs() + spec.defaultLifetimeSeconds * 1000)
-            // Adopt + persist under the state lock, and only
-            // if no sign-out landed while the mint was on the
-            // wire (the epoch rule): a cleared source must
-            // never see this token resurrect.
-            val stored = stateMutex.withLock {
-                if (epoch != clearEpoch) return@withLock null
-                val state = stateFor(scopeKey)
-                val fresh = StoredReadToken(
-                    value = tokenValue,
-                    expiresAtMs = expiresAt,
-                    generation = (state.held?.generation ?: 0) + 1
-                )
-                adoptLocked(state, fresh)
-                persistLocked(scopeKey, fresh)
-                fresh
-            } ?: return MintOutcome.Unavailable(
-                "the session was cleared while the token was issued"
+            return adoptMintToken(
+                scopeKey, epoch, tokenValue, expiresAtFromBody(body)
             )
-            return MintOutcome.Ready(stored.value, stored.generation)
         }
-        if (challenge || response.status == 403 &&
-            SiteCheck.hasChallengeMarkersIn(response.body)
+        if (challenge || status == 403 &&
+            SiteCheck.hasChallengeMarkersIn(body)
         ) {
             return MintOutcome.ChallengeRequired
         }
-        val bodyText = response.body.lowercase()
-        if (response.status == 401 ||
+        val bodyText = body.lowercase()
+        if (status == 401 ||
             "unauthorized" in bodyText || "not authenticated" in bodyText ||
             "session expired" in bodyText || "sign in" in bodyText
         ) {
             return MintOutcome.SessionDead
         }
         return MintOutcome.Unavailable(
-            "the site answered the token request with HTTP ${response.status}"
+            "the site answered the token request with HTTP $status"
         )
     }
 
@@ -372,23 +610,34 @@ class ReadTokenCoordinator(
      * generation — it never touches another scope, and
      * never the reverse.
      */
+    /** Blocking wrapper over [noteIssuedAwaited], kept for
+     * genuinely non-coroutine callers. */
     fun noteIssued(headers: Map<String, String>, scopeKey: String) {
+        val issued = headerValue(headers, spec.issuedHeader) ?: return
+        if (issued.isBlank()) return
+        runBlocking { noteIssuedAwaited(headers, scopeKey) }
+    }
+
+    /** v1.5.12 (Front 1, S4): the suspend-native form of
+     * [noteIssued] — same harvest, no runBlocking. */
+    suspend fun noteIssuedAwaited(
+        headers: Map<String, String>,
+        scopeKey: String
+    ) {
         val issued = headerValue(headers, spec.issuedHeader) ?: return
         if (issued.isBlank()) return
         val expiresAt = headerValue(headers, spec.issuedExpiresHeader)
             ?.toLongOrNull()?.times(1000)
             ?: (nowMs() + spec.defaultLifetimeSeconds * 1000)
-        runBlocking {
-            stateMutex.withLock {
-                val state = stateFor(scopeKey)
-                val stored = StoredReadToken(
-                    value = issued,
-                    expiresAtMs = expiresAt,
-                    generation = (state.held?.generation ?: 0) + 1
-                )
-                adoptLocked(state, stored)
-                persistLocked(scopeKey, stored)
-            }
+        stateMutex.withLock {
+            val state = stateFor(scopeKey)
+            val stored = StoredReadToken(
+                value = issued,
+                expiresAtMs = expiresAt,
+                generation = (state.held?.generation ?: 0) + 1
+            )
+            adoptLocked(state, stored)
+            persistLocked(scopeKey, stored)
         }
     }
 
@@ -399,37 +648,49 @@ class ReadTokenCoordinator(
      * revoke a newer one, and one chapter's failure must
      * never revoke another chapter's token.
      */
+    /** Blocking wrapper over [invalidateAwaited], kept for
+     * genuinely non-coroutine callers. */
     fun invalidate(scopeKey: String, generation: Long) {
-        runBlocking {
-            stateMutex.withLock {
-                val state = states[scopeKey] ?: return@withLock
-                val current = state.held ?: return@withLock
-                if (current.generation != generation) return@withLock
-                state.held = null
-                state.heldVerified = false
-                state.heldDeadlineElapsedMs = 0
-                val storeNow = store
-                if (storeNow != null && storeKey.isNotBlank()) {
-                    runCatching {
-                        storeNow.clearReadToken(storeKey, scopeKey)
-                    }
+        runBlocking { invalidateAwaited(scopeKey, generation) }
+    }
+
+    /** v1.5.12 (Front 1, S4): the suspend-native form of
+     * [invalidate] — same generation guard, no runBlocking. */
+    suspend fun invalidateAwaited(scopeKey: String, generation: Long) {
+        stateMutex.withLock {
+            val state = states[scopeKey] ?: return@withLock
+            val current = state.held ?: return@withLock
+            if (current.generation != generation) return@withLock
+            state.held = null
+            state.heldVerified = false
+            state.heldDeadlineElapsedMs = 0
+            val storeNow = store
+            if (storeNow != null && storeKey.isNotBlank()) {
+                runCatching {
+                    storeNow.clearReadToken(storeKey, scopeKey)
                 }
             }
         }
     }
 
     /** Forget everything (sign-out): every scope's held
-     * token and stored record, plus the shared cooldown. */
+     * token and stored record, plus the shared cooldown.
+     * Blocking wrapper over [clearAwaited] — the sign-out
+     * callers (RepoManager) are not coroutines. */
     fun clear() {
-        runBlocking {
-            stateMutex.withLock {
-                states.clear()
-                cooldownUntilMs = 0
-                clearEpoch += 1
-                val storeNow = store
-                if (storeNow != null && storeKey.isNotBlank()) {
-                    runCatching { storeNow.clearReadTokens(storeKey) }
-                }
+        runBlocking { clearAwaited() }
+    }
+
+    /** v1.5.12 (Front 1, S4): the suspend-native form of
+     * [clear] — same epoch bump, no runBlocking. */
+    suspend fun clearAwaited() {
+        stateMutex.withLock {
+            states.clear()
+            cooldownUntilMs = 0
+            clearEpoch += 1
+            val storeNow = store
+            if (storeNow != null && storeKey.isNotBlank()) {
+                runCatching { storeNow.clearReadTokens(storeKey) }
             }
         }
     }

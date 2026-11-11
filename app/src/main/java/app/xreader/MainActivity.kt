@@ -1,8 +1,8 @@
 package app.xreader
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -30,8 +30,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-/** The single activity; everything else is Compose (PLAN §3). */
-class MainActivity : ComponentActivity() {
+/** The single activity; everything else is Compose (PLAN §3).
+ * v1.5.6 (§3): a [FragmentActivity] (a ComponentActivity subclass)
+ * so the local EPUB reader can host Readium's EpubNavigatorFragment;
+ * setContent and every other behaviour are unchanged. */
+class MainActivity : FragmentActivity() {
 
     private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -53,6 +56,22 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         handleWidgetIntent(intent, (application as XreaderApp).container)
         handleSourceShortcut(intent, (application as XreaderApp).container)
+        handleSourceShelfIntent(intent, (application as XreaderApp).container)
+    }
+
+    /** Source-update notification taps (v1.5.39, item 4)
+     * carry the shelf extra; the shell observes
+     * [AppContainer.pendingOpenSourceShelf] and opens the
+     * manga shelf — the widget-tap pattern. */
+    private fun handleSourceShelfIntent(
+        intent: android.content.Intent?,
+        container: AppContainer
+    ) {
+        val open = intent?.getBooleanExtra(
+            app.xreader.data.update.SourceUpdateNotifier
+                .EXTRA_OPEN_SOURCE_SHELF, false
+        ) ?: false
+        if (open) container.pendingOpenSourceShelf.value = true
     }
 
     /** Live Source home-screen shortcuts (v1.0.9) carry the
@@ -100,11 +119,28 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // v1.5.12 (E4 / Readium host conformance): if the
+        // process was killed while the EPUB reader was open,
+        // the FragmentManager restores the EpubNavigatorFragment
+        // DURING super.onCreate — before any Compose code can
+        // install the real factory — and instantiating it
+        // without a factory crashes the restore. Install
+        // Readium's dummy factory FIRST (the reference host's
+        // process-death pattern): the restored fragment can be
+        // instantiated without a live publication, and the
+        // reader's EpubBody replaces this with the real factory
+        // before its own transaction when a book is opened.
+        runCatching {
+            supportFragmentManager.fragmentFactory =
+                org.readium.r2.navigator.epub.EpubNavigatorFragment
+                    .createDummyFactory()
+        }
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val container = (application as XreaderApp).container
         handleWidgetIntent(intent, container)
         handleSourceShortcut(intent, container)
+        handleSourceShelfIntent(intent, container)
         // A previous crash outranks onboarding (PLAN §1.5): recovery first.
         val crashNote = container.unseenCrashNote()
         setContent {

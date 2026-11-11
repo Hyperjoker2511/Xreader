@@ -88,14 +88,31 @@ interface ChapterDao {
     /** v1.0.2 (R19): all books' download tallies in one flow. */
     @Query(
         "SELECT bookId, " +
-            "SUM(CASE WHEN downloadState = 'READY' THEN 1 ELSE 0 END) AS downloaded, " +
-            "SUM(CASE WHEN downloadState = 'READY' AND read = 1 THEN 1 ELSE 0 END) " +
+            "SUM(CASE WHEN downloadState = 'READY' AND bodyOrigin = 'USER' THEN 1 ELSE 0 END) AS downloaded, " +
+            "SUM(CASE WHEN downloadState = 'READY' AND bodyOrigin = 'USER' AND read = 1 THEN 1 ELSE 0 END) " +
             "AS readDownloaded FROM chapters GROUP BY bookId"
     )
     fun observeDownloadCounts(): Flow<List<BookDownloadCount>>
     /** Phase 4: the reader marks chapters read as they're finished. */
     @Query("UPDATE chapters SET read = :read WHERE id = :id")
     suspend fun setRead(id: Long, read: Boolean)
+    /** v1.5.2 (§12.4): origin is stamped where the BODY is written. */
+    @Query("UPDATE chapters SET bodyOrigin = :origin WHERE id = :id")
+    suspend fun setBodyOrigin(id: Long, origin: String?)
+    /** v1.5.2 fix (FIX-6d): origin stamped in bulk at enqueue. */
+    @Query("UPDATE chapters SET bodyOrigin = :origin WHERE id IN (:ids)")
+    suspend fun setBodyOriginForIds(ids: List<Long>, origin: String?)
+    /** v1.5.2 fix (FIX-6b): eviction clears row+state with the file. */
+    @Query("UPDATE chapters SET contentPath = NULL, downloadState = 'NONE', bodyOrigin = NULL, wordCount = 0 WHERE id = :id")
+    suspend fun clearBody(id: Long)
+    /** v1.5.2 fix (FIX-8c): chapters whose stored body exists (stub check). */
+    @Query("SELECT * FROM chapters WHERE bookId = :bookId AND contentPath IS NOT NULL")
+    suspend fun storedBodies(bookId: Long): List<Chapter>
+    /** v1.5.2 (§12.9): the ONE "downloaded" definition — USER + READY. */
+    @Query("SELECT COUNT(*) FROM chapters WHERE bookId = :bookId AND downloadState = 'READY' AND bodyOrigin = 'USER'")
+    suspend fun downloadedCount(bookId: Long): Int
+    @Query("SELECT * FROM chapters WHERE bodyOrigin IS NULL AND contentPath IS NOT NULL")
+    suspend fun unstampedBodies(): List<Chapter>
     /** Phase 5: sync/AI address chapters by their position in the book. */
     @Query("SELECT * FROM chapters WHERE bookId = :bookId AND `index` = :index LIMIT 1")
     suspend fun getByIndex(bookId: Long, index: Int): Chapter?
@@ -103,6 +120,32 @@ interface ChapterDao {
      * (the achievements' chapter counts read this, so migrated
      * read-state counts too). */
     @Query("SELECT COUNT(*) FROM chapters WHERE read = 1") suspend fun readCount(): Int
+    /** v1.5.6 (§3.5 R3): Clear Legacy Data removes a book's
+     * converted chapter rows while keeping the book itself. */
+    @Query("DELETE FROM chapters WHERE bookId = :bookId")
+    suspend fun deleteForBook(bookId: Long): Int
+}
+
+@Dao
+interface ReadingMemoryDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(memory: ReadingMemory)
+    @Query("SELECT * FROM reading_memory WHERE fingerprint = :fingerprint")
+    suspend fun get(fingerprint: String): ReadingMemory?
+    @Query("DELETE FROM reading_memory WHERE fingerprint = :fingerprint")
+    suspend fun delete(fingerprint: String): Int
+    @Query("SELECT * FROM reading_memory ORDER BY updatedAt DESC")
+    suspend fun all(): List<ReadingMemory>
+}
+
+@Dao
+interface LocalOutlineDao {
+    @Insert suspend fun insertAll(rows: List<LocalOutline>)
+    @Query("SELECT * FROM local_outline WHERE bookId = :bookId ORDER BY idx ASC")
+    suspend fun forBook(bookId: Long): List<LocalOutline>
+    @Query("SELECT * FROM local_outline WHERE bookId = :bookId ORDER BY idx ASC")
+    fun observeForBook(bookId: Long): Flow<List<LocalOutline>>
+    @Query("DELETE FROM local_outline WHERE bookId = :bookId")
+    suspend fun deleteForBook(bookId: Long): Int
 }
 
 @Dao
@@ -195,6 +238,13 @@ interface InstalledExtensionDao {
     @Query("SELECT COUNT(*) FROM installed_extensions") suspend fun countAll(): Int
     @Query("SELECT * FROM installed_extensions ORDER BY displayName")
     suspend fun allNow(): List<InstalledExtension>
+    /** v1.5.2 fix (FIX-10): the needs-repair SETTER the §8 deferred
+     * pass needs — before this fix no code path could ever set the
+     * mark, so the §8.2 outcome could never occur. */
+    @Query("UPDATE installed_extensions SET needsRepair = 1, needsRepairReason = :reason WHERE id = :id")
+    suspend fun setNeedsRepair(id: Long, reason: String?)
+    @Query("UPDATE installed_extensions SET needsRepair = 0, needsRepairReason = NULL WHERE id = :id")
+    suspend fun clearNeedsRepair(id: Long)
 }
 
 @Dao
@@ -219,6 +269,12 @@ interface DownloadQueueDao {
     suspend fun activeForBook(bookId: Long): List<DownloadQueueItem>
     @Query("UPDATE download_queue SET state = 'QUEUED', lastErrorDetail = NULL WHERE state = 'RUNNING'")
     suspend fun resetRunningToQueued(): Int
+    /** v1.5.2 fix (FIX-9): full deletion removes queue items in EVERY
+     * state, DONE included — not merely cancels the active ones. */
+    @Query("DELETE FROM download_queue WHERE bookId = :bookId")
+    suspend fun deleteForBook(bookId: Long): Int
+    @Query("SELECT * FROM download_queue WHERE bookId = :bookId")
+    suspend fun allForBook(bookId: Long): List<DownloadQueueItem>
 }
 
 @Dao
@@ -409,4 +465,49 @@ interface VocabDao {
     @Query("SELECT * FROM vocab_words WHERE dueAt <= :nowMillis AND state != 'KNOWN' ORDER BY dueAt")
     suspend fun due(nowMillis: Long): List<VocabWord>
     @Query("SELECT COUNT(*) FROM vocab_words") suspend fun count(): Int
+}
+
+@Dao
+interface HistoryRecordDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(record: HistoryRecord)
+    @Query("SELECT * FROM history_records ORDER BY recordedAt DESC") fun observeAll(): Flow<List<HistoryRecord>>
+    @Query("SELECT * FROM history_records ORDER BY recordedAt DESC") suspend fun allNow(): List<HistoryRecord>
+    @Query("SELECT * FROM history_records WHERE bookKey = :bookKey") suspend fun getByKey(bookKey: String): HistoryRecord?
+    @Query("DELETE FROM history_records WHERE bookKey = :bookKey") suspend fun deleteByKey(bookKey: String)
+    @Query("DELETE FROM history_records") suspend fun clearAll()
+    @Query("SELECT COUNT(*) FROM history_records") suspend fun count(): Int
+}
+
+@Dao
+interface PendingOperationDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(op: PendingOperation): Long
+    @Query("SELECT * FROM pending_operations WHERE sessionKey = :key") suspend fun getByKey(key: String): PendingOperation?
+    @Query("SELECT * FROM pending_operations") suspend fun allNow(): List<PendingOperation>
+    /** §1 atomic claim: READY → RUNNING in ONE update; rows affected is
+     * the claim verdict (1 = won, 0 = lost). */
+    @Query("UPDATE pending_operations SET state = 'RUNNING', claimantToken = :token, attemptCount = attemptCount + 1 WHERE sessionKey = :key AND state = 'READY'")
+    suspend fun claim(key: String, token: String): Int
+    /** v1.5.2 (round-15, §1): promotion as a compare-and-swap —
+     * WAITING → READY lands for exactly ONE evaluator, however
+     * many surfaces evaluate concurrently; the winner alone
+     * appends the transition to the record's trace. */
+    @Query("UPDATE pending_operations SET state = 'READY' WHERE sessionKey = :key AND state = 'WAITING'")
+    suspend fun promoteToReady(key: String): Int
+    /** v1.5.2 (round-15, §1): RUNNING recovery at process start,
+     * also compare-and-swap so two start-up evaluators cannot
+     * both record the recovery. */
+    @Query("UPDATE pending_operations SET state = 'READY' WHERE sessionKey = :key AND state = 'RUNNING'")
+    suspend fun recoverRunning(key: String): Int
+    @Query("UPDATE pending_operations SET state = :state WHERE sessionKey = :key")
+    suspend fun setState(key: String, state: String)
+    @Query("DELETE FROM pending_operations WHERE sessionKey = :key") suspend fun deleteByKey(key: String)
+    @Query("DELETE FROM pending_operations WHERE state IN ('SUCCEEDED','FAILED','CANCELLED','EXPIRED') AND createdAt < :before")
+    suspend fun pruneTerminalBefore(before: Long): Int
+}
+
+@Dao
+interface UpdatePassJournalDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(entry: UpdatePassJournalEntry)
+    @Query("SELECT * FROM update_pass_journal WHERE versionCode = :versionCode") suspend fun forVersion(versionCode: Int): List<UpdatePassJournalEntry>
+    @Query("SELECT COUNT(*) FROM update_pass_journal WHERE versionCode = :versionCode AND outcome != 'pending'") suspend fun terminalCount(versionCode: Int): Int
 }

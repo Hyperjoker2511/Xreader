@@ -40,6 +40,10 @@ object SeedCatalog {
         "novelbuddy.com" to "NovelBuddy",
         "novelbuddy.me" to "NovelBuddy",
         "botitranslation.com" to "BotiTranslation"
+        // v1.5.39 (item 2): xnovel.me's seed name is removed
+        // with the bundled source — a pasted xnovel.me link
+        // now names itself from the page, like any other
+        // site the learner meets.
     )
 
     /** The display name a seed carries for [host] (or any URL's

@@ -1,5 +1,6 @@
 package app.xreader.data.extension
 
+import app.xreader.core.error.AppResult
 import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.content.ChapterPage
 import app.xreader.domain.content.ChapterPages
@@ -36,6 +37,25 @@ import java.net.URLEncoder
  * own fetch path wants the normalised model; the service uses the
  * model when this source produced it.
  */
+/**
+ * v1.5.8 (D2 rule 3): WHICH ROAD supplied a declarative
+ * chapter harvest — the provenance the sync seam stamps
+ * completeness from. [ENDPOINT]: the declared JSON endpoint
+ * road (or a direct JSON payload) answered, and its rows
+ * passed provenance validation. [DOM]: the declared DOM
+ * spec — the chapter road this source declares — answered
+ * and validated. [FALLBACK]: the item-85 DOM substitution
+ * supplied the rows after the declared endpoint road
+ * answered nothing (only possible where the DOM spec is
+ * scoped — see parseAllChaptersWalk). [UNPROVEN]: the
+ * harvest lost (nearly) all its rows to provenance
+ * validation, or otherwise cannot testify to its own
+ * origin. FALLBACK and UNPROVEN results are stored as NO
+ * chapters / a failed load by the sync seam — never
+ * drop-reconciled, never stamped complete.
+ */
+enum class ChapterSuppliedBy { ENDPOINT, DOM, FALLBACK, UNPROVEN }
+
 class DeclarativeSource(
     /** The rules this source runs on (exposed so the host can apply
      * the source's own cleaner rules in the fetch path). */
@@ -44,8 +64,105 @@ class DeclarativeSource(
     /** v1.3.4 (T1): the encrypted store the read-token
      * coordinator persists through (the app's SessionStore in
      * production; null in probes/tests that stay memory-only). */
-    private val readTokenStore: SessionStore? = null
+    private val readTokenStore: SessionStore? = null,
+    /** v1.5.5 (§2/§3): this source's rendered-session access —
+     * the seam the render-backed endpoint fetch and the
+     * post-solve in-WebView mint ride. Null whenever the host
+     * built this source without a renderer (probes, JVM
+     * tests); every road that needs it degrades to the plain
+     * HTTP path it replaces, never to a guess. */
+    private val sessionAccess: RenderedSessionAccess? = null
 ) : Source {
+
+    /** v1.5.5 (§2/§3): how a [DeclarativeSource] reaches its
+     * source's rendered session: the fetcher, the session key
+     * its cookies live under, the permissions its hosts are
+     * judged by, and the solved-at probe the mint order reads
+     * (the [SessionSolvedRegistry] window). Built by
+     * ExtensionService for installed sources; faked in tests. */
+    data class RenderedSessionAccess(
+        val fetcher: RenderedPageFetcher,
+        val sessionKey: String,
+        val permissions: ExtensionPermissions,
+        val hasRecentSolve: () -> Boolean = { false }
+    )
+
+    /** The coordinator's in-WebView mint provider over
+     * [sessionAccess] (null without one). Capability-scoped
+     * by construction: it is only ever handed to the
+     * coordinator for sources declaring a read-token endpoint
+     * (see SessionCapabilityRouting). */
+    private val webViewMintProvider: ReadTokenCoordinator.WebViewMintProvider? =
+        sessionAccess?.let { access ->
+            object : ReadTokenCoordinator.WebViewMintProvider {
+                override suspend fun harvestToken(
+                    parkUrl: String
+                ): TokenHarvestResult? =
+                    access.fetcher.harvestTokenInContext(
+                        parkUrl, access.sessionKey, access.permissions
+                    )
+
+                override suspend fun mintInContext(
+                    spec: OperationTokenSpec,
+                    mintChapterId: String?,
+                    parkUrl: String
+                ): InContextFetchResult? {
+                    // The transport switch copies the source's
+                    // declared custom headers into the fetch —
+                    // for a read-token source that is the
+                    // JSON content type the mint endpoint
+                    // demands (header bindings ride OkHttp on
+                    // their own sources and are never routed
+                    // here — the BOTI law).
+                    val result = access.fetcher.fetchInContext(
+                        url = spec.mintUrl,
+                        parkUrl = parkUrl,
+                        sessionKey = access.sessionKey,
+                        permissions = access.permissions,
+                        method = "POST",
+                        body = spec.mintBody(mintChapterId),
+                        headers = mapOf(
+                            "Content-Type" to "application/json",
+                            "Accept" to "application/json",
+                            "X-Requested-With" to "XMLHttpRequest"
+                        )
+                    )
+                    return when (result) {
+                        is AppResult.Ok -> InContextFetchResult(
+                            result.value.status, result.value.body
+                        )
+                        else -> null
+                    }
+                }
+            }
+        }
+
+    /** True when this source's session was solved/saved
+     * inside the §3 routing window. */
+    private fun recentSolveNow(): Boolean =
+        sessionAccess?.hasRecentSolve?.invoke() == true
+
+    /** v1.5.5 (§2): the per-source walk lock — a render-backed
+     * endpoint walk holds its source's WebView for the WHOLE
+     * walk, so two walks of one source can never interleave
+     * pages on the shared view. Reentrant: chaptersFirst's
+     * single-shot leg nests parseAllChapters. Only render-
+     * backed JSON-endpoint sources pay for a lock at all. */
+    private inline fun <T> withEndpointWalkLock(block: () -> T): T {
+        val pagination = config.details.chapters.pagination
+        if (!config.needsRendering || pagination?.jsonArrayPath == null) {
+            return block()
+        }
+        val lock = ENDPOINT_WALK_LOCKS.computeIfAbsent(config.id) {
+            java.util.concurrent.locks.ReentrantLock()
+        }
+        lock.lock()
+        try {
+            return block()
+        } finally {
+            lock.unlock()
+        }
+    }
 
     override val id: String get() = config.id
     override val name: String get() = config.name
@@ -75,6 +192,24 @@ class DeclarativeSource(
                 eldest: MutableMap.MutableEntry<String, CachedChapter>
             ): Boolean = size > MAX_CONTENT_CACHE_ENTRIES
         }
+
+    /** v1.5.3 (finding #4, item 15): gallery illustration
+     * leads — chapter id → the gallery image URLs that open
+     * that chapter, harvested ONCE per book when its chapter
+     * list is resolved (see [harvestGalleryLeads]) and
+     * prepended to the chapter's HTML by [chapterContent], so
+     * the existing per-book image pipeline downloads them and
+     * they land as leading image blocks. Only books whose
+     * config declares [DeclarativeConfig.illustrations] ever
+     * populate this. */
+    private val galleryLeads =
+        java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+
+    /** Book page URLs whose gallery harvest has already run
+     * (successfully or not) on this instance — a failed or
+     * empty gallery is never re-fetched once per chapter. */
+    private val galleryHarvested =
+        java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     fun contentOf(chapterId: String): ChapterContent? =
         synchronized(contentCache) { contentCache[chapterId]?.content }
@@ -132,6 +267,14 @@ class DeclarativeSource(
     var lastWalkTruncated: Boolean = false
         private set
 
+    /** v1.5.8 (D2 rule 3): which road supplied the last
+     * full walk's rows (parseAllChapters) — the refresh
+     * road's provenance, read by the sync seam beside
+     * [lastWalkTruncated]. Progressive chunks carry their
+     * own copy on [ChapterChunk.suppliedBy]. */
+    var lastWalkSuppliedBy: ChapterSuppliedBy = ChapterSuppliedBy.DOM
+        private set
+
     private fun beginWalk() {
         walkDeadlineMs = System.currentTimeMillis() + walkBudgetMs
         lastWalkTruncated = false
@@ -154,7 +297,45 @@ class DeclarativeSource(
     override fun search(query: String, page: Int): SourceBookPage {
         val spec = config.search
             ?: throw SourceException("“$name” doesn't support search")
+        if (spec.localFilter) return localFilterSearch(spec, query)
         return fetchListing(spec, query, page)
+    }
+
+    /** Memoised catalogue rows for local-filter search (one
+     * fetch per source instance — see [ListSpec.localFilter]). */
+    @Volatile
+    private var localFilterCatalogue: List<app.xreader.extensionapi.SourceBook>? =
+        null
+
+    /**
+     * v1.5.2 (FIX-14, gap G1): client-side search over the
+     * source's own catalogue — the site's own search semantics
+     * (Lnori's service worker, replicated): normalise the
+     * query (trim + lowercase); a row matches when its
+     * normalised TITLE or AUTHOR contains it; an empty query
+     * matches the whole catalogue (the site's filter with an
+     * empty string). The catalogue spec is fetched through the
+     * ordinary listing road (its own selectors read the rows),
+     * once per source instance. Results keep catalogue order
+     * and never paginate (hasNextPage = false).
+     */
+    private fun localFilterSearch(
+        spec: ListSpec,
+        query: String
+    ): SourceBookPage {
+        val catalogue = localFilterCatalogue ?: synchronized(this) {
+            localFilterCatalogue ?: fetchListing(spec, "", 1).books
+                .also { localFilterCatalogue = it }
+        }
+        val needle = query.trim().lowercase()
+        if (needle.isEmpty()) {
+            return SourceBookPage(catalogue, hasNextPage = false)
+        }
+        val hits = catalogue.filter { book ->
+            book.title.lowercase().contains(needle) ||
+                (book.author?.lowercase()?.contains(needle) == true)
+        }
+        return SourceBookPage(hits, hasNextPage = false)
     }
 
     override fun popular(page: Int): SourceBookPage =
@@ -254,7 +435,83 @@ class DeclarativeSource(
         ) {
             throw SourceException(SiteCheck.challengeDetail())
         }
+        // v1.5.3 (finding #2, item 6): SHAPE-MISS. Zero rows
+        // while the fetched page carried an embedded-JSON
+        // payload that NOTHING consumed is a different fact
+        // from an empty catalogue: the data was THERE, the
+        // app's declared shape just doesn't reach it (the
+        // pre-fix BrightNovel state — signed in, page full of
+        // series data, catalogue "came back empty"). Fail
+        // with the shape-miss detail so the catalogue shows
+        // its own words instead of the signed-in-but-empty
+        // copy. A genuinely empty page (no payload, or a
+        // payload the reads consumed) keeps the honest empty.
+        // Search is exempt: a no-hit search page legitimately
+        // carries its app payload with zero result rows.
+        if (listing.books.isEmpty() && query.isBlank() &&
+            listingShapeMissed(doc, spec, page)
+        ) {
+            throw SourceException(shapeMissDetail())
+        }
         return listing
+    }
+
+    /**
+     * v1.5.3 (item 6): did this listing document carry an
+     * embedded-JSON root that no read consumed? A root is
+     * consumed when the spec's declared [ListSpec.jsonPath]
+     * resolves to an array in it, or the envelope-drift scan
+     * finds its record array. A DOM spec consumes no root, so
+     * on a first catalogue page any payload beside zero DOM
+     * rows is a miss; a JSON spec's payload that neither its
+     * path nor the scan can reach is a miss on any page.
+     *
+     * v1.5.4 (item 14): a confirmed miss is RECORDED before
+     * it is reported — the payload's key names (never its
+     * values) go into [DiagnosticLog], the log the shareable
+     * problem report already surfaces, so the next drift is
+     * diagnosable from the owner's own report instead of a
+     * fresh capture hunt (the BrightNovel class: three
+     * candidate causes, one of them unverifiable from off
+     * the device, precisely because nothing recorded the
+     * payload's shape).
+     */
+    private fun listingShapeMissed(
+        doc: Document,
+        spec: ListSpec,
+        page: Int
+    ): Boolean {
+        val roots = EmbeddedJson.rootsForRead(doc)
+        if (roots.isEmpty()) return false
+        val path = spec.jsonPath
+        if (path == null) {
+            val missed = page == 1
+            if (missed) logShapeMissKeys(doc)
+            return missed
+        }
+        val consumed = roots.any { root ->
+            val resolved = EmbeddedJson.resolve(root, path)
+            resolved is kotlinx.serialization.json.JsonArray ||
+                EmbeddedJson.scanForArray(root) != null
+        }
+        if (!consumed) logShapeMissKeys(doc)
+        return !consumed
+    }
+
+    /** v1.5.4 (item 14): the shape-miss diagnostics record —
+     * the payload's top-level key set and each root's props
+     * key set, KEY NAMES ONLY (see
+     * [EmbeddedJson.keyNamesSummary]). Recorded into
+     * [DiagnosticLog] directly: that is the log
+     * ProblemDetails copies into the owner's shareable
+     * problem report. */
+    private fun logShapeMissKeys(doc: Document) {
+        DiagnosticLog.record(
+            "shape-miss",
+            "listing shape-miss on ${config.id} — payload keys: " +
+                EmbeddedJson.keyNamesSummary(doc),
+            config.id
+        )
     }
 
     /**
@@ -306,7 +563,14 @@ class DeclarativeSource(
                 title = title,
                 author = spec.author?.let { readSpec(el, it)?.trim()?.ifEmpty { null } },
                 coverUrl = spec.cover?.let { readSpec(el, it)?.trim()?.ifEmpty { null } }
-                    ?.let { absolute(it, pageUrl) }
+                    ?.let { deniedCover(absolute(it, pageUrl)) },
+                // v1.5.2 (§7 tier 1): the row's own kind field.
+                // v1.5.8 (B5): an unmapped value is recorded,
+                // not silently dropped (see tier1Kind).
+                kind = tier1Kind(
+                    spec.kindValueMap.takeIf { spec.kindField != null },
+                    spec.kindField?.let { readSpec(el, it)?.trim()?.ifEmpty { null } }
+                )
             )
         }
         val hasNext = spec.nextPage?.let { sel ->
@@ -404,8 +668,15 @@ class DeclarativeSource(
                     // (fenrirealm's "storage/…" covers).
                     val expanded = spec.jsonCoverTemplate
                         ?.replace("{value}", raw) ?: raw
-                    absolute(expanded, pageUrl)
-                }
+                    deniedCover(absolute(expanded, pageUrl))
+                },
+                // v1.5.2 (§7 tier 1): the record's own kind field.
+                // v1.5.8 (B5): an unmapped value is recorded,
+                // not silently dropped (see tier1Kind).
+                kind = tier1Kind(
+                    spec.kindValueMap.takeIf { spec.kindField != null },
+                    spec.kindField?.let { EmbeddedJson.stringAt(record, it) }
+                )
             )
         }
         // Paging evidence, when the payload states it: the
@@ -423,16 +694,86 @@ class DeclarativeSource(
     // ── details + chapters ──────────────────────────────────────────
 
     override fun details(book: SourceBook): SourceBook {
-        val doc = fetchDoc(bookPageUrl(book))
+        val url = bookPageUrl(book)
+        val doc = fetchDoc(url)
         val spec = config.details
         return book.copy(
+            // v1.5.9 (Finding 2 §5.1): a healed walk reports
+            // the healed remote id (see healedBookId).
+            id = healedBookId(book, url),
             title = readTitle(doc, spec.title) ?: book.title,
             author = spec.author?.let { readDocSpec(doc, it) }?.ifBlank { null } ?: book.author,
             description = readDescription(doc, spec) ?: book.description,
-            coverUrl = spec.cover?.let { readDocSpec(doc, it) }?.ifBlank { null }
-                ?.let { absolute(it, bookPageUrl(book)) }
-                ?: metaCoverUrl(doc, bookPageUrl(book))
-                ?: book.coverUrl
+            coverUrl = deniedCover(
+                spec.cover?.let { readDocSpec(doc, it) }?.ifBlank { null }
+                    ?.let { absolute(it, url) }
+                    ?: jsonDetailsCover(doc, url)
+                    ?: metaCoverUrl(doc, url)
+                    ?: book.coverUrl
+            ),
+            // v1.5.8 (B1): kind from the book's own document.
+            kind = detailsKind(doc) ?: book.kind
+        )
+    }
+
+    /**
+     * v1.5.8 (B1 + B5): the ONE tier-1 kind read every parse
+     * site (both listings, details) runs through. A mapped
+     * value files the book; a BLANK value is no evidence; a
+     * NON-BLANK value the map doesn't know is recorded in
+     * [DiagnosticLog] ONCE per value per source (B5) instead
+     * of silently returning null — the next unmapped type
+     * string becomes visible on its first occurrence instead
+     * of fatal-invisible, and B2/B3's chapter-shape net is
+     * what re-files the book meanwhile.
+     */
+    private fun tier1Kind(
+        map: Map<String, String>?,
+        rawValue: String?
+    ): String? {
+        val verdict = BookKind152.tier1(map, rawValue)
+        if (verdict == null && map != null && !rawValue.isNullOrBlank()) {
+            // v1.5.8 gate (coordinator): ONE once-per-value
+            // mechanism — BookKind152.UnmappedKindLog owns the
+            // discipline; this site only calls it. (An inline
+            // duplicate set lived here briefly during the
+            // parallel build; collapsed so the seam B1's
+            // coverage test proves is the seam production runs.)
+            UnmappedKindLog.record(config.id, rawValue)
+        }
+        return verdict
+    }
+
+    /**
+     * v1.5.8 (B1 / F3 Fix 1): tier-1 kind from the DETAILS
+     * document — the book's OWN document, fetched on every
+     * book-page refresh. JSON documents (a bare API answer or
+     * an embedded payload root that IS the series record)
+     * read the declared field via [EmbeddedJson.stringAt],
+     * the listing pattern; DOM documents read it as a spec
+     * via [readDocSpec]. Null when the spec declares no kind
+     * field, the document carries none, or the value is
+     * unmapped — the stored kind then stands, exactly as
+     * `applyTier1` downstream already treats a null.
+     */
+    private fun detailsKind(doc: Document): String? {
+        val spec = config.details
+        val field = spec.kindField?.takeIf { it.isNotBlank() }
+            ?: return null
+        if (spec.kindValueMap.isEmpty()) return null
+        for (root in EmbeddedJson.rootsForRead(doc)) {
+            val record = root as? JsonObject ?: continue
+            val raw = EmbeddedJson.stringAt(record, field)
+            if (raw != null) return tier1Kind(spec.kindValueMap, raw)
+        }
+        val body = EmbeddedJson.bodyJson(doc) as? JsonObject
+        if (body != null) {
+            val raw = EmbeddedJson.stringAt(body, field)
+            if (raw != null) return tier1Kind(spec.kindValueMap, raw)
+        }
+        return tier1Kind(
+            spec.kindValueMap,
+            readDocSpec(doc, field)?.trim()?.ifEmpty { null }
         )
     }
 
@@ -544,6 +885,90 @@ class DeclarativeSource(
         return readDetails(book, doc, url) to parseAllChapters(doc, url)
     }
 
+    /** The product of a head-check fetch (v1.5.37, S3). */
+    data class HeadSnapshot(
+        val details: SourceBook,
+        /** The book page's own chapter rows — the list's
+         * HEAD slice — finished, conformed, in reading
+         * order. */
+        val seed: List<SourceChapter>,
+        /** An exact chapter total the book page itself
+         * states, when it states one (never the spec's
+         * floor — a floor is a minimum claim, not a count). */
+        val statedTotal: Int?,
+        /** The pagination capacity (declared pages × page
+         * size) the book page states — an upper bound on
+         * the count, never the count itself. */
+        val statedCapacity: Int?
+    )
+
+    /**
+     * v1.5.37 (combined build, S3): ONE book-page fetch read
+     * as a head snapshot — details, the page's own chapter
+     * rows (the head seed), and the totals the page states —
+     * WITHOUT the pagination walk. SourceBookSync's refresh
+     * compares it against the store: an unchanged head
+     * settles the refresh in this one request, and head-only
+     * growth merges from the seed. Null when the page
+     * exposes no usable seed (a road whose rows don't ride
+     * the book page, a conformance near-total loss) — the
+     * caller falls back to the full walk, so a head-check
+     * miss costs nothing but this fetch. The seed passes
+     * the same row finishing and provenance conformance
+     * the full road's harvest passes.
+     */
+    fun headSnapshot(book: SourceBook): HeadSnapshot? =
+        withEndpointWalkLock { headSnapshotWalk(book) }
+
+    private fun headSnapshotWalk(book: SourceBook): HeadSnapshot? {
+        val url = bookPageUrl(book)
+        val doc = fetchDoc(url)
+        val details = readDetails(book, doc, url)
+        val spec = config.details.chapters
+        // The seed assembly mirrors parseAllChaptersWalk's
+        // pre-walk rows exactly: DOM/panel rows unless the
+        // endpoint is the road, embedded-JSON rows merged
+        // in, a direct endpoint payload replacing all.
+        val endpointIsTheRoad = spec.pagination?.jsonArrayPath != null
+        val panelled = spec.panelSelector != null
+        val seed = mutableListOf<SourceChapter>()
+        if (!endpointIsTheRoad) {
+            seed += if (panelled) {
+                panelledChapterRows(doc, url)
+            } else {
+                parseChapterRows(doc, url)
+            }
+        }
+        if (spec.jsonPath != null) {
+            seed += jsonChapterRows(doc, url)
+        }
+        val endpointPath = spec.jsonEndpointPath
+        if (endpointPath != null) {
+            val endpointRows = directJsonChapterRows(doc, url, endpointPath)
+            if (endpointRows.isNotEmpty()) {
+                seed.clear()
+                seed += endpointRows
+            }
+        }
+        if (seed.isEmpty()) return null
+        val finished = finishChapterRows(seed, url)
+        val (conformed, nearTotalLoss) =
+            provenanceConformance(finished, url)
+        if (nearTotalLoss || conformed.isEmpty()) return null
+        val hint = chapterCountHintDetailed(doc, null)
+        val pagination = spec.pagination
+        return HeadSnapshot(
+            details = details,
+            seed = conformed,
+            statedTotal = hint.value.takeIf {
+                it > 0 && hint.source == "book-page stated total"
+            },
+            statedCapacity = pagination?.let { p ->
+                p.totalPagesIn(doc)?.let { pages -> pages * p.pageSize }
+            }
+        )
+    }
+
     /** A document's own URL (its parse-time base), for the
      * prefetched-document identity checks. */
     private fun documentUrl(doc: Document): String =
@@ -556,14 +981,76 @@ class DeclarativeSource(
     ): SourceBook {
         val spec = config.details
         return book.copy(
+            // v1.5.9 (Finding 2 §5.1): a healed walk reports
+            // the healed remote id (see healedBookId).
+            id = healedBookId(book, url),
             title = readTitle(doc, spec.title) ?: book.title,
             author = spec.author?.let { readDocSpec(doc, it) }?.ifBlank { null } ?: book.author,
             description = readDescription(doc, spec) ?: book.description,
-            coverUrl = spec.cover?.let { readDocSpec(doc, it) }?.ifBlank { null }
-                ?.let { absolute(it, url) }
-                ?: metaCoverUrl(doc, url)
-                ?: book.coverUrl
+            coverUrl = deniedCover(
+                spec.cover?.let { readDocSpec(doc, it) }?.ifBlank { null }
+                    ?.let { absolute(it, url) }
+                    ?: jsonDetailsCover(doc, url)
+                    ?: metaCoverUrl(doc, url)
+                    ?: book.coverUrl
+            ),
+            // v1.5.8 (B1): kind from the book's own document —
+            // the heal road SourceBookSync's applyTier1 sites
+            // have always consumed; until now no declarative
+            // details parse ever wrote this field.
+            kind = detailsKind(doc) ?: book.kind
         )
+    }
+
+    /**
+     * v1.5.3 (finding #3, item 17 mechanism): the config's
+     * declared NON-covers — a resolved cover URL containing
+     * any of [DeclarativeConfig.coverDenyPatterns] is no
+     * cover at all (a site's own no-cover filler — a logo
+     * banner every coverless series shares — must never bind
+     * as the book's cover; the app's placeholder shows
+     * instead). Plain substring match on the final absolutised
+     * URL, applied at every cover ingestion point (DOM
+     * listing, JSON listing, details/meta). Returns the URL
+     * untouched when no pattern matches.
+     */
+    private fun deniedCover(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        val patterns = config.coverDenyPatterns
+        if (patterns.isEmpty()) return url
+        return if (patterns.any { it.isNotBlank() && url.contains(it) }) {
+            null
+        } else {
+            url
+        }
+    }
+
+    /**
+     * v1.5.3 (finding #3, item 9 mechanism): the DETAILS cover
+     * of a JSON-endpoint source — the class of source whose
+     * book "page" is a bare API answer (the heal-never class:
+     * their details document carries no DOM and no meta tags,
+     * so the DOM/meta cover chain could never heal a cover
+     * for them). Consulted only when the details document IS
+     * a JSON payload (a bare-JSON body root exists): the
+     * [DetailsSpec.jsonCover] dot path resolves over that
+     * root, the [DetailsSpec.jsonCoverTemplate] expands the
+     * raw value (the FenrirRealm storage-path shape), and the
+     * result absolutises exactly as the JSON listing road
+     * absolutises its covers. Precedence: after the DOM read,
+     * before the meta read (a JSON document has neither, so
+     * working configs are untouched).
+     */
+    private fun jsonDetailsCover(doc: Document, url: String): String? {
+        val path = config.details.jsonCover?.takeIf { it.isNotBlank() }
+            ?: return null
+        val body = EmbeddedJson.bodyJson(doc) ?: return null
+        val raw = (EmbeddedJson.resolve(body, path)
+            as? JsonPrimitive)?.contentOrNull
+            ?.trim()?.ifEmpty { null } ?: return null
+        val expanded = config.details.jsonCoverTemplate
+            ?.replace("{value}", raw) ?: raw
+        return absolute(expanded, url)
     }
 
     // ── v1.0.8: progressive chapter loading ─────────────────────
@@ -595,7 +1082,14 @@ class DeclarativeSource(
         val details: SourceBook?,
         val chapters: List<SourceChapter>,
         val walk: ChapterWalk,
-        val complete: Boolean
+        val complete: Boolean,
+        /** v1.5.8 (D2 rule 3): which road supplied this
+         * chunk's rows, copied from the walk that produced
+         * them — the chunk is the only object that crosses
+         * into SourceBookSync.applyChunk, so provenance
+         * rides it. Defaulted DOM so older constructions
+         * keep their meaning. */
+        val suppliedBy: ChapterSuppliedBy = ChapterSuppliedBy.DOM
     )
 
     /** True when this source's chapter list can grow a chunk
@@ -627,7 +1121,12 @@ class DeclarativeSource(
      * [minCount] chapters (one site page is the natural
      * unit — slicing a fetched page's rows would not save
      * a single request). */
-    fun chaptersFirst(book: SourceBook, minCount: Int): ChapterChunk {
+    fun chaptersFirst(book: SourceBook, minCount: Int): ChapterChunk =
+        // v1.5.5 (§2): the whole first walk holds the source's
+        // WebView when its endpoint is render-backed.
+        withEndpointWalkLock { chaptersFirstWalk(book, minCount) }
+
+    private fun chaptersFirstWalk(book: SourceBook, minCount: Int): ChapterChunk {
         beginWalk()
         val url = bookPageUrl(book)
         val doc = fetchDoc(url)
@@ -647,7 +1146,8 @@ class DeclarativeSource(
                     totalPages = 1,
                     pageSize = all.size
                 ),
-                complete
+                complete,
+                suppliedBy = lastWalkSuppliedBy
             )
         }
         val session = WalkSession(doc, url)
@@ -660,7 +1160,8 @@ class DeclarativeSource(
         // book actually opens through).
         session.proveFirstPage()
         val chunk = ChapterChunk(
-            filled, session.readingRows(), session.walk(), session.complete
+            filled, session.readingRows(), session.walk(), session.complete,
+            suppliedBy = session.suppliedBy()
         )
         // v1.4.3: the zero-chapter rule on the progressive
         // road too — a COMPLETE walk that found nothing on a
@@ -668,7 +1169,11 @@ class DeclarativeSource(
         // empty book (an incomplete walk may legitimately
         // still be empty-handed mid-flight).
         if (chunk.complete && chunk.chapters.isEmpty()) {
-            guardChapterList(chunk.chapters, doc, url)
+            guardChapterList(
+                chunk.chapters, doc, url,
+                endpointRoad =
+                    config.details.chapters.pagination?.jsonArrayPath != null
+            )
         }
         return chunk
     }
@@ -677,6 +1182,17 @@ class DeclarativeSource(
      * chapters. [haveReading] is the stored reading-order
      * prefix; [walk] is the persisted cursor. */
     fun chaptersMore(
+        book: SourceBook,
+        haveReading: List<SourceChapter>,
+        minTotal: Int,
+        walk: ChapterWalk
+    ): ChapterChunk =
+        // v1.5.5 (§2): a resumed walk holds the WebView too.
+        withEndpointWalkLock {
+            chaptersMoreWalk(book, haveReading, minTotal, walk)
+        }
+
+    private fun chaptersMoreWalk(
         book: SourceBook,
         haveReading: List<SourceChapter>,
         minTotal: Int,
@@ -694,7 +1210,8 @@ class DeclarativeSource(
             return ChapterChunk(
                 null, all,
                 ChapterWalk(nextPage = 0, totalPages = 1, pageSize = all.size),
-                complete = true
+                complete = true,
+                suppliedBy = lastWalkSuppliedBy
             )
         }
         val doc = fetchDoc(url)
@@ -702,7 +1219,8 @@ class DeclarativeSource(
         session.resume(haveReading, walk)
         session.growTo(minTotal)
         return ChapterChunk(
-            null, session.readingRows(), session.walk(), session.complete
+            null, session.readingRows(), session.walk(), session.complete,
+            suppliedBy = session.suppliedBy()
         )
     }
 
@@ -733,12 +1251,69 @@ class DeclarativeSource(
          * behaviour, armed as the fallback when this walk's
          * page-1 fetch fails on a DOM/fragment road. */
         private var seedFallbackArmed = false
+        /** v1.5.8 (D2): the seed fallback actually supplied
+         * rows in this session — the chunk's provenance. */
+        private var usedSeedFallback = false
+        /** v1.5.8 (D2 rule 2): this session's harvest lost
+         * (nearly) all its rows to provenance conformance. */
+        private var sessionUnproven = false
+
+        /** v1.5.8 (D2 rule 3): which road supplied this
+         * session's rows: UNPROVEN when conformance gutted
+         * the harvest, the seed fallback when it fired, the
+         * JSON endpoint when the walk is an endpoint walk,
+         * the declared DOM/fragment road otherwise. A resumed
+         * session (rows carried in) reports the road its
+         * pagination declares — the stored prefix's own
+         * provenance was stamped when it landed. */
+        fun suppliedBy(): ChapterSuppliedBy = when {
+            sessionUnproven -> ChapterSuppliedBy.UNPROVEN
+            usedSeedFallback -> ChapterSuppliedBy.FALLBACK
+            pagination?.jsonArrayPath != null ->
+                ChapterSuppliedBy.ENDPOINT
+            else -> ChapterSuppliedBy.DOM
+        }
         /** v1.3.0 (E1): the chapter total a JSON endpoint
          * states; 0 = not stated. Ends the walk exactly. */
         private var knownTotal = 0
         private var failed = false
         var complete = false
             private set
+
+        /** v1.5.6 (§1.4, fact vii): every direct page fetch
+         * this walk attempted (prefetch batch pages count —
+         * each is a real request), the first terminal stop
+         * reason [step] reached, and the once-guard for the
+         * walk-summary line. Diagnostic only: no stop
+         * condition reads these. */
+        private var pagesAttempted = 0
+        private var walkStopReason: String? = null
+        private var walkSummaryLogged = false
+
+        private fun noteWalkStop(reason: String) {
+            if (walkStopReason == null) walkStopReason = reason
+        }
+
+        /** v1.5.6 (§1.4, fact vii): the walk-summary line —
+         * pages attempted, stop reason, rows accumulated,
+         * stated total seen. JSON-endpoint walks only, and
+         * only once the walk actually attempted a page or
+         * reached a stop (a no-id/no-pagination settle is not
+         * an endpoint walk and logs nothing). */
+        private fun logWalkSummary() {
+            if (walkSummaryLogged) return
+            if (pagination?.jsonArrayPath == null) return
+            if (pagesAttempted == 0 && walkStopReason == null) return
+            walkSummaryLogged = true
+            DiagnosticLog.record(
+                "endpoint-walk",
+                "walk summary: pages attempted=$pagesAttempted, " +
+                    "stop=${walkStopReason ?: "walk ended"}, " +
+                    "rows=${rows.size}, stated total=" +
+                    (if (knownTotal > 0) knownTotal.toString() else "none"),
+                config.id
+            )
+        }
 
         /** v1.3.3 (scope S5): prefetched pages of a JSON
          * list endpoint, fetched in one bounded parallel
@@ -747,6 +1322,16 @@ class DeclarativeSource(
          * walk stops paying full serial latency per page. */
         private val prefetched =
             ArrayDeque<Pair<Int, PageFetch?>>()
+
+        /** v1.5.5 (§2): strict-law failures of SPECULATIVE
+         * batch pages, keyed by page. A batch fetches pages
+         * the serial walk may never consume (a short page can
+         * end the list first), so a failure is parked here
+         * and thrown only when the walk actually ASKS for
+         * that page — the law binds every page the walk
+         * fetches, never a page it didn't. */
+        private val prefetchErrors =
+            HashMap<Int, SourceException>()
 
         /** v1.3.3 (scope S3): the book page's own first-page
          * link, captured before any walking (the proof's
@@ -845,16 +1430,39 @@ class DeclarativeSource(
 
         fun growTo(minCount: Int) {
             var guard = 0
-            while (!complete && !failed &&
-                readingRows().size < minCount && guard < MAX_LIST_PAGES
-            ) {
-                if (!step()) break
-                guard++
+            try {
+                while (!complete && !failed &&
+                    readingRows().size < minCount && guard < MAX_LIST_PAGES
+                ) {
+                    if (!step()) break
+                    guard++
+                }
+            } catch (error: SourceException) {
+                // v1.5.6 (§1.4, fact vii): a strict-tier page
+                // error ends the walk by exception — the
+                // summary still names it before the throw
+                // propagates. Cancellation is not a
+                // SourceException and never lands here.
+                noteWalkStop("page error")
+                logWalkSummary()
+                throw error
             }
+            if (complete || failed) logWalkSummary()
         }
 
-        fun readingRows(): List<SourceChapter> =
-            finishChapterRows(rows, pageUrl)
+        fun readingRows(): List<SourceChapter> {
+            // v1.5.8 (D2 rule 2): the progressive road's
+            // harvest passes the same provenance conformance
+            // as the full walk — a near-total loss marks the
+            // session UNPROVEN and shows nothing.
+            val (conformed, nearTotalLoss) =
+                provenanceConformance(rows, pageUrl)
+            if (nearTotalLoss) {
+                sessionUnproven = true
+                return finishChapterRows(emptyList(), pageUrl)
+            }
+            return finishChapterRows(conformed, pageUrl)
+        }
 
         fun walk(): ChapterWalk = ChapterWalk(
             nextPage = if (complete) 0 else nextPage,
@@ -875,7 +1483,12 @@ class DeclarativeSource(
             rows += merged
             seen += rows.map { it.id }
             nextPage = 0
-            complete = true
+            // v1.5.37 (combined build, S2): the inner walk's
+            // own verdict governs — it used to stamp complete
+            // UNCONDITIONALLY, so a truncated fallback walk
+            // (budget, failed page) was believed whole
+            // (BIG-BOOK-REFRESH-FORENSICS Q5).
+            complete = !lastWalkTruncated
         }
 
         /** Fetch exactly one more page in the walk's
@@ -910,6 +1523,7 @@ class DeclarativeSource(
             // spent budget ends the chunk resumable, never
             // complete, never a hang.
             if (walkBudgetSpent()) {
+                noteWalkStop("budget spent")
                 failed = true
                 return false
             }
@@ -925,6 +1539,7 @@ class DeclarativeSource(
             // Ascending: the F1 walk's stop conditions, one
             // page at a time.
             if (fetchedPages >= MAX_LIST_PAGES) {
+                noteWalkStop("MAX_LIST_PAGES")
                 complete = true
                 return false
             }
@@ -938,11 +1553,13 @@ class DeclarativeSource(
                 // failed page ends the chunk here, resumable.
                 if (seedFallbackArmed && nextPage == 1) {
                     seedFallbackArmed = false
+                    usedSeedFallback = true
                     rows += bookPageRows
                     seen += bookPageRows.map { it.id }
                     nextPage = 2
                     return true
                 }
+                noteWalkStop("page error")
                 failed = true
                 return false
             }
@@ -956,17 +1573,20 @@ class DeclarativeSource(
                 // rows; seed and walk on from page 2.
                 if (seedFallbackArmed && nextPage == 1) {
                     seedFallbackArmed = false
+                    usedSeedFallback = true
                     rows += bookPageRows
                     seen += bookPageRows.map { it.id }
                     nextPage = 2
                     return true
                 }
+                noteWalkStop("empty page")
                 complete = true
                 return false
             }
             seedFallbackArmed = false
             val fresh = fragmentRows.filter { it.id !in seen }
             if (fresh.isEmpty()) {
+                noteWalkStop("all-duplicate page")
                 complete = true
                 return false
             }
@@ -976,6 +1596,7 @@ class DeclarativeSource(
             // ends the walk the moment the rows reach it —
             // exact, no short-page guessing.
             if (knownTotal > 0 && seen.size >= knownTotal) {
+                noteWalkStop("stated total reached")
                 nextPage = 0
                 complete = true
                 return true
@@ -983,6 +1604,7 @@ class DeclarativeSource(
             if (firstPageSize < 0) {
                 firstPageSize = fragmentRows.size
             } else if (fragmentRows.size < firstPageSize) {
+                noteWalkStop("short page")
                 nextPage = 0
                 complete = true
                 return true
@@ -996,16 +1618,19 @@ class DeclarativeSource(
             id: String
         ): Boolean {
             if (walkBudgetSpent()) {
+                noteWalkStop("budget spent")
                 failed = true
                 return false
             }
             if (nextPage <= 0) {
+                noteWalkStop("descending walk exhausted")
                 complete = true
                 return false
             }
             if (nextPage == 1) {
                 // Site page 1 is the book page itself — its
                 // rows are the newest slice, prepended last.
+                noteWalkStop("descending: book-page slice settled")
                 prependFresh(bookPageRows)
                 nextPage = 0
                 complete = true
@@ -1013,20 +1638,33 @@ class DeclarativeSource(
             }
             val fetchedPage = fetchListPage(p, id, nextPage)
             if (fetchedPage == null) {
+                noteWalkStop("page error")
                 failed = true
                 return false
             }
             fetchedPage.total?.let { if (it > 0) knownTotal = it }
             val fragmentRows = fetchedPage.rows
             if (fragmentRows.isEmpty()) {
-                // The declared total overshot the real list
-                // (the site shrank): settle with the book
-                // page's rows instead of spinning incomplete
-                // forever; a manual Refresh re-derives truth.
-                prependFresh(bookPageRows)
-                nextPage = 0
-                complete = true
-                return true
+                // v1.5.37 (combined build, S2): an empty page
+                // mid-descent used to settle COMPLETE on the
+                // theory that the declared total overshot —
+                // leaving a hole in the list stamped whole.
+                // Settle only when the next step is the
+                // page-1 settle anyway (nextPage == 2: the
+                // empty page was the last declared one);
+                // anywhere else the page is a FAILURE —
+                // resumable, cursor kept, exactly like a
+                // failed fetch above.
+                if (nextPage == 2) {
+                    noteWalkStop("empty page (last declared)")
+                    prependFresh(bookPageRows)
+                    nextPage = 0
+                    complete = true
+                    return true
+                }
+                noteWalkStop("empty page (mid-walk)")
+                failed = true
+                return false
             }
             prependFresh(fragmentRows.filter { it.id !in seen })
             nextPage--
@@ -1054,6 +1692,9 @@ class DeclarativeSource(
             id: String,
             page: Int
         ): PageFetch? {
+            // v1.5.5 (§2): a parked strict failure for THIS
+            // page fires the moment the walk consumes it.
+            prefetchErrors.remove(page)?.let { throw it }
             if (prefetched.isNotEmpty() &&
                 prefetched.first().first == page
             ) {
@@ -1098,11 +1739,32 @@ class DeclarativeSource(
             val results = kotlinx.coroutines.runBlocking {
                 pages.map { page ->
                     async(kotlinx.coroutines.Dispatchers.IO) {
-                        page to fetchListPageDirect(p, id, page)
+                        page to runCatching {
+                            fetchListPageDirect(p, id, page)
+                        }
                     }
                 }.awaitAll()
             }
-            prefetched.addAll(results)
+            for ((page, result) in results) {
+                result.fold(
+                    onSuccess = { prefetched.addLast(page to it) },
+                    onFailure = { error ->
+                        // Cancellation is the caller's business,
+                        // never a page outcome.
+                        if (error is kotlinx.coroutines.CancellationException) {
+                            throw error
+                        }
+                        // v1.5.5 (§2): strict failures park
+                        // (see prefetchErrors); anything else
+                        // keeps the old null-page signal.
+                        if (error is SourceException) {
+                            prefetchErrors[page] = error
+                        } else {
+                            prefetched.addLast(page to null)
+                        }
+                    }
+                )
+            }
         }
 
         /** The serial page fetch the prefetch queue wraps. */
@@ -1111,6 +1773,10 @@ class DeclarativeSource(
             id: String,
             page: Int
         ): PageFetch? {
+            // v1.5.6 (§1.4, fact vii): one more attempted
+            // page for the walk summary (serial and prefetch
+            // batch fetches both land here).
+            pagesAttempted++
             val slug = ChapterListPagination.bookSlugOf(pageUrl)
             val url = resolveUrl(p.endpointFor(id, page, slug, pageUrl))
             // v1.5.0 (A1 audit, mechanism): a browser's XHR
@@ -1128,6 +1794,20 @@ class DeclarativeSource(
                 }
             ) {
                 headers["Referer"] = pageUrl
+            }
+
+            // v1.5.5 (§2): the JSON-endpoint road leaves the
+            // nullable-page world here — every failure tier is
+            // a thrown SourceException under the three-tier
+            // law (see fetchJsonEndpointPageStrict). The
+            // DOM/fragment road below keeps its exact old
+            // semantics (null page = resumable failure).
+            if (p.jsonArrayPath != null) {
+                return fetchJsonEndpointPageStrict(
+                    p, id, page, pageUrl,
+                    bookDoc = bookDoc,
+                    isFirstFetchedPage = fetchedPages == 0
+                )
             }
 
             // The last attempt's raw body — the hand-off
@@ -1212,6 +1892,544 @@ class DeclarativeSource(
         val total: Int?
     )
 
+    // ── v1.5.5 (§2): the strict JSON-endpoint road ──────────
+
+    /**
+     * v1.5.5 (§2): ONE page of the JSON chapters endpoint,
+     * judged by the three-tier law. Returns the page's rows
+     * (possibly none — a VALID empty page) or throws a
+     * [SourceException]; there is no third outcome. The
+     * pre-v1.5.5 road converted every failure — a 403 refusal
+     * page, a drifted envelope, records that stopped
+     * validating — into the same empty list that means
+     * "end of the book", and the walks stamped the truncated
+     * list COMPLETE (diagnosis §2: BrightNovel's chapters
+     * endpoint answered invisibly while the sync recorded
+     * success). The tiers:
+     *
+     *  1. transport failure / non-2xx / unparseable body on
+     *     ANY page → hard error (a page N>1 failure errors
+     *     too — never a silent truncate-commit);
+     *  2. page 1 answering 2xx JSON whose declared array path
+     *     no longer resolves → [ENDPOINT_SHAPE_MISS_MARKER];
+     *  3. rows present at the path but ZERO surviving record
+     *     validation → [ENDPOINT_RECORD_SHAPE_MISS_MARKER];
+     *  4. a literal [] → a valid empty page, UNLESS the book
+     *     declares a chapter total above zero (the details
+     *     spec's stated total, the book page's own stated
+     *     total, or the endpoint's stated total) →
+     *     [ENDPOINT_SUSPICIOUS_EMPTY_MARKER].
+     *
+     * Zero-row first pages also leave an item-14-style
+     * diagnostic: the HTTP status + the body's top-level key
+     * names (names only, never values).
+     *
+     * v1.5.6 (§1.4): zero-row pages on ANY page leave the
+     * seven-fact diagnostic set — request line + answering
+     * transport (own entry), byte size, array provenance +
+     * length, the drop split, and the hint + its source —
+     * and each walk leaves a walk-summary line. Diagnostic
+     * only: no tier verdict reads any of it.
+     */
+    private fun fetchJsonEndpointPageStrict(
+        p: ChapterListPagination,
+        bookId: String,
+        page: Int,
+        pageUrl: String,
+        bookDoc: Document?,
+        isFirstFetchedPage: Boolean
+    ): PageFetch {
+        val slug = ChapterListPagination.bookSlugOf(pageUrl)
+        val url = resolveUrl(p.endpointFor(bookId, page, slug, pageUrl))
+        // The A1 rule, shared with the lenient road: a
+        // browser's XHR carries the page it was fired from as
+        // Referer; the spec's own headers always win.
+        val headers = LinkedHashMap(p.headers)
+        if (headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
+            headers["Referer"] = pageUrl
+        }
+        val isPost = p.method.equals("POST", ignoreCase = true) &&
+            p.body != null
+        val requestBody = if (isPost) {
+            p.bodyFor(bookId, page, slug, pageUrl)
+        } else {
+            null
+        }
+        val outcome = fetchEndpointResponse(
+            url, headers, pageUrl, isPost, requestBody
+        )
+        val response = outcome.response
+        // v1.5.6 (§1.4, facts i + ii): the request line and
+        // the answering transport, assembled now and emitted
+        // with any zero-row verdict below — NAMES ONLY for
+        // body fields and headers (values could carry session
+        // data; the logEndpointZeroPage discipline). On the
+        // in-context leg the fetcher adds its two constant XHR
+        // header names to the spec's set (fetchInContextOrNull).
+        val bodyBytes = response.body.toByteArray(Charsets.UTF_8).size
+        val sentHeaderNames = LinkedHashSet<String>()
+        if (outcome.transport == TRANSPORT_IN_CONTEXT) {
+            sentHeaderNames += "Accept"
+            sentHeaderNames += "X-Requested-With"
+        }
+        sentHeaderNames += headers.keys
+        val requestLine =
+            "${if (isPost) "POST" else "GET"} $url" +
+                " | body fields: ${postBodyFieldNames(requestBody)}" +
+                " | headers: " +
+                sentHeaderNames.joinToString(", ", "[", "]")
+        val transportLine =
+            "transport: ${outcome.transport}" +
+                " (in-context attempted: " +
+                "${if (outcome.inContextAttempted) "yes" else "no"}," +
+                " fell back: " +
+                "${if (outcome.inContextFellBack) "yes" else "no"})"
+        if (response.status !in 200..299) {
+            logEndpointRequestLine(requestLine, transportLine)
+            DiagnosticLog.record(
+                "endpoint-walk",
+                "zero-row page (http-error, " +
+                    "first=$isFirstFetchedPage): " +
+                    "HTTP ${response.status}, bytes=$bodyBytes",
+                config.id
+            )
+            throw SourceException(
+                "the chapters endpoint answered HTTP " +
+                    "${response.status} — the chapter list " +
+                    "couldn't be read"
+            )
+        }
+        val root = runCatching {
+            ajaxJson.parseToJsonElement(response.body)
+        }.getOrElse {
+            logEndpointRequestLine(requestLine, transportLine)
+            DiagnosticLog.record(
+                "endpoint-walk",
+                "zero-row page (unparseable, " +
+                    "first=$isFirstFetchedPage): " +
+                    "HTTP ${response.status}, bytes=$bodyBytes",
+                config.id
+            )
+            throw SourceException(
+                "the chapters endpoint answered something " +
+                    "that isn't readable data — the chapter " +
+                    "list couldn't be read"
+            )
+        }
+        val path = p.jsonArrayPath.orEmpty()
+        // v1.5.6 (§1.4, fact iv): array provenance — the
+        // declared path is resolved on its own first so the
+        // log can say whether the array came from it or from
+        // the envelope fallback scan.
+        val declaredArray = EmbeddedJson.resolve(root, path)
+            as? kotlinx.serialization.json.JsonArray
+        val array = declaredArray ?: EmbeddedJson.scanForArray(root)
+        val provenance = when {
+            declaredArray != null -> "declared path '$path'"
+            array != null ->
+                "envelope fallback scan (declared path '$path' missed)"
+            else ->
+                "none (declared path '$path' missed, scan found none)"
+        }
+        val total = p.jsonTotalPath?.let { totalPath ->
+            (EmbeddedJson.resolve(root, totalPath)
+                as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.toIntOrNull()
+        }
+        // v1.5.6 (§1.4, fact vi): the hint AND its source —
+        // computed before the verdicts so the empty and
+        // shape-miss lines carry both.
+        val hintDetail = chapterCountHintDetailed(bookDoc, total)
+        if (array == null) {
+            logEndpointRequestLine(requestLine, transportLine)
+            logEndpointZeroPage(
+                response.status, root, "shape-miss", isFirstFetchedPage,
+                bodyBytes = bodyBytes, provenance = provenance,
+                arrayLength = null, drops = null, hint = hintDetail
+            )
+            throw SourceException(
+                "$ENDPOINT_SHAPE_MISS_MARKER: the chapters " +
+                    "endpoint answered, but its reply no longer " +
+                    "carries the chapter list where this source " +
+                    "expects it"
+            )
+        }
+        if (array.isEmpty()) {
+            logEndpointRequestLine(requestLine, transportLine)
+            logEndpointZeroPage(
+                response.status, root, "empty", isFirstFetchedPage,
+                bodyBytes = bodyBytes, provenance = provenance,
+                arrayLength = 0, drops = null, hint = hintDetail
+            )
+            val hint = hintDetail.value
+            if (hint > 0) {
+                // v1.5.37 (combined build, item 4): when the
+                // hint's ONLY source is the spec's own floor,
+                // the "the book declares N chapters" claim is
+                // the config talking about itself — the site
+                // declares nothing (BrightNovel publishes
+                // series shells before any chapter exists;
+                // BRIGHTNOVEL-EMPTY-CHAPTERS-CHECK). Throw
+                // the no-chapters-yet flavour so the book
+                // page can word it as exactly that.
+                if (hintDetail.source == "spec totalCount") {
+                    throw SourceException(
+                        "$ENDPOINT_NO_CHAPTERS_YET_MARKER: the " +
+                            "chapters endpoint answered an " +
+                            "empty list, and nothing on the " +
+                            "site declares chapters for this " +
+                            "book — it has no chapters on the " +
+                            "site yet"
+                    )
+                }
+                throw SourceException(
+                    "$ENDPOINT_SUSPICIOUS_EMPTY_MARKER: the " +
+                        "chapters endpoint answered an empty " +
+                        "list, but the book declares $hint " +
+                        "chapters — the list couldn't be read"
+                )
+            }
+            return PageFetch(emptyList(), total)
+        }
+        val (rows, drops) = mapJsonEndpointRecordsWithStats(
+            array, pageUrl, bookId
+        )
+        if (rows.isEmpty()) {
+            logEndpointRequestLine(requestLine, transportLine)
+            logEndpointZeroPage(
+                response.status, root, "records-dropped",
+                isFirstFetchedPage,
+                bodyBytes = bodyBytes, provenance = provenance,
+                arrayLength = array.size, drops = drops, hint = null
+            )
+            throw SourceException(
+                "$ENDPOINT_RECORD_SHAPE_MISS_MARKER: the " +
+                    "chapters endpoint listed ${array.size} " +
+                    "entries, but none of them reads as a " +
+                    "chapter any more — the site's chapter " +
+                    "records changed shape"
+            )
+        }
+        return PageFetch(rows, total)
+    }
+
+    /** The endpoint array at the declared path, with the
+     * v1.5.0 envelope scan as the drift fallback — null when
+     * neither resolves (the shape-miss tier). */
+    private fun resolveEndpointArray(
+        root: kotlinx.serialization.json.JsonElement,
+        path: String
+    ): kotlinx.serialization.json.JsonArray? =
+        (EmbeddedJson.resolve(root, path)
+            as? kotlinx.serialization.json.JsonArray)
+            ?: EmbeddedJson.scanForArray(root)
+
+    /** The chapter total the BOOK declares, for the
+     * suspicious-empty tier: the chapter spec's stated total
+     * for this book page (a count field, a "N chapters"
+     * pattern), or the endpoint's own stated total. 0 = the
+     * book declares nothing, and an empty answer stands. */
+    private fun chapterCountHint(
+        bookDoc: Document?,
+        endpointTotal: Int?
+    ): Int = chapterCountHintDetailed(bookDoc, endpointTotal).value
+
+    /** v1.5.6 (§1.4, fact vi): a chapter-count hint and the
+     * source that supplied it — "endpoint total" (the
+     * response's own stated total), "spec totalCount" (the
+     * chapter spec's declared number), "book-page stated
+     * total" (the totalCountPattern over the book page), or
+     * "none". The value is exactly [chapterCountHint]'s:
+     * the largest positive candidate wins, earlier sources
+     * keep a tie. */
+    private data class ChapterCountHint(val value: Int, val source: String)
+
+    private fun chapterCountHintDetailed(
+        bookDoc: Document?,
+        endpointTotal: Int?
+    ): ChapterCountHint {
+        var best = ChapterCountHint(0, "none")
+        endpointTotal?.takeIf { it > 0 }?.let {
+            best = ChapterCountHint(it, "endpoint total")
+        }
+        val spec = config.details.chapters
+        spec.totalCount?.takeIf { it > best.value }?.let {
+            best = ChapterCountHint(it, "spec totalCount")
+        }
+        if (bookDoc != null) {
+            spec.statedTotalIn(bookDoc.body()?.text().orEmpty())
+                ?.takeIf { it > best.value }
+                ?.let {
+                    best = ChapterCountHint(it, "book-page stated total")
+                }
+        }
+        return best
+    }
+
+    /** Item-14 style: a zero-row page leaves its HTTP status
+     * + the body's top-level key NAMES in the diagnostics
+     * (names only — the same discipline as
+     * [logShapeMissKeys]).
+     *
+     * v1.5.6 (§1.4): the line also carries the enrichment
+     * facts — response body byte size (iii), array
+     * provenance + length (iv), the drop split (v, non-empty
+     * arrays only) and the chapter-count hint + its source
+     * (vi). Facts a tier doesn't have are omitted, never
+     * faked. */
+    private fun logEndpointZeroPage(
+        status: Int,
+        root: kotlinx.serialization.json.JsonElement,
+        tier: String,
+        isFirstFetchedPage: Boolean = true,
+        bodyBytes: Int = -1,
+        provenance: String? = null,
+        arrayLength: Int? = null,
+        drops: EndpointDropStats? = null,
+        hint: ChapterCountHint? = null
+    ) {
+        val facts = StringBuilder()
+        if (bodyBytes >= 0) facts.append(", bytes=$bodyBytes")
+        if (provenance != null) {
+            facts.append(" | array: $provenance")
+            if (arrayLength != null) facts.append(" len=$arrayLength")
+        }
+        if (drops != null) {
+            facts.append(
+                " | drops: non-object=${drops.nonObject}" +
+                    " empty-link=${drops.emptyLink}" +
+                    " cross-host=${drops.crossHost}"
+            )
+        }
+        if (hint != null) {
+            facts.append(" | hint: ${hint.value} (${hint.source})")
+        }
+        DiagnosticLog.record(
+            "endpoint-walk",
+            "zero-row page ($tier, first=$isFirstFetchedPage): " +
+                "HTTP $status, payload keys: " +
+                EmbeddedJson.keyNamesSummary(root) + facts,
+            config.id
+        )
+    }
+
+    /** v1.5.6 (§1.4, facts i + ii): the request line of a
+     * zero-row endpoint page — method + the fully resolved
+     * request URL as built + POST body field NAMES + header
+     * names sent, and which transport answered (with whether
+     * the in-context leg was attempted and fell back). Its
+     * own entry: the enriched zero-row line above has no
+     * room for a full URL under the log's message cap.
+     * NAMES ONLY throughout — no body or header VALUE is
+     * ever recorded (the logEndpointZeroPage discipline). */
+    private fun logEndpointRequestLine(
+        requestLine: String,
+        transportLine: String
+    ) {
+        DiagnosticLog.record(
+            "endpoint-walk",
+            "endpoint request: $requestLine | $transportLine",
+            config.id
+        )
+    }
+
+    /** The NAMES of a POST body's fields — JSON object keys
+     * or form field names — never a value (v1.5.6 §1.4,
+     * fact i). "-" when there is no body; "(unparsed body)"
+     * when the body is neither shape. */
+    private fun postBodyFieldNames(body: String?): String {
+        if (body.isNullOrBlank()) return "-"
+        val trimmed = body.trim()
+        if (trimmed.startsWith("{")) {
+            val obj = runCatching {
+                ajaxJson.parseToJsonElement(trimmed)
+            }.getOrNull() as? JsonObject
+            if (obj != null) {
+                return obj.keys.sorted()
+                    .joinToString(", ", "[", "]")
+            }
+        }
+        if (trimmed.contains('=')) {
+            val names = trimmed.split('&')
+                .map { it.substringBefore('=').trim() }
+                .filter { it.isNotEmpty() }
+            if (names.isNotEmpty()) {
+                return names.joinToString(", ", "[", "]")
+            }
+        }
+        return "(unparsed body)"
+    }
+
+    /**
+     * v1.5.5 (§2): the endpoint's transport. Render-backed
+     * sources (needsRendering) go STRAIGHT to the rendered
+     * session — deliberately no plain-GET first attempt: the
+     * diagnosis is that the plain road is precisely what the
+     * site refuses for these sources (BrightNovel's endpoint
+     * needs the app's own session context), so a plain
+     * attempt would only add a refused request before the
+     * real one. The WebView parks on the book's details page
+     * (never about:blank) and the fetch runs in its context
+     * with the XHR headers + the spec's declared headers.
+     * When the in-context road cannot run at all (no
+     * renderer, background, bridge unavailable), the plain
+     * HTTP road answers instead and the strict law judges
+     * ITS answer. Non-render sources keep the plain road,
+     * with one escalation: a non-2xx / non-JSON plain answer
+     * on a source that HAS a rendered session retries once
+     * in-context before any error is declared.
+     */
+    /** v1.5.6 (§1.4, fact ii): what [fetchEndpointResponse]
+     * hands back — the response plus the transport facts the
+     * zero-row log needs: which leg answered
+     * ([TRANSPORT_IN_CONTEXT] / [TRANSPORT_PLAIN]), whether
+     * the in-context leg was attempted at all, and whether it
+     * was attempted and fell back (attempted, could not run,
+     * and the plain road answered instead). */
+    private data class EndpointTransportOutcome(
+        val response: app.xreader.extensionapi.HostResponse,
+        val transport: String,
+        val inContextAttempted: Boolean,
+        val inContextFellBack: Boolean
+    )
+
+    private fun fetchEndpointResponse(
+        url: String,
+        headers: Map<String, String>,
+        pageUrl: String,
+        isPost: Boolean,
+        requestBody: String?
+    ): EndpointTransportOutcome {
+        val access = sessionAccess
+        if (config.needsRendering && access != null) {
+            fetchInContextOrNull(
+                access, url, pageUrl, isPost, requestBody, headers
+            )?.let {
+                return EndpointTransportOutcome(
+                    it, TRANSPORT_IN_CONTEXT,
+                    inContextAttempted = true, inContextFellBack = false
+                )
+            }
+            // The rendered session couldn't run — the plain
+            // road answers and the law judges it.
+            return EndpointTransportOutcome(
+                plainEndpointFetch(url, isPost, requestBody, headers),
+                TRANSPORT_PLAIN,
+                inContextAttempted = true, inContextFellBack = true
+            )
+        }
+        val plain = runCatching {
+            plainEndpointFetch(url, isPost, requestBody, headers)
+        }
+        var inContextAttempted = false
+        if (access != null) {
+            val plainFailed = plain.isFailure ||
+                plain.getOrNull()?.let {
+                    it.status !in 200..299 || !looksLikeJson(it.body)
+                } == true
+            if (plainFailed) {
+                inContextAttempted = true
+                fetchInContextOrNull(
+                    access, url, pageUrl, isPost, requestBody, headers
+                )?.let {
+                    return EndpointTransportOutcome(
+                        it, TRANSPORT_IN_CONTEXT,
+                        inContextAttempted = true,
+                        inContextFellBack = false
+                    )
+                }
+            }
+        }
+        val response = plain.getOrElse { error ->
+            if (error is kotlinx.coroutines.CancellationException) {
+                throw error
+            }
+            throw SourceException(
+                "the chapters endpoint couldn't be reached: " +
+                    (error.message ?: "the request failed")
+            )
+        }
+        return EndpointTransportOutcome(
+            response, TRANSPORT_PLAIN,
+            inContextAttempted = inContextAttempted,
+            inContextFellBack = false
+        )
+    }
+
+    /** The plain HTTP leg of the endpoint transport (throws
+     * the transport's own SourceException on a wire failure —
+     * the strict law's tier 1 reads it as-is). */
+    private fun plainEndpointFetch(
+        url: String,
+        isPost: Boolean,
+        requestBody: String?,
+        headers: Map<String, String>
+    ): app.xreader.extensionapi.HostResponse {
+        return if (isPost) {
+            context.http.post(url, requestBody ?: "", headers = headers)
+        } else {
+            context.http.get(url, headers)
+        }
+    }
+
+    /** The in-context leg: sequential fetch() calls on the
+     * ONE parked WebView (the fetcher parks, never reloads
+     * per page). Null when the bridge road cannot run.
+     * Blocking wrapper over [fetchInContextSuspend] — the
+     * endpoint-walk callers are blocking host code. */
+    private fun fetchInContextOrNull(
+        access: RenderedSessionAccess,
+        url: String,
+        pageUrl: String,
+        isPost: Boolean,
+        requestBody: String?,
+        headers: Map<String, String>
+    ): app.xreader.extensionapi.HostResponse? =
+        kotlinx.coroutines.runBlocking {
+            fetchInContextSuspend(
+                access, url, pageUrl, isPost, requestBody, headers
+            )
+        }
+
+    /** v1.5.12 (Front 1, S4): the suspend-native in-context
+     * leg — identical wire shape to [fetchInContextOrNull]
+     * with no runBlocking, for the (coroutine) token road's
+     * in-context chapter fetch. */
+    private suspend fun fetchInContextSuspend(
+        access: RenderedSessionAccess,
+        url: String,
+        pageUrl: String,
+        isPost: Boolean,
+        requestBody: String?,
+        headers: Map<String, String>
+    ): app.xreader.extensionapi.HostResponse? {
+        // The XHR markers the endpoints demand ride on every
+        // in-context call; the spec's declared headers (already
+        // in [headers]) win on a clash.
+        val merged = LinkedHashMap<String, String>()
+        merged["Accept"] = "application/json"
+        merged["X-Requested-With"] = "XMLHttpRequest"
+        for ((name, value) in headers) merged[name] = value
+        val result = access.fetcher.fetchInContext(
+            url = url,
+            parkUrl = pageUrl,
+            sessionKey = access.sessionKey,
+            permissions = access.permissions,
+            method = if (isPost) "POST" else "GET",
+            body = requestBody,
+            headers = merged
+        ) ?: return null
+        return when (result) {
+            is AppResult.Ok -> result.value
+            is AppResult.Err -> null
+        }
+    }
+
+    private fun looksLikeJson(body: String): Boolean {
+        val trimmed = body.trimStart()
+        return trimmed.startsWith("{") || trimmed.startsWith("[")
+    }
+
     /**
      * v1.3.0 (E1): chapter rows from a JSON endpoint response —
      * the chapter array at the pagination spec's
@@ -1233,16 +2451,88 @@ class DeclarativeSource(
         // v1.5.0 (steer A2): declared path first; on a miss,
         // the envelope scan (a drifted envelope must not read
         // as an empty chapter list).
-        val array = (EmbeddedJson.resolve(root, path)
-            as? kotlinx.serialization.json.JsonArray)
-            ?: EmbeddedJson.scanForArray(root)
+        val array = resolveEndpointArray(root, path)
             ?: return emptyList()
-        return array.mapIndexedNotNull { index, element ->
+        return mapJsonEndpointRecords(array, pageUrl, bookId)
+    }
+
+    /** v1.5.5 (§2): the per-record mapping half of
+     * [jsonEndpointRows], split out so the strict road can
+     * compare the raw row count against the survivors (the
+     * record-shape tier fires when K>0 raw rows yield zero). */
+    private fun mapJsonEndpointRecords(
+        array: kotlinx.serialization.json.JsonArray,
+        pageUrl: String,
+        bookId: String
+    ): List<SourceChapter> =
+        mapJsonEndpointRecordsWithStats(array, pageUrl, bookId).first
+
+    /** v1.5.6 (§1.4, fact v): how many records the mapper
+     * dropped at each of its three rejection points —
+     * non-object element, empty link field, cross-host link.
+     * Diagnostic only: the counts never steer a verdict. */
+    private data class EndpointDropStats(
+        val nonObject: Int,
+        val emptyLink: Int,
+        val crossHost: Int
+    )
+
+    /**
+     * v1.5.36 (F1): the endpoint-record unwrap, shared by
+     * both JSON chapter mappers. Some JSON APIs wrap every
+     * record one level deep — `{id, data: {…the record's
+     * own fields…}}` (xnovel's /n2/ chapter endpoint: the
+     * spec's own mapping table reads `items[].data`, and the
+     * shipped field reads pointed at the wrapper, so every
+     * record failed the link admission and the strict road
+     * threw the records-shape tier). When the spec's link
+     * field reads blank at the record's top level AND the
+     * record carries a `data` member that is a JsonObject,
+     * the record's fields are read from that object. Flat
+     * records — the q-data seed, BOTI's and every other
+     * endpoint's rows — never take the branch: it fires only
+     * where the top-level link read already failed, so their
+     * mapping is byte-identical to before.
+     */
+    private fun unwrapEndpointRecord(
+        record: kotlinx.serialization.json.JsonObject
+    ): kotlinx.serialization.json.JsonObject {
+        val top = EmbeddedJson.stringAt(
+            record, config.details.chapters.jsonLinkField
+        )
+        if (!top.isNullOrBlank()) return record
+        return record["data"]
+            as? kotlinx.serialization.json.JsonObject ?: record
+    }
+
+    /** [mapJsonEndpointRecords] with its drop accounting —
+     * the same mapping, the same admission rule, plus the
+     * per-point counts the strict road's zero-row log
+     * splits by. */
+    private fun mapJsonEndpointRecordsWithStats(
+        array: kotlinx.serialization.json.JsonArray,
+        pageUrl: String,
+        bookId: String
+    ): Pair<List<SourceChapter>, EndpointDropStats> {
+        val spec = config.details.chapters
+        var nonObject = 0
+        var emptyLink = 0
+        var crossHost = 0
+        val rows = array.mapIndexedNotNull { index, element ->
             val record = element as? kotlinx.serialization.json.JsonObject
-                ?: return@mapIndexedNotNull null
-            val rawLink = EmbeddedJson.stringAt(record, spec.jsonLinkField)
+                ?: run {
+                    nonObject++
+                    return@mapIndexedNotNull null
+                }
+            // v1.5.36 (F1): a `{id, data}`-wrapped record
+            // reads its fields from the wrapper's data object.
+            val effective = unwrapEndpointRecord(record)
+            val rawLink = EmbeddedJson.stringAt(effective, spec.jsonLinkField)
                 ?.trim().orEmpty()
-            if (rawLink.isEmpty()) return@mapIndexedNotNull null
+            if (rawLink.isEmpty()) {
+                emptyLink++
+                return@mapIndexedNotNull null
+            }
             val link = spec.jsonLinkTemplate?.let { template ->
                 template
                     .replace("{value}", rawLink)
@@ -1254,9 +2544,10 @@ class DeclarativeSource(
             } ?: rawLink
             val absoluteLink = absolute(link, pageUrl)
             if (!LinkInference.isSameSiteHost(pageUrl, absoluteLink)) {
+                crossHost++
                 return@mapIndexedNotNull null
             }
-            val rawName = jsonRecordName(record, spec, index)
+            val rawName = jsonRecordName(effective, spec, index)
             // v1.3.2 (item 78): JSON roads de-glue too — name
             // and date are separate fields on every road.
             val (name, gluedDate) = cleanChapterName(rawName)
@@ -1264,13 +2555,14 @@ class DeclarativeSource(
                 id = absoluteLink,
                 name = name,
                 number = ChapterNumbers.parse(name)
-                    ?: recordNumber(record, spec),
+                    ?: recordNumber(effective, spec),
                 dateText = spec.jsonDateField?.let { field ->
-                    EmbeddedJson.stringAt(record, field)
+                    EmbeddedJson.stringAt(effective, field)
                         ?.trim()?.ifEmpty { null }
                 } ?: gluedDate
             )
         }
+        return rows to EndpointDropStats(nonObject, emptyLink, crossHost)
     }
 
     /**
@@ -1307,7 +2599,13 @@ class DeclarativeSource(
         record: kotlinx.serialization.json.JsonObject,
         spec: ChapterListSpec
     ): Float? {
-        for (field in listOf("number", "chapterNumber", "chapter_number")) {
+        for (field in listOf(
+            "number", "chapterNumber", "chapter_number",
+            // v1.5.7 (BOTI): the story-wave backend names the
+            // same fact chapterOrder — a record carrying it
+            // states its number as plainly as the others.
+            "chapterOrder"
+        )) {
             val value = (EmbeddedJson.resolve(record, field)
                 as? kotlinx.serialization.json.JsonPrimitive)
                 ?.contentOrNull?.toFloatOrNull()
@@ -1334,7 +2632,12 @@ class DeclarativeSource(
      * the pagination walk appends every remaining page in site
      * order. Dedupe + reading-order finishing happen ONCE, over
      * the merged set, exactly as the single-page parse did. */
-    private fun parseAllChapters(doc: Document, pageUrl: String): List<SourceChapter> {
+    private fun parseAllChapters(doc: Document, pageUrl: String): List<SourceChapter> =
+        // v1.5.5 (§2): the full walk holds the WebView too
+        // (reentrant with the chaptersFirst/More wrappers).
+        withEndpointWalkLock { parseAllChaptersWalk(doc, pageUrl) }
+
+    private fun parseAllChaptersWalk(doc: Document, pageUrl: String): List<SourceChapter> {
         beginWalk()
         val spec = config.details.chapters
         // v1.3.2 (item 85): when the spec declares a JSON
@@ -1347,7 +2650,18 @@ class DeclarativeSource(
         // real list. The DOM rows return only as the fallback
         // when the endpoint answers nothing at all.
         val endpointIsTheRoad = spec.pagination?.jsonArrayPath != null
-        val domRows = parseChapterRows(doc, pageUrl)
+        // v1.5.2 (FIX-17): the PANELLED chapter-list mode —
+        // when the spec declares panel links, the rows come
+        // from the panels (each fetched and parsed with the
+        // same row spec, concatenated in panel order); the
+        // book page's inline rows are one panel's rendering
+        // and are NOT seeded (the first panel covers them).
+        val panelled = spec.panelSelector != null
+        val domRows = if (panelled) {
+            panelledChapterRows(doc, pageUrl)
+        } else {
+            parseChapterRows(doc, pageUrl)
+        }
         val rows = if (endpointIsTheRoad) {
             mutableListOf()
         } else {
@@ -1378,17 +2692,54 @@ class DeclarativeSource(
             }
         }
         val pagination = spec.pagination
-        if (pagination != null) {
+        if (pagination != null && !panelled) {
             walkChapterPages(
                 doc, pageUrl, pagination, rows,
                 seededFromEndpoint = seededFromEndpoint
             )
         }
+        // v1.5.8 (D2 rule 3): the walk's provenance — which
+        // road supplied the rows — tracked from here to the
+        // returns below and published on [lastWalkSuppliedBy]
+        // (the refresh seam) / the chunk (the progressive
+        // seam). Completeness at the sync seam requires a
+        // provenance-validated road, never mere non-emptiness.
+        var suppliedBy = when {
+            endpointIsTheRoad || seededFromEndpoint ->
+                ChapterSuppliedBy.ENDPOINT
+            else -> ChapterSuppliedBy.DOM
+        }
         // v1.3.2 (item 85): the endpoint road answered
         // nothing — only then do the book page's DOM rows
         // stand as the list (the pre-v1.3.2 degradation).
+        // v1.5.8 (D2 rule 1): that substitution now survives
+        // ONLY where the DOM spec is itself a declared,
+        // SCOPED road (a real container selector). A bare
+        // "a" sweep over a whole app-shell page is NOT a
+        // chapter road: when the declared JSON endpoint
+        // answers a valid empty, the honest result is the
+        // empty list ("no chapters / couldn't be read"),
+        // never the page's furniture (the BrightNovel
+        // conviction, Finding 6). Where the substitution
+        // does survive, D3: it LOGS itself — road declared,
+        // rows substituted, source page — inside this branch.
         if (endpointIsTheRoad && rows.isEmpty()) {
-            rows += domRows
+            if (domRows.isNotEmpty() &&
+                isScopedChapterList(spec.list)
+            ) {
+                DiagnosticLog.record(
+                    "chapter-fallback",
+                    "endpoint road declared " +
+                        "(jsonArrayPath=" +
+                        (spec.pagination?.jsonArrayPath ?: "") +
+                        ") answered no rows; DOM fallback " +
+                        "substituted ${domRows.size} rows " +
+                        "from $pageUrl",
+                    config.id
+                )
+                rows += domRows
+                suppliedBy = ChapterSuppliedBy.FALLBACK
+            }
         }
         // v1.3.3 (V132-CHECK 3, scope S3): FIRST-CHAPTER
         // PROOF. A list whose earliest chapter is later than
@@ -1403,18 +2754,138 @@ class DeclarativeSource(
             rows.clear()
             rows += proven
         }
+        // v1.5.8 (D2 rule 2): PROVENANCE CONFORMANCE at the
+        // shared chapter seam — every declarative harvest
+        // (DOM or JSON) must live under the declared chapter
+        // link template when the spec declares one (the
+        // bookPrefix idea patternCompletedRows applies to
+        // its extras, generalised; the D2-fix round narrowed
+        // the landed book-URL-subtree fallback — see
+        // chapterLinkPrefix for why it zeroed proven
+        // harvests). Rows
+        // outside it are another book's cards, nav and genre
+        // chips — rejected. A harvest losing (nearly) all
+        // its rows to conformance is judged UNPROVEN, not
+        // trimmed-and-shown: it testifies nothing about this
+        // book, and the sync seam stores it as no chapters /
+        // a failed load rather than stamping it complete.
+        val (conformed, nearTotalLoss) =
+            provenanceConformance(rows, pageUrl)
+        if (nearTotalLoss) {
+            rows.clear()
+            suppliedBy = ChapterSuppliedBy.UNPROVEN
+        } else if (conformed.size != rows.size) {
+            rows.clear()
+            rows += conformed
+        }
+        lastWalkSuppliedBy = suppliedBy
         // v1.0.8.1: a pattern-completed list is already in
         // reading order — it must NOT pass through the reverse
         // finishing the parsed-rows path uses.
         val patterned = patternCompletedRows(doc, pageUrl, rows)
         if (patterned != null) {
-            return guardChapterList(
-                ChapterIdentity.merge(patterned), doc, pageUrl
+            return withGalleryLeads(
+                guardChapterList(
+                    ChapterIdentity.merge(patterned), doc, pageUrl,
+                    endpointRoad = endpointIsTheRoad
+                ),
+                pageUrl
             )
         }
-        return guardChapterList(
-            finishChapterRows(rows, pageUrl), doc, pageUrl
+        return withGalleryLeads(
+            guardChapterList(
+                finishChapterRows(rows, pageUrl, authoritative = panelled),
+                doc, pageUrl,
+                endpointRoad = endpointIsTheRoad
+            ),
+            pageUrl
         )
+    }
+
+    /**
+     * v1.5.8 (D2 rule 1): is this chapter-list selector a
+     * SCOPED road — a real container selector — rather than
+     * a bare element sweep? A bare tag (`a`, `li`) or the
+     * universal selector over a whole page is unscoped: it
+     * names no chapter container, so its rows can never
+     * substitute for a declared endpoint road. Any candidate
+     * in a fallback chain that carries a class, id,
+     * attribute, combinator or pseudo-class is scoped.
+     */
+    private fun isScopedChapterList(rawList: String): Boolean =
+        SelectorChains.split(rawList).any { candidate ->
+            val css = SelectorSpec.parse(candidate).css.trim()
+            css.isNotEmpty() && css != "*" &&
+                !css.matches(BARE_TAG_SELECTOR)
+        }
+
+    /**
+     * v1.5.8 (D2 rule 2): the URL prefix this book's chapter
+     * links must live under — the declared chapter link
+     * template's static head (with `{bookSlug}` expanded and
+     * the URL absolutised). Null when the spec declares NO
+     * chapter link template: without a declared template
+     * there is no provenance base to conform against.
+     *
+     * D2-fix round (coordinator gate): the landed code fell
+     * back to the book page's own URL subtree
+     * (`pageUrl + "/"`), and that fallback is empirically
+     * false as a hard filter — real chapter links are
+     * SIBLING-shaped, not subtree-shaped: novelight's live
+     * capture links `/book/chapter/{id}` from a book at
+     * `/book/{slug}`; endpoint rows link `/book/{slug}/{n}`
+     * from books addressed at `/api/books/{slug}` or
+     * `/novel/{slug}`; ranged rows link `/r/{n}`. The
+     * subtree fallback rejected (nearly) every row of
+     * those proven harvests and judged them UNPROVEN —
+     * the regression the gate caught. The precedent the
+     * rule cited, [patternCompletedRows]' `bookPrefix`,
+     * never zeroed a harvest either: it only selects
+     * extras alongside a generated list. Conformance
+     * therefore binds exactly where provenance is
+     * DECLARED — a [ChapterListSpec.jsonLinkTemplate] —
+     * which is the BrightNovel conviction's shape (its
+     * template is declared, and its furniture dies
+     * against it / against rule 1's scoped-road test).
+     * Undeclared-template harvests keep the older nets
+     * (same-host admission, `isChapterShaped`,
+     * ChapterShape consistency) exactly as before D2.
+     */
+    private fun chapterLinkPrefix(pageUrl: String): String? {
+        val template = config.details.chapters.jsonLinkTemplate
+            ?.takeIf { it.isNotBlank() } ?: return null
+        var head = template.replace(
+            "{bookSlug}",
+            ChapterListPagination.bookSlugOf(pageUrl)
+        )
+        val brace = head.indexOf('{')
+        if (brace >= 0) head = head.substring(0, brace)
+        if (head.isBlank()) return null
+        val abs = absolute(head, pageUrl)
+        return abs.takeIf { it.startsWith("http") }
+    }
+
+    /**
+     * v1.5.8 (D2 rule 2): split [rows] into the rows that
+     * conform to [chapterLinkPrefix] and the near-total-loss
+     * verdict: true when conformance leaves nothing, or
+     * under a tenth of the harvest — the harvest then
+     * testifies nothing about this book (UNPROVEN), instead
+     * of a trimmed list being shown as its chapters. When
+     * no link template is declared there is no conformance
+     * base (see [chapterLinkPrefix]) and the harvest stands
+     * as harvested.
+     */
+    private fun provenanceConformance(
+        rows: List<SourceChapter>,
+        pageUrl: String
+    ): Pair<List<SourceChapter>, Boolean> {
+        if (rows.isEmpty()) return rows to false
+        val prefix = chapterLinkPrefix(pageUrl) ?: return rows to false
+        val kept = rows.filter { it.id.startsWith(prefix) }
+        if (kept.size == rows.size) return rows to false
+        val nearTotalLoss = kept.isEmpty() || kept.size * 10 < rows.size
+        return kept to nearTotalLoss
     }
 
     /**
@@ -1436,9 +2907,29 @@ class DeclarativeSource(
     private fun guardChapterList(
         chapters: List<SourceChapter>,
         doc: Document,
-        pageUrl: String
+        pageUrl: String,
+        endpointRoad: Boolean = false
     ): List<SourceChapter> {
-        if (chapters.isEmpty() && pageHasChapterShapedLinks(doc, pageUrl)) {
+        // v1.5.8 (D2 rule 1, D2-fix round): when the spec
+        // declares a JSON endpoint road, that road is the
+        // chapter source of truth and its VALID EMPTY is
+        // testimony, not a parse failure — the strict road
+        // already throws for every non-valid outcome (shape
+        // miss, record-shape miss, suspicious empty against
+        // a stated total), so an empty list that reaches
+        // this guard from the endpoint road is the honest
+        // "no chapters" surface D2 names. The DOM page was
+        // never the road, and its links are not evidence
+        // against the endpoint's verdict: a "Latest Chapter"
+        // nav anchor below the book URL is furniture-shaped
+        // (the Finding-6 shape) yet satisfies
+        // pageHasChapterShapedLinks, so the guard — written
+        // for a DOM parse that matched none of the page's
+        // links — must not re-litigate it. The DOM road's
+        // guard is unchanged (endpointRoad = false there).
+        if (!endpointRoad && chapters.isEmpty() &&
+            pageHasChapterShapedLinks(doc, pageUrl)
+        ) {
             throw SourceException(
                 "the chapter list couldn't be read — this page " +
                     "links to chapters but none of them matched. " +
@@ -1680,7 +3171,10 @@ class DeclarativeSource(
                 }
                 val record = element as? kotlinx.serialization.json.JsonObject
                     ?: return@mapIndexedNotNull null
-                val rawLink = EmbeddedJson.stringAt(record, spec.jsonLinkField)
+                // v1.5.36 (F1): the same unwrap as the endpoint
+                // mapper — one admission rule for both shapes.
+                val effective = unwrapEndpointRecord(record)
+                val rawLink = EmbeddedJson.stringAt(effective, spec.jsonLinkField)
                     ?.trim().orEmpty()
                 if (rawLink.isEmpty()) return@mapIndexedNotNull null
                 val link = spec.jsonLinkTemplate?.let { template ->
@@ -1697,16 +3191,16 @@ class DeclarativeSource(
                 if (!LinkInference.isSameSiteHost(pageUrl, absoluteLink)) {
                     return@mapIndexedNotNull null
                 }
-                val rawName = jsonRecordName(record, spec, index)
+                val rawName = jsonRecordName(effective, spec, index)
                 // v1.3.2 (item 78): de-glue on this road too.
                 val (name, gluedDate) = cleanChapterName(rawName)
                 SourceChapter(
                     id = absoluteLink,
                     name = name,
                     number = ChapterNumbers.parse(name)
-                        ?: recordNumber(record, spec),
+                        ?: recordNumber(effective, spec),
                     dateText = spec.jsonDateField?.let { field ->
-                        EmbeddedJson.stringAt(record, field)
+                        EmbeddedJson.stringAt(effective, field)
                             ?.trim()?.ifEmpty { null }
                     } ?: gluedDate
                 )
@@ -1717,6 +3211,34 @@ class DeclarativeSource(
 
     private fun parseChapterRows(doc: Document, pageUrl: String): List<SourceChapter> =
         rowsFromElements(selectChained(doc, config.details.chapters.list), pageUrl)
+
+    /**
+     * v1.5.2 (FIX-17): the panelled chapter list — the book page
+     * links each volume panel ([ChapterListSpec.panelSelector]
+     * anchors); every panel page is fetched and parsed with the
+     * SAME row spec, and the rows concatenate in panel order.
+     * A panel that fails to fetch contributes nothing rather
+     * than taking the whole list down; duplicate panel links
+     * are followed once. The book page's own inline rows are
+     * deliberately NOT read here (the first panel covers them —
+     * see the call site in [parseAllChapters]).
+     */
+    private fun panelledChapterRows(doc: Document, pageUrl: String): List<SourceChapter> {
+        val spec = config.details.chapters
+        val selector = spec.panelSelector ?: return parseChapterRows(doc, pageUrl)
+        val panelUrls = LinkedHashSet<String>()
+        for (anchor in selectChained(doc, selector)) {
+            val href = anchor.attr("href").trim()
+            if (href.isNotEmpty()) panelUrls += absolute(href, pageUrl)
+        }
+        if (panelUrls.isEmpty()) return parseChapterRows(doc, pageUrl)
+        val rows = mutableListOf<SourceChapter>()
+        for (panelUrl in panelUrls) {
+            val panelDoc = runCatching { fetchDoc(panelUrl) }.getOrNull() ?: continue
+            rows += parseChapterRows(panelDoc, panelUrl)
+        }
+        return rows
+    }
 
     /**
      * v1.2.3: chapter rows from the book page's embedded JSON
@@ -1741,12 +3263,31 @@ class DeclarativeSource(
             }
         }
         val records = array ?: return emptyList()
+        val bookId = spec.pagination
+            ?.bookIdIn(bookIdHaystack(doc)) ?: ""
         return records.mapIndexedNotNull { index, element ->
             val record = element as? kotlinx.serialization.json.JsonObject
                 ?: return@mapIndexedNotNull null
-            val link = EmbeddedJson.stringAt(record, spec.jsonLinkField)
+            val rawLink = EmbeddedJson.stringAt(record, spec.jsonLinkField)
                 ?.trim().orEmpty()
-            if (link.isEmpty()) return@mapIndexedNotNull null
+            if (rawLink.isEmpty()) return@mapIndexedNotNull null
+            // v1.5.2 (FIX-16): the declared link template
+            // applies on this road too — the listing road and
+            // the direct-endpoint road already honour it, and
+            // without it a bare-number link field was
+            // absolutised against the book URL, minting
+            // phantom rows (…/novel/1, …/novel/2, …) beside
+            // the real chapters (the WuxiaClick shape).
+            val link = spec.jsonLinkTemplate?.let { template ->
+                template
+                    .replace("{value}", rawLink)
+                    .replace("{index}", (index + 1).toString())
+                    .replace(
+                        "{bookSlug}",
+                        ChapterListPagination.bookSlugOf(pageUrl)
+                    )
+                    .replace("{bookId}", bookId)
+            } ?: rawLink
             if (!LinkInference.isSameSiteHost(pageUrl, absolute(link, pageUrl))) {
                 return@mapIndexedNotNull null
             }
@@ -1840,15 +3381,46 @@ class DeclarativeSource(
         ) {
             return false
         }
-        val path = runCatching { java.net.URI(row.id).path }
-            .getOrNull() ?: return true
+        val uri = runCatching { java.net.URI(row.id) }.getOrNull()
+            ?: return true
+        val path = uri.path ?: return true
         val segments = path.split('/').filter { it.isNotBlank() }
-        return segments.none { it.lowercase() in LISTING_PATH_SEGMENTS }
+        if (segments.any { it.lowercase() in LISTING_PATH_SEGMENTS }) {
+            return false
+        }
+        // v1.5.8 (D2 rule 2): the listing-segment law extends
+        // to QUERY-PARAM listing links — a genre chip whose
+        // href routes through ?genre=… (or whose query value
+        // itself carries a listing path) is a collection link
+        // whatever its path looks like (the BrightNovel genre
+        // chips survived the path-only gate, Finding 6 §2.1).
+        val query = uri.rawQuery
+        if (!query.isNullOrBlank()) {
+            for (pair in query.split('&')) {
+                val name = pair.substringBefore('=').trim().lowercase()
+                if (name in LISTING_PATH_SEGMENTS) return false
+                val value = runCatching {
+                    java.net.URLDecoder.decode(
+                        pair.substringAfter('=', ""), "UTF-8"
+                    )
+                }.getOrDefault(pair.substringAfter('=', ""))
+                val valueSegments = value.split('/')
+                    .filter { it.isNotBlank() }
+                if (valueSegments.any {
+                        it.lowercase() in LISTING_PATH_SEGMENTS
+                    }
+                ) {
+                    return false
+                }
+            }
+        }
+        return true
     }
 
     private fun finishChapterRows(
         rows: List<SourceChapter>,
-        pageUrl: String
+        pageUrl: String,
+        authoritative: Boolean = false
     ): List<SourceChapter> {
         val spec = config.details.chapters
         // v1.3.0 delta (V120-CHECK 50): the chapter-shape gate.
@@ -1869,9 +3441,23 @@ class DeclarativeSource(
         // number anywhere survives only when its URL wears
         // the book's own chapter-URL shape (nav and genre
         // menu anchors never do).
-        val shaped = ChapterShape.filterConsistent(
-            rows.filter { isChapterShaped(it) }, pageUrl
-        )
+        // v1.5.2 (FIX-17): a PANELLED harvest is authoritative —
+        // its rows come from the site's own table-of-contents
+        // panels, each parsed with the chapter row spec, not
+        // from a loose selector swept over a whole page. The
+        // shape-consistency gate exists for that loose sweep;
+        // judged against a panelled list it kills real
+        // unnumbered chapters (Light Novel Translations'
+        // "Intro to Magic" — an unnumbered slug among numbered
+        // chapter-N slugs, verified live 2026-11-03). The
+        // CTA/listing gates above it still apply.
+        val shaped = if (authoritative) {
+            rows.filter { isChapterShaped(it) }
+        } else {
+            ChapterShape.filterConsistent(
+                rows.filter { isChapterShaped(it) }, pageUrl
+            )
+        }
         // v1.3.2 (items 64/80/82, scope B/R3): the fragments a
         // list arrives in — book-page slice, embedded JSON,
         // pagination pages, an API answer — MERGE by canonical
@@ -1985,20 +3571,100 @@ class DeclarativeSource(
         // page's request is byte-identical to the previous
         // one, the list is already whole: stop before fetching.
         var prevRequest: Pair<String, String?>? = null
+        // v1.5.6 (§1.4, fact vii): the walk-summary line for
+        // THIS walk too (the full-list walk — the road a
+        // reversed endpoint book, BrightNovel included, takes
+        // through legacyFullWalk). Same facts as WalkSession's
+        // summary; emitted once, at the walk's exit.
+        // v1.5.37 (combined build, S1): the fragment/DOM road
+        // logs too — the old jsonArrayPath gate meant a
+        // fragment truncation left NO diagnostic trace at all
+        // (the owner's 950-chapter Novelight list died at
+        // page 20 invisibly; BIG-BOOK-REFRESH-FORENSICS Q5).
+        var walkSummaryLogged = false
+        fun emitWalkSummary(reason: String) {
+            if (walkSummaryLogged) return
+            walkSummaryLogged = true
+            DiagnosticLog.record(
+                "endpoint-walk",
+                "walk summary: pages attempted=$fetched, " +
+                    "stop=$reason, rows=${rows.size}, " +
+                    "stated total=" +
+                    (if (knownTotal > 0) knownTotal.toString() else "none"),
+                config.id
+            )
+        }
+        var loopStop = "MAX_LIST_PAGES"
         while (fetched < MAX_LIST_PAGES) {
             // v1.3.3 (V132-CHECK 21): the walk's hard budget —
             // a stalling road ends the walk here with the
             // rows gathered so far (and the truncated mark)
             // instead of chaining page renders forever.
-            if (walkBudgetSpent()) return
+            if (walkBudgetSpent()) {
+                emitWalkSummary("budget spent")
+                return
+            }
             val url = resolveUrl(
                 pagination.endpointFor(bookId, page, slug, pageUrl)
             )
             val requestKey = url to pagination.bodyFor(
                 bookId, page, slug, pageUrl
             )
-            if (requestKey == prevRequest) break
+            if (requestKey == prevRequest) {
+                loopStop = "identical request repeated (single-shot)"
+                break
+            }
             prevRequest = requestKey
+            // v1.5.5 (§2): on the JSON-endpoint road the page
+            // fetch is STRICT — a failure throws out of the
+            // whole walk (the sync records an error, never a
+            // truncated "complete" list); only a valid empty
+            // page ends the walk below. The DOM/fragment road
+            // keeps its nullable page semantics untouched.
+            if (pagination.jsonArrayPath != null) {
+                val strictPage = try {
+                    fetchJsonEndpointPageStrict(
+                        pagination, bookId, page, pageUrl,
+                        bookDoc = bookDoc,
+                        isFirstFetchedPage = fetched == 0
+                    )
+                } catch (error: SourceException) {
+                    // v1.5.6 (§1.4, fact vii): the summary
+                    // names the page error before the strict
+                    // throw ends the walk.
+                    emitWalkSummary("page error")
+                    throw error
+                }
+                strictPage.total?.let { if (it > 0) knownTotal = it }
+                val strictRows = strictPage.rows
+                fetched++
+                if (strictRows.isEmpty()) {
+                    emitWalkSummary("empty page")
+                    return
+                }
+                val strictFresh = strictRows.filter { it.id !in seen }
+                if (strictFresh.isEmpty()) {
+                    if (fetched > 1 || startPage != 1) {
+                        emitWalkSummary("all-duplicate page")
+                        return
+                    }
+                } else {
+                    rows += strictFresh
+                    seen += strictFresh.map { it.id }
+                    if (knownTotal > 0 && seen.size >= knownTotal) {
+                        emitWalkSummary("stated total reached")
+                        return
+                    }
+                    if (firstPageSize < 0) {
+                        firstPageSize = strictRows.size
+                    } else if (strictRows.size < firstPageSize) {
+                        emitWalkSummary("short page")
+                        return
+                    }
+                }
+                page++
+                continue
+            }
             val fetchedPage = runCatching {
                 val response = if (
                     pagination.method.equals("POST", ignoreCase = true) &&
@@ -2040,11 +3706,39 @@ class DeclarativeSource(
                     throw error
                 }
                 null
-            } ?: return
+            } ?: run {
+                // v1.5.37 (combined build, S1): a failed page
+                // mid-walk is a TRUNCATION, never a silent
+                // end — the gathered rows stand, but the sync
+                // seam must not stamp the partial list
+                // complete (the silent exit that ate Ex
+                // Rank's chapters 1–713).
+                lastWalkTruncated = true
+                emitWalkSummary("page failed")
+                return
+            }
             fetchedPage.total?.let { if (it > 0) knownTotal = it }
             val fragmentRows = fetchedPage.rows
             fetched++
-            if (fragmentRows.isEmpty()) return
+            if (fragmentRows.isEmpty()) {
+                // v1.5.37 (combined build, S1): an empty page
+                // is the natural end ONLY when nothing states
+                // more rows exist. When the book page's own
+                // pagination select (or a stated total) says
+                // the page just tried is inside the declared
+                // range, the list is truncated, not over.
+                val statedPages = pagination.totalPagesIn(bookDoc)
+                val moreStated =
+                    (knownTotal > 0 && seen.size < knownTotal) ||
+                        (statedPages != null && page <= statedPages)
+                if (moreStated) {
+                    lastWalkTruncated = true
+                    emitWalkSummary("empty page (more stated)")
+                } else {
+                    emitWalkSummary("empty page")
+                }
+                return
+            }
             val fresh = fragmentRows.filter { it.id !in seen }
             if (fresh.isEmpty()) {
                 // A page that adds nothing: when the walk
@@ -2055,19 +3749,37 @@ class DeclarativeSource(
                 // whose next page duplicates the book slice,
                 // or a later page cycling — means the list is
                 // over: stop.
-                if (fetched > 1 || startPage != 1) return
+                if (fetched > 1 || startPage != 1) {
+                    emitWalkSummary("all-duplicate page")
+                    return
+                }
             } else {
                 rows += fresh
                 seen += fresh.map { it.id }
-                if (knownTotal > 0 && seen.size >= knownTotal) return
+                if (knownTotal > 0 && seen.size >= knownTotal) {
+                    emitWalkSummary("stated total reached")
+                    return
+                }
                 if (firstPageSize < 0) {
                     firstPageSize = fragmentRows.size
                 } else if (fragmentRows.size < firstPageSize) {
+                    emitWalkSummary("short page")
                     return
                 }
             }
             page++
         }
+        // v1.5.6 (§1.4, fact vii): the loop left by its cap
+        // or by the single-shot repeat break — the strict
+        // road's earlier exits already emitted (once-guard).
+        // v1.5.37 (combined build, S1): leaving by the page
+        // CAP is a truncation — a >5,000-chapter book's list
+        // is partial however clean its pages were. The
+        // single-shot repeat break stays a natural end.
+        if (loopStop == "MAX_LIST_PAGES") {
+            lastWalkTruncated = true
+        }
+        emitWalkSummary(loopStop)
     }
 
     /** The text the book-id pattern runs over: script bodies
@@ -2306,18 +4018,8 @@ class DeclarativeSource(
         var best: String? = null
         for (text in candidates) {
             for (key in listOf("description", "synopsis")) {
-                for (match in PAYLOAD_FIELD_PLAIN.findAll(text)) {
-                    if (match.groupValues[1] != key) continue
-                    decodePayloadString(match.groupValues[2])
-                        ?.let { value ->
-                            if (value.length > (best?.length ?: 0)) {
-                                best = value
-                            }
-                        }
-                }
-                for (match in PAYLOAD_FIELD_ESCAPED.findAll(text)) {
-                    if (match.groupValues[1] != key) continue
-                    decodePayloadString(match.groupValues[2])
+                for (raw in payloadFieldValues(text, key)) {
+                    decodePayloadString(raw)
                         ?.let { value ->
                             if (value.length > (best?.length ?: 0)) {
                                 best = value
@@ -2329,6 +4031,90 @@ class DeclarativeSource(
         return best?.let {
             app.xreader.domain.reader.SynopsisText.stripBoilerplate(it)
         }?.takeIf { it.length >= 40 }
+    }
+
+    /**
+     * v1.5.2 fix (FIX-1c): every raw value of the JSON string
+     * field [key] in [text] — plain form (`"key": "…"`) and
+     * escaped form (`\"key\": \"…\"`, an RSC stream's quotes) —
+     * with escapes intact for [decodePayloadString]. A linear
+     * scan replacing the regex pair that recursed once per
+     * matched character (see the note at the old regexes'
+     * site): a plain value ends at the first quote its
+     * backslash run doesn't escape; an escaped value ends at
+     * the first backslash-quote pair at a pair boundary —
+     * exactly the two shapes the old patterns matched.
+     */
+    private fun payloadFieldValues(
+        text: String,
+        key: String
+    ): List<String> {
+        val values = mutableListOf<String>()
+        for (escaped in listOf(false, true)) {
+            val needle = if (escaped) "\\\"$key\\\"" else "\"$key\""
+            var from = 0
+            while (true) {
+                val keyAt = text.indexOf(needle, from)
+                if (keyAt < 0) break
+                var i = skipPayloadWs(text, keyAt + needle.length)
+                if (i >= text.length || text[i] != ':') {
+                    from = keyAt + needle.length
+                    continue
+                }
+                i = skipPayloadWs(text, i + 1)
+                val valueStart: Int
+                if (escaped) {
+                    if (i + 1 < text.length && text[i] == '\\' &&
+                        text[i + 1] == '"'
+                    ) {
+                        valueStart = i + 2
+                    } else {
+                        from = keyAt + needle.length
+                        continue
+                    }
+                } else {
+                    if (i < text.length && text[i] == '"') {
+                        valueStart = i + 1
+                    } else {
+                        from = keyAt + needle.length
+                        continue
+                    }
+                }
+                var j = valueStart
+                var run = 0
+                var end = -1
+                while (j < text.length) {
+                    val c = text[j]
+                    if (c == '\\') {
+                        run++
+                        j++
+                        continue
+                    }
+                    if (c == '"') {
+                        if (!escaped && run % 2 == 0) {
+                            end = j
+                            break
+                        }
+                        if (escaped && run % 2 == 1) {
+                            end = j - 1
+                            break
+                        }
+                    }
+                    run = 0
+                    j++
+                }
+                if (end < 0) break
+                values += text.substring(valueStart, end)
+                from = end + 1
+            }
+        }
+        return values
+    }
+
+    private fun skipPayloadWs(text: String, from: Int): Int {
+        var j = from
+        while (j < text.length && text[j].isWhitespace()) j++
+        return j
     }
 
     /** JSON-decode one extracted payload string value; null
@@ -2381,6 +4167,25 @@ class DeclarativeSource(
     fun chapterContent(
         chapter: SourceChapter,
         prefetchedFirstPage: Document?
+    ): SourceChapterContent =
+        // v1.5.12 (Front 1, S1): the chapter CONTENT road is
+        // render-capped — every fetch this read makes (the
+        // chapter page, its next-page chain, the AJAX text
+        // endpoint) runs inside [ContentRoadCap], so the
+        // escalating fetcher serves it from the static road +
+        // the fetch bridge and never places a full WebView
+        // render (60–105 s, main-resident) behind a reading
+        // tap. Catalogue / book / chapter-list entries never
+        // enter this scope and keep their full escalation.
+        ContentRoadCap.runCapped {
+            chapterContentRoad(chapter, prefetchedFirstPage)
+        }
+
+    /** The chapter read itself, inside the S1 cap (see the
+     * [chapterContent] wrapper above). */
+    private fun chapterContentRoad(
+        chapter: SourceChapter,
+        prefetchedFirstPage: Document?
     ): SourceChapterContent {
         // Manga programme (M1): an image source's chapter is
         // its ordered page list — the prose road below (AJAX
@@ -2421,29 +4226,62 @@ class DeclarativeSource(
             if (title == null) {
                 title = spec.title?.let { readDocSpec(doc, it) }?.ifBlank { null }
             }
-            val element = firstChainedMatch(doc, spec.content)?.first
-                ?: run {
-                    // v1.5.0 (A6): AUTOMATIC KIND ROUTING —
-                    // the prose container isn't on this page.
-                    // On a both-kinds site (Chikari, Asura) a
-                    // manhwa chapter's page is a strip of page
-                    // images instead: when the page carries a
-                    // real page-image set, this chapter is an
-                    // IMAGE chapter whatever the source's kind
-                    // says, and it reads in the image reader.
-                    if (pages == 1) {
-                        imageChapterFrom(doc, chapter, pageUrl, title)
-                            ?.let { return it }
-                    }
-                    throw SourceException(
-                        "the chapter text wasn't found on the page"
-                    )
+            val matchedElement = firstChainedMatch(doc, spec.content)?.first
+            if (matchedElement == null) {
+                // v1.5.3 (finding #2, item 5b): EMBEDDED-JSON
+                // CONTENT PATH. An app-driven chapter page
+                // (Inertia/Laravel — BrightNovel) carries no
+                // prose container in its DOM at all: the
+                // chapter text is a string inside the page's
+                // embedded payload. When the declared content
+                // spec names a dot path that resolves in the
+                // page's embedded roots to text, that text IS
+                // the chapter fragment. Tried only where the
+                // DOM read already failed — every working
+                // config behaves exactly as before.
+                val embedded = embeddedContentHtml(
+                    doc, spec.content, pageUrl
+                )
+                if (embedded != null) {
+                    fragments += embedded
+                    // The payload is the whole chapter — no
+                    // next-page chain follows it.
+                    url = null
+                    continue
                 }
+                // v1.5.0 (A6): AUTOMATIC KIND ROUTING —
+                // the prose container isn't on this page.
+                // On a both-kinds site (Chikari, Asura) a
+                // manhwa chapter's page is a strip of page
+                // images instead: when the page carries a
+                // real page-image set, this chapter is an
+                // IMAGE chapter whatever the source's kind
+                // says, and it reads in the image reader.
+                if (pages == 1) {
+                    imageChapterFrom(doc, chapter, pageUrl, title)
+                        ?.let { return it }
+                }
+                throw SourceException(
+                    "the chapter text wasn't found on the page"
+                )
+            }
+            val element = matchedElement
             val clone = element.clone()
             for (removeSel in spec.remove) {
                 for (candidate in SelectorChains.split(removeSel)) {
                     runCatching { clone.select(candidate).remove() }
                 }
+            }
+            // <picture> elements unwrap to their plain <img>
+            // (QuickNovel's Lnori shape, owner-ruled
+            // 2026-11-03): the block converter reads <img>;
+            // a <picture> wrapper (sources + img) would
+            // otherwise hide the image from it. DOM-level, on
+            // the clone, so the served markup is exact.
+            for (pic in clone.select("picture")) {
+                val img = pic.selectFirst("img")
+                if (img != null) pic.replaceWith(img.clone())
+                else pic.remove()
             }
             fragments += clone.html()
             url = spec.nextPage?.let { nextSel ->
@@ -2469,7 +4307,19 @@ class DeclarativeSource(
                 }
             }
         }
-        val combined = fragments.joinToString("\n")
+        var combined = fragments.joinToString("\n")
+        // v1.5.3 (finding #4, item 15): this chapter opens a
+        // volume (or the book) — its harvested gallery
+        // illustrations lead it. The <img> tags ride the
+        // ordinary fragment conversion and the fetch path's
+        // per-book image pipeline, landing as leading image
+        // blocks; no reader change is involved.
+        val leads = galleryLeads[chapter.id]
+        if (!leads.isNullOrEmpty()) {
+            combined = leads.joinToString("\n") { url ->
+                "<p><img src=\"$url\"/></p>"
+            } + "\n" + combined
+        }
         // v1.5.0 (A6): the container existed but carried
         // almost no prose — on a both-kinds site that is an
         // image chapter wearing a prose container (the images
@@ -2522,6 +4372,87 @@ class DeclarativeSource(
         return SourceChapterContent(html = html, title = title)
     }
 
+    /**
+     * v1.5.8 (B2 / F3 Fix 2 + F1 M3): the fetcher-seam entry to
+     * [imageChapterFrom]'s exact rule, for chapter HTML that
+     * arrived on a road the DOM walk never touches (the AJAX
+     * text road, the embedded-JSON road). The rule is the
+     * A6 rule unchanged: the fragment's prose under
+     * [MIN_PROSE_CHARS] AND a page-image set of at least
+     * [MIN_SNIFFED_PAGES]. On a hit the pages record is
+     * stashed exactly where the DOM road stashes it
+     * ([pagesOf] / [contentOf]), so the fetch seam stores it
+     * alongside the content and tier-2 evidence can testify
+     * from it. Returns the record, or null when the fragment
+     * is prose (the novel fence: a real prose chapter's text
+     * never qualifies) or carries no real page-image set.
+     */
+    fun sniffImageChapterEvidence(
+        chapter: SourceChapter,
+        html: String
+    ): ChapterPages? {
+        if (html.isBlank() || !html.contains("<img", ignoreCase = true)) {
+            return null
+        }
+        val doc = Jsoup.parseBodyFragment(html, chapter.id)
+        if (doc.text().length >= MIN_PROSE_CHARS) return null
+        imageChapterFrom(doc, chapter, chapter.id, null) ?: return null
+        return pagesOf(chapter.id)
+    }
+
+    /** v1.5.9 (Finding 5 §6): the FULL-SIZE candidate an
+     * <img> offers beyond its (possibly preview) src, or
+     * null when it offers none: `data-full` first — the
+     * full-size attribute Fenrir's markup contract carries
+     * (its reader bundle builds every comic <img> with
+     * src=preview_url, data-full=original_url) — else the
+     * LARGEST-width `srcset` candidate. The preview is a
+     * deliberate momentary placeholder on the site's own
+     * reader; storing it is storing the blur. Blank and
+     * `data:` values never count as a full-size door.
+     * Shared by both page pickers ([sniffPageImageUrls] and
+     * [pageUrlOf]) so the order can never drift between
+     * them. Returns the RAW attribute value; callers
+     * absolutise exactly as they do every other candidate. */
+    private fun fullSizeCandidate(img: Element): String? {
+        val full = img.attr("data-full").trim()
+        if (full.isNotEmpty() && !full.startsWith("data:")) {
+            return full
+        }
+        val srcset = img.attr("srcset").trim()
+        if (srcset.isNotEmpty()) {
+            return largestSrcsetCandidate(srcset)
+        }
+        return null
+    }
+
+    /** v1.5.9 (Finding 5 §6): the largest-width candidate
+     * of a `srcset` value — width descriptors parsed and
+     * the MAX taken, never the first entry (in a width
+     * ladder the first is the smallest: Fenrir's ladder is
+     * 480/768/1280). Entries without a width descriptor
+     * count as width 0, so any width-bearing entry beats
+     * them; `data:` entries never win. Null when the value
+     * carries no usable entry. */
+    private fun largestSrcsetCandidate(srcset: String): String? {
+        var best: String? = null
+        var bestWidth = -1
+        for (entry in srcset.split(',')) {
+            val parts = entry.trim().split(Regex("\\s+"))
+                .filter { it.isNotEmpty() }
+            if (parts.isEmpty()) continue
+            val url = parts[0]
+            if (url.startsWith("data:")) continue
+            val width = parts.getOrNull(1)
+                ?.removeSuffix("w")?.toIntOrNull() ?: 0
+            if (best == null || width > bestWidth) {
+                best = url
+                bestWidth = width
+            }
+        }
+        return best
+    }
+
     /** The sniffed page-image set of one chapter page:
      * http(s) images in document order, data-URIs and
      * chrome-sized images excluded, duplicates collapsed.
@@ -2537,7 +4468,12 @@ class DeclarativeSource(
         val scope = container ?: doc
         val found = LinkedHashSet<String>()
         for (img in scope.select("img")) {
-            val raw = img.attr("data-src").ifBlank { img.attr("src") }
+            // v1.5.9 (Finding 5 §6): the full-size door wins
+            // over the (possibly preview) data-src/src tail —
+            // data-full, else the largest srcset candidate,
+            // else exactly the read that stood before.
+            val raw = fullSizeCandidate(img)
+                ?: img.attr("data-src").ifBlank { img.attr("src") }
             if (raw.isBlank() || raw.startsWith("data:")) continue
             val width = img.attr("width").toIntOrNull()
             val height = img.attr("height").toIntOrNull()
@@ -2578,10 +4514,19 @@ class DeclarativeSource(
         prefetchedFirstPage: Document?
     ): SourceChapterContent {
         val spec = config.chapter
+        // v1.5.8 (A7 / F1 M2): a BLANK pages spec no longer
+        // hard-throws. The link learner never writes a pages
+        // selector, so a learner config stamped MANGA failed
+        // EVERY fresh chapter deterministically ("this manga
+        // source doesn't say where its chapter pages are").
+        // With no declared spec the road extracts via the
+        // prose road's own sniff — [sniffPageImageUrls] under
+        // [imageChapterFrom]'s exact rule (the
+        // [MIN_SNIFFED_PAGES] threshold is applied to the
+        // walked set below) — so a stamped learner config
+        // behaves like a native manga config with a sniffed
+        // pages rule. No config rewrite, no schema change.
         val pagesSpec = spec.pages?.takeIf { it.isNotBlank() }
-            ?: throw SourceException(
-                "this manga source doesn't say where its chapter pages are"
-            )
         var url: String? = chapter.id
         val pageUrls = LinkedHashSet<String>()
         var title: String? = null
@@ -2601,7 +4546,11 @@ class DeclarativeSource(
                 title = spec.title?.let { readDocSpec(doc, it) }
                     ?.ifBlank { null }
             }
-            pageUrls += extractPageUrls(doc, pagesSpec, pageUrl)
+            pageUrls += if (pagesSpec != null) {
+                extractPageUrls(doc, pagesSpec, pageUrl)
+            } else {
+                sniffPageImageUrls(doc, spec, pageUrl)
+            }
             url = spec.nextPage?.let { nextSel ->
                 val (nextEl, parsed) = firstChainedMatch(doc, nextSel)
                     ?: return@let null
@@ -2622,6 +4571,16 @@ class DeclarativeSource(
                     target
                 }
             }
+        }
+        // v1.5.8 (A7): the sniff road's threshold — a sniffed
+        // set under [MIN_SNIFFED_PAGES] is not a page list
+        // (imageChapterFrom's exact rule); the chapter then
+        // takes the ordinary empty-pages road below (prose
+        // mirror, else the plain-words failure). A DECLARED
+        // pages spec keeps its own law: any extracted set,
+        // however small, is the source's declared answer.
+        if (pagesSpec == null && pageUrls.size < MIN_SNIFFED_PAGES) {
+            pageUrls.clear()
         }
         if (pageUrls.isEmpty()) {
             // v1.5.0 (A6): the mirror direction — an
@@ -2673,19 +4632,27 @@ class DeclarativeSource(
     }
 
     /** One page element's image URL. Candidates are read in
-     * priority order — the spec's own attribute first, then
-     * (for an @src read) the lazy-image attributes, since
-     * manga pages commonly park the real URL in `data-src`
-     * behind a `data:` placeholder in `src` — and a container
-     * element falls back to its first descendant <img>. The
-     * first candidate that resolves to a real http(s) URL
-     * wins; blank and `data:` candidates never do. */
+     * priority order — v1.5.9 (Finding 5 §6): the full-size
+     * door first (`data-full`, else the largest `srcset`
+     * candidate — the sniff picker's exact order, shared via
+     * [fullSizeCandidate]), then the spec's own attribute,
+     * then (for an @src read) the lazy-image attributes,
+     * since manga pages commonly park the real URL in
+     * `data-src` behind a `data:` placeholder in `src` — and
+     * a container element falls back to its first descendant
+     * <img> (whose full-size door likewise precedes its own
+     * attribute tail). The first candidate that resolves to
+     * a real http(s) URL wins; blank and `data:` candidates
+     * never do. */
     private fun pageUrlOf(
         element: Element,
         attr: String,
         pageUrl: String
     ): String? {
         val candidates = mutableListOf<String>()
+        if (element.tagName().equals("img", ignoreCase = true)) {
+            fullSizeCandidate(element)?.let { candidates += it }
+        }
         readAttr(element, attr)?.let { candidates += it }
         if (attr == "src") {
             for (lazy in LAZY_IMAGE_ATTRS) {
@@ -2694,6 +4661,7 @@ class DeclarativeSource(
         }
         val img = element.selectFirst("img")
         if (img != null && img !== element) {
+            fullSizeCandidate(img)?.let { candidates += it }
             readAttr(img, attr)?.let { candidates += it }
             if (attr == "src") {
                 for (lazy in LAZY_IMAGE_ATTRS) {
@@ -2754,6 +4722,108 @@ class DeclarativeSource(
         chapter: SourceChapter,
         ajax: ChapterTextAjax,
         endpoint: String
+    ): SourceChapterContent =
+        // v1.5.12 (Front 1, S4): the ONE boundary bridge of
+        // the token road. The Source API this serves is
+        // blocking, so the coroutine road begins here — and
+        // everything below it (the coordinator calls, the
+        // in-context fetch) runs suspend-native inside it:
+        // no coordinator runBlocking wrapper is reachable
+        // from the fetch road any more.
+        kotlinx.coroutines.runBlocking {
+            ajaxChapterContentAsync(chapter, ajax, endpoint)
+        }
+
+    /** v1.5.12 (Front 1, S2/S4): one chapter open's
+     * FULL-RENDER round-trip budget. What this budget
+     * counts is a full WebView page load — a harvest visit
+     * / mint page load, the 60–105 s main-resident loads
+     * the cap exists to prevent: ONE WebView mint per open
+     * (the coordinator's in-context mint — its sink
+     * adoption costs none). Once that is spent, later mints
+     * in this open run OkHttp-only (still single-flight,
+     * still classified).
+     *
+     * v1.5.12 gate fix (Group B): the recovery chain's
+     * TERMINAL in-context chapter fetch is NOT a
+     * full-render round-trip and is not charged against
+     * this budget. It is a JS fetch() inside the page the
+     * fetcher already parks on (parkOnMain warm-reuses the
+     * parked view — no reload), and it is Fenrir's
+     * ESTABLISHED, device-shaped recovery road (v1.5.8,
+     * V158FenrirInContextChapterFixture): refusal → mint →
+     * second refusal → in-context fetch serves the prose.
+     * The original S2 shape counted it against the mint's
+     * one round-trip, so after any WebView mint the
+     * escalation could never run and the protected payload
+     * stood — a speculative cap (its forensics lane had
+     * labelled the ANR chain UNPROVEN) amputating a proven
+     * read road. The fetch keeps its OWN one-per-open
+     * allowance below, independent of the mint spend.
+     * Sequential by construction: the chapter road is one
+     * call chain, so plain counters need no
+     * synchronisation, and no WebView operation is ever
+     * held across a plain fetch — each round-trip acquires
+     * and releases the rendered fetcher's mutex inside its
+     * own call, so composition and any neighbour warm-up
+     * are never starved by a lock this road holds. */
+    private class MintOpenBudget {
+        private var webViewRoundTrips = 0
+        private var inContextFetches = 0
+
+        /** Spend the open's one FULL-RENDER WebView
+         * round-trip on a mint; false when it is already
+         * spent (the caller then mints without the WebView
+         * provider). */
+        fun trySpendOnMint(): Boolean {
+            if (webViewRoundTrips >= 1) return false
+            webViewRoundTrips++
+            return true
+        }
+
+        /** Spend the open's one terminal in-context
+         * chapter fetch; false only when one already ran
+         * in this open. A mint's full-render spend does NOT
+         * block it (see the class doc). */
+        fun trySpendOnInContextFetch(): Boolean {
+            if (inContextFetches >= 1) return false
+            inContextFetches++
+            return true
+        }
+    }
+
+    /**
+     * v1.5.37 (combined build): the AJAX chapter road's
+     * refusal detail — judge the BODY before flattening a
+     * non-2xx answer to a bare status. A site-check
+     * challenge's evidence lives only in its body; the old
+     * status-only detail ("the site answered HTTP 403")
+     * erased the challenge before any classifier could see
+     * it, and the reader dead-ended on "blocked… limiting
+     * readers" with no solve ever offered
+     * (XNOVEL-403-ESCALATION-FORENSICS). A challenge-shaped
+     * body yields the typed challenge detail, which
+     * SessionNeed / FetchClassification already map to
+     * SITE_CHECK; any other refusal keeps the exact status
+     * detail it has always carried. One helper for the
+     * road's three refusal throws so they cannot drift.
+     * (The token-recovery retries are NOT routed through
+     * this: their refusals are superseded by the
+     * coordinator's own typed outcomes.)
+     */
+    private fun ajaxRefusalDetail(
+        response: app.xreader.extensionapi.HostResponse
+    ): String =
+        if (SiteCheck.isChallengePage(response.body)) {
+            SiteCheck.challengeDetail()
+        } else {
+            "the site answered HTTP ${response.status}"
+        }
+
+    private suspend fun ajaxChapterContentAsync(
+        chapter: SourceChapter,
+        ajax: ChapterTextAjax,
+        endpoint: String
     ): SourceChapterContent {
         // v1.3.4 (T1/T2): the credential-aware entry. A source
         // whose config declares an operation token
@@ -2770,13 +4840,19 @@ class DeclarativeSource(
             ReadTokenCoordinators.forSource(config.id, it, readTokenStore)
         }
         val chapterScope = ReadTokenCoordinator.chapterScopeKey(endpoint)
+        // v1.5.12 (Front 1, S2): this open's budget — one
+        // FULL-RENDER round-trip (the WebView mint) across
+        // the whole recovery chain below, plus the terminal
+        // in-context fetch's own allowance (see
+        // [MintOpenBudget]).
+        val openBudget = MintOpenBudget()
         // A comfortably valid held token for THIS chapter
         // rides proactively — the common case costs no extra
         // round trip.
-        var authToken = coordinator?.currentToken(chapterScope)
+        var authToken = coordinator?.currentTokenAwaited(chapterScope)
         var response = fetchAjax(chapter, ajax, endpoint, tokenSpec, authToken?.value)
         if (response.status in 200..299) {
-            coordinator?.noteIssued(response.headers, chapterScope)
+            coordinator?.noteIssuedAwaited(response.headers, chapterScope)
         }
         val root = runCatching {
             ajaxJson.parseToJsonElement(response.body)
@@ -2788,6 +4864,16 @@ class DeclarativeSource(
         // not a scrape and not a sign-in demand.
         if (format.equals(FORMAT_ENCRYPTED, ignoreCase = true)) {
             throw SourceException(ENCRYPTED_CHAPTER_MESSAGE)
+        }
+        // v1.5.5 (§3.5): a RECOGNISED unsupported delivery
+        // form is terminal-honest, exactly like encrypted —
+        // no mint can make it readable, so it never enters
+        // the withholding road below and never degrades into
+        // a blank success through the prose gate.
+        if (format != null &&
+            format.lowercase() in UNSUPPORTED_FORMATS
+        ) {
+            throw SourceException(UNSUPPORTED_CHAPTER_MESSAGE)
         }
         val lockedByField = ajax.jsonLockField?.let { field ->
             (root?.get(field) as? JsonPrimitive)?.booleanOrNull == true
@@ -2817,11 +4903,12 @@ class DeclarativeSource(
         if (response.status in 200..299 && !locked) {
             return processWithTokenRecovery(
                 chapter, ajax, response, coordinator, tokenSpec,
-                endpoint, chapterScope, recovered = false
+                endpoint, chapterScope, recovered = false,
+                openBudget = openBudget
             )
         }
         if (!locked && response.status !in 200..299) {
-            throw SourceException("the site answered HTTP ${response.status}")
+            throw SourceException(ajaxRefusalDetail(response))
         }
         // LOCKED (or an unauthenticated 401): terminal for
         // the text leg. With no credential contract the
@@ -2830,7 +4917,7 @@ class DeclarativeSource(
             if (response.status !in 200..299 && !lockedByField &&
                 !format.equals(FORMAT_LOCKED, ignoreCase = true)
             ) {
-                throw SourceException("the site answered HTTP ${response.status}")
+                throw SourceException(ajaxRefusalDetail(response))
             }
             throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
         }
@@ -2842,19 +4929,59 @@ class DeclarativeSource(
         // its generation IN THIS SCOPE first so the mint
         // below is a genuine fresh mint, not a replay.
         if (authToken != null) {
-            coordinator.invalidate(chapterScope, authToken.generation)
+            coordinator.invalidateAwaited(chapterScope, authToken.generation)
         }
         val chapterHint = (root?.get(REMINT_ID_FIELD) as? JsonPrimitive)
             ?.contentOrNull
             ?: (root?.get(REMINT_UUID_FIELD) as? JsonPrimitive)?.contentOrNull
             ?: chapter.id.substringAfterLast('/').takeIf { it.isNotBlank() }
-        when (val outcome = coordinator.token(context.http, chapterScope, chapterHint)) {
+        // v1.5.5 (§3.3): the mint order — OkHttp first when no
+        // solve is recent; after a solve, the coordinator
+        // routes the mint inside the WebView's context
+        // (harvest, then in-context mint) via the provider.
+        // Capability-scoped: the provider is only built for
+        // read-token sources, and the park URL is the
+        // chapter's own reader page (the spec's check URL).
+        val solvedRecently = recentSolveNow()
+        // v1.5.12 (Front 1, S2): the WebView provider rides
+        // only while this open's one round-trip is unspent —
+        // a later mint in the same open runs OkHttp-only.
+        val outcome = coordinator.tokenAwaited(
+            context.http, chapterScope, chapterHint,
+            webViewProvider = if (
+                SessionCapabilityRouting.webViewMintAllowed(config) &&
+                openBudget.trySpendOnMint()
+            ) {
+                webViewMintProvider
+            } else {
+                null
+            },
+            recentSolve = solvedRecently,
+            parkUrl = tokenSpec.checkUrlFor(chapter.id) ?: chapter.id
+        )
+        // v1.5.5 (§3.4): one structured line per post-save
+        // chapter attempt — who retried (this fetch), whether
+        // the mint ran and on which road, its HTTP status and
+        // a body prefix — so the three suspects (no retry /
+        // no mint / mint refused) separate at a glance.
+        if (solvedRecently) {
+            val mintDiag = coordinator.lastMintDiagnostic()
+            DiagnosticLog.record(
+                "fenrir-unlock",
+                "[FenrirUnlock] surface=chapter-fetch " +
+                    "retried=true mintRoad=${mintDiag?.road ?: "none"} " +
+                    "mintStatus=${mintDiag?.status ?: "none"} " +
+                    "mintBody=${mintDiag?.bodyPrefix ?: ""}",
+                config.id
+            )
+        }
+        when (outcome) {
             is ReadTokenCoordinator.MintOutcome.Ready -> {
                 response = fetchAjax(
                     chapter, ajax, endpoint, tokenSpec, outcome.token
                 )
                 if (response.status in 200..299) {
-                    coordinator.noteIssued(response.headers, chapterScope)
+                    coordinator.noteIssuedAwaited(response.headers, chapterScope)
                 }
                 val retryRoot = runCatching {
                     ajaxJson.parseToJsonElement(response.body)
@@ -2863,6 +4990,15 @@ class DeclarativeSource(
                     as? JsonPrimitive)?.contentOrNull
                 if (retryFormat.equals(FORMAT_ENCRYPTED, ignoreCase = true)) {
                     throw SourceException(ENCRYPTED_CHAPTER_MESSAGE)
+                }
+                // v1.5.5 (§3.5): the retry's recognised
+                // unsupported form is honest-terminal too —
+                // not "stayed locked" (a further mint would
+                // not change the delivery form).
+                if (retryFormat != null &&
+                    retryFormat.lowercase() in UNSUPPORTED_FORMATS
+                ) {
+                    throw SourceException(UNSUPPORTED_CHAPTER_MESSAGE)
                 }
                 // v1.5.0 (A7i): the same withholding rule on
                 // the retry — a fresh token answered with a
@@ -2884,7 +5020,7 @@ class DeclarativeSource(
                     // invalidated by this failure — a newer
                     // token minted meanwhile, and every other
                     // chapter's token, is untouched.
-                    coordinator.invalidate(chapterScope, outcome.generation)
+                    coordinator.invalidateAwaited(chapterScope, outcome.generation)
                     throw SourceException(STAYED_LOCKED_MESSAGE)
                 }
                 if (response.status !in 200..299) {
@@ -2894,7 +5030,8 @@ class DeclarativeSource(
                 }
                 return processWithTokenRecovery(
                     chapter, ajax, response, coordinator, tokenSpec,
-                    endpoint, chapterScope, recovered = true
+                    endpoint, chapterScope, recovered = true,
+                    openBudget = openBudget
                 )
             }
             ReadTokenCoordinator.MintOutcome.ChallengeRequired ->
@@ -2932,7 +5069,7 @@ class DeclarativeSource(
      * downstream of any other road). Sources without an
      * operation-token contract take exactly the old path.
      */
-    private fun processWithTokenRecovery(
+    private suspend fun processWithTokenRecovery(
         chapter: SourceChapter,
         ajax: ChapterTextAjax,
         response: app.xreader.extensionapi.HostResponse,
@@ -2940,7 +5077,8 @@ class DeclarativeSource(
         tokenSpec: OperationTokenSpec?,
         endpoint: String,
         chapterScope: String,
-        recovered: Boolean
+        recovered: Boolean,
+        openBudget: MintOpenBudget
     ): SourceChapterContent {
         val content = processAjaxResponse(chapter, ajax, response)
         if (coordinator == null || tokenSpec == null) return content
@@ -2948,15 +5086,46 @@ class DeclarativeSource(
             .text()
         val refusal = ChapterServeGate.refusalFor(plain)
             ?: return content
-        if (recovered) throw SourceException(refusal)
-        coordinator.currentToken(chapterScope)?.let { held ->
-            coordinator.invalidate(chapterScope, held.generation)
+        if (recovered) {
+            // v1.5.8 (C1 / F7 F1): the token retry STILL
+            // returned the protected payload — the token is
+            // necessary-but-not-sufficient on the plain
+            // (OkHttp) context. Escalate ONCE to an in-context
+            // chapter fetch (parked on the chapter's reader
+            // page, the Bearer attached in-context — the
+            // transport switch the endpoint walks already
+            // have) before the refusal surfaces. Pre-solve and
+            // non-token sources never reach this branch: it
+            // sits behind the token recovery's second refusal,
+            // and sources without a rendered session keep the
+            // refusal exactly as before.
+            inContextChapterContent(
+                chapter, ajax, endpoint, coordinator, tokenSpec,
+                chapterScope, openBudget
+            )?.let { return it }
+            throw SourceException(refusal)
+        }
+        coordinator.currentTokenAwaited(chapterScope)?.let { held ->
+            coordinator.invalidateAwaited(chapterScope, held.generation)
         }
         val chapterHint = chapter.id.substringAfterLast('/')
             .takeIf { it.isNotBlank() }
         return when (
-            val outcome = coordinator.token(
-                context.http, chapterScope, chapterHint
+            // v1.5.12 (Front 1, S2): this recovery mint spends
+            // the open's one WebView round-trip only when the
+            // locked road above did not already spend it.
+            val outcome = coordinator.tokenAwaited(
+                context.http, chapterScope, chapterHint,
+                webViewProvider = if (
+                    SessionCapabilityRouting.webViewMintAllowed(config) &&
+                    openBudget.trySpendOnMint()
+                ) {
+                    webViewMintProvider
+                } else {
+                    null
+                },
+                recentSolve = recentSolveNow(),
+                parkUrl = tokenSpec.checkUrlFor(chapter.id) ?: chapter.id
             )
         ) {
             is ReadTokenCoordinator.MintOutcome.Ready -> {
@@ -2964,7 +5133,7 @@ class DeclarativeSource(
                     chapter, ajax, endpoint, tokenSpec, outcome.token
                 )
                 if (retry.status in 200..299) {
-                    coordinator.noteIssued(retry.headers, chapterScope)
+                    coordinator.noteIssuedAwaited(retry.headers, chapterScope)
                 }
                 if (retry.status !in 200..299) {
                     throw SourceException(
@@ -2981,7 +5150,8 @@ class DeclarativeSource(
                 }
                 processWithTokenRecovery(
                     chapter, ajax, retry, coordinator, tokenSpec,
-                    endpoint, chapterScope, recovered = true
+                    endpoint, chapterScope, recovered = true,
+                    openBudget = openBudget
                 )
             }
             ReadTokenCoordinator.MintOutcome.ChallengeRequired ->
@@ -3004,6 +5174,96 @@ class DeclarativeSource(
             is ReadTokenCoordinator.MintOutcome.Unavailable ->
                 throw SourceException(refusal)
         }
+    }
+
+    /**
+     * v1.5.8 (C1 / F7 F1): the in-context chapter fetch — the
+     * transport switch [fetchEndpointResponse] already gives
+     * the endpoint walks, applied to the operation-token
+     * CHAPTER fetch. The request runs as a fetch() inside the
+     * rendered session parked on the chapter's own reader
+     * page (the token spec's check page), with the AJAX
+     * spec's headers, the chapter-page Referer, and the held
+     * Bearer token attached in-context (origin-exact, the
+     * [fetchAjax] rule). The answer is judged by the SAME
+     * laws as a plain-road answer: non-2xx, a locked /
+     * encrypted / unsupported format, an empty payload or a
+     * still-protected payload all return null here, and the
+     * caller's refusal then surfaces unchanged — the prose
+     * guard is never weakened by this road. Null also when
+     * the source has no rendered session (the road cannot
+     * run), exactly as the endpoint walks degrade.
+     */
+    private suspend fun inContextChapterContent(
+        chapter: SourceChapter,
+        ajax: ChapterTextAjax,
+        endpoint: String,
+        coordinator: ReadTokenCoordinator,
+        tokenSpec: OperationTokenSpec,
+        chapterScope: String,
+        openBudget: MintOpenBudget
+    ): SourceChapterContent? {
+        // v1.5.12 gate fix (Group B): this fetch is a JS
+        // fetch() inside the parked page, NOT a full-render
+        // round-trip — it runs whenever this open has not
+        // already spent its one in-context fetch, INCLUDING
+        // after a WebView mint earlier in this open (the
+        // v1.5.8 recovery road this escalation exists for).
+        // Only a second in-context fetch in the same open is
+        // refused here; the caller's refusal then surfaces
+        // unchanged, exactly as when the source has no
+        // rendered session.
+        if (!openBudget.trySpendOnInContextFetch()) return null
+        val access = sessionAccess ?: return null
+        val resolved = resolveUrl(endpoint)
+        val headers = LinkedHashMap(ajax.headers)
+        if (headers.keys.none {
+                it.equals("Referer", ignoreCase = true)
+            } &&
+            (chapter.id.startsWith("http://") ||
+                chapter.id.startsWith("https://"))
+        ) {
+            headers["Referer"] = chapter.id
+        }
+        val token = coordinator.currentTokenAwaited(chapterScope)?.value
+        if (token != null) {
+            val host = CookieParsing.hostOf(resolved)
+            if (host != null && tokenSpec.appliesTo(host)) {
+                headers[tokenSpec.headerName] = tokenSpec.prefix + token
+            }
+        }
+        val parkUrl = tokenSpec.checkUrlFor(chapter.id) ?: chapter.id
+        val response = fetchInContextSuspend(
+            access, resolved, parkUrl,
+            isPost = ajax.method.equals("POST", ignoreCase = true),
+            requestBody = ajax.bodyFor(chapter.id),
+            headers = headers
+        ) ?: return null
+        if (response.status !in 200..299) return null
+        val root = runCatching {
+            ajaxJson.parseToJsonElement(response.body)
+        }.getOrNull() as? JsonObject
+        val format = (root?.get(FORMAT_FIELD) as? JsonPrimitive)
+            ?.contentOrNull
+        if (format.equals(FORMAT_ENCRYPTED, ignoreCase = true) ||
+            format.equals(FORMAT_LOCKED, ignoreCase = true) ||
+            (format != null && format.lowercase() in UNSUPPORTED_FORMATS)
+        ) {
+            return null
+        }
+        val content = runCatching {
+            processAjaxResponse(chapter, ajax, response)
+        }.getOrNull() ?: return null
+        val plain = Jsoup.parseBodyFragment(content.html, chapter.id)
+            .text()
+        if (ChapterServeGate.refusalFor(plain) != null) return null
+        DiagnosticLog.record(
+            "fenrir-unlock",
+            "[FenrirUnlock] surface=chapter-fetch transport=in-context " +
+                "escalated=true served=true",
+            config.id
+        )
+        return content
     }
 
     /** One AJAX text fetch: the declared method/headers plus
@@ -3039,12 +5299,23 @@ class DeclarativeSource(
         // v1.3.0 (E1): reader APIs that take the chapter
         // address in a POST body (WTR-LAB) ride the same seam —
         // headers, session, whitelist, rate limit unchanged.
-        return if (ajax.method.equals("POST", ignoreCase = true)) {
+        val raw = if (ajax.method.equals("POST", ignoreCase = true)) {
             context.http.post(
                 resolved, ajax.bodyFor(chapter.id) ?: "", headers = headers
             )
         } else {
             context.http.get(resolved, headers)
+        }
+        // v1.5.35 (Item 5): the q-data pre-step on the text
+        // road too — a Qwik City chapter payload arrives as
+        // the plain envelope (its `content` hoisted), so the
+        // declared content path reads it unchanged. Every
+        // other body passes through byte-identical.
+        val transformed = QDataResolve.transformBody(raw.body)
+        return if (transformed == raw.body) {
+            raw
+        } else {
+            raw.copy(body = transformed)
         }
     }
 
@@ -3059,7 +5330,7 @@ class DeclarativeSource(
     ): SourceChapterContent {
         val spec = config.chapter
         if (response.status !in 200..299) {
-            throw SourceException("the site answered HTTP ${response.status}")
+            throw SourceException(ajaxRefusalDetail(response))
         }
         val rootElement = runCatching {
             ajaxJson.parseToJsonElement(response.body)
@@ -3140,17 +5411,266 @@ class DeclarativeSource(
         val element = firstChainedMatch(fragment, spec.content)?.first
             ?: fragment.body()
         val clone = element.clone()
+        // v1.5.37 (combined build): the pre-removal clone, kept
+        // for the decoy-strip guard — if a spec's removals ever
+        // blank a fragment that HAD text, the un-stripped clone
+        // is served instead: the stripper must never be able to
+        // manufacture an empty/locked chapter out of a readable
+        // one (FENRIR-TEXT-GIBBERISH-FORENSICS §5, the named
+        // guard on Fenrir's new remove list). Sources with no
+        // removes keep today's exact path (unStripped = null).
+        val unStripped = if (spec.remove.isNotEmpty()) {
+            element.clone()
+        } else {
+            null
+        }
         for (removeSel in spec.remove) {
             for (candidate in SelectorChains.split(removeSel)) {
                 runCatching { clone.select(candidate).remove() }
             }
         }
-        if (clone.text().isBlank()) throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
-        val html = clone.html()
+        val served = if (clone.text().isBlank() && unStripped != null &&
+            unStripped.text().isNotBlank()
+        ) {
+            unStripped
+        } else {
+            clone
+        }
+        if (served.text().isBlank()) {
+            // v1.5.8 (B2, D2-fix round): a blank-text payload
+            // is not automatically a locked chapter — on a
+            // both-kinds site it can be an IMAGE chapter
+            // served by the AJAX road (the Fenrir manhwa
+            // shape: an <img> strip with no prose at all).
+            // The DOM prose road answers that shape with
+            // imageChapterFrom's exact rule before its own
+            // failure; the AJAX road threw here first, so
+            // B2's fetcher-seam evidence pass never saw the
+            // HTML and the chapter died as "paid or locked".
+            // Run the same rule on the payload fragment: a
+            // real page-image set serves the chapter as an
+            // image chapter (the pages record is stashed for
+            // the fetcher exactly as the DOM road stashes
+            // it); anything less keeps the typed empty-text
+            // failure standing, unchanged.
+            imageChapterFrom(fragment, chapter, chapter.id, title)
+                ?.let { return it }
+            throw SourceException(AJAX_TEXT_EMPTY_MESSAGE)
+        }
+        val html = served.html()
         val doc = Jsoup.parseBodyFragment(html, chapter.id)
         cacheChapter(chapter.id, doc)
         return SourceChapterContent(html = html, title = title)
     }
+
+    /**
+     * v1.5.3 (item 5b): the chapter fragment a content spec
+     * names as an EMBEDDED-JSON dot path — each candidate of
+     * the (possibly chained) content spec is tried as a dot
+     * path over the page's embedded roots, and the first that
+     * resolves to text wins: a string primitive is the
+     * fragment; an array contributes its string items, one
+     * per line. The spec's remove rules apply to the result
+     * exactly as they do to a DOM-sourced fragment. Null when
+     * no candidate resolves to text (the caller's ordinary
+     * failure then stands).
+     */
+    private fun embeddedContentHtml(
+        doc: Document,
+        contentSpec: String,
+        pageUrl: String
+    ): String? {
+        val roots = EmbeddedJson.rootsForRead(doc)
+        if (roots.isEmpty()) return null
+        for (candidate in SelectorChains.split(contentSpec)) {
+            val path = SelectorSpec.parse(candidate).css
+                .takeIf { it.isNotBlank() } ?: continue
+            for (root in roots) {
+                val node = EmbeddedJson.resolve(root, path)
+                    ?: continue
+                val text = when (node) {
+                    is JsonPrimitive -> node
+                        .takeIf { it.isString }?.contentOrNull
+                    is kotlinx.serialization.json.JsonArray ->
+                        node.mapNotNull { item ->
+                            (item as? JsonPrimitive)
+                                ?.takeIf { it.isString }
+                                ?.contentOrNull
+                        }.filter { it.isNotBlank() }
+                            .joinToString("\n")
+                            .takeIf { it.isNotBlank() }
+                    else -> null
+                }?.takeIf { it.isNotBlank() } ?: continue
+                val fragment = Jsoup.parseBodyFragment(text, pageUrl)
+                for (removeSel in config.chapter.remove) {
+                    for (sel in SelectorChains.split(removeSel)) {
+                        runCatching { fragment.select(sel).remove() }
+                    }
+                }
+                return fragment.body().html()
+            }
+        }
+        return null
+    }
+
+    // ── v1.5.3 (item 15): the gallery illustration harvest ──
+
+    /** The chapter-list roads' exit: when the config carries
+     * an illustrations spec, resolving a book's chapter list
+     * also harvests its gallery ONCE (the result rides
+     * [galleryLeads] into [chapterContent]). A gallery that
+     * fails, or yields nothing, never breaks the book — the
+     * chapters return exactly as they were. */
+    private fun withGalleryLeads(
+        chapters: List<SourceChapter>,
+        pageUrl: String
+    ): List<SourceChapter> {
+        if (config.illustrations != null && chapters.isNotEmpty()) {
+            try {
+                harvestGalleryLeads(pageUrl, chapters)
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // A broken gallery page costs the illustrations,
+                // never the chapter list.
+            }
+        }
+        return chapters
+    }
+
+    /** Fetch the book's gallery page and map its images onto
+     * the chapters they open. Runs at most once per book per
+     * source instance, however the harvest turns out. */
+    private fun harvestGalleryLeads(
+        bookUrl: String,
+        chapters: List<SourceChapter>
+    ) {
+        val spec = config.illustrations ?: return
+        if (!galleryHarvested.add(bookUrl)) return
+        val galleryUrl = absolute(
+            spec.urlTemplate.replace("{bookUrl}", bookUrl), bookUrl
+        )
+        val doc = runCatching { fetchDoc(galleryUrl) }.getOrElse { error ->
+            if (error is kotlinx.coroutines.CancellationException) {
+                throw error
+            }
+            return
+        }
+        for ((chapterId, urls) in
+            galleryLeadsFor(doc, spec, chapters, galleryUrl)
+        ) {
+            galleryLeads[chapterId] = urls
+        }
+    }
+
+    /**
+     * Map a fetched gallery page's images to chapters. With a
+     * [IllustrationsSpec.groupSelector], each group element
+     * names its volume (its text carries "Volume N") and its
+     * images lead the first chapter in list order whose name
+     * carries the same volume. When grouping can't be parsed
+     * reliably — a group without a volume, a volume with no
+     * chapter — the §5.2 fallback applies: ALL the gallery's
+     * images lead the book's first chapter. The same fallback
+     * serves the ungrouped shape (no groupSelector declared).
+     */
+    private fun galleryLeadsFor(
+        doc: Document,
+        spec: IllustrationsSpec,
+        chapters: List<SourceChapter>,
+        galleryUrl: String
+    ): Map<String, List<String>> {
+        val groupSel = spec.groupSelector?.takeIf { it.isNotBlank() }
+        if (groupSel != null) {
+            val groups = selectAllChained(doc, groupSel)?.first
+            if (!groups.isNullOrEmpty()) {
+                val byVolume = LinkedHashMap<Int, MutableList<String>>()
+                var grouped = true
+                for (group in groups) {
+                    val volume = volumeNumberOf(group.text())
+                    if (volume == null) {
+                        grouped = false
+                        break
+                    }
+                    val images = galleryImageUrls(group, spec, galleryUrl)
+                    if (images.isNotEmpty()) {
+                        byVolume.getOrPut(volume) { mutableListOf() }
+                            .addAll(images)
+                    }
+                }
+                if (grouped && byVolume.isNotEmpty()) {
+                    val leads = mutableMapOf<String, List<String>>()
+                    var allMapped = true
+                    for ((volume, images) in byVolume) {
+                        val opening = chapters.firstOrNull {
+                            volumeNumberOf(it.name) == volume
+                        }
+                        if (opening == null) {
+                            allMapped = false
+                            break
+                        }
+                        leads[opening.id] = images
+                    }
+                    if (allMapped) return leads
+                }
+            }
+        }
+        val all = galleryImageUrls(doc, spec, galleryUrl)
+        if (all.isEmpty()) return emptyMap()
+        return mapOf(chapters.first().id to all)
+    }
+
+    /** The image URLs under [container] the illustrations
+     * spec names — the selector@attr form, read through the
+     * same lazy ladder as every engine image read (a spec
+     * with no @attr reads the element's src through that
+     * ladder). Absolutised against the gallery page, web
+     * URLs only, duplicates collapsed, page order kept. */
+    private fun galleryImageUrls(
+        container: Element,
+        spec: IllustrationsSpec,
+        galleryUrl: String
+    ): List<String> {
+        val (elements, parsed) = selectAllChained(
+            container, spec.imageSelector
+        ) ?: return emptyList()
+        return elements.mapNotNull { el ->
+            val raw = if (parsed.attr != null) {
+                readFrom(el, parsed)
+            } else {
+                readAttr(el, "src")
+            }?.trim()?.ifEmpty { null } ?: return@mapNotNull null
+            absolute(raw, galleryUrl)
+        }.filter {
+            it.startsWith("http://") || it.startsWith("https://")
+        }.distinct()
+    }
+
+    /** All elements the first matching candidate of a
+     * (possibly chained) selector matches under [container],
+     * with the candidate that matched — [selectChained]'s
+     * all-matches twin, for reads that need every element
+     * (gallery images) rather than one row per container. */
+    private fun selectAllChained(
+        container: Element,
+        rawSpec: String
+    ): Pair<List<Element>, SelectorSpec>? {
+        for (candidate in SelectorChains.split(rawSpec)) {
+            val spec = SelectorSpec.parse(candidate)
+            if (spec.css.isBlank()) continue
+            val found = runCatching { container.select(spec.css) }
+                .getOrNull()
+            if (!found.isNullOrEmpty()) return found.toList() to spec
+        }
+        return null
+    }
+
+    /** The volume a gallery group heading or a chapter name
+     * declares ("Volume 3", "Vol. 2"), or null when it names
+     * none — the only volume signal the gallery mapping
+     * trusts (§5.2: no invented heuristics). */
+    private fun volumeNumberOf(text: String): Int? =
+        VOLUME_LABEL.find(text)?.groupValues?.get(1)?.toIntOrNull()
 
     // ── helpers ─────────────────────────────────────────────────────
 
@@ -3163,9 +5683,81 @@ class DeclarativeSource(
 
     private fun bookPageUrl(book: SourceBook): String =
         if (book.id.startsWith("http://") || book.id.startsWith("https://")) {
-            book.id
+            healedStoredBookUrl(book.id)
         } else {
             resolveUrl(book.id)
+        }
+
+    /** v1.5.9 (Finding 2 §5.1): the permissions the stored-URL
+     * heal judges against — the row's REAL permissions object
+     * when the rendered-session seam carries one (the seam
+     * ExtensionService builds for installed sources), else the
+     * permissions derived from this config itself
+     * ([derivedPermissions]). A real object with no allowed
+     * domains at all (a corrupt/blank row) falls back to the
+     * derivation too: the config is the source's own
+     * declaration of where its books live. */
+    private fun healPermissions(): ExtensionPermissions =
+        sessionAccess?.permissions
+            ?.takeIf { it.allowedDomains().isNotEmpty() }
+            ?: derivedPermissions(config)
+
+    /** v1.5.9 (Finding 2 §5.1): heal a STORED book URL at the
+     * walk's door. The definition and the allowed-hosts guard
+     * are both correct; a book record's address can predate
+     * the definition's host (a DOM-anchor-era catalogue read,
+     * a re-pointed link row), and no road ever corrected it —
+     * the render guard then refused the walk's first fetch
+     * for a host the definition never chose. The host part of
+     * a stored address is the source's own to correct (the
+     * MirrorHosts principle): when the stored host is outside
+     * this source's allowed hosts — the
+     * [ExtensionPermissions.allows] rule, equals-or-subdomain
+     * after normaliseHost — the URL is re-hosted onto the
+     * config's baseUrl (scheme + authority from baseUrl; path,
+     * query and fragment — the book's identity — preserved).
+     * An allowed host (the base host, or any subdomain of an
+     * allowed domain) is returned BYTE-IDENTICAL. A URL whose
+     * host cannot be read, or whose re-host cannot be built,
+     * is returned untouched — today's honest errors then stand
+     * exactly as they did. No foreign host is ever added to
+     * any definition and [ExtensionPermissions.allows] is
+     * never loosened: this corrects the address TO the allowed
+     * set, never widens the set. */
+    internal fun healedStoredBookUrl(stored: String): String {
+        val host = CookieParsing.hostOf(stored)
+            ?.takeIf { it.isNotEmpty() } ?: return stored
+        if (healPermissions().allows(host)) return stored
+        val storedUri = runCatching { URI(stored) }.getOrNull()
+            ?: return stored
+        val baseUri = runCatching { URI(config.baseUrl) }.getOrNull()
+            ?: return stored
+        val scheme = baseUri.scheme?.takeIf { it.isNotBlank() }
+            ?: return stored
+        val authority = baseUri.authority?.takeIf { it.isNotBlank() }
+            ?: return stored
+        return runCatching {
+            URI(
+                scheme, authority,
+                storedUri.path, storedUri.query, storedUri.fragment
+            ).toString()
+        }.getOrDefault(stored)
+    }
+
+    /** The id a details read reports for [book] after a walk
+     * of [walkedUrl]: the healed address when the walk healed
+     * the stored one (so the SourceBook the sync path receives
+     * carries the corrected remote id), the stored id
+     * untouched in every other case — a relative id that
+     * merely RESOLVED against the base URL keeps its stored
+     * form, exactly as before. */
+    private fun healedBookId(book: SourceBook, walkedUrl: String): String =
+        if ((book.id.startsWith("http://") ||
+                book.id.startsWith("https://")) && walkedUrl != book.id
+        ) {
+            walkedUrl
+        } else {
+            book.id
         }
 
     private fun fetchDoc(url: String): Document {
@@ -3173,7 +5765,31 @@ class DeclarativeSource(
         if (response.status !in 200..299) {
             throw SourceException("the site answered HTTP ${response.status}")
         }
-        return Jsoup.parse(response.body, response.finalUrl.ifBlank { url })
+        // v1.5.35 (Item 5): the q-data pre-step — a Qwik City
+        // payload is rewritten as the plain record envelope
+        // (QDataResolve) before any read sees it; every other
+        // body passes through byte-identical (shape-guarded).
+        val body = QDataResolve.transformBody(response.body)
+        val finalUrl = response.finalUrl.ifBlank { url }
+        // v1.5.2 (FIX-16): a bare-JSON answer must reach
+        // EmbeddedJson as TEXT. Jsoup's HTML parser eats
+        // markup-shaped bytes inside JSON strings (a
+        // synopsis carrying <p> tags loses ~1.7 KB of the
+        // payload and the result no longer parses as JSON —
+        // ScrollersPub's catalogue read as ZERO rows while
+        // markup-free payloads like FenrirRealm's survived).
+        // Present the body the way a browser presents a JSON
+        // response: one <pre> text node, which
+        // EmbeddedJson.bodyJson already prefers. DOM reads
+        // on such a page find nothing — correct: a pure-JSON
+        // page was never DOM data.
+        val trimmed = body.removePrefix("\uFEFF").trimStart()
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            val doc = Jsoup.parse("", finalUrl)
+            doc.body().appendElement("pre").appendText(body)
+            return doc
+        }
+        return Jsoup.parse(body, finalUrl)
     }
 
     private fun resolveUrl(raw: String): String =
@@ -3301,7 +5917,18 @@ class DeclarativeSource(
             else -> element.attr(attr)
         }
         val resolved = value.ifBlank { element.attr(attr).ifBlank { null } }
-        if (resolved != null) return resolved
+        // v1.5.3 (finding #3, item 13 mechanism): a `data:` URI
+        // in an img's src is a PLACEHOLDER the site's scripts
+        // would have replaced (the NovelFire shape: a 1×1
+        // transparent gif in src, the real cover in data-src)
+        // — it counts as BLANK, so the lazy fallthrough below
+        // fires exactly as it does for an empty src. Any other
+        // non-blank value keeps winning, exactly as before.
+        val placeholder = resolved != null &&
+            attr.equals("src", ignoreCase = true) &&
+            element.tagName().equals("img", ignoreCase = true) &&
+            resolved.startsWith("data:", ignoreCase = true)
+        if (resolved != null && !placeholder) return resolved
         // v1.3.3 (V132-CHECK 2, scope S2): LAZY COVERS. Image
         // hosts in the NovelFire family ship the cover in a
         // lazy attribute (data-src and kin) with an empty or
@@ -3342,6 +5969,43 @@ class DeclarativeSource(
             "1", "first", "oldest", "«", "« first", "first page"
         )
 
+        /** v1.5.3 (finding #2, item 6): the marker a
+         * shape-miss failure carries in its detail, so the
+         * catalogue layer can give it its own words (the
+         * SiteCheck marker pattern). */
+        /** v1.5.8 (D2 rule 1): a bare element-name selector —
+         * the unscoped sweep shape (`a`, `li`, `div`) that
+         * names no chapter container. */
+        private val BARE_TAG_SELECTOR =
+            Regex("^[a-zA-Z][a-zA-Z0-9-]*$")
+
+        const val SHAPE_MISS_MARKER = "page-shape-not-understood"
+
+        /** v1.5.9 (Finding 2 §5.1): the permissions a config
+         * declares on its own — base host + [DeclarativeConfig]
+         * extraDomains, normalised exactly as RepoManager's
+         * bundled derivation writes them (RepoManager's
+         * installOneBundledDefault insert/REPLACE derivation).
+         * The heal at the walk's door derives its allowed set
+         * from here whenever the row's real permissions object
+         * is not reachable through the rendered-session seam;
+         * a test pins the two derivations in agreement. */
+        internal fun derivedPermissions(
+            config: DeclarativeConfig
+        ): ExtensionPermissions = ExtensionPermissions(
+            domains = listOf(config.baseUrl.normaliseHost()) +
+                config.extraDomains
+        )
+
+        /** The shape-miss failure detail: the marker, then
+         * the plain words (kept free of every session-need
+         * trigger phrase — a shape miss is not a sign-in or
+         * check state). */
+        fun shapeMissDetail(): String =
+            "$SHAPE_MISS_MARKER: this source's page shape " +
+                "isn't understood yet — its page carried data " +
+                "the app couldn't read"
+
         /** v1.3.3 (V132-CHECK 21): one chapter walk's hard
          * wall-clock budget (see [walkBudgetMs]). */
         const val WALK_BUDGET_MS: Long = 150_000L
@@ -3352,16 +6016,76 @@ class DeclarativeSource(
          * in flight is the 2 GB-tier-safe cap. */
         const val LIST_BATCH_PAGES: Int = 3
 
-        /** v1.3.3 (synopsis ladder): a JSON string field in a
-         * plain payload — `"description": "…"`, value captured
-         * with its escapes intact for the JSON decoder. */
-        private val PAYLOAD_FIELD_PLAIN =
-            Regex(""""(description|synopsis)"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+        /** v1.5.2 fix (FIX-1c): the payload-field regexes that
+         * used to live here recursed once per matched character
+         * in the JDK regex engine (a `*` over an alternation),
+         * so a book whose synopsis ran long overflowed the
+         * stack inside the details read: the BOTI test-drive
+         * died with a bare StackOverflowError on exactly such
+         * a book. Extraction is the linear hand-rolled scan in
+         * payloadFieldValues now; the regexes are gone. */
 
-        /** The same field inside an escaped payload (an RSC
-         * stream is a JS string: its quotes arrive as \"). */
-        private val PAYLOAD_FIELD_ESCAPED =
-            Regex("""\\"(description|synopsis)\\"\s*:\s*\\"((?:[^\\]|\\.)*?)\\"""")
+        /** v1.5.5 (§2): per-source endpoint-walk locks (see
+         * withEndpointWalkLock) — process-wide because
+         * DeclarativeSource instances are rebuilt per
+         * operation while the WebView they guard is not. */
+        private val ENDPOINT_WALK_LOCKS =
+            java.util.concurrent.ConcurrentHashMap<
+                String, java.util.concurrent.locks.ReentrantLock
+            >()
+
+        /** v1.5.5 (§2): the three-tier endpoint law's
+         * distinguishable markers, riding in the
+         * SourceException messages so diagnostics (and the
+         * catalogue's own wording) can name WHICH tier fired:
+         * the declared array path stopped resolving (the
+         * envelope drifted), rows arrived but none survived
+         * record validation (the record shape drifted), and
+         * the suspicious empty (the endpoint answered [] while
+         * the book declares chapters). */
+        const val ENDPOINT_SHAPE_MISS_MARKER =
+            "endpoint-shape-not-understood"
+        const val ENDPOINT_RECORD_SHAPE_MISS_MARKER =
+            "endpoint-records-not-understood"
+        const val ENDPOINT_SUSPICIOUS_EMPTY_MARKER =
+            "endpoint-answered-empty-against-a-stated-total"
+
+        /** v1.5.37 (combined build, item 4): the suspicious
+         * empty whose ONLY chapter-count evidence is the
+         * chapter spec's own declared floor (the hint's
+         * source is "spec totalCount") — nothing on the site
+         * declares chapters for the book. The book page
+         * words this marker as "no chapters on the site
+         * yet" and names no recovery door: there is nothing
+         * to repair (BRIGHTNOVEL-EMPTY-CHAPTERS-CHECK). */
+        const val ENDPOINT_NO_CHAPTERS_YET_MARKER =
+            "endpoint-answered-empty-no-chapters-yet"
+
+        /** v1.5.6 (§1.4, fact ii): the two transports an
+         * endpoint page can be answered by, as the zero-row
+         * log names them. */
+        const val TRANSPORT_IN_CONTEXT = "in-context"
+        const val TRANSPORT_PLAIN = "plain"
+
+        /** v1.5.5 (§3.5): content_format values that name a
+         * delivery form the parser does not support at all —
+         * recognised so the chapter lands on the honest
+         * "isn't supported yet" state instead of the mint
+         * road (a mint cannot make a scrambled/image-only
+         * payload readable) or a blank success. */
+        private val UNSUPPORTED_FORMATS = setOf(
+            "scrambled", "obfuscated", "image", "images",
+            "image_only", "canvas", "pdf"
+        )
+
+        /** v1.5.5 (§3.5): the honest unsupported-chapter
+         * wording (carries
+         * [FetchClassification.UNSUPPORTED_MARKER]). */
+        const val UNSUPPORTED_CHAPTER_MESSAGE: String =
+            "${FetchClassification.UNSUPPORTED_MARKER}: " +
+                "this chapter is served in a form the app " +
+                "can't read yet — the site answered, but not " +
+                "with readable text"
 
         /** v1.3.2 (item 71): a row label that repeats its own
          * chapter number as a glued prefix — "101Chapter 101
@@ -3446,6 +6170,11 @@ class DeclarativeSource(
         /** The AJAX mode's JSON reader: the tree's existing
          * kotlinx.serialization (no new dependency). */
         private val ajaxJson = Json { ignoreUnknownKeys = true; isLenient = true }
+
+        /** v1.5.3 (item 15): the volume label a gallery
+         * group heading or a chapter name carries. */
+        private val VOLUME_LABEL =
+            Regex("(?i)\\bvol(?:ume)?\\.?\\s*(\\d+)")
 
         /** v1.3.0 delta (item 50): call-to-action labels that
          * book pages render inside chapter-list regions. A row

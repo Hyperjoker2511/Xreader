@@ -1,0 +1,16 @@
+STAGE analyseListingPage(home): OK -> null
+STAGE analyseListingPage(latest): OK -> count=24 sel=main#main-content > div.mx-auto.w-full > div > div.grid.gap-4 > div
+STAGE analyseBookPage(book): OK -> title=Eternal Holy Emperor chapters=20 first=https://novelbuddy.me/eternal-holy-emperor/chapter-2198-2024-the-arrival-of-a-formidable-enemy
+STAGE analyseChapterPage(chapter): OK -> sel=body > div textLen=7618
+STAGE isJsShell(home): OK -> false
+STAGE needsLogin(home): OK -> false
+STAGE probe[book] https://novelbuddy.me/eternal-holy-emperor: OK -> Ready title='Eternal Holy Emperor' chapters=50 textLen=7618 searchVerified=false
+STAGE probe[root] https://novelbuddy.me/: OK -> Failed: That link opened the site's home page. Xreader looked for a book there to learn from, but couldn't read one well enough to build the source. Paste one book's page instead — the one with the whole chapter list. | stages=
+STAGE probe[latest] https://novelbuddy.me/latest: OK -> Failed: That link opened the site's home page. Xreader looked for a book there to learn from, but couldn't read one well enough to build the source. Paste one book's page instead — the one with the whole chapter list. | stages=API discovery — endpoints: the pages point at API endpoints: https://novelbuddy.me/api/manifest; a book list of 45 sits in the page data at props.pageProps.genres
+STAGE probe[book-com] https://novelbuddy.com/eternal-holy-emperor: OK -> Failed: Xreader could read that book, but it couldn't find the site's book list — the page that lists all its books. A source without a book list would open empty, so nothing was saved. If the site has a page that lists its books (often called Latest, Browse or Library), paste that page's link instead. | stages=inference — book list: the book read fine, but no page on the site gave a readable book list — a source needs one, so these rules weren't saved ;; inference — book list: the book read fine, but no page on the site gave a readable book list — a source needs one, so these rules weren't saved
+STAGE probe[root-com] https://novelbuddy.com/: OK -> Failed: That link opened the site's home page. Xreader looked for a book there to learn from, but couldn't read one well enough to build the source. Paste one book's page instead — the one with the whole chapter list. | stages=
+STAGE addRepoOrDetect(https://novelbuddy.com): OK -> Failed ProviderDown(serviceId=server, httpCode=404, retryable=false, detail=null)
+STAGE addRepoOrDetect(https://novelbuddy.me): OK -> Failed ProviderDown(serviceId=server, httpCode=404, retryable=false, detail=null)
+STAGE addRepoOrDetect(https://novelbuddy.me/): OK -> Failed ProviderDown(serviceId=server, httpCode=404, retryable=false, detail=null)
+STAGE addRepoOrDetect(https://novelbuddy.me/eternal-holy-emperor): OK -> Failed ProviderDown(serviceId=server, httpCode=404, retryable=false, detail=null)
+STAGE addRepoOrDetect(novelbuddy.me): OK -> Failed ProviderDown(serviceId=server, httpCode=404, retryable=false, detail=null)

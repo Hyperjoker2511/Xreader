@@ -2,6 +2,8 @@ package app.xreader
 
 import android.app.Application
 import app.xreader.core.error.CrashGuard
+import app.xreader.core.error.ExitInfoHarvest
+import app.xreader.core.error.StallWatchdog
 import app.xreader.di.AppContainer
 import app.xreader.di.AppImageLoader
 import coil.ImageLoader
@@ -27,6 +29,13 @@ class XreaderApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         CrashGuard.install(this)
+        // v1.5.11 (ANR forensics): the stall watchdog starts
+        // with the process (all devices — it is Android 9's
+        // only forensics layer; it costs nothing while the
+        // main thread is healthy), and the system exit-record
+        // harvest runs off-thread (API 30+; a no-op below).
+        StallWatchdog.start(this)
+        ExitInfoHarvest.harvestAsync(this)
         container = AppContainer(this)
     }
 

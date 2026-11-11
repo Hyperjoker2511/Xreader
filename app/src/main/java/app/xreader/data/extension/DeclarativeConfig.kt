@@ -42,6 +42,18 @@ data class DeclarativeConfig(
      * Read by the probe's lane drive; null (every config
      * written before it existed) = no hint, exactly as before. */
     val renderWaitSelector: String? = null,
+    /** v1.5.8 (D1 / F2-F2): a declared render budget in
+     * milliseconds for sources whose pages demonstrably need
+     * longer than the default settle clock (BrightNovel's
+     * observed ~40 s). Threaded exactly like
+     * [renderWaitSelector] (live-read lambda in
+     * ExtensionService → EscalatingPageFetcher →
+     * fetchRendered); the effective deadline is this budget
+     * when present, the progress-extended default otherwise,
+     * always under the F1 ceiling. Null (every config written
+     * before it existed) = no declared budget, exactly as
+     * before. */
+    val renderBudgetMs: Long? = null,
     /** v1.0.1: a book page on this site that probing proved readable
      * — the "Set up search" retry re-detects from this page. */
     val sampleBookUrl: String? = null,
@@ -134,7 +146,26 @@ data class DeclarativeConfig(
      * inherit the rating from the index's own flag. See
      * [ContentRating] / [ContentAccess]. Defaulted SAFE so
      * every older config decodes unchanged. */
-    val contentRating: ContentRating = ContentRating.SAFE
+    val contentRating: ContentRating = ContentRating.SAFE,
+    /** v1.5.3 (finding #4, fix 3): cover-URL deny patterns — any
+     * resolved cover URL containing one of these as a substring is
+     * treated as NO cover at ingestion, so the app's generated
+     * placeholder shows instead of site chrome (LNT serves its
+     * membership plugin's banner wordmark in the cover slot of
+     * series that have no cover art at all). Plain substring match
+     * on the final absolutised URL; empty (every config written
+     * before) = nothing denied, exactly as before. */
+    val coverDenyPatterns: List<String> = emptyList(),
+    /** v1.5.3 (finding #4, fix 1): the series ILLUSTRATIONS
+     * gallery — some sites keep a book's illustrations on a
+     * separate gallery page instead of inside its chapters (LNT's
+     * `?tab=novel_illustrations`). When declared, the engine
+     * harvests the gallery and attaches each volume's images as
+     * leading image blocks of that volume's opening chapter
+     * (frontispiece placement — the site unmoors the art from the
+     * prose, so exact positions are unrecoverable). Null (every
+     * config written before) = no gallery, exactly as before. */
+    val illustrations: IllustrationsSpec? = null
 )
 
 /**
@@ -151,7 +182,13 @@ data class CredentialSpec(
     /** Replay a named session cookie as a header to exact hosts. */
     val headerBinding: HeaderBinding? = null,
     /** Mint + carry a short-lived operation (read) token. */
-    val operationToken: OperationTokenSpec? = null
+    val operationToken: OperationTokenSpec? = null,
+    /** v1.5.2 (§10 item 1): static headers the site's own client
+     * sends on every call to its API hosts, harvested when the
+     * source was learned and replayed verbatim (BOTI's
+     * `lang` / `site-domain`). Empty for sources whose sites
+     * send none. */
+    val staticHeaders: List<StaticHeaderBinding> = emptyList()
 )
 
 /**
@@ -183,6 +220,60 @@ data class HeaderBinding(
     fun headerValue(cookieValue: String?): String? {
         val value = cookieValue?.takeIf { it.isNotBlank() } ?: return null
         return prefix + value
+    }
+}
+
+/**
+ * v1.5.2 (§10 item 1): a STATIC header replayed verbatim to
+ * exact hosts — one of the headers the site's own client
+ * attaches to every API call (its interceptor shape), captured
+ * by the harvest when the source was learned. Unlike
+ * [HeaderBinding] the value is a constant, not a session
+ * cookie: BOTI's API answers a different road without
+ * `lang: en_US` and `site-domain: <web host>` than with them,
+ * so a derived road that drops them is not the site's road.
+ * Sent to [hosts] ONLY (exact host match, normalised); a
+ * caller's own header of the same name is replaced on those
+ * hosts, exactly as with a binding.
+ */
+@Serializable
+data class StaticHeaderBinding(
+    val headerName: String,
+    val value: String,
+    val hosts: List<String> = emptyList(),
+    /** v1.5.3 (round-16 amendment B): the scheme this binding
+     * was learned on, when the harvest recorded one. A pinned
+     * binding applies ONLY to that scheme — a header learned
+     * over https is never replayed onto an unencrypted http
+     * fallback of the same host. Null (every config written
+     * before this field, bundled/pack configs that don't set
+     * it, and bindings whose harvest mixed schemes) keeps
+     * the legacy host-only behaviour. */
+    val scheme: String? = null
+) {
+    /** Legacy host-only match — unchanged behaviour for
+     * callers that don't know the request scheme. */
+    fun appliesTo(host: String): Boolean {
+        val h = host.normaliseHost()
+        return hosts.any { it.normaliseHost() == h }
+    }
+
+    /** Scheme-aware match: the host must match AND, when this
+     * binding pins a [scheme], the request's scheme must
+     * equal it (case-insensitive). A pinned binding fails
+     * CLOSED on an unknown request scheme — a credential-
+     * shaped header is never sent on a scheme it wasn't
+     * learned on. A scheme-less binding matches on host
+     * alone, exactly as before. */
+    fun appliesTo(host: String, scheme: String?): Boolean {
+        if (!appliesTo(host)) return false
+        val pinned = this.scheme
+            ?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+            ?: return true
+        val actual = scheme
+            ?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+            ?: return false
+        return pinned == actual
     }
 }
 
@@ -277,6 +368,22 @@ data class ListSpec(
     val nextPage: String? = null,
     /** v1.0.1: "GET" (default) or "POST" — POST search forms exist. */
     val method: String = "GET",
+    /** v1.5.2 (FIX-14, the Lnori gap G1): LOCAL-FILTER search.
+     * Some sites have no server search at all — their own
+     * search is a client-side filter over the whole catalogue
+     * (Lnori's service worker filters /library; the LnMTL
+     * shape is the same). Under this flag, [url] names the
+     * source's single-page CATALOGUE (not a search endpoint):
+     * search fetches it once, reads its rows with this spec's
+     * own selectors, and returns the rows whose normalised
+     * title OR author contains the normalised query — the
+     * site's own semantics. The catalogue is memoised per
+     * source instance, so a search session pays one fetch.
+     * Only meaningful on the search spec of a source whose
+     * catalogue is a single page. Default false (every spec
+     * written before v1.5.2) = server search, exactly as
+     * before. */
+    val localFilter: Boolean = false,
     /** For POST listings: the form body template, may use {query}. */
     val body: String? = null,
     /** v1.1.0 (design §6.1, Shape B): the Book-Shape Rule for
@@ -316,7 +423,15 @@ data class ListSpec(
      * path a relative resolve would produce). "{value}" is
      * the field's value. Null = the field value resolves
      * against the listing URL like any cover. */
-    val jsonCoverTemplate: String? = null
+    val jsonCoverTemplate: String? = null,
+    /** v1.5.2 (§7 tier 1): the per-item kind field — a record field
+     * (JSON mode) or selector (DOM mode) whose value, mapped through
+     * [kindValueMap], decides THAT BOOK's kind. Null (every spec
+     * written before v1.5.2) = no tier-1 evidence. */
+    val kindField: String? = null,
+    /** v1.5.2 (§7): raw listing value → "TEXT"/"MANGA". Any value
+     * absent from the map is UNKNOWN — never guessed. */
+    val kindValueMap: Map<String, String> = emptyMap()
 )
 
 /** The book page: fills details and carries the chapter list. When the
@@ -327,7 +442,58 @@ data class DetailsSpec(
     val author: String? = null,
     val description: String? = null,
     val cover: String? = null,
+    /** v1.5.3 (finding #3, fix A4.2): the cover inside a JSON
+     * book payload — the dot path of the cover field in the
+     * series endpoint's JSON (fenrirrealm's `cover`), for sources
+     * whose book document IS a JSON payload where the DOM/og:image
+     * steps can never see it. Mirrors the list spec's JSON cover.
+     * Null (every spec written before) = no JSON cover binding. */
+    val jsonCover: String? = null,
+    /** v1.5.3 (finding #3, fix A4.2): builds the details cover
+     * from the [jsonCover] field's value when the value is a bare
+     * storage path rather than a resolvable URL ("{value}" is the
+     * field's value) — the details twin of the list spec's
+     * `jsonCoverTemplate`. Null = the value resolves against the
+     * book URL like any cover. */
+    val jsonCoverTemplate: String? = null,
+    /** v1.5.8 (B1 / F3 Fix 1): the per-book kind field of the
+     * DETAILS document — the twin of [ListSpec.kindField]. A
+     * both-kinds source's own book document carries the same
+     * kind evidence its listings carry (FenrirRealm's series
+     * payload `type`); reading it at details time is what lets
+     * a kindless or mis-filed row HEAL on its next book-page
+     * refresh instead of staying wrong forever. In JSON mode
+     * this names a record field (read via
+     * `EmbeddedJson.stringAt`, the listing pattern); in DOM
+     * mode it is a selector spec read off the document.
+     * Null (every spec written before v1.5.8) = the details
+     * document carries no tier-1 evidence, exactly as before. */
+    val kindField: String? = null,
+    /** v1.5.8 (B1): raw details value → "TEXT"/"MANGA" — the
+     * twin of [ListSpec.kindValueMap]. Any value absent from
+     * the map is UNKNOWN — never guessed (an unmapped value
+     * is recorded in DiagnosticLog by the parse, B5). */
+    val kindValueMap: Map<String, String> = emptyMap(),
     val chapters: ChapterListSpec
+)
+
+/**
+ * v1.5.3 (finding #4, fix 1): a series illustrations gallery.
+ * The gallery page is fetched once per book; its images are
+ * downloaded through the book's own image pipeline and attached
+ * as leading image blocks of each volume's opening chapter.
+ */
+@Serializable
+data class IllustrationsSpec(
+    /** Gallery page URL; `{bookUrl}` expands to the book's canonical URL. */
+    val urlTemplate: String,
+    /** Attr spec for the gallery's image elements, in the engine's usual
+     *  selector@attr form (e.g. "img@src"); read through the same
+     *  lazy-attribute ladder as listing covers. */
+    val imageSelector: String,
+    /** Optional selector for the element that groups images by volume
+     *  (its text carries the volume heading); null = one ungrouped set. */
+    val groupSelector: String? = null
 )
 
 /** [list] selects one chapter row; [name]/[link] resolve within it
@@ -404,7 +570,20 @@ data class ChapterListSpec(
      * URL's last segment, `{bookId}` the pagination book id.
      * Null = the field value IS the link (resolved against
      * the page like any href). */
-    val jsonLinkTemplate: String? = null
+    val jsonLinkTemplate: String? = null,
+    /** v1.5.2 (FIX-17): the PANELLED chapter-list mode. Some
+     * sites split a book's chapter list across volume panels:
+     * the book page itself links each panel (Light Novel
+     * Translations: `?tab=table_contents&lnt_volume=<id>`), and
+     * each panel page renders that volume's rows with the SAME
+     * row spec. When [panelSelector] (a selector for the panel
+     * LINK anchors on the book page) is set, the chapter list
+     * is the concatenation of every panel's rows in panel
+     * order — the book page's inline rows are NOT seeded (the
+     * first panel covers them), and the pagination walk does
+     * not run. Null (every spec written before) = the ordinary
+     * single-page list, exactly as before. */
+    val panelSelector: String? = null
 ) {
 
     /** The chapter total the book page's visible text states,
