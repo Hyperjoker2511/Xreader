@@ -38,6 +38,22 @@ profileinstaller = "1.4.1"
 injekt = "91edab2317"
 androidxPreference = "1.2.1"
 logcat = "0.4"
+# v1.5.6 (§3): Readium Kotlin EPUB carrier, pinned 3.1.2 — the newest
+# line whose AARs fit compileSdk 36 + Kotlin 2.2.21 unchanged (3.4.0
+# demands compileSdk 37; see build-logs/V156-CARRIER-VERIFICATION.md).
+# Desugaring is a hard Readium requirement; 2.1.5 is the known-good
+# pairing for AGP 8.7.3 (the 3.1.2 AARs themselves name 2.0.4).
+readium = "3.1.2"
+desugarJdkLibs = "2.1.5"
+# v1.5.6: Readium's media3 transitives flip Guava resolution to the
+# empty listenablefuture stub, breaking ML Kit/CameraX's
+# ListenableFuture access — pin the real Guava (android flavour).
+guava = "33.3.1-android"
+# v1.5.7 (Komikku full): the donor's tiling page view — Tachiyomi's
+# fork of SubsamplingScaleImageView, at the exact commit the donor
+# pins (research/komikku gradle/libs.versions.toml:50). JitPack is
+# already a repository in settings.gradle.kts (for Injekt).
+subsamplingScaleImageView = "66e0db195d"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -90,6 +106,12 @@ injekt = { group = "com.github.mihonapp", name = "injekt", version.ref = "injekt
 androidx-preference-ktx = { group = "androidx.preference", name = "preference-ktx", version.ref = "androidxPreference" }
 okhttp-dnsoverhttps = { group = "com.squareup.okhttp3", name = "okhttp-dnsoverhttps", version.ref = "okhttp" }
 logcat = { group = "com.squareup.logcat", name = "logcat", version.ref = "logcat" }
+readium-shared = { group = "org.readium.kotlin-toolkit", name = "readium-shared", version.ref = "readium" }
+readium-streamer = { group = "org.readium.kotlin-toolkit", name = "readium-streamer", version.ref = "readium" }
+readium-navigator = { group = "org.readium.kotlin-toolkit", name = "readium-navigator", version.ref = "readium" }
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
+guava = { group = "com.google.guava", name = "guava", version.ref = "guava" }
+subsampling-scale-image-view = { group = "com.github.tachiyomiorg", name = "subsampling-scale-image-view", version.ref = "subsamplingScaleImageView" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

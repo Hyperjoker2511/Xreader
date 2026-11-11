@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<!-- V154 FIXTURE — documented BrightNovel payload shape (donor: Keiyoushi extensions-source BrightNovels.kt parseSeriesListing / extractPropsFromInertiaRoot; QuickNovel provider table). NOT a live capture: this egress is Cloudflare-walled (HTTP 403, evidence in build-logs/evidence/README-brightnovel-finding3.md). The authenticated-payload leg remains a device-proof item. -->
+<!-- The payload rides in div#app[data-page] exactly as documented; the surrounding header/nav/footer chrome mirrors the chrome-bearing, non-shell page the v1.5.3 diagnosis drove the stale DOM config against (V153-PROOF-FINDING-BRIGHTNOVEL.md, scratch probe 2): a bare shell page would trip the engine's JS-shell guard before the shape-miss guard, which is not the device state this fixture proves. No chrome anchor points under /series/ — the series links exist only inside the payload, which is the whole point of the stale-config miss. -->
+<html><head><title>All Series - BrightNovel</title></head>
+<body>
+<header>
+<nav>
+<a href="/">Home</a>
+<a href="/series">All Series</a>
+<a href="/latest">Latest Updates</a>
+<a href="/ranking">Rankings</a>
+<a href="/login">Sign In</a>
+</nav>
+<h1>All Series</h1>
+<p>Browse the complete BrightNovel library — every translated series, updated daily with new chapters as soon as they are released by their translators.</p>
+</header>
+<main>
+<div id="app" data-page="{&quot;component&quot;:&quot;Series/Index&quot;,&quot;props&quot;:{&quot;seriesList&quot;:{&quot;current_page&quot;:1,&quot;data&quot;:[{&quot;id&quot;:1,&quot;title&quot;:&quot;The Dullard&quot;,&quot;slug&quot;:&quot;the-dullard&quot;,&quot;cover&quot;:{&quot;url&quot;:&quot;/covers/dullard.jpg&quot;}},{&quot;id&quot;:2,&quot;title&quot;:&quot;Second Son&quot;,&quot;slug&quot;:&quot;second-son&quot;,&quot;cover&quot;:{&quot;url&quot;:&quot;https://brightnovels.com/covers/second.jpg&quot;}}],&quot;next_page_url&quot;:null},&quot;auth&quot;:{&quot;user&quot;:null}},&quot;url&quot;:&quot;/series&quot;,&quot;version&quot;:&quot;v1&quot;}"></div>
+</main>
+<footer>
+<p>BrightNovel — read translated web novels online. All series are listed alphabetically and by popularity for easy browsing.</p>
+</footer>
+<script type="module" src="/build/assets/app.js"></script>
+</body></html>

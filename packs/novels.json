@@ -24,11 +24,14 @@
                     "author": null,
                     "nextPage": null,
                     "method": "GET",
+                    "localFilter": false,
                     "body": null,
                     "linkPattern": null,
                     "jsonPath": null,
                     "jsonLinkTemplate": null,
-                    "jsonCoverTemplate": null
+                    "jsonCoverTemplate": null,
+                    "kindField": null,
+                    "kindValueMap": {}
                 },
                 "searchNeedsSetup": false,
                 "needsRendering": false,
@@ -43,11 +46,14 @@
                     "author": null,
                     "nextPage": null,
                     "method": "GET",
+                    "localFilter": false,
                     "body": null,
                     "linkPattern": null,
                     "jsonPath": null,
                     "jsonLinkTemplate": null,
-                    "jsonCoverTemplate": null
+                    "jsonCoverTemplate": null,
+                    "kindField": null,
+                    "kindValueMap": {}
                 },
                 "latest": null,
                 "details": {
@@ -55,6 +61,8 @@
                     "author": null,
                     "description": "p.ln-lead",
                     "cover": "div.ln-dcv img@src",
+                    "jsonCover": null,
+                    "jsonCoverTemplate": null,
                     "chapters": {
                         "list": "div.ln-crow",
                         "name": "span.ln-ct",
@@ -70,7 +78,8 @@
                         "jsonNameField": "name",
                         "jsonLinkField": "url",
                         "jsonEndpointPath": null,
-                        "jsonLinkTemplate": null
+                        "jsonLinkTemplate": null,
+                        "panelSelector": null
                     }
                 },
                 "chapter": {
@@ -92,7 +101,9 @@
                 "credentials": null,
                 "backupHosts": [],
                 "mediaKind": "TEXT",
-                "contentRating": "SAFE"
+                "contentRating": "SAFE",
+                "coverDenyPatterns": [],
+                "illustrations": null
             }
         },
         {
@@ -114,11 +125,14 @@
                     "author": null,
                     "nextPage": null,
                     "method": "GET",
+                    "localFilter": false,
                     "body": null,
                     "linkPattern": null,
                     "jsonPath": null,
                     "jsonLinkTemplate": null,
-                    "jsonCoverTemplate": null
+                    "jsonCoverTemplate": null,
+                    "kindField": null,
+                    "kindValueMap": {}
                 },
                 "searchNeedsSetup": false,
                 "needsRendering": false,
@@ -133,18 +147,23 @@
                     "author": null,
                     "nextPage": null,
                     "method": "GET",
+                    "localFilter": false,
                     "body": null,
                     "linkPattern": null,
                     "jsonPath": null,
                     "jsonLinkTemplate": null,
-                    "jsonCoverTemplate": null
+                    "jsonCoverTemplate": null,
+                    "kindField": null,
+                    "kindValueMap": {}
                 },
                 "latest": null,
                 "details": {
                     "title": "h1",
                     "author": ".author-content a",
                     "description": "div.description-summary div.summary__content",
-                    "cover": null,
+                    "cover": ".summary_image img@data-lazy-src || .summary_image img@data-src || .summary_image img@src",
+                    "jsonCover": null,
+                    "jsonCoverTemplate": null,
                     "chapters": {
                         "list": "a.lunox-chapter-item",
                         "name": "span.lunox-chapter-name",
@@ -174,7 +193,8 @@
                         "jsonNameField": "name",
                         "jsonLinkField": "url",
                         "jsonEndpointPath": null,
-                        "jsonLinkTemplate": null
+                        "jsonLinkTemplate": null,
+                        "panelSelector": null
                     }
                 },
                 "chapter": {
@@ -196,7 +216,9 @@
                 "credentials": null,
                 "backupHosts": [],
                 "mediaKind": "TEXT",
-                "contentRating": "SAFE"
+                "contentRating": "SAFE",
+                "coverDenyPatterns": [],
+                "illustrations": null
             }
         },
         {
@@ -218,11 +240,14 @@
                     "author": null,
                     "nextPage": null,
                     "method": "GET",
+                    "localFilter": false,
                     "body": null,
                     "linkPattern": null,
                     "jsonPath": null,
                     "jsonLinkTemplate": null,
-                    "jsonCoverTemplate": null
+                    "jsonCoverTemplate": null,
+                    "kindField": null,
+                    "kindValueMap": {}
                 },
                 "searchNeedsSetup": false,
                 "needsRendering": false,
@@ -237,18 +262,23 @@
                     "author": null,
                     "nextPage": null,
                     "method": "GET",
+                    "localFilter": false,
                     "body": null,
                     "linkPattern": null,
                     "jsonPath": null,
                     "jsonLinkTemplate": null,
-                    "jsonCoverTemplate": null
+                    "jsonCoverTemplate": null,
+                    "kindField": null,
+                    "kindValueMap": {}
                 },
                 "latest": null,
                 "details": {
                     "title": "h1",
                     "author": ".author-content a",
                     "description": "div.description-summary div.summary__content",
-                    "cover": null,
+                    "cover": ".summary_image img@data-lazy-src || .summary_image img@data-src || .summary_image img@src",
+                    "jsonCover": null,
+                    "jsonCoverTemplate": null,
                     "chapters": {
                         "list": "li.wp-manga-chapter a",
                         "name": "@text",
@@ -278,7 +308,8 @@
                         "jsonNameField": "name",
                         "jsonLinkField": "url",
                         "jsonEndpointPath": null,
-                        "jsonLinkTemplate": null
+                        "jsonLinkTemplate": null,
+                        "panelSelector": null
                     }
                 },
                 "chapter": {
@@ -300,7 +331,9 @@
                 "credentials": null,
                 "backupHosts": [],
                 "mediaKind": "TEXT",
-                "contentRating": "SAFE"
+                "contentRating": "SAFE",
+                "coverDenyPatterns": [],
+                "illustrations": null
             }
         }
     ]

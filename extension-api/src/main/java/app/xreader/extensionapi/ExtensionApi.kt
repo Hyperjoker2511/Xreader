@@ -26,7 +26,11 @@ data class SourceBook(
     val title: String,
     val author: String? = null,
     val coverUrl: String? = null,
-    val description: String? = null
+    val description: String? = null,
+    /** v1.5.2 (§7): per-book kind evidence from the listing itself —
+     * "TEXT" / "MANGA" / null (UNKNOWN). Defaulted so existing
+     * extensions stay source-compatible. */
+    val kind: String? = null
 )
 
 /** One page of catalogue results. */
@@ -45,7 +49,30 @@ data class SourceChapter(
      * e.g. novelight's "09.09.2026"). Defaulted so existing
      * extensions stay source-compatible; the host stores it on
      * the chapter row and renders it relatively ("3 days ago"). */
-    val dateText: String? = null
+    val dateText: String? = null,
+    /** v1.5.8 (E1): the scanlator / translation group the source
+     * credits for this chapter (the donor model's first-class
+     * `SChapter.scanlator`). Defaulted so existing extensions
+     * stay source-compatible; the host normalises it at the
+     * adapter seam (`?.ifBlank { null }?.trim()` — the donor's
+     * own normalisation), stores it on the chapter row and
+     * shows it on chapter rows. Null = the source credits none —
+     * honest absence, never fabricated. */
+    val scanlator: String? = null,
+    /** v1.5.11 (transplant, Verdict 1): the donor model's
+     * per-chapter private state (`SChapter.memo`, a
+     * JsonObject "intended for internal or source-specific
+     * purposes"), carried as its JSON TEXT. An extension
+     * mints this during its chapter-list fetch and may
+     * REQUIRE it back at page-list time (Asura Scans throws
+     * "Refresh Chapter List" when it is missing — and no
+     * refresh could ever help while the host dropped it).
+     * Defaulted so existing extensions stay source-compatible;
+     * the host persists it on the chapter row (schema v12)
+     * and restores it at every reader-road reconstruction.
+     * Null = the source minted none (or an empty object) —
+     * honest absence, never fabricated. */
+    val memo: String? = null
 )
 
 /** One chapter's readable content: an HTML fragment (the host converts

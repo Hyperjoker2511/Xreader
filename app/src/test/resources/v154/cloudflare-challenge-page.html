@@ -1,0 +1,28 @@
+<!--
+  v1.5.4 WS-1 fixture (items 6/8c). PROVENANCE: donor-documented shape.
+  A Cloudflare challenge page of the class the DONOR detection
+  isolates (Komikku CloudflareInterceptor.kt:44-58, copied verbatim
+  into our interceptor): served with 403/503 + "Server: cloudflare",
+  body carrying the challenge-error-title / challenge-error-text
+  elements. This is the auto-solvable JS/captcha class. Modelled on
+  the donor's documented detection contract — NOT a live capture
+  (this machine's egress is Cloudflare-walled; the one genuine
+  capture in build-logs/evidence is the block-wall class, used
+  separately in cloudflare-wall-capture.html).
+-->
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+<title>Attention Required! | Cloudflare</title>
+<meta charset="UTF-8" />
+<meta name="robots" content="noindex, nofollow" />
+</head>
+<body>
+  <div id="cf-wrapper">
+    <div id="cf-error-details" class="cf-error-details-wrapper">
+      <h1 id="challenge-error-title">Checking your browser before accessing the site.</h1>
+      <p id="challenge-error-text">This process is automatic. Your browser will redirect to your requested content shortly.</p>
+    </div>
+  </div>
+</body>
+</html>
