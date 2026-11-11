@@ -23,6 +23,7 @@ import java.io.ByteArrayInputStream
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -30,14 +31,33 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jsoup.Jsoup
 
+/** v1.5.9 (Finding 2 §5.2): the allowed-hosts guard's refusal
+ * detail — it NAMES the judged host, so the book page's error
+ * card and Copy details convict the mechanism unaided (the
+ * v1.5.8 wording named neither the host nor the book address,
+ * and the stored-URL defect behind Finding 2 was invisible
+ * from the device). Built in exactly one place so both guard
+ * sites ([WebViewRenderedFetcher.fetchRendered] and
+ * [WebViewRenderedFetcher.fetchInContext]) speak identically;
+ * the construction is factored here precisely so a JVM test
+ * can pin it — the fetcher itself is WebView-bound. */
+internal fun renderedGuardDetail(host: String): String =
+    "that page is on $host, outside this source's allowed sites"
+
 /**
  * v1.0.6 (W1.2/W5): the production [RenderedPageFetcher] — ONE
  * reusable WebView, confined to the main thread, that loads a page,
  * waits for it to build itself ([RenderSettle]) and returns the
  * built HTML. This is an invisible engine: it has no UI surface at
- * all — no address bar, no chrome — and `addJavascriptInterface` is
- * never called (W5.6). Page scripts run (that's the point), but they
- * get no bridge into the app.
+ * all — no address bar, no chrome. v1.5.5 (§2/§3) narrows the
+ * old blanket "no `addJavascriptInterface` (W5.6)" rule:
+ * exactly ONE interface is now attached —
+ * [InContextBridge.Bridge], app-owned, exposing only two
+ * result callbacks (in-context fetch answers and read-token
+ * harvests) — because Amendments 2 forbid reading fetch
+ * results from evaluateJavascript's return value, and a bridge
+ * resuming a CompletableDeferred is the only lawful channel.
+ * Page scripts still get no other bridge into the app.
  *
  * Leashes (W5): strictly serial via a mutex; the per-source rate
  * budget is paid by the caller ([EscalatingPageFetcher]) before each
@@ -53,12 +73,26 @@ import org.jsoup.Jsoup
 class WebViewRenderedFetcher(
     context: Context,
     private val sessionStore: SessionStore,
-    private val tierProvider: () -> PerfTier
+    private val tierProvider: () -> PerfTier,
+    /** v1.5.5 (§2/§3): the app-foreground probe the in-context
+     * roads consult before touching the shared view —
+     * AppContainer wires RenderRuntime.appInForeground; the
+     * default keeps direct constructions (tests) permissive. */
+    private val foregroundProvider: () -> Boolean = { true }
 ) : RenderedPageFetcher {
 
     private val appContext: Context = context.applicationContext
     private val mutex = Mutex()
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // v1.5.38 (§B mitigation): the bridge-attempt epoch. A
+    // fetchViaBridge call snapshots it before queueing on
+    // the mutex; cancelInFlightBridge() bumps it, and an
+    // attempt whose snapshot no longer matches bails at
+    // its next poll beat (or before it starts) instead of
+    // holding the mutex out to its own timeout.
+    private val bridgeEpoch =
+        java.util.concurrent.atomic.AtomicInteger(0)
 
     // ── main-thread confined ────────────────────────────────────
     private var webView: WebView? = null
@@ -85,26 +119,64 @@ class WebViewRenderedFetcher(
         sessionKey: String,
         permissions: ExtensionPermissions,
         waitForSelector: String?
+    ): AppResult<HostResponse> =
+        fetchRendered(url, sessionKey, permissions, waitForSelector, null)
+
+    override suspend fun fetchRendered(
+        url: String,
+        sessionKey: String,
+        permissions: ExtensionPermissions,
+        waitForSelector: String?,
+        renderBudgetMs: Long?
     ): AppResult<HostResponse> {
         val host = CookieParsing.hostOf(url).orEmpty()
         if (host.isEmpty() || !permissions.allows(host)) {
             return AppResult.Err(
                 AppError.AuthFailed(
                     "browser view",
-                    "that page is outside this source's allowed sites"
+                    renderedGuardDetail(host)
                 )
             )
         }
         val session = runCatching { sessionStore.load(sessionKey) }.getOrNull()
         return mutex.withLock {
-            val timeoutMs = RenderSettle.hardTimeoutMs(tierProvider())
-            val outcome = withTimeoutOrNull(timeoutMs + MAIN_SLACK_MS) {
+            // v1.5.8 (D1/F1+F2): the base clock is the tier's
+            // hard timeout; the CEILING (2×) bounds the whole
+            // render, and the declared budget (when the source
+            // carries one) replaces the base inside
+            // RenderProgress's decision — never above the
+            // ceiling.
+            val tier = tierProvider()
+            val baseMs = RenderSettle.hardTimeoutMs(tier)
+            val ceilingMs = RenderSettle.ceilingMs(tier)
+            val startedAtMs = SystemClock.uptimeMillis()
+            val outcome = withTimeoutOrNull(ceilingMs + MAIN_SLACK_MS) {
                 withContext(Dispatchers.Main) {
                     renderOnMain(
                         url, session, permissions, waitForSelector,
-                        timeoutMs, sessionKey
+                        baseMs, ceilingMs, renderBudgetMs, sessionKey
                     )
                 }
+            }
+            // v1.5.8 (D1 observability rider): the render's
+            // elapsed-vs-budget outcome is recorded under the
+            // source's session key — settled at Xs, or timed
+            // out at the ceiling (the bridge-served outcome is
+            // recorded by the escalating fetcher's bridge leg).
+            val elapsedSec =
+                (SystemClock.uptimeMillis() - startedAtMs) / 1000
+            when {
+                outcome == null || outcome.timedOut ->
+                    DiagnosticLog.record(
+                        "render",
+                        "render timed out at ceiling ${ceilingMs / 1000}s",
+                        sessionKey
+                    )
+                outcome.html != null ->
+                    DiagnosticLog.record(
+                        "render", "render settled at ${elapsedSec}s",
+                        sessionKey
+                    )
             }
             when {
                 outcome == null -> AppResult.Err(
@@ -190,11 +262,22 @@ class WebViewRenderedFetcher(
         session: SessionData?,
         permissions: ExtensionPermissions,
         waitForSelector: String?,
-        timeoutMs: Long,
+        baseBudgetMs: Long,
+        ceilingMs: Long,
+        declaredBudgetMs: Long?,
         sessionKey: String
     ): RenderOutcome {
         cancelScheduledDestroy()
         val view = webView ?: createWebView().also { webView = it }
+        // v1.5.8 (D1/F1): progress tracking for the deadline
+        // decision — the start instant, and the last instant
+        // the page demonstrably progressed (commit, readyState
+        // / content change between samples, or a subresource
+        // observed in shouldInterceptRequest, which runs off
+        // the main thread — hence the atomic).
+        val startedMs = SystemClock.uptimeMillis()
+        val lastActivityMs =
+            java.util.concurrent.atomic.AtomicLong(startedMs)
         // Hoisted so the finally can see it (v1.5.1 item 2:
         // a timed-out view is destroyed, not reused).
         var timedOut = false
@@ -253,6 +336,8 @@ class WebViewRenderedFetcher(
                 override fun onPageFinished(view: WebView?, url: String?) {
                     if (finishedAt == 0L) {
                         finishedAt = SystemClock.uptimeMillis()
+                        // v1.5.8 (D1): a commit IS progress.
+                        lastActivityMs.set(finishedAt)
                     }
                 }
 
@@ -269,6 +354,8 @@ class WebViewRenderedFetcher(
                 ) {
                     if (finishedAt == 0L) {
                         finishedAt = SystemClock.uptimeMillis()
+                        // v1.5.8 (D1): a commit IS progress.
+                        lastActivityMs.set(finishedAt)
                     }
                 }
 
@@ -282,7 +369,15 @@ class WebViewRenderedFetcher(
                 override fun shouldInterceptRequest(
                     view: WebView?,
                     request: WebResourceRequest?
-                ): WebResourceResponse? = interceptAds(request)
+                ): WebResourceResponse? {
+                    // v1.5.8 (D1/F1): a subresource load IS
+                    // progress — the existing hook observes it
+                    // for the deadline decision.
+                    if (request != null && !request.isForMainFrame) {
+                        lastActivityMs.set(SystemClock.uptimeMillis())
+                    }
+                    return interceptAds(request)
+                }
 
                 // v1.5.1 (item 2, adopted steer): if the
                 // renderer process dies, the view is dead
@@ -326,7 +421,6 @@ class WebViewRenderedFetcher(
             }
             view.loadUrl(url)
             val samples = mutableListOf<RenderSettleSample>()
-            val deadline = SystemClock.uptimeMillis() + timeoutMs
             var expanderClicked = false
             while (true) {
                 delayOnMain(RenderSettle.POLL_INTERVAL_MS)
@@ -337,6 +431,18 @@ class WebViewRenderedFetcher(
                         SystemClock.uptimeMillis() - finishedAt
                     )
                     if (sample != null) {
+                        // v1.5.8 (D1): a sample that CHANGED
+                        // (readyState, text, anchors, selector)
+                        // is progress at the sample's instant.
+                        val previous = samples.lastOrNull()
+                        if (previous == null ||
+                            previous.readyState != sample.readyState ||
+                            previous.textLength != sample.textLength ||
+                            previous.anchorCount != sample.anchorCount ||
+                            previous.selectorCount != sample.selectorCount
+                        ) {
+                            lastActivityMs.set(finishedAt + sample.elapsedMs)
+                        }
                         samples += sample
                         // v1.0.8.1: a book page that hides its
                         // chapter list behind a "show all
@@ -360,7 +466,26 @@ class WebViewRenderedFetcher(
                         }
                     }
                 }
-                if (SystemClock.uptimeMillis() >= deadline) {
+                // v1.5.8 (D1/F1): the pure progress→deadline
+                // decision, consulted EVERY iteration and
+                // obeyed — a progressing page earns time up
+                // to the ceiling; a stalled one gets its
+                // verdict at the base budget (or one base
+                // budget after its last activity).
+                val decision = RenderProgress.evaluate(
+                    RenderProgressInput(
+                        committed = finishedAt != 0L,
+                        readyState = samples.lastOrNull()?.readyState
+                            ?: "loading",
+                        lastActivityMs = lastActivityMs.get(),
+                        nowMs = SystemClock.uptimeMillis(),
+                        startedMs = startedMs,
+                        baseBudgetMs = baseBudgetMs,
+                        ceilingMs = ceilingMs,
+                        declaredBudgetMs = declaredBudgetMs
+                    )
+                )
+                if (decision is RenderDeadlineDecision.Verdict) {
                     timedOut = true
                     break
                 }
@@ -450,6 +575,13 @@ class WebViewRenderedFetcher(
             view.measure(widthSpec, heightSpec)
             view.layout(0, 0, width, height)
         }
+        // v1.5.5 (§2/§3): the ONE bridge (see the class doc) —
+        // attached at creation so parked fetches and token
+        // harvests can report; it accepts results only and
+        // exposes no app capability to the page.
+        view.addJavascriptInterface(
+            inContextBridge, InContextBridge.INTERFACE_NAME
+        )
         return view
     }
 
@@ -480,6 +612,11 @@ class WebViewRenderedFetcher(
         finalUrl: String,
         userAgent: String?
     ) {
+        // v1.5.5 (§3.1a): flush BEFORE the harvest — the same
+        // ordering the sanctioned screen's save path keeps, so
+        // a cookie the view just earned is durable in the jar
+        // before the store reads it back.
+        runCatching { CookieManager.getInstance().flush() }
         val header = runCatching {
             CookieManager.getInstance().getCookie(finalUrl)
         }.getOrNull() ?: return
@@ -519,6 +656,307 @@ class WebViewRenderedFetcher(
         )
     }
 
+    // ── v1.5.5 (§2/§3): parked in-context fetch + token harvest ──
+
+    /** The one JS bridge (see the class doc). Main-thread
+     * confined like the view it is attached to. */
+    private val inContextBridge = InContextBridge.Bridge()
+
+    /** True while a parked load should carry the read-token
+     * harvest hook (read by the park client's onPageStarted
+     * fallback). Main thread. */
+    private var harvestHookArmed: Boolean = false
+
+    /** The URL the view was last parked on by [parkOnMain],
+     * for warm reuse. Main thread. */
+    private var parkedUrl: String? = null
+
+    /** True once the parked document finished loading. */
+    private var parkedLoaded: Boolean = false
+
+    private val bridgeCallSeq =
+        java.util.concurrent.atomic.AtomicLong(0)
+
+    /**
+     * v1.5.5 (§2): the render-backed endpoint fetch — see
+     * [RenderedPageFetcher.fetchInContext]. Runs under the
+     * fetcher's own mutex, so a walk's pages are strictly
+     * sequential on the one warm view (the walk's per-source
+     * mutex serialises walks; this serialises the view). The
+     * park client's navigation guard plus the bridge timeout
+     * keep a walk from stranding.
+     */
+    override suspend fun fetchInContext(
+        url: String,
+        parkUrl: String,
+        sessionKey: String?,
+        permissions: ExtensionPermissions,
+        method: String,
+        body: String?,
+        headers: Map<String, String>
+    ): AppResult<HostResponse>? {
+        val host = CookieParsing.hostOf(url).orEmpty()
+        if (host.isEmpty() || !permissions.allows(host)) {
+            return AppResult.Err(
+                AppError.AuthFailed(
+                    "browser view",
+                    renderedGuardDetail(host)
+                )
+            )
+        }
+        if (!foregroundProvider()) return null
+        val session = sessionKey?.let {
+            runCatching { sessionStore.load(it) }.getOrNull()
+        }
+        return mutex.withLock {
+            if (!foregroundProvider()) return@withLock null
+            withContext(Dispatchers.Main) {
+                inContextFetchOnMain(
+                    url, parkUrl, session, sessionKey,
+                    permissions, method, body, headers
+                )
+            }
+        }
+    }
+
+    /**
+     * v1.5.5 (§3): the harvest visit — see
+     * [RenderedPageFetcher.harvestTokenInContext]. Parks on
+     * the reader page with the hook armed (document-start
+     * where the WebView supports it, onPageStarted fallback),
+     * then waits for the page's OWN mint to report through
+     * the bridge.
+     */
+    override suspend fun harvestTokenInContext(
+        parkUrl: String,
+        sessionKey: String?,
+        permissions: ExtensionPermissions,
+        waitMs: Long
+    ): TokenHarvestResult? {
+        val host = CookieParsing.hostOf(parkUrl).orEmpty()
+        if (host.isEmpty() || !permissions.allows(host)) return null
+        if (!foregroundProvider()) return null
+        val session = sessionKey?.let {
+            runCatching { sessionStore.load(it) }.getOrNull()
+        }
+        return mutex.withLock {
+            if (!foregroundProvider()) return@withLock null
+            val deferred = inContextBridge.registerHarvest(host)
+            try {
+                withContext(Dispatchers.Main) {
+                    parkOnMain(
+                        parkUrl, session, permissions, armHook = true
+                    )
+                }
+                val payload = withTimeoutOrNull(waitMs) {
+                    deferred.await()
+                } ?: return@withLock null
+                val harvest = InContextBridge.parseHarvest(payload)
+                    ?: return@withLock null
+                FenrirHarvestSink.recordForHost(host, harvest)
+                harvest
+            } finally {
+                inContextBridge.cancelHarvest(host)
+            }
+        }
+    }
+
+    /** Main thread: park (or reuse) the view on [parkUrl],
+     * then run the bridge fetch for [url] and shape the
+     * answer as a [HostResponse]. */
+    private suspend fun inContextFetchOnMain(
+        url: String,
+        parkUrl: String,
+        session: SessionData?,
+        sessionKey: String?,
+        permissions: ExtensionPermissions,
+        method: String,
+        body: String?,
+        headers: Map<String, String>
+    ): AppResult<HostResponse>? {
+        parkOnMain(parkUrl, session, permissions, armHook = false)
+        val view = webView ?: return null
+        val callId = "xr-" + bridgeCallSeq.incrementAndGet()
+        val deferred = inContextBridge.register(callId)
+        try {
+            view.evaluateJavascript(
+                InContextBridge.fetchScript(
+                    callId, url, method, body, headers
+                ),
+                null
+            )
+            val payload = withTimeoutOrNull(IN_CONTEXT_TIMEOUT_MS) {
+                deferred.await()
+            } ?: return AppResult.Err(
+                AppError.ProviderDown(
+                    "browser view",
+                    retryable = true,
+                    detail = "the in-page fetch did not answer in time"
+                )
+            )
+            val result = InContextBridge.parseFetchResult(payload)
+                ?: return AppResult.Err(
+                    AppError.ProviderDown(
+                        "browser view",
+                        retryable = true,
+                        detail = "the in-page fetch answered unreadably"
+                    )
+                )
+            if (result.status == 0) {
+                return AppResult.Err(
+                    AppError.ProviderDown(
+                        "browser view",
+                        retryable = true,
+                        detail = "the in-page fetch failed: " +
+                            result.body.take(120)
+                    )
+                )
+            }
+            if (sessionKey != null) {
+                harvestCookies(sessionKey, url, null)
+            }
+            val trimmed = result.body.trimStart()
+            return AppResult.Ok(
+                HostResponse(
+                    status = result.status,
+                    headers = if (
+                        trimmed.startsWith("{") || trimmed.startsWith("[")
+                    ) {
+                        mapOf("Content-Type" to "application/json")
+                    } else {
+                        emptyMap()
+                    },
+                    body = result.body,
+                    finalUrl = url
+                )
+            )
+        } finally {
+            inContextBridge.cancel(callId)
+        }
+    }
+
+    /**
+     * Main thread: leave the shared view parked on [parkUrl]
+     * with the session's cookies seeded. Warm reuse when the
+     * view already sits on the parked page (the §2 sequential
+     * pages rule — no reload per page); otherwise a fresh
+     * load behind a navigation guard: main-frame navigations
+     * to a DIFFERENT HOST are refused, so a walk's page can
+     * never be carried off-origin mid-walk. When [armHook]
+     * is set, the read-token harvest hook rides the load.
+     */
+    private suspend fun parkOnMain(
+        parkUrl: String,
+        session: SessionData?,
+        permissions: ExtensionPermissions,
+        armHook: Boolean
+    ) {
+        cancelScheduledDestroy()
+        val view = webView ?: createWebView().also { webView = it }
+        seedCookies(session)
+        val ua = session?.userAgent?.takeIf { it.isNotBlank() }
+            ?: PinnedUserAgent.current()
+        ua?.let { view.settings.userAgentString = it }
+        harvestHookArmed = armHook
+        if (armHook) installDocumentStartHookLocked(view)
+        if (parkedUrl == parkUrl && parkedLoaded && view.url == parkUrl) {
+            return
+        }
+        parkedUrl = parkUrl
+        parkedLoaded = false
+        view.stopLoading()
+        view.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): Boolean {
+                val target = request?.url?.toString() ?: return false
+                if (request?.isForMainFrame != true) return false
+                // The navigation guard: the parked page may
+                // not be carried OFF its host mid-walk (a
+                // hijack/redirect chain to another site would
+                // strand the walk's fetches on a foreign
+                // origin). Same-host navigations — the park
+                // load itself, canonical redirects, the app
+                // shell's own routing — pass; in-context
+                // fetch() works from any same-origin page, and
+                // the fetcher's mutex means no other load can
+                // interleave while a walk holds the view.
+                val targetHost = CookieParsing.hostOf(target)
+                val parkHost = CookieParsing.hostOf(parkUrl)
+                return targetHost != null && parkHost != null &&
+                    targetHost != parkHost
+            }
+
+            override fun onPageStarted(
+                view: WebView?,
+                url: String?,
+                favicon: android.graphics.Bitmap?
+            ) {
+                view?.evaluateJavascript(HARVEST_HOOK, null)
+                if (harvestHookArmed) {
+                    // The old-WebView fallback for the token
+                    // hook (document-start is attempted first
+                    // in installDocumentStartHookLocked).
+                    view?.evaluateJavascript(
+                        InContextBridge.tokenHarvestHookScript(), null
+                    )
+                }
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                if (url == parkUrl) parkedLoaded = true
+            }
+
+            override fun onRenderProcessGone(
+                view: WebView?,
+                detail: RenderProcessGoneDetail?
+            ): Boolean {
+                parkedLoaded = false
+                destroyWebViewSoon()
+                return true
+            }
+        }
+        view.loadUrl(parkUrl)
+        // The in-context fetch needs the page's origin + JS
+        // context, not catalogue content: wait for the parked
+        // document itself, bounded by the park timeout.
+        val deadline = System.nanoTime() + PARK_TIMEOUT_MS * 1_000_000L
+        while (!parkedLoaded && System.nanoTime() < deadline) {
+            delay(150)
+        }
+        parkedLoaded = true
+    }
+
+    /** v1.5.5 (§3): best-effort document-start hook install.
+     * The app carries no androidx.webkit dependency, so the
+     * WebViewCompat call is reflective: where the class is
+     * present (a transitive WebKit) and the feature supported,
+     * the hook lands before any page script runs; everywhere
+     * else the park client's onPageStarted injection is the
+     * fallback (Amendments name both routes). Silent by
+     * design — the fallback covers every failure here. */
+    private fun installDocumentStartHookLocked(view: WebView) {
+        runCatching {
+            val compat = Class.forName("androidx.webkit.WebViewCompat")
+            val feature = Class.forName("androidx.webkit.WebViewFeature")
+            val featureName = feature
+                .getField("DOCUMENT_START_SCRIPT").get(null) as String
+            val supported = compat.getMethod(
+                "isFeatureSupported", String::class.java
+            ).invoke(null, featureName) as? Boolean ?: false
+            if (!supported) return
+            compat.getMethod(
+                "addDocumentStartJavaScript",
+                WebView::class.java, String::class.java, Set::class.java
+            ).invoke(
+                null, view,
+                InContextBridge.tokenHarvestHookScript(),
+                setOf("*")
+            )
+        }
+    }
+
     /**
      * v1.5.1 (item 5): the fetch bridge — see
      * [RenderedPageFetcher.fetchViaBridge]. The view loads
@@ -530,6 +968,26 @@ class WebViewRenderedFetcher(
      * catalogue through the session that already passed
      * the site's check.
      */
+    /** v1.5.38 (Fix A): the store's real answer — see
+     * [RenderedPageFetcher.hasSavedSession]. */
+    override suspend fun hasSavedSession(
+        sessionKey: String
+    ): Boolean = runCatching { sessionStore.has(sessionKey) }
+        .getOrDefault(true)
+
+    /** v1.5.38 (§B mitigation): bump the bridge epoch —
+     * the in-flight attempt bails at its next poll beat —
+     * and stop the shared view's current load. Posted to
+     * the main thread, where the view lives; harmless when
+     * no attempt is running (the next attempt snapshots
+     * the new epoch and proceeds normally). */
+    override fun cancelInFlightBridge() {
+        bridgeEpoch.incrementAndGet()
+        mainHandler.post {
+            runCatching { webView?.stopLoading() }
+        }
+    }
+
     override suspend fun fetchViaBridge(
         url: String,
         sessionKey: String,
@@ -539,10 +997,15 @@ class WebViewRenderedFetcher(
         if (host.isEmpty() || !permissions.allows(host)) return null
         val session = runCatching { sessionStore.load(sessionKey) }
             .getOrNull()
+        // v1.5.38 (§B mitigation): snapshot the bridge
+        // epoch BEFORE queueing on the mutex — a cancel
+        // that lands while this attempt waits its turn (or
+        // while it polls) retires it; see bridgeOnMain.
+        val epoch = bridgeEpoch.get()
         return mutex.withLock {
             val text = withTimeoutOrNull(BRIDGE_TIMEOUT_MS) {
                 withContext(Dispatchers.Main) {
-                    bridgeOnMain(url, session)
+                    bridgeOnMain(url, session, epoch)
                 }
             }
             when {
@@ -583,8 +1046,12 @@ class WebViewRenderedFetcher(
      * verdict standing. */
     private suspend fun bridgeOnMain(
         url: String,
-        session: SessionData?
+        session: SessionData?,
+        epoch: Int
     ): String? {
+        // v1.5.38 (§B mitigation): cancelled while queued
+        // on the mutex — never start the WebView dance.
+        if (bridgeEpoch.get() != epoch) return null
         cancelScheduledDestroy()
         val view = webView ?: createWebView().also { webView = it }
         try {
@@ -633,11 +1100,14 @@ class WebViewRenderedFetcher(
                 val waitDeadline = SystemClock.uptimeMillis() +
                     BRIDGE_ORIGIN_WAIT_MS
                 while (!committed && !rendererGone &&
+                    bridgeEpoch.get() == epoch &&
                     SystemClock.uptimeMillis() < waitDeadline
                 ) {
                     delayOnMain(200)
                 }
-                if (!committed) return null
+                if (!committed || bridgeEpoch.get() != epoch) {
+                    return null
+                }
             }
             val urlLiteral = org.json.JSONObject.quote(url)
             val kick = "(function(){window.__xrBridge=null;" +
@@ -651,6 +1121,7 @@ class WebViewRenderedFetcher(
             val deadline = SystemClock.uptimeMillis() +
                 BRIDGE_FETCH_WAIT_MS
             while (!rendererGone &&
+                bridgeEpoch.get() == epoch &&
                 SystemClock.uptimeMillis() < deadline
             ) {
                 delayOnMain(250)
@@ -692,7 +1163,12 @@ class WebViewRenderedFetcher(
             "(document.body ? document.body.innerText.length : 0) + '|' + " +
             "document.querySelectorAll('a[href]').length + '|' + " +
             "(s ? document.querySelectorAll(s).length : -1);})()"
-        val decoded = decodeJsString(evaluate(view, script)) ?: return null
+        // v1.5.8 (D1/F3): the probe is timeout-guarded — a
+        // wedged renderer yields "no sample this poll", never
+        // a parked loop.
+        val decoded = decodeJsString(
+            RenderProbeGuard.guarded { evaluate(view, script) }
+        ) ?: return null
         val parts = decoded.split('|')
         if (parts.size != 4) return null
         return RenderSettleSample(
@@ -721,8 +1197,10 @@ class WebViewRenderedFetcher(
             "t.indexOf('load more')>=0;});" +
             "els.forEach(function(b){b.click();});" +
             "return ''+els.length;})()"
-        val decoded = decodeJsString(evaluate(view, script))
-            ?: return false
+        // v1.5.8 (D1/F3): timeout-guarded probe (see samplePage).
+        val decoded = decodeJsString(
+            RenderProbeGuard.guarded { evaluate(view, script) }
+        ) ?: return false
         return (decoded.toIntOrNull() ?: 0) > 0
     }
 
@@ -770,10 +1248,13 @@ class WebViewRenderedFetcher(
     }
 
     private suspend fun extractHtml(view: WebView): String? {
-        val raw = evaluate(
-            view,
-            "document.documentElement ? document.documentElement.outerHTML : ''"
-        ) ?: return null
+        // v1.5.8 (D1/F3): timeout-guarded probe (see samplePage).
+        val raw = RenderProbeGuard.guarded {
+            evaluate(
+                view,
+                "document.documentElement ? document.documentElement.outerHTML : ''"
+            )
+        } ?: return null
         val decoded = decodeJsString(raw) ?: return null
         return decoded.takeIf {
             it.length <= ExtensionHttpClient.MAX_BODY_BYTES
@@ -837,6 +1318,11 @@ class WebViewRenderedFetcher(
         /** Slack over the settle budget for main-thread scheduling. */
         const val MAIN_SLACK_MS: Long = 15_000L
 
+        /** v1.5.5 (§2/§3): the in-context budgets — one parked
+         * document load, and one bridge fetch answer. */
+        const val PARK_TIMEOUT_MS: Long = 20_000L
+        const val IN_CONTEXT_TIMEOUT_MS: Long = 30_000L
+
         /** v1.5.1 (item 5): the fetch bridge's budgets — the
          * whole bridge answers well inside one render's. */
         const val BRIDGE_TIMEOUT_MS: Long = 30_000L
@@ -898,7 +1384,7 @@ class WebViewRenderedFetcher(
                 "clone.text().then(function(t){rec({" +
                 "url:resp.url||url,method:method,status:resp.status," +
                 "ct:resp.headers.get('content-type')||''," +
-                "headers:headers,body:(t||'').slice(0,4000)," +
+                "headers:headers,body:(t||'').slice(0,65536)," +
                 "cookies:document.cookie||''});" +
                 "}).catch(function(){});}catch(e){}})" +
                 ".catch(function(){});" +
@@ -924,7 +1410,7 @@ class WebViewRenderedFetcher(
                 "method:(x.__xr&&x.__xr.method)||'GET',status:x.status," +
                 "ct:x.getResponseHeader('content-type')||''," +
                 "headers:(x.__xr&&x.__xr.headers)||{}," +
-                "body:(t||'').slice(0,4000)," +
+                "body:(t||'').slice(0,65536)," +
                 "cookies:document.cookie||''});" +
                 "}catch(e){}});" +
                 "return os.apply(this,arguments);};" +

@@ -33,7 +33,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -44,6 +46,7 @@ import androidx.compose.material.icons.filled.FiberNew
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapVert
@@ -65,6 +68,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -80,7 +84,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.xreader.core.motion.listPlacementSpec
+import kotlinx.coroutines.flow.distinctUntilChanged
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.DownloadState
 import app.xreader.data.library.ReadingStatus
@@ -124,6 +128,11 @@ fun BookDetailScreen(
     assetFile: (bookId: Long, fileName: String) -> File,
     onBack: () -> Unit,
     onReadChapter: (chapterIndex: Int) -> Unit,
+    /** v1.5.6 (§3.2): Contents taps on an in-place local book
+     * carry the outline entry's target JSON (e.g. {"section": 4})
+     * straight to the local reader. Null = fall back to the
+     * chapter-index door (resume point). */
+    onReadLocalTarget: ((bookId: Long, targetJson: String) -> Unit)? = null,
     onExportEpub: () -> Unit,
     onExportCbz: () -> Unit,
     onOpenLore: () -> Unit = {},
@@ -148,15 +157,43 @@ fun BookDetailScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val engineLabel by viewModel.engineLabel.collectAsStateWithLifecycle()
+    // v1.5.6 (§3): in-place local books show their own Contents
+    // (local_outline) instead of chapter rows.
+    val localOutline by viewModel.localOutline.collectAsStateWithLifecycle()
     val book = state.book
     // v1.0.5 (B2/E6): the Download sheet's open state — the three
     // choices (all / next 10 / latest unread) live there, beside
     // Start reading, never only in a long-press sheet.
     var downloadSheetOpen by remember { mutableStateOf(false) }
+    /** v1.5.8 (J2/E3): the chapter-settings sheet's open state —
+     * sort/display choices + the scanlator filter live there. */
+    var chapterSettingsOpen by remember { mutableStateOf(false) }
     // v1.0.7 (draw-check ask): chapter search + filters — a
     // 1,692-chapter list can't be scrolled by hand, and a
     // novel split into parts buries Part 1 under Part 2.
     var chapterQuery by remember { mutableStateOf("") }
+    // v1.5.7 (Finding 5, second bug): the "Jump to chapter…"
+    // field's OWN text. The field used to BE chapterQuery, so
+    // every keystroke filtered the list by row text — typing
+    // "1" showed "863 of 1200" rows whose dates/titles contain
+    // a "1". The field's text is separate state: a purely
+    // numeric entry is a JUMP (ChapterJump — scroll +
+    // highlight) and, since v1.5.38 (Fix C2), ALSO a number
+    // search: it sets chapterQuery, whose number rung is an
+    // exact identity match, so the list narrows to the named
+    // chapter without the old substring flood. Non-numeric
+    // text flows into chapterQuery as the text search,
+    // exactly as before. The field, its placeholder and its
+    // styling are byte-identical — behaviour only.
+    var jumpFieldText by remember { mutableStateOf("") }
+    /** The chapter row a jump landed on (transient highlight,
+     * reusing the current chapter's container treatment). */
+    var jumpTargetId by remember { mutableStateOf<Long?>(null) }
+    /** Display position a jump is waiting to scroll to, once
+     * the window has grown enough to compose the row. */
+    var pendingJumpPos by remember { mutableStateOf(-1) }
+    val chapterListState =
+        androidx.compose.foundation.lazy.rememberLazyListState()
     var chapterStateFilter by remember {
         mutableStateOf(
             app.xreader.domain.reader.ChapterListFilter.State.ALL
@@ -196,11 +233,12 @@ fun BookDetailScreen(
     // full data set are untouched, and the window follows
     // the current display order in both sort directions.
     // The window resets when the book, the search or the
-    // sort changes; the Show more control grows it by 100
-    // and doubles as the fetch gesture (it calls the same
-    // near-edge growth the scroll path uses, so reaching
-    // past the fetched range pulls the next chunk — never a
-    // background full load).
+    // sort changes. v1.5.37 (S6): the window's end is a
+    // scroll sentinel, not a button — composing it grows
+    // the window by 200 and calls the same near-edge growth
+    // the scroll path uses, so reaching past the fetched
+    // range pulls the next chunk — never a background full
+    // load.
     var chapterWindow by remember(
         state.book?.id, chapterQuery, chapterStateFilter,
         chapterPartFilter, newestFirst
@@ -216,6 +254,34 @@ fun BookDetailScreen(
             it.index == state.continueChapterIndex
         }
         if (pos >= chapterWindow) chapterWindow = pos + 1
+    }
+    // v1.5.37 (combined build, S6): the near-edge growth
+    // trigger is HOISTED here — one flow over the list's
+    // visible items reports the furthest visible chapter's
+    // stored index to the same growth trigger the rows used
+    // to fire individually. (The per-row LaunchedEffect it
+    // replaces ran the trigger — and, behind it, a full-list
+    // head-missing scan on the main thread — for every row
+    // composed during a fling: BIG-BOOK-REFRESH-FORENSICS
+    // Q8b, half of the big-list smear.)
+    LaunchedEffect(chapterListState, displayChapters) {
+        snapshotFlow {
+            val byId = displayChapters.associateBy { it.id }
+            chapterListState.layoutInfo.visibleItemsInfo
+                .mapNotNull { item ->
+                    ((item.key as? String)
+                        ?.removePrefix("chapter-")
+                        ?.toLongOrNull())
+                        ?.let { byId[it]?.index }
+                }
+                .maxOrNull()
+        }
+            .distinctUntilChanged()
+            .collect { maxIndex ->
+                if (maxIndex != null) {
+                    viewModel.onChapterNearEdge(maxIndex)
+                }
+            }
     }
     val chapterFilterActive = chapterQuery.isNotBlank() ||
         chapterStateFilter !=
@@ -327,6 +393,85 @@ fun BookDetailScreen(
             isLinkSource = state.isLinkSource,
             needsSiteCheck = state.sourceNeedsSiteCheck
         )
+        // v1.5.7 (Finding 5): the jump scroll. The chapter rows
+        // sit deep inside this page's single LazyColumn, so the
+        // scroll index is the chapter's display position plus
+        // the number of items the column emits before the first
+        // chapter row — counted here from the same conditions
+        // that gate those items below (hero, CTA, the source
+        // banner, the progress card, Synopsis, the local
+        // Contents block, the Chapters header). When the target
+        // row is beyond the display window, the pending effect
+        // below first grows the window (the field's own handler
+        // already requested it), then scrolls once the row
+        // exists. An out-of-range entry sets no pending
+        // position at all: the page stays put.
+        val chapterRowPrefixCount = 2 +
+            (if (book.sourceType ==
+                app.xreader.data.db.SourceType.EXTENSION
+            ) 1 else 0) +
+            (if (state.progress != null || state.downloadedCount > 0) {
+                1
+            } else {
+                0
+            }) +
+            1 +
+            (if (localOutline.isNotEmpty()) {
+                1 + localOutline.size
+            } else {
+                0
+            }) +
+            (if (book.sourceType ==
+                app.xreader.data.db.SourceType.LOCAL_FILE &&
+                book.documentUri == null && book.filePath == null &&
+                localOutline.isEmpty()
+            ) 1 else 0) +
+            1 +
+            (if (section.kind == ChaptersSectionKind.LIST &&
+                visibleChapters.isEmpty() && state.chapters.isNotEmpty()
+            ) 1 else 0)
+        LaunchedEffect(pendingJumpPos, displayedChapters.size) {
+            val pos = pendingJumpPos
+            if (pos >= 0 && pos < displayChapters.size &&
+                pos >= displayedChapters.size
+            ) {
+                // (displayChapters = the full display list;
+                // displayedChapters = its windowed head.)
+                // The window reset (e.g. the jump cleared a
+                // text search, a remember key) or simply hasn't
+                // reached the target yet: grow it to the target
+                // and let this effect re-run when the row lands.
+                chapterWindow = pos + 1
+            }
+            if (pos >= 0 && pos < displayedChapters.size) {
+                // v1.5.38 (Fix C1, V1537-PROOF-FORENSICS §C):
+                // the trigger clears in the FINALLY, after the
+                // scroll returns — never before it. This effect
+                // is keyed on pendingJumpPos, so clearing it
+                // first changed the key mid-flight and the
+                // restarted effect cancelled the animation in
+                // its first frame: every off-screen jump died
+                // silently, in every book. The equality guard
+                // keeps a NEWER jump typed during this scroll
+                // from being clobbered when the old one lands.
+                try {
+                    chapterListState.animateScrollToItem(
+                        chapterRowPrefixCount + pos
+                    )
+                } finally {
+                    if (pendingJumpPos == pos) pendingJumpPos = -1
+                }
+            }
+        }
+        // The jump highlight is transient: it fades back to the
+        // plain row after a few seconds (the highlight itself
+        // is the current chapter's own container treatment).
+        LaunchedEffect(jumpTargetId) {
+            if (jumpTargetId != null) {
+                kotlinx.coroutines.delay(2_800)
+                jumpTargetId = null
+            }
+        }
         val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
         // Tweak 2 (Nocturne): the Continue pill's numbers, derived
         // from the ViewModel's existing progress state only —
@@ -335,9 +480,29 @@ fun BookDetailScreen(
         val continueChapter = state.chapters.firstOrNull {
             it.index == state.continueChapterIndex
         }
-        val readCount = state.chapters.count { it.read }
+        // v1.5.7 (scope F smoothness): the read count and the
+        // newest chapter index are remembered per chapter list
+        // — the newest index in particular used to be recomputed
+        // by maxOfOrNull INSIDE every chapter row's arguments
+        // (a full-list scan per row, per recomposition).
+        val readCount = remember(state.chapters) {
+            state.chapters.count { it.read }
+        }
+        val maxChapterIndex = remember(state.chapters) {
+            state.chapters.maxOfOrNull { it.index } ?: -1
+        }
         val bookPercent = if (state.chapters.isEmpty()) {
-            0
+            // v1.5.6 (audit §1.5 trap): a local book's progress is
+            // locator-keyed — its percentage IS the stored book
+            // fraction, never nulled by the empty chapter list.
+            if (book.sourceType ==
+                app.xreader.data.db.SourceType.LOCAL_FILE &&
+                state.progress?.locatorJson != null
+            ) {
+                (state.progress!!.fraction * 100).toInt().coerceIn(0, 100)
+            } else {
+                0
+            }
         } else {
             val progressNow = state.progress
             val inChapter = if (progressNow != null &&
@@ -354,11 +519,16 @@ fun BookDetailScreen(
             ReadingStatus.READING -> "Reading"
             ReadingStatus.COMPLETED -> "Completed"
             ReadingStatus.ON_HOLD -> "On hold"
+            ReadingStatus.PLAN_TO_READ -> "Plan to Read"
             ReadingStatus.DROPPED -> "Dropped"
             ReadingStatus.NONE -> null
         }
         LazyColumn(
             Modifier.weight(1f),
+            // v1.5.7 (Finding 5): the list state the chapter
+            // jump scrolls (previously the column had no state,
+            // so no programmatic scroll was possible at all).
+            state = chapterListState,
             // Design margin 20dp; bottom clearance 88dp (the
             // design's own rule) — tweak 1: nothing important
             // ever sits in the phone's dead bottom strip.
@@ -426,7 +596,15 @@ fun BookDetailScreen(
                             Box {
                                 val heroCover = coverFile(book.coverPath)
                                 if (heroCover != null && heroCover.exists()) {
-                                    AsyncImage(
+                                    // v1.5.4 (WS-1 item 7): the
+                                    // generated cover is the
+                                    // loading AND error content —
+                                    // "still loading" and "cover
+                                    // failed" are no longer the
+                                    // same blank violet box (the
+                                    // related-row pattern below,
+                                    // applied to the hero).
+                                    coil.compose.SubcomposeAsyncImage(
                                         model = heroCover,
                                         contentDescription = null,
                                         contentScale = ContentScale.Crop,
@@ -437,7 +615,61 @@ fun BookDetailScreen(
                                                 1.dp,
                                                 Color.White.copy(alpha = 0.10f),
                                                 coverShape
+                                            ),
+                                        loading = {
+                                            app.xreader.ui.library.PlaceholderCover(
+                                                title = book.title,
+                                                author = book.author,
+                                                modifier = Modifier.fillMaxSize()
                                             )
+                                        },
+                                        error = {
+                                            app.xreader.ui.library.PlaceholderCover(
+                                                title = book.title,
+                                                author = book.author,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        }
+                                    )
+                                } else if (!book.coverUrl.isNullOrBlank()) {
+                                    // v1.5.3 (item 10, finding #3
+                                    // A4.3): no local cover file —
+                                    // fall back to the book's cover
+                                    // URL, the exact behaviour the
+                                    // Library grid already has. A
+                                    // stored row whose local file
+                                    // never landed (or was lost) no
+                                    // longer renders a placeholder
+                                    // while its URL cover exists.
+                                    // v1.5.4 (WS-1 item 7): same
+                                    // generated-cover loading/error
+                                    // treatment as the file branch.
+                                    coil.compose.SubcomposeAsyncImage(
+                                        model = book.coverUrl,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .size(width = 144.dp, height = 208.dp)
+                                            .clip(coverShape)
+                                            .border(
+                                                1.dp,
+                                                Color.White.copy(alpha = 0.10f),
+                                                coverShape
+                                            ),
+                                        loading = {
+                                            app.xreader.ui.library.PlaceholderCover(
+                                                title = book.title,
+                                                author = book.author,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        },
+                                        error = {
+                                            app.xreader.ui.library.PlaceholderCover(
+                                                title = book.title,
+                                                author = book.author,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        }
                                     )
                                 } else {
                                     app.xreader.ui.library.PlaceholderCover(
@@ -615,9 +847,44 @@ fun BookDetailScreen(
                         // button over an unproven chapter state
                         // (a load that never settles can no longer
                         // leave a tappable Start Reading behind).
+                        // v1.5.4 (WS-1 item 6c): while a site
+                        // check is pending, the pill SAYS so —
+                        // a load parked on a challenge must not
+                        // claim to be finding chapters.
+                        // v1.5.10 (B1): past the honest bound
+                        // the pill stops claiming "Finding" and
+                        // says the source is slow, with a visible
+                        // Retry that re-joins the in-flight call
+                        // (never a second walk). A pending site
+                        // check still outranks the stall wording.
                         ChaptersUnavailablePill(
-                            reason = "Finding chapters…"
+                            // v1.5.37 (combined build, item 4):
+                            // while the fetch is in flight the
+                            // pill headlines the FINDING state —
+                            // "Chapters unavailable" is reserved
+                            // for the settled failure above.
+                            title = "Finding chapters…",
+                            reason = when {
+                                state.challengePending ->
+                                    "Waiting for the site's check…"
+                                state.chaptersStalled ->
+                                    "Still finding — " +
+                                        "this source is slow"
+                                else ->
+                                    "The chapter list is still " +
+                                        "loading from the source."
+                            }
                         )
+                        if (state.chaptersStalled &&
+                            !state.challengePending
+                        ) {
+                            TextButton(
+                                onClick = { viewModel.refreshChapters() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Retry")
+                            }
+                        }
                     } else {
                     Surface(
                         onClick = { onReadChapter(state.continueChapterIndex) },
@@ -777,20 +1044,119 @@ fun BookDetailScreen(
                             modifier = Modifier.weight(1f)
                         )
                     }
-                    // Reading status chips + Track toggle
-                    // (v1.0.1, kept): the chips WRAP (B3/D25).
+                    // v1.5.7 (owner-ordered 2026-11-04, re-demanded
+                    // 2026-11-05 — "I told you to add refresh
+                    // function on the novel page"): the first-class
+                    // Refresh, QuickNovel-style, in the primary
+                    // action area in the tiles' own visual language
+                    // (same tier-1 tile surface, full width so its
+                    // label never crushes the 4-tile row). It calls
+                    // the SAME shared-seam refresh the automatic
+                    // Finding-5 head heal calls
+                    // (BookDetailViewModel.refreshChapters →
+                    // SourceBookSync.refresh): new chapters land,
+                    // the count + synopsis refresh with it, and a
+                    // list that lost its beginning is restored
+                    // whole by this same fetch. While it runs the
+                    // tile says so and won't re-fire; the result —
+                    // count, new chapters, a restored beginning, or
+                    // the honest failure — arrives as the page's
+                    // usual message, and a failure leaves the
+                    // existing list untouched. This is the page's
+                    // ONE Refresh: the buried mid-page "Refresh
+                    // chapters" text link is removed below.
+                    // Manga books from sources ride the same tile:
+                    // their lists live in the same store through
+                    // the same sync seam (see the scope-F report).
+                    if (book.sourceType ==
+                        app.xreader.data.db.SourceType.EXTENSION
+                    ) {
+                        Surface(
+                            onClick = { viewModel.refreshChapters() },
+                            enabled = !state.chaptersLoading,
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme
+                                .surfaceContainerLow,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                Modifier.padding(
+                                    horizontal = 12.dp, vertical = 10.dp
+                                ),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (state.chaptersLoading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Filled.Refresh,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme
+                                            .onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Text(
+                                    if (state.chaptersLoading) {
+                                        "Refreshing…"
+                                    } else {
+                                        "Refresh"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                                Spacer(Modifier.weight(1f))
+                                Text(
+                                    "Get new chapters from the source",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    // Reading status (v1.0.1, kept): the chips
+                    // WRAP (B3/D25). v1.5.4 (owner, 17:46): the
+                    // five statuses get their own labelled
+                    // section — unheaded, they sat under the
+                    // quick-action tiles in the same pill shape
+                    // as the genre tags and read as genres
+                    // ("The options look like the novel
+                    // geners"). The heading is the page's
+                    // section style (titleMedium, as Synopsis /
+                    // Chapters), and the chips are styled as
+                    // the CONTROL they are: the chosen status
+                    // fills violet with a check, never the
+                    // muted stadium pill of a genre tag.
+                    // Behaviour is byte-identical: tap sets,
+                    // tap-again clears to NONE.
+                    Text(
+                        "Status",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(Modifier.height(8.dp))
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         listOf(
+                            // v1.5.3 (item 29): all five donor
+                            // statuses, in the donor tab order.
                             ReadingStatus.READING to "Reading",
-                            ReadingStatus.COMPLETED to "Completed",
                             ReadingStatus.ON_HOLD to "On hold",
+                            ReadingStatus.PLAN_TO_READ to "Plan to Read",
+                            ReadingStatus.COMPLETED to "Completed",
                             ReadingStatus.DROPPED to "Dropped"
                         ).forEach { (status, label) ->
+                            val statusSelected =
+                                state.bookMeta.status == status
                             FilterChip(
-                                selected = state.bookMeta.status == status,
+                                selected = statusSelected,
                                 onClick = {
                                     viewModel.setReadingStatus(
                                         if (state.bookMeta.status == status) {
@@ -800,7 +1166,47 @@ fun BookDetailScreen(
                                         }
                                     )
                                 },
-                                label = { Text(label) }
+                                label = { Text(label) },
+                                leadingIcon = if (statusSelected) {
+                                    {
+                                        Icon(
+                                            Icons.Filled.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                } else {
+                                    null
+                                },
+                                colors = androidx.compose.material3
+                                    .FilterChipDefaults.filterChipColors(
+                                        containerColor =
+                                            MaterialTheme.colorScheme
+                                                .surfaceContainerHigh,
+                                        labelColor =
+                                            MaterialTheme.colorScheme
+                                                .onSurface,
+                                        selectedContainerColor =
+                                            MaterialTheme.colorScheme
+                                                .primary,
+                                        selectedLabelColor =
+                                            MaterialTheme.colorScheme
+                                                .onPrimary,
+                                        selectedLeadingIconColor =
+                                            MaterialTheme.colorScheme
+                                                .onPrimary
+                                    ),
+                                border = androidx.compose.material3
+                                    .FilterChipDefaults.filterChipBorder(
+                                        enabled = true,
+                                        selected = statusSelected,
+                                        borderColor =
+                                            MaterialTheme.colorScheme
+                                                .outlineVariant,
+                                        selectedBorderColor =
+                                            MaterialTheme.colorScheme
+                                                .primary
+                                    )
                             )
                         }
                     }
@@ -821,13 +1227,21 @@ fun BookDetailScreen(
             }
             if (book.sourceType == app.xreader.data.db.SourceType.EXTENSION) {
                 item(key = "source-banner") {
-                    // Reference source & network banner, with
-                    // this screen's real source doors: the host
-                    // the book came from, how much of it is on
-                    // the device, Repair (link sources) and the
-                    // site check (browser-view sources that need
-                    // setup). The Chapters recovery card below
-                    // still carries its own doors for failures.
+                    // Reference source & network banner: the
+                    // host the book came from, how much of it
+                    // is on the device, and the site check
+                    // (browser-view sources that need setup).
+                    // v1.5.4 (WS-8): no Repair door on this
+                    // line — beside the chapter count it read
+                    // as "this source is broken" on healthy
+                    // books (owner, 2026-11-04). Repair lives
+                    // on the Chapters recovery card below
+                    // (failure states) and on the source's own
+                    // Details page, and nowhere beside a
+                    // chapter-state line. Addendum 3 (same
+                    // evening): no "partial list" marker either
+                    // — partiality is invisible; the line shows
+                    // the plain loaded count, complete or not.
                     val host = remember(section.sourcePageUrl) {
                         section.sourcePageUrl?.let { url ->
                             runCatching { java.net.URI(url).host }
@@ -863,25 +1277,11 @@ fun BookDetailScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                "· ${state.chapters.size} loaded" +
-                                    if (!book.chapterListComplete) {
-                                        " · partial list"
-                                    } else {
-                                        ""
-                                    },
+                                "· ${state.chapters.size} loaded",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(Modifier.weight(1f))
-                            if (state.isLinkSource) {
-                                TextButton(
-                                    onClick = {
-                                        book.extensionId?.let {
-                                            onOpenSourceDetails(it)
-                                        }
-                                    }
-                                ) { Text("Repair") }
-                            }
                             if (state.sourceNeedsSiteCheck) {
                                 TextButton(
                                     onClick = {
@@ -1226,42 +1626,93 @@ fun BookDetailScreen(
                                 )
                             }
                         ) { Text("Highlights (.md)") }
-                        if (book.sourceType ==
-                            app.xreader.data.db.SourceType.EXTENSION
-                        ) {
-                            TextButton(
-                                onClick = { viewModel.refreshChapters() }
-                            ) {
-                                Text("Refresh chapters")
-                            }
-                        }
+                        // v1.5.7: the buried "Refresh chapters"
+                        // text link that used to sit here is
+                        // REMOVED — Refresh is now the first-class
+                        // action in the primary action row above
+                        // (owner-ordered), and the page keeps
+                        // exactly one obvious Refresh.
                         TextButton(
                             onClick = {
+                                // v1.5.8 (K5): Copy details
+                                // tells the truth — chapters
+                                // error, the sync-seam log lines
+                                // and (Fenrir) the unlock lines
+                                // ride along via BookCopyDetails.
                                 clipboard.setText(
                                     AnnotatedString(
-                                        buildString {
-                                            append(book.title)
-                                            if (book.author.isNotBlank()) {
-                                                append("\nby ${book.author}")
-                                            }
-                                            append(
-                                                "\n${state.chapters.size} chapters" +
-                                                    " · ${state.downloadedCount}" +
-                                                    " downloaded"
-                                            )
-                                            statusLabel?.let {
-                                                append("\nStatus: $it")
-                                            }
-                                            if (book.description.isNotBlank()) {
-                                                append("\n\n${book.description}")
-                                            }
-                                        }
+                                        BookCopyDetails.build(
+                                            title = book.title,
+                                            author = book.author,
+                                            chapterCount = state.chapters.size,
+                                            downloadedCount = state.downloadedCount,
+                                            statusLabel = statusLabel,
+                                            description = book.description,
+                                            chaptersError = state.chaptersError,
+                                            isFenrirBook = BookCopyDetails.isFenrir(
+                                                state.providerName
+                                            ),
+                                            logEntries =
+                                                app.xreader.data.extension
+                                                    .DiagnosticLog.entries()
+                                        )
                                     )
                                 )
                                 viewModel.notifyMessage("Book details copied")
                             }
                         ) { Text("Copy details") }
                     }
+                }
+            }
+            // v1.5.6 (§3.2): an in-place local book's Contents —
+            // the book's own outline from its file. Tapping a row
+            // hands the entry's target JSON to the local reader
+            // via onReadLocalTarget when the shell provided it;
+            // otherwise the chapter-index door opens the book at
+            // its resume point.
+            if (localOutline.isNotEmpty()) {
+                item(key = "local-contents-header") {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            "Contents",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            "From the book's own file — it reads exactly as published.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                items(
+                    count = localOutline.size,
+                    key = { i -> "local-outline-$i" }
+                ) { i ->
+                    val entry = localOutline[i]
+                    TextButton(
+                        onClick = {
+                            val targetDoor = onReadLocalTarget
+                            if (targetDoor != null) {
+                                targetDoor(book.id, entry.targetJson)
+                            } else {
+                                onReadChapter(entry.idx)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(entry.title, Modifier.fillMaxWidth())
+                    }
+                }
+            }
+            // v1.5.6 (§3.4(b)): the legacy lane's offered re-add —
+            // plain words, never forced, never silent.
+            if (book.sourceType ==
+                app.xreader.data.db.SourceType.LOCAL_FILE &&
+                book.documentUri == null && book.filePath == null &&
+                localOutline.isEmpty()
+            ) {
+                item(key = "local-readd-offer") {
+                    LegacyReAddCard(viewModel = viewModel)
                 }
             }
             // v1.0.5 (B1/D26): the Chapters section ALWAYS opens
@@ -1287,6 +1738,13 @@ fun BookDetailScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(Modifier.weight(1f))
+                            // v1.5.8 (J2/E3): the chapter
+                            // settings door — sort/display +
+                            // the scanlator filter, one tap
+                            // from the list it shapes.
+                            TextButton(
+                                onClick = { chapterSettingsOpen = true }
+                            ) { Text("Chapter settings") }
                             val headerLatest = remember(state.chapters) {
                                 app.xreader.domain.reader.ChapterDateText
                                     .latestRelative(
@@ -1311,16 +1769,29 @@ fun BookDetailScreen(
                             }
                         }
                     }
-                    // v1.0.8 (recommendation): a partially loaded
-                    // book says so plainly — tweak 3: the loaded
-                    // prefix is the normal state, the remainder
-                    // and its one-tap door sit in-design.
+                    // v1.5.4 (WS-8, owner addendum 3 —
+                    // supersedes the v1.0.8 announcement below
+                    // in history): partiality is INVISIBLE in
+                    // the normal flow. The old announcement
+                    // card (loaded count + a promise that more
+                    // would arrive while reading) is gone —
+                    // scrolling to the loaded edge grows the
+                    // list silently (each row's edge trigger
+                    // resumes the walk from its stored cursor),
+                    // and that is the only growth the user
+                    // experiences. The ONE allowed surfacing:
+                    // a load-more attempt that actually FAILED
+                    // shows this plain-words retry row — a
+                    // failed load is the only "broke" signal
+                    // (owner, 2026-11-04).
                     if (section.kind == ChaptersSectionKind.LIST &&
-                        !book.chapterListComplete
+                        !book.chapterListComplete &&
+                        state.chaptersError != null
                     ) {
                         Surface(
                             Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
+                            // v1.5.8 (J15): the one card radius.
+                            shape = RoundedCornerShape(24.dp),
                             color = MaterialTheme.colorScheme.surfaceContainerLow
                         ) {
                             Row(
@@ -1331,8 +1802,8 @@ fun BookDetailScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Text(
-                                    "${state.chapters.size} loaded · more " +
-                                        "chapters load as you read",
+                                    "More chapters couldn't be loaded — " +
+                                        "the source didn't answer.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme
                                         .onSurfaceVariant,
@@ -1341,7 +1812,7 @@ fun BookDetailScreen(
                                 TextButton(
                                     onClick = { viewModel.loadFullChapterList() }
                                 ) {
-                                    Text("Load full list")
+                                    Text("Try again")
                                 }
                             }
                         }
@@ -1358,15 +1829,104 @@ fun BookDetailScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             TextField(
-                                value = chapterQuery,
+                                // v1.5.7 (Finding 5): the field
+                                // shows its OWN text now. A purely
+                                // numeric entry resolves through
+                                // ChapterJump, grows the display
+                                // window to the target, and the
+                                // pending-scroll effect above
+                                // scrolls it into view with the
+                                // transient highlight — and since
+                                // v1.5.38 (Fix C2) it ALSO sets
+                                // chapterQuery, so the number
+                                // search narrows the list to the
+                                // named chapter (exact identity
+                                // rung — never the old substring
+                                // flood). Text that isn't purely
+                                // numeric keeps the old search
+                                // behaviour, unchanged. An entry
+                                // that resolves nowhere shows the
+                                // filter's empty state: the page
+                                // stays put, honestly.
+                                value = jumpFieldText,
                                 onValueChange = { value ->
-                                    chapterQuery = value
-                                    // v1.0.8 (recommendation): a
-                                    // chapter-number search past
-                                    // the loaded edge loads forward
-                                    // to it.
-                                    value.trim().toIntOrNull()?.let { number ->
-                                        viewModel.onChapterNumberSearch(number)
+                                    jumpFieldText = value
+                                    if (ChapterJump.isJumpQuery(value)) {
+                                        // v1.5.38 (Fix C2,
+                                        // V1537-PROOF-FORENSICS §C):
+                                        // numeric text ALSO sets
+                                        // chapterQuery — the number
+                                        // search the v1.5.7 split
+                                        // routed away from the
+                                        // filter entirely, leaving
+                                        // the field's number rung
+                                        // unreachable and the typed
+                                        // number visibly doing
+                                        // nothing. The filter's
+                                        // number rung is an EXACT
+                                        // identity match (see
+                                        // ChapterListFilter), so the
+                                        // old substring flood cannot
+                                        // return through this door.
+                                        chapterQuery = value
+                                        // v1.0.8 (recommendation):
+                                        // a chapter number past the
+                                        // loaded edge loads forward
+                                        // to it (kept from the old
+                                        // wiring — the load is the
+                                        // same, only the list's
+                                        // reaction changed).
+                                        ChapterJump.parseNumber(value)
+                                            ?.let { number ->
+                                                viewModel.onChapterNumberSearch(
+                                                    number.toInt()
+                                                )
+                                            }
+                                        // Resolution runs against
+                                        // the list AS THE NEW QUERY
+                                        // FILTERS IT — the same pure
+                                        // derivation the screen
+                                        // composes (filter over the
+                                        // full list, then display
+                                        // order) — so the pending
+                                        // position indexes the list
+                                        // the effect will actually
+                                        // scroll, not the pre-
+                                        // keystroke one.
+                                        val jumpDisplay =
+                                            app.xreader.domain.reader
+                                                .ChapterDisplayOrder
+                                                .ordered(
+                                                    app.xreader.domain
+                                                        .reader
+                                                        .ChapterListFilter
+                                                        .apply(
+                                                            state.chapters,
+                                                            value,
+                                                            chapterStateFilter,
+                                                            chapterPartFilter
+                                                        ),
+                                                    newestFirst
+                                                )
+                                        val pos = ChapterJump
+                                            .resolvePosition(
+                                                value, jumpDisplay
+                                            )
+                                        if (pos >= 0) {
+                                            jumpTargetId =
+                                                jumpDisplay[pos].id
+                                            if (pos >= chapterWindow) {
+                                                chapterWindow = pos + 1
+                                            }
+                                            pendingJumpPos = pos
+                                        } else {
+                                            jumpTargetId = null
+                                            pendingJumpPos = -1
+                                        }
+                                    } else {
+                                        jumpTargetId = null
+                                        pendingJumpPos = -1
+                                        chapterQuery = value
                                     }
                                 },
                                 placeholder = { Text("Jump to chapter…") },
@@ -1641,6 +2201,12 @@ fun BookDetailScreen(
                         TextButton(
                             onClick = {
                                 chapterQuery = ""
+                                // v1.5.7: the jump field's own
+                                // text clears with the search it
+                                // may have fed.
+                                jumpFieldText = ""
+                                jumpTargetId = null
+                                pendingJumpPos = -1
                                 chapterStateFilter =
                                     app.xreader.domain.reader.ChapterListFilter.State.ALL
                                 chapterPartFilter = null
@@ -1651,18 +2217,25 @@ fun BookDetailScreen(
             }
             if (section.kind == ChaptersSectionKind.LIST) {
                 items(displayedChapters, key = { "chapter-${it.id}" }) { chapter ->
-                    // v1.0.8: composing a row near the loaded edge
-                    // of a partially loaded book grows the list —
-                    // scrolling IS the demand signal.
-                    LaunchedEffect(chapter.id) {
-                        viewModel.onChapterNearEdge(chapter.index)
-                    }
+                    // v1.5.37 (S6): no per-row effect and no
+                    // animateItem here any more. The growth
+                    // trigger is hoisted to one snapshotFlow
+                    // over the visible items (above), and the
+                    // rows' placement animation — an
+                    // underdamped spring on every row — is
+                    // what smeared big lists on any shift or
+                    // sort flip (BIG-BOOK-REFRESH-FORENSICS
+                    // Q8a). Rows now place instantly; the row
+                    // content and design are unchanged.
                     ChapterRow(
                         chapter = chapter,
                         isCurrent = chapter.index == state.continueChapterIndex &&
                             state.progress != null,
-                        isNew = chapter.index ==
-                            (state.chapters.maxOfOrNull { it.index } ?: -1) &&
+                        // v1.5.7 (Finding 5): the jump's
+                        // transient highlight, on the current
+                        // chapter's own container treatment.
+                        isJumpTarget = chapter.id == jumpTargetId,
+                        isNew = chapter.index == maxChapterIndex &&
                             !chapter.read && state.chapters.size > 1,
                         currentPercent = if (
                             chapter.index == state.continueChapterIndex
@@ -1671,96 +2244,62 @@ fun BookDetailScreen(
                         } else {
                             null
                         },
-                        minutesLeft = if (chapter.wordCount > 0) {
-                            (chapter.wordCount / state.wpm).toInt()
+                        isStubBody = chapter.id in state.stubChapterIds,
+                        minutesLeft = if (
+                            app.xreader.data.download.ChapterTruth152
+                                .displayWordCount(chapter, state.stubChapterIds) > 0
+                        ) {
+                            (app.xreader.data.download.ChapterTruth152
+                                .displayWordCount(chapter, state.stubChapterIds) /
+                                state.wpm).toInt()
                                 .coerceAtLeast(1)
                         } else {
                             null
                         },
                         onClick = { onReadChapter(chapter.index) },
-                        onDownload = { viewModel.downloadChapter(chapter) },
-                        modifier = Modifier.animateItem(
-                            placementSpec = listPlacementSpec()
-                        )
+                        onDownload = { viewModel.downloadChapter(chapter) }
                     )
                 }
                 if (chapterWindow < displayChapters.size) {
-                    // v1.3.1 (item 54): the window's end — a
-                    // plain counter and one big, plainly
-                    // labelled control. The LazyColumn's own
-                    // bottom padding keeps it clear of the
-                    // phone's dead bottom strip.
+                    // v1.5.37 (combined build, S6): the window's
+                    // end is a SENTINEL, not a button — the
+                    // owner's ask: chapters load as he scrolls.
+                    // Composing the sentinel (scrolling to it)
+                    // grows the window by 200 and reports the
+                    // new window end to the same near-edge
+                    // growth the rows use, so reveal and
+                    // fetch-streaming are driven by the scroll
+                    // itself. The "Showing N of M" line stays
+                    // as its label; there is no button to tap.
+                    // The LazyColumn's own bottom padding keeps
+                    // it clear of the phone's dead bottom strip.
                     item(key = "chapters-window-more") {
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                "Showing ${displayedChapters.size} of " +
-                                    "${displayChapters.size} chapters",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme
-                                    .onSurfaceVariant
+                        LaunchedEffect(Unit) {
+                            chapterWindow += 200
+                            viewModel.onChapterNearEdge(
+                                chapterWindow
                             )
-                            Button(
-                                onClick = {
-                                    chapterWindow += 100
-                                    // Compose with progressive
-                                    // fetching: if the new window
-                                    // reaches past the fetched
-                                    // rows, this tap pulls the
-                                    // next chunk.
-                                    viewModel.onChapterNearEdge(
-                                        chapterWindow
-                                    )
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(56.dp)
-                            ) {
-                                Text("Show more")
-                            }
                         }
+                        Text(
+                            "Showing ${displayedChapters.size} of " +
+                                "${displayChapters.size} chapters",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
                     }
                 }
-                if (!book.chapterListComplete) {
-                    // Tweak 3: the not-yet-loaded remainder, in
-                    // design — a quiet tier-1 row that says the
-                    // list continues past what's loaded and
-                    // carries the same Load full list door.
-                    item(key = "chapters-more") {
-                        Surface(
-                            onClick = { viewModel.loadFullChapterList() },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerLow
-                        ) {
-                            Row(
-                                Modifier.padding(
-                                    horizontal = 14.dp, vertical = 12.dp
-                                ),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(
-                                    Icons.Filled.ChevronRight,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme
-                                        .onSurfaceVariant,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Text(
-                                    "More chapters beyond these " +
-                                        "${state.chapters.size} — tap to load " +
-                                        "the full list",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme
-                                        .onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
+                // v1.5.4 (WS-8, owner addendum 3): the old
+                // tail row here (which told the reader more
+                // chapters sat beyond the loaded ones, with a
+                // tap-to-load-the-rest door) announced
+                // partiality at the end of every incomplete
+                // list; it is removed for the same reason as
+                // the Chapters-section card. It was NOT
+                // load-bearing: composing the last loaded
+                // rows fires the edge trigger, which resumes
+                // the walk from the cursor stored on the
+                // book row — growth at the edge is silent.
             }
             item(key = "tags") {
                 GlassCard(Modifier.fillMaxWidth()) {
@@ -1822,7 +2361,13 @@ fun BookDetailScreen(
                 )
             }
             item(key = "book-actions") {
-                BookCleanupActions(viewModel = viewModel, bookTitle = book.title, onRemoved = onBack)
+                BookCleanupActions(
+                    viewModel = viewModel,
+                    bookTitle = book.title,
+                    isLocalFile = book.sourceType ==
+                        app.xreader.data.db.SourceType.LOCAL_FILE,
+                    onRemoved = onBack
+                )
             }
         }
     }
@@ -1912,6 +2457,140 @@ fun BookDetailScreen(
                 }
             }
         )
+    }
+
+    // v1.5.8 (J2/E3): the chapter-settings sheet — the donor's
+    // sort/display choices the page lacked, plus the per-book
+    // scanlator filter (E3's surface). Every control binds the
+    // SAME state the list itself reads: sort → newestFirst,
+    // display → chapterStateFilter, scanlators → the VM's
+    // BookReaderPrefs exclusion set (this book only —
+    // option-scope rule).
+    if (chapterSettingsOpen) {
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { chapterSettingsOpen = false },
+            sheetState = androidx.compose.material3
+                .rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                Modifier
+                    .verticalScroll(
+                        androidx.compose.foundation.rememberScrollState()
+                    )
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "Chapter settings",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    "Order",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = !newestFirst,
+                        onClick = { newestFirst = false },
+                        label = { Text("Oldest first") }
+                    )
+                    FilterChip(
+                        selected = newestFirst,
+                        onClick = { newestFirst = true },
+                        label = { Text("Newest first") }
+                    )
+                }
+                Text(
+                    "Show",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = chapterStateFilter ==
+                            app.xreader.domain.reader.ChapterListFilter.State.ALL,
+                        onClick = {
+                            chapterStateFilter =
+                                app.xreader.domain.reader.ChapterListFilter.State.ALL
+                        },
+                        label = { Text("All chapters") }
+                    )
+                    FilterChip(
+                        selected = chapterStateFilter ==
+                            app.xreader.domain.reader.ChapterListFilter.State.UNREAD,
+                        onClick = {
+                            chapterStateFilter =
+                                app.xreader.domain.reader.ChapterListFilter.State.UNREAD
+                        },
+                        label = { Text("Unread only") }
+                    )
+                    FilterChip(
+                        selected = chapterStateFilter ==
+                            app.xreader.domain.reader.ChapterListFilter.State.DOWNLOADED,
+                        onClick = {
+                            chapterStateFilter =
+                                app.xreader.domain.reader.ChapterListFilter.State.DOWNLOADED
+                        },
+                        label = { Text("Downloaded only") }
+                    )
+                }
+                if (state.allScanlators.isNotEmpty()) {
+                    Text(
+                        "Scanlators",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        "Untick a scanlator to hide its chapters " +
+                            "from this book's list.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    state.allScanlators.forEach { scanlator ->
+                        val included =
+                            scanlator !in state.excludedScanlators
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.setExcludedScanlators(
+                                        if (included) {
+                                            state.excludedScanlators + scanlator
+                                        } else {
+                                            state.excludedScanlators - scanlator
+                                        }
+                                    )
+                                }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            androidx.compose.material3.Checkbox(
+                                checked = included,
+                                onCheckedChange = { nowIncluded ->
+                                    viewModel.setExcludedScanlators(
+                                        if (nowIncluded) {
+                                            state.excludedScanlators - scanlator
+                                        } else {
+                                            state.excludedScanlators + scanlator
+                                        }
+                                    )
+                                }
+                            )
+                            Text(
+                                scanlator,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+            }
+        }
     }
 
     // v1.0.5 (B2/E6): the Download choices sheet — the three
@@ -2403,9 +3082,21 @@ private fun SourcesMergeSection(
  * slot, same pill shape (the page's look is unchanged), but
  * muted and inert: it can never read as a live button, and
  * it carries the reason itself.
+ *
+ * v1.5.37 (combined build, item 4): the headline follows
+ * the state — [title] defaults to the settled-failure
+ * headline, and the still-loading call site passes its
+ * finding headline instead. Until now the pill headlined
+ * "Chapters unavailable" even while a fetch was in flight
+ * and its own reason line said "Finding chapters…" (the
+ * owner's source-tour wart): the error headline now
+ * renders only on a settled failure.
  */
 @Composable
-private fun ChaptersUnavailablePill(reason: String) {
+private fun ChaptersUnavailablePill(
+    reason: String,
+    title: String = "Chapters unavailable"
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = CircleShape,
@@ -2416,7 +3107,7 @@ private fun ChaptersUnavailablePill(reason: String) {
             Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
             Text(
-                "Chapters unavailable",
+                title,
                 style = MaterialTheme.typography.labelLarge,
                 maxLines = 1
             )
@@ -2438,17 +3129,32 @@ private fun ChapterRow(
     minutesLeft: Int?,
     onClick: () -> Unit,
     onDownload: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** v1.5.2 fix (FIX-8c): this chapter's stored body is a stub —
+     * no count renders for it anywhere (§14.4). */
+    isStubBody: Boolean = false,
+    /** v1.5.7 (Finding 5): the jump landed on this row — it
+     * takes the current chapter's container treatment while
+     * the highlight lasts (the page clears it after a few
+     * seconds). No other visual change. */
+    isJumpTarget: Boolean = false
 ) {
+    // v1.5.2 fix (FIX-8c/FIX-6a): the rendered count is the PROVEN
+    // count (0 for stubs); the row mark is §12.10's: DOWNLOADED
+    // (USER+READY, green tick) vs CACHED (AUTOMATIC+READY, hollow).
+    val provenWordCount = if (isStubBody) 0 else chapter.wordCount
+    val rowMark = app.xreader.data.download.ChapterTruth152.rowMark(chapter)
     val container = when {
-        isCurrent -> MaterialTheme.colorScheme.surfaceContainerHigh
+        isCurrent || isJumpTarget ->
+            MaterialTheme.colorScheme.surfaceContainerHigh
         chapter.read -> MaterialTheme.colorScheme.surfaceContainerLow
         else -> MaterialTheme.colorScheme.surfaceContainer
     }
     Surface(
         onClick = onClick,
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        // v1.5.8 (J2): the one card radius — 24dp everywhere.
+        shape = RoundedCornerShape(24.dp),
         color = container
     ) {
         // v1.3.2 (item 89 — the user's own freeze override, ROW
@@ -2529,24 +3235,38 @@ private fun ChapterRow(
                 // The chapter's release date rides the same
                 // subtitle line, relatively ("· 3 days ago") —
                 // absent when the source prints no date.
+                // v1.5.7 (scope F smoothness): the relative-date
+                // parse is remembered per date text — it used to
+                // re-parse on every row recomposition (progress
+                // ticks recompose the whole visible list).
+                val dateLine = remember(chapter.dateText) {
+                    app.xreader.domain.reader.ChapterDateText
+                        .relative(chapter.dateText)
+                }
                 val statusLine = when {
+                    isStubBody -> "Locked — sign in to read this chapter"
                     chapter.read -> "Read" +
-                        if (chapter.downloadState == DownloadState.READY) {
-                            " · Downloaded"
-                        } else {
-                            ""
+                        when (rowMark) {
+                            app.xreader.data.download.ChapterTruth152.RowMark.DOWNLOADED ->
+                                " · Downloaded"
+                            app.xreader.data.download.ChapterTruth152.RowMark.CACHED ->
+                                " · Cached"
+                            else -> ""
                         }
                     isCurrent -> "Continue here" +
                         (minutesLeft?.let { " · ≈$it min left" } ?: "")
-                    chapter.wordCount > 0 -> "${chapter.wordCount} words" +
+                    provenWordCount > 0 -> "$provenWordCount words" +
                         (minutesLeft?.let { " · ≈$it min" } ?: "")
                     else -> ""
                 }
-                val dateLine = app.xreader.domain.reader.ChapterDateText
-                    .relative(chapter.dateText)
+                // v1.5.8 (E2): the scanlator rides the meta
+                // line dot-separated with the date, donor
+                // shape — absent entirely when the source
+                // credited nobody (no placeholder).
                 val subtitle = listOfNotNull(
                     statusLine.ifEmpty { null },
-                    dateLine
+                    dateLine,
+                    chapter.scanlator?.takeIf { it.isNotBlank() }
                 ).joinToString(" · ")
                 if (subtitle.isNotEmpty()) {
                     Text(
@@ -2559,11 +3279,23 @@ private fun ChapterRow(
                 }
             }
             when (chapter.downloadState) {
-                DownloadState.READY -> Icon(
-                    Icons.Filled.CheckCircle,
-                    contentDescription = "Downloaded",
-                    tint = sageTextColor()
-                )
+                DownloadState.READY -> if (
+                    rowMark == app.xreader.data.download.ChapterTruth152.RowMark.CACHED
+                ) {
+                    // §12.10: the distinct HOLLOW mark for cache —
+                    // never the green downloaded tick.
+                    Icon(
+                        Icons.Outlined.CheckCircle,
+                        contentDescription = "Cached",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Icon(
+                        Icons.Filled.CheckCircle,
+                        contentDescription = "Downloaded",
+                        tint = sageTextColor()
+                    )
+                }
                 DownloadState.DOWNLOADING, DownloadState.QUEUED -> Icon(
                     Icons.Filled.Schedule,
                     contentDescription = "Queued",
@@ -2877,14 +3609,63 @@ private fun AiSuggestionsSection(
 
 /** v1.0.1 cleanup + removal: visible, labelled, with the size shown
  * BEFORE confirming and honest consequences in plain words. */
+/** v1.5.6 (§3.4(b)): the legacy lane's re-add offer card. */
+@Composable
+private fun LegacyReAddCard(viewModel: BookDetailViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val picker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        val name = runCatching {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val idx = cursor.getColumnIndex(
+                    android.provider.OpenableColumns.DISPLAY_NAME
+                )
+                if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
+            }
+        }.getOrNull() ?: "book"
+        viewModel.reAddPicked(
+            displayName = name,
+            documentUri = uri.toString(),
+            openStream = { context.contentResolver.openInputStream(uri) }
+        )
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Re-add the original file to read this book exactly as published.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Text(
+            "This copy was imported by an older version, which kept " +
+                "only converted chapters. Adding the original file " +
+                "switches the book to reading straight from it — " +
+                "your place and bookmarks stay.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Button(onClick = {
+            picker.launch(arrayOf("application/epub+zip", "application/pdf", "*/*"))
+        }) { Text("Re-add the original file") }
+    }
+}
+
 @Composable
 private fun BookCleanupActions(
     viewModel: BookDetailViewModel,
     bookTitle: String,
+    isLocalFile: Boolean = false,
     onRemoved: () -> Unit
 ) {
     var confirmCleanup by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
+    var confirmPermanent by remember { mutableStateOf(false) }
+    val deleteContext = androidx.compose.ui.platform.LocalContext.current
     var sizeBytes by remember { mutableStateOf(0L) }
     LaunchedEffect(confirmCleanup, confirmRemove) {
         if (confirmCleanup || confirmRemove) {
@@ -2924,6 +3705,32 @@ private fun BookCleanupActions(
             }
         )
     }
+    if (confirmPermanent) {
+        // v1.5.6 (§3.7): the permanent option's own warning step.
+        AlertDialog(
+            onDismissRequest = { confirmPermanent = false },
+            title = { Text("Delete from your device?") },
+            text = {
+                Text(
+                    "This also deletes the file from your device — " +
+                        "it cannot be undone. Android may ask you to " +
+                        "confirm the file delete as well."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmPermanent = false
+                    viewModel.removeLocalBook(
+                        app.xreader.data.library.LocalBookDeleteMode.PERMANENT,
+                        deleteContext
+                    ) { onRemoved() }
+                }) { Text("Delete everything") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmPermanent = false }) { Text("Cancel") }
+            }
+        )
+    }
     if (confirmRemove) {
         // v1.0.5 (D2): the two remove choices stack full-width in
         // the BODY (DialogDangerOption) and "Keep the book" sits
@@ -2933,32 +3740,70 @@ private fun BookCleanupActions(
             title = { Text("Remove “$bookTitle”?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        "Removing the book also removes its reading progress and " +
-                            "bookmarks. Your original file (if you imported one) " +
-                            "stays exactly where it is — only Xreader's own copies " +
-                            "can be deleted, and only if you choose that below."
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    app.xreader.ui.common.DialogDangerOption(
-                        label = "Remove book only",
-                        onClick = {
-                            confirmRemove = false
-                            viewModel.removeFromLibrary(deleteFiles = false) {
-                                onRemoved()
+                    if (isLocalFile) {
+                        // v1.5.6 (§3.7): a local book's three
+                        // options — no second copy, YouTube rule.
+                        Text(
+                            "This book reads from its own file. " +
+                                "Deleting the book never touches your " +
+                                "file unless you choose the last option."
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        app.xreader.ui.common.DialogDangerOption(
+                            label = "Delete book",
+                            onClick = {
+                                confirmRemove = false
+                                viewModel.removeLocalBook(
+                                    app.xreader.data.library.LocalBookDeleteMode.DELETE_BOOK,
+                                    null
+                                ) { onRemoved() }
                             }
-                        }
-                    )
-                    app.xreader.ui.common.DialogDangerOption(
-                        label = "Remove book and downloaded chapters " +
-                            "(${formatMb(sizeBytes)})",
-                        onClick = {
-                            confirmRemove = false
-                            viewModel.removeFromLibrary(deleteFiles = true) {
-                                onRemoved()
+                        )
+                        app.xreader.ui.common.DialogDangerOption(
+                            label = "Delete book and forget my reading",
+                            onClick = {
+                                confirmRemove = false
+                                viewModel.removeLocalBook(
+                                    app.xreader.data.library.LocalBookDeleteMode.FORGET,
+                                    null
+                                ) { onRemoved() }
                             }
-                        }
-                    )
+                        )
+                        app.xreader.ui.common.DialogDangerOption(
+                            label = "Permanent delete from my device",
+                            onClick = {
+                                confirmRemove = false
+                                confirmPermanent = true
+                            }
+                        )
+                    } else {
+                        Text(
+                            "Removing the book also removes its reading progress and " +
+                                "bookmarks. Your original file (if you imported one) " +
+                                "stays exactly where it is — only Xreader's own copies " +
+                                "can be deleted, and only if you choose that below."
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        app.xreader.ui.common.DialogDangerOption(
+                            label = "Remove book only",
+                            onClick = {
+                                confirmRemove = false
+                                viewModel.removeFromLibrary(deleteFiles = false) {
+                                    onRemoved()
+                                }
+                            }
+                        )
+                        app.xreader.ui.common.DialogDangerOption(
+                            label = "Remove book and downloaded chapters " +
+                                "(${formatMb(sizeBytes)})",
+                            onClick = {
+                                confirmRemove = false
+                                viewModel.removeFromLibrary(deleteFiles = true) {
+                                    onRemoved()
+                                }
+                            }
+                        )
+                    }
                 }
             },
             confirmButton = {},

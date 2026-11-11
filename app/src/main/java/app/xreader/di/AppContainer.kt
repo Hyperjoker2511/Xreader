@@ -38,9 +38,11 @@ import app.xreader.data.prefs.AppearancePrefs
 import app.xreader.data.prefs.OnboardingPrefs
 import app.xreader.data.prefs.keyVaultDataStore
 import app.xreader.data.prefs.settingsDataStore
+import dev.mihon.injekt.patchInjekt
 import eu.kanade.tachiyomi.AppInfo
 import eu.kanade.tachiyomi.network.NetworkPreferences
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -80,7 +82,12 @@ fun buildXreaderDatabase(context: Context): XreaderDatabase =
         app.xreader.data.db.MIGRATION_3_4,
         app.xreader.data.db.MIGRATION_4_5,
         app.xreader.data.db.MIGRATION_5_6,
-        app.xreader.data.db.MIGRATION_6_7
+        app.xreader.data.db.MIGRATION_6_7,
+        app.xreader.data.db.MIGRATION_7_8,
+        app.xreader.data.db.MIGRATION_8_9,
+        app.xreader.data.db.MIGRATION_9_10,
+        app.xreader.data.db.MIGRATION_10_11,
+        app.xreader.data.db.MIGRATION_11_12
     ).build()
 
 /**
@@ -89,7 +96,31 @@ fun buildXreaderDatabase(context: Context): XreaderDatabase =
  * Later phases add their engines here; nothing else builds its own
  * database, vault, or preference owner.
  */
-class AppContainer(context: Context) {
+class AppContainer(
+    context: Context,
+    /** v1.5.2 loop 2 (owner auto-install decision): a test seam —
+     * journey proofs substitute the extension transport so the
+     * REAL container (its pending-op store, repo manager, sync
+     * and DAOs) drives a scripted site. Production passes null
+     * and gets the OkHttp extension lane, unchanged. */
+    private val extensionTransportOverride:
+        app.xreader.data.net.HttpTransport? = null,
+    /** Same seam, one level up: a journey proof may substitute
+     * a LinkProber built over a scripted rendered fetcher (the
+     * device road that follows a site's cross-domain redirect
+     * lives in the browser view, which JVM tests script). The
+     * prober itself is the production class; production passes
+     * null. */
+    private val linkProberOverride:
+        app.xreader.data.extension.LinkProber? = null,
+    /** Same seam for the rendered road itself: a source the
+     * probe marked needsRendering test-drives through the
+     * browser view when it installs — JVM journeys script that
+     * view instead of loading a real WebView. Production
+     * passes null and gets the WebView fetcher, unchanged. */
+    private val renderedFetcherOverride:
+        app.xreader.data.extension.RenderedPageFetcher? = null
+) {
 
     private val appContext: Context = context.applicationContext
 
@@ -132,6 +163,12 @@ class AppContainer(context: Context) {
                 app.xreader.data.prefs.PerformancePolicy.resolve(
                     appearance.performanceMode, totalRamMb(), false
                 ).tier
+            },
+            // v1.5.10 (A2): contained failures from the runtime's
+            // collectors land in CrashGuard's contained note writer
+            // + DiagnosticLog via the container's one recorder.
+            containedFailureSink = { site, throwable ->
+                recordContainedFailure(site, throwable)
             }
         )
 
@@ -154,6 +191,25 @@ class AppContainer(context: Context) {
      * size) layered over the global reader settings. */
     val bookReaderPrefs: app.xreader.data.prefs.BookReaderPrefs =
         app.xreader.data.prefs.BookReaderPrefs(appContext.settingsDataStore)
+
+    /** FIX-18 (Komikku transplant): the manga reader's GLOBAL
+     * preference store (Settings/Customise defaults) and the
+     * per-book overlay factory (in-reader changes land on the
+     * book's own layer — the option-scope rule). The global store
+     * is also the Injekt-registered ReaderPreferences' backing
+     * store (KomikkuReaderRegistrar, registered in init below). */
+    val komikkuGlobalStore: app.xreader.komikku.setting.KomikkuPreferenceStore by lazy {
+        app.xreader.komikku.setting.DataStoreKomikkuStore(
+            appContext.settingsDataStore, appScope, "komikku."
+        )
+    }
+
+    fun komikkuBookStore(
+        bookId: Long
+    ): app.xreader.komikku.setting.KomikkuPreferenceStore =
+        app.xreader.komikku.setting.DataStoreKomikkuStore(
+            appContext.settingsDataStore, appScope, "komikku.book.$bookId."
+        )
 
     /** P0 (Reader Terms): display-time term replacements — one
      * global list plus a list per book. The stored chapter text
@@ -190,8 +246,422 @@ class AppContainer(context: Context) {
     // history visibility, and library/navigation customisation.
     val bookMetaPrefs: app.xreader.data.library.BookMetaPrefs =
         app.xreader.data.library.BookMetaPrefs(appContext.settingsDataStore)
+
+    init {
+        // v1.5.2 (§13.1): favourites live by natural key. The
+        // resolvers read the CURRENT book set, so a recreated row
+        // keeps its favourite and a reused rowid inherits nothing.
+        bookMetaPrefs.naturalKeyForId = { bookId ->
+            val book = database.bookDao().getById(bookId)
+            book?.let { b ->
+                val pkg = b.extensionId?.let { extId ->
+                    database.installedExtensionDao().getById(extId)?.packageId
+                }
+                app.xreader.data.sync.SyncKeys.bookKey(b, pkg)
+            }
+        }
+        bookMetaPrefs.idForNaturalKey = { key ->
+            val books = database.bookDao().allBooks()
+            val byId = books.associateBy { it.id }
+            books.firstOrNull { b ->
+                val pkg = b.extensionId?.let { extId ->
+                    database.installedExtensionDao().getById(extId)?.packageId
+                }
+                app.xreader.data.sync.SyncKeys.bookKey(b, pkg) == key
+            }?.id
+        }
+    }
     val historyPrefs: app.xreader.data.library.HistoryPrefs =
         app.xreader.data.library.HistoryPrefs(appContext.settingsDataStore)
+
+    // ── v1.5.2 stores ───────────────────────────────────────────
+    val pendingOperationStore: app.xreader.data.db.PendingOperationStore by lazy {
+        app.xreader.data.db.PendingOperationStore(database.pendingOperationDao())
+    }
+
+    val deletedBookKeysStore: app.xreader.data.sync.DeletedBookKeysStore by lazy {
+        app.xreader.data.sync.DeletedBookKeysStore(appContext.settingsDataStore)
+    }
+
+    /** §15.5 producer: a read START writes/updates the book's ONE
+     * History record (QuickNovel copy). Resume position stays in
+     * ReadingProgress — never in this record. */
+    suspend fun recordHistoryStart(bookId: Long) {
+        val book = database.bookDao().getById(bookId) ?: return
+        val pkg = book.extensionId?.let {
+            database.installedExtensionDao().getById(it)?.packageId
+        }
+        val key = app.xreader.data.sync.SyncKeys.bookKey(book, pkg)
+        val sourceName = book.extensionId?.let {
+            database.installedExtensionDao().getById(it)?.displayName
+        } ?: ""
+        database.historyRecordDao().upsert(
+            app.xreader.data.db.HistoryRecord(
+                bookKey = key,
+                bookId = book.id,
+                title = book.title,
+                bookUrl = book.remoteId ?: "",
+                sourceName = sourceName,
+                coverUrl = book.coverUrl,
+                author = book.author,
+                synopsis = book.description,
+                totalChapters = book.totalChapters,
+                recordedAt = System.currentTimeMillis()
+            )
+        )
+        // v1.5.3 (finding #9, owner decision 2026-11-04): a read
+        // start writes History ONLY — it never flips Library
+        // membership. §15.1's "first chapter read = membership"
+        // (and its "recovery" retelling of this flip) is
+        // SUPERSEDED by the owner's rule: "Reading a ch adds in
+        // history not library — library is only books that I
+        // add." Membership flips only on deliberate acts: Add,
+        // Favourite, Download, status-set. A browsed book stays
+        // a preview row, visible in History/Recents only.
+        // §15.6: an explicit re-add clears the book's tombstone.
+        deletedBookKeysStore.clear(key)
+    }
+
+    /** §15.6: FULL book deletion (NOT a History action) — the one
+     * path whose reach is: row + cascades, BookMeta, History record,
+     * favourite key, queue items, both body stores' files, cover,
+     * and a sync tombstone. */
+    suspend fun deleteBookFully(book: app.xreader.data.db.Book) {
+        val pkg = book.extensionId?.let {
+            database.installedExtensionDao().getById(it)?.packageId
+        }
+        val key = app.xreader.data.sync.SyncKeys.bookKey(book, pkg)
+        runCatching { downloadController.cancelAllForBook(book.id) }
+        // v1.5.2 fix (Track B, §15.6): downloads-temp residue — the
+        // book's queue items' .part files are deleted BEFORE the
+        // queue rows go, while their ids are still known.
+        runCatching {
+            val tempDir = bookStorage.downloadsTempDir()
+            for (item in database.downloadQueueDao().allForBook(book.id)) {
+                java.io.File(tempDir, "queue-${item.id}.part").delete()
+            }
+        }
+        // v1.5.2 fix (FIX-9, §15.6): queue items are DELETED in every
+        // state (DONE included), not merely cancelled, and the
+        // book's per-book reader-preference keys are cleared.
+        runCatching { database.downloadQueueDao().deleteForBook(book.id) }
+        runCatching { bookReaderPrefs.clear(book.id) }
+        database.bookDao().delete(book)
+        bookMetaPrefs.set(book.id, app.xreader.data.library.BookMeta())
+        bookMetaPrefs.clearFavouriteByKey(key)
+        database.historyRecordDao().deleteByKey(key)
+        runCatching { bookStorage.deleteBookFiles(book) }
+        deletedBookKeysStore.record(key, System.currentTimeMillis())
+    }
+
+    /** §15.1 SOFT removal: the inLibrary flip ONLY — shelves and
+     * the hero (both derive from the same flag) stop offering the
+     * book in the same commit; downloads, progress, History and
+     * the favourite all survive. Read-cache (AUTOMATIC) bodies are
+     * freed; USER downloads are kept (§12/ED-10). */
+    suspend fun removeFromLibrarySoft(book: app.xreader.data.db.Book) {
+        if (book.inLibrary) {
+            database.bookDao().update(book.copy(inLibrary = false))
+        }
+        val chapters = database.chapterDao().forBook(book.id)
+        for (chapter in chapters) {
+            if (chapter.bodyOrigin ==
+                app.xreader.data.download.BodyOrigin152.AUTOMATIC &&
+                chapter.contentPath != null
+            ) {
+                runCatching {
+                    bookStorage.resolve(chapter.contentPath!!).delete()
+                }
+                database.chapterDao().update(
+                    chapter.copy(
+                        contentPath = null,
+                        downloadState = app.xreader.data.db.DownloadState.NONE
+                    )
+                )
+            }
+        }
+    }
+
+    /** v1.5.2 fix (FIX-10): the §8.5 one-time Explore summary —
+     * set when the deferred phase completes; Explore shows it once. */
+    val updatePassSummary =
+        kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
+    val updatePass152: app.xreader.data.extension.UpdatePass152 by lazy {
+        app.xreader.data.extension.UpdatePass152(
+            bookDao = database.bookDao(),
+            chapterDao = database.chapterDao(),
+            extensionDao = database.installedExtensionDao(),
+            progressDao = database.readingProgressDao(),
+            historyDao = database.historyRecordDao(),
+            journalDao = database.updatePassJournalDao(),
+            bookMetaPrefs = bookMetaPrefs,
+            historyPrefs = historyPrefs,
+            keyForBook = { book ->
+                val pkg = book.extensionId?.let {
+                    database.installedExtensionDao().getById(it)?.packageId
+                }
+                app.xreader.data.sync.SyncKeys.bookKey(book, pkg)
+            },
+            versionCode = 44,
+            shelfDao = database.shelfDao(),
+            isBothKinds = { row ->
+                val bundled = app.xreader.data.extension.BundledDefaults
+                    .configs().firstOrNull {
+                        "bundled.${it.id}" == row.packageId
+                    }
+                val config = bundled ?: runCatching {
+                    val sourceId = row.sourceIds.split(",")
+                        .firstOrNull()?.trim().orEmpty()
+                    val handle = extensionService
+                        .source(row.id, sourceId).getOrNull()
+                    handle?.let { extensionService.declarativeConfigOf(it) }
+                }.getOrNull()
+                config?.popular?.kindField != null &&
+                    config.popular.kindValueMap.isNotEmpty()
+            },
+            hostForRow = { row ->
+                when {
+                    row.packageId.startsWith("live.") ->
+                        row.packageId.removePrefix("live.")
+                    row.packageId.startsWith("link.") ->
+                        row.packageId.removePrefix("link.")
+                    else -> app.xreader.data.extension.BundledDefaults.configs()
+                        .firstOrNull { "bundled.${it.id}" == row.packageId }
+                        ?.let { app.xreader.data.extension.CookieParsing.hostOf(it.baseUrl) }
+                }
+            },
+            rederive = { row ->
+                val host = when {
+                    row.packageId.startsWith("live.") ->
+                        row.packageId.removePrefix("live.")
+                    row.packageId.startsWith("link.") ->
+                        row.packageId.removePrefix("link.")
+                    else -> null
+                }
+                if (host == null) {
+                    app.xreader.data.extension.UpdatePass152.RederiveOutcome
+                        .Failure("derivation failed")
+                } else {
+                    when (val outcome = linkProber.probe("https://$host/")) {
+                        is app.xreader.data.extension.LinkProber.Outcome.Ready -> {
+                            val saved = repoManager.saveLinkSource(
+                                outcome.draft.config, host,
+                                packageIdOverride = row.packageId
+                            )
+                            when (saved) {
+                                is app.xreader.core.error.AppResult.Ok ->
+                                    app.xreader.data.extension.UpdatePass152
+                                        .RederiveOutcome.Success(saved.value.id)
+                                is app.xreader.core.error.AppResult.Err ->
+                                    app.xreader.data.extension.UpdatePass152
+                                        .RederiveOutcome.Failure("derivation failed")
+                            }
+                        }
+                        is app.xreader.data.extension.LinkProber.Outcome.LoginRequired ->
+                            app.xreader.data.extension.UpdatePass152
+                                .RederiveOutcome.Challenge
+                        is app.xreader.data.extension.LinkProber.Outcome.NotProven ->
+                            app.xreader.data.extension.UpdatePass152
+                                .RederiveOutcome.Failure("reading not proven")
+                        is app.xreader.data.extension.LinkProber.Outcome.Failed ->
+                            app.xreader.data.extension.UpdatePass152
+                                .RederiveOutcome.Failure(
+                                    if (!networkGate.hasNetwork()) "offline"
+                                    else "site unreachable"
+                                )
+                    }
+                }
+            },
+            fetchCoverFile = { book -> sourceBookSync.backfillCoverFile(book) },
+            ratingBackfill = { keiyoushiPlayerManager.backfillRatings() },
+            isOnline = { networkGate.hasNetwork() }
+        )
+    }
+    /** v1.5.2 fix (FIX-6b): the production eviction enforcer. */
+    val cacheEviction152: app.xreader.data.download.CacheEviction152 by lazy {
+        app.xreader.data.download.CacheEviction152(
+            bookDao = database.bookDao(),
+            chapterDao = database.chapterDao(),
+            extensionDao = database.installedExtensionDao(),
+            storage = bookStorage
+        )
+    }
+
+    /** Outcome of the one Clean cache implementation (§12.3). */
+    data class CleanCacheResult(val failures: List<String>)
+
+    /**
+     * v1.5.2 fix (FIX-6c, §12.1/§12.3): THE Clean cache — shared by
+     * the Downloads screen and Customise → Storage so the two can
+     * never diverge again. Clears CACHE-classified storage only:
+     * read chapter bodies (AUTOMATIC rows: file + row together),
+     * the Coil image cache, downloads temp/partials and import
+     * staging. It does NOT touch: stored covers (per-book assets),
+     * lore-art, USER downloads, the session vault, the cookie jar,
+     * the database or settings. Failures are returned with §12.3's
+     * taxonomy so the calling screen can show them in plain words.
+     */
+    suspend fun cleanCache(): CleanCacheResult {
+        val failures = mutableListOf<String>()
+        // Read chapter bodies (the exhibited 29.2 MB class).
+        var bodyFailure = false
+        runCatching {
+            for (book in database.bookDao().allBooks()) {
+                for (chapter in database.chapterDao().forBook(book.id)) {
+                    if (chapter.bodyOrigin ==
+                        app.xreader.data.download.BodyOrigin152.AUTOMATIC &&
+                        chapter.contentPath != null
+                    ) {
+                        // v1.5.2 fix (Track B, §12.3): a body file
+                        // that cannot be deleted is REPORTED, not
+                        // swallowed — and its row is only cleared
+                        // when the file actually went, so the row
+                        // never claims a body the disk still holds.
+                        val file = bookStorage.resolve(chapter.contentPath!!)
+                        val deleted = !file.exists() ||
+                            runCatching { file.delete() }.getOrDefault(false)
+                        if (deleted) {
+                            database.chapterDao().clearBody(chapter.id)
+                        } else {
+                            bodyFailure = true
+                        }
+                    }
+                }
+            }
+        }.onFailure { bodyFailure = true }
+        if (bodyFailure) {
+            failures += "an I/O error stopped some read-chapter cache from clearing"
+        }
+        runCatching { clearImageCache() }
+            .onFailure { failures += "an I/O error stopped the image cache from clearing" }
+        // v1.5.2 fix (Track B, §12.1/§12.3): WebView WEB STORAGE
+        // (local storage / IndexedDB) is cache and clears here —
+        // the cookie JAR is credential state and is never touched
+        // (deleteAllData does not clear cookies). If a live
+        // WebView is holding its storage, that is reported in
+        // §12.3's own words.
+        runCatching {
+            android.webkit.WebStorage.getInstance().deleteAllData()
+        }.onFailure {
+            failures += "a live WebView is holding its storage"
+        }
+        runCatching {
+            // v1.5.2 fix (Track B, §12.1): temp/partials clear, but
+            // NEVER an in-flight download's part file — queue items
+            // that are not in a terminal state keep queue-<id>.part.
+            val tempDir = bookStorage.downloadsTempDir()
+            val inFlightIds = database.downloadQueueDao().observeAll()
+                .first()
+                .filter {
+                    it.state != app.xreader.data.db.QueueState.DONE &&
+                        it.state != app.xreader.data.db.QueueState.FAILED &&
+                        it.state != app.xreader.data.db.QueueState.CANCELLED
+                }
+                .map { it.id }.toSet()
+            tempDir.listFiles()?.forEach { child ->
+                val itemId = child.name.removePrefix("queue-")
+                    .removeSuffix(".part").toLongOrNull()
+                if (itemId != null && itemId in inFlightIds) {
+                    return@forEach // in flight — not cache prey
+                }
+                runCatching { child.deleteRecursively() }
+            }
+            app.xreader.data.files.StorageMeter.clearContents(bookStorage.importStagingRoot())
+        }.onFailure { failures += "an I/O error stopped temporary files from clearing" }
+        // NOTE (§12.1): coversDir() and lore-art are per-book assets
+        // and deliberately NOT cleared here; the vault and cookie
+        // jar are credential state and never cache prey.
+        bookStorage.invalidateAllBookFileSizes()
+        return CleanCacheResult(failures)
+    }
+
+    // ── §1 pending-operation helpers (FIX-2) ─────────────────────
+
+    /** Register (or re-register after a terminal state) a pending
+     * operation for [sessionKey], watermarked from the vault. */
+    suspend fun registerPendingOperation(
+        sessionKey: String, flowKind: String, host: String, category: String = "NONE"
+    ) {
+        runCatching {
+            val session = sessionStore.load(sessionKey)
+            pendingOperationStore.register(
+                sessionKey = sessionKey, flowKind = flowKind, host = host,
+                currentWatermark = app.xreader.data.db.PendingOperationStore.watermarkOf(
+                    session?.let { it.cookies.toString() + it.userAgent }
+                ),
+                category = category, now = System.currentTimeMillis()
+            )
+        }
+    }
+
+    /** Event-free evaluation + atomic claim for one key: true when
+     * THIS caller won the claim and must run the blocked action.
+     *
+     * v1.5.5 (§3): NO LONGER A RETRY GATE — the post-save
+     * surfaces stopped claiming in this build (the claim was
+     * the starvation mechanism: one surface's win silently
+     * dropped every other surface's blocked operation). The
+     * helper remains for the store's own state bookkeeping;
+     * session saves now broadcast on [sessionUpdateBus] and
+     * every surface retries its OWN recorded operation. */
+    suspend fun claimPendingOperation(sessionKey: String): Boolean {
+        val session = runCatching { sessionStore.load(sessionKey) }.getOrNull()
+        val op = runCatching {
+            pendingOperationStore.evaluate(
+                sessionKey,
+                app.xreader.data.db.PendingOperationStore.watermarkOf(
+                    session?.let { it.cookies.toString() + it.userAgent }
+                ),
+                System.currentTimeMillis()
+            )
+        }.getOrNull() ?: return false
+        if (op.state != "READY") return false
+        return runCatching {
+            pendingOperationStore.claim(sessionKey, "claim-" + System.nanoTime())
+        }.getOrDefault(false)
+    }
+
+    suspend fun finishPendingOperation(sessionKey: String, success: Boolean) {
+        runCatching { pendingOperationStore.finish(sessionKey, success) }
+    }
+
+    /** v1.5.2 fix (FIX-2, §1): the named abandonment path — a flow
+     * the user explicitly closed, or a source that was deleted,
+     * cancels its pending operation instead of leaving it to expire. */
+    suspend fun cancelPendingOperation(sessionKey: String) {
+        runCatching { pendingOperationStore.cancel(sessionKey) }
+    }
+
+    /**
+     * v1.5.2 fix (FIX-2, §1): promotion is reconciled at evaluation
+     * points — surface resume/(re)creation and app foreground call
+     * this; it also recovers RUNNING records at process start and
+     * prunes terminal traces after 7 days. Returns the session keys
+     * whose operations are READY (a surface holding one of those
+     * keys claims it through [claimPendingOperation]).
+     */
+    suspend fun evaluatePendingOperations(processStart: Boolean = false): List<String> {
+        val ready = mutableListOf<String>()
+        runCatching {
+            val ops = database.pendingOperationDao().allNow()
+            for (op in ops) {
+                if (op.state in app.xreader.data.db.PendingOperationStore.TERMINAL) continue
+                val session = runCatching { sessionStore.load(op.sessionKey) }.getOrNull()
+                val evaluated = pendingOperationStore.evaluate(
+                    op.sessionKey,
+                    app.xreader.data.db.PendingOperationStore.watermarkOf(
+                        session?.let { it.cookies.toString() + it.userAgent }
+                    ),
+                    System.currentTimeMillis(), processStart = processStart
+                )
+                if (evaluated?.state == "READY") ready += op.sessionKey
+            }
+            pendingOperationStore.prune(System.currentTimeMillis())
+        }
+        return ready
+    }
+
     val libraryPrefs: app.xreader.data.library.LibraryPrefs =
         app.xreader.data.library.LibraryPrefs(appContext.settingsDataStore)
 
@@ -235,9 +705,36 @@ class AppContainer(context: Context) {
         registry = parserRegistry,
         bookDao = database.bookDao(),
         chapterDao = database.chapterDao(),
+        // v1.5.6 (§3): the v10 stores — in-place outline +
+        // reading-memory restore on (re-)registration.
+        readingMemoryDao = database.readingMemoryDao(),
+        localOutlineDao = database.localOutlineDao(),
+        readingProgressDao = database.readingProgressDao(),
+        bookmarkDao = database.bookmarkDao(),
+        highlightDao = database.highlightDao(),
         // D9: an import's thousands of chapter writes commit once.
         inTransaction = { block -> database.withTransaction(block) }
     )
+
+    /** v1.5.6 (§3.7/§3.5): the local-book delete operations and
+     * the manual-only Clear Legacy Data data-op. Nothing calls
+     * clearLegacyData automatically — Settings' owner tap only. */
+    val localBookDeletion: app.xreader.data.library.LocalBookDeletion =
+        app.xreader.data.library.LocalBookDeletion(
+            bookDao = database.bookDao(),
+            chapterDao = database.chapterDao(),
+            readingProgressDao = database.readingProgressDao(),
+            bookmarkDao = database.bookmarkDao(),
+            highlightDao = database.highlightDao(),
+            readingMemoryDao = database.readingMemoryDao(),
+            localOutlineDao = database.localOutlineDao(),
+            storage = bookStorage,
+            // v1.5.8 (F4 gap): deleting a local book also
+            // clears its PDF strip/render cache under
+            // cacheDir/local-pdf/<bookId>/.
+            cacheDir = appContext.cacheDir,
+            inTransaction = { block -> database.withTransaction(block) }
+        )
 
     val bookExporter: BookExporter = BookExporter(bookStorage, database.chapterDao())
 
@@ -380,14 +877,16 @@ class AppContainer(context: Context) {
     /** Extensions NEVER use [httpTransport]: their client must not
      * auto-follow redirects (whitelist re-check per hop, §9.1). */
     val extensionTransport: HttpTransport by lazy {
-        // v1.3.3 (V132-CHECK 24): extension static fetches
-        // run on their own lane — a walled or stalling
-        // source can never starve a healthy source's
-        // catalogue by exhausting the shared IO pool.
-        OkHttpTransport(
-            OkHttpTransport.extensionClient(),
-            app.xreader.data.net.FetchLanes.static
-        )
+        extensionTransportOverride ?: run {
+            // v1.3.3 (V132-CHECK 24): extension static fetches
+            // run on their own lane — a walled or stalling
+            // source can never starve a healthy source's
+            // catalogue by exhausting the shared IO pool.
+            OkHttpTransport(
+                OkHttpTransport.extensionClient(),
+                app.xreader.data.net.FetchLanes.static
+            )
+        }
     }
 
     val extensionStore: app.xreader.data.extension.ExtensionStore by lazy {
@@ -406,9 +905,12 @@ class AppContainer(context: Context) {
      * [app.xreader.data.extension.RenderedPageFetcher] seam —
      * JVM tests substitute a fake and never load this class. */
     val renderedPageFetcher: app.xreader.data.extension.RenderedPageFetcher by lazy {
-        app.xreader.data.extension.WebViewRenderedFetcher(
-            appContext, sessionStore
-        ) { renderRuntime.currentTier }
+        renderedFetcherOverride
+            ?: app.xreader.data.extension.WebViewRenderedFetcher(
+                appContext, sessionStore,
+                { renderRuntime.currentTier },
+                { renderRuntime.appInForeground }
+            )
     }
 
     val hostContextFactory: app.xreader.data.extension.HostContextFactory by lazy {
@@ -420,7 +922,14 @@ class AppContainer(context: Context) {
             renderRuntime = renderRuntime,
             onRuntimeShell = { rowId ->
                 // TR4: recorded in prefs; Details offers Repair.
-                appScope.launch { sourcePrefs.markBrowserViewNeeded(rowId) }
+                // v1.5.10 (A2): a failed mark is a contained failure
+                // (note + log), never a process death.
+                appScope.launch {
+                    runCatching { sourcePrefs.markBrowserViewNeeded(rowId) }
+                        .onFailure {
+                            recordContainedFailure("runtime-shell:mark", it)
+                        }
+                }
             }
         )
     }
@@ -460,7 +969,27 @@ class AppContainer(context: Context) {
             keiyoushiPlayerEnabled = {
                 keiyoushiPlayerManager.isPlayerEnabled()
             },
+            // v1.5.4 (WS-1 item 7b, integration): cover hosts
+            // a package's own sources return — the manager
+            // folds them into the package's derived permission
+            // domains so its covers can land as local files.
+            keiyoushiCoverHostSink = { packageName, hosts ->
+                keiyoushiPlayerManager.noteCoverHosts(
+                    packageName, hosts
+                )
+            },
+            // v1.5.7 (Finding 4, §6): the Keiyoushi claim —
+            // the cached catalogue's hosts, read at load
+            // time from the manager (never a fetch: an
+            // unfetched catalogue answers empty and every
+            // source loads exactly as before). A link-added
+            // declarative source on a claimed host is
+            // stamped MANGA when ExtensionService builds it.
+            keiyoushiClaimedHosts = {
+                keiyoushiPlayerManager.claimedHosts()
+            },
             jsRuntimeFactory = { app.xreader.data.extension.QuickJsRuntime() },
+            bookDao = database.bookDao(),
             // v1.3.4 (T1): read-token persistence rides the
             // app's encrypted session store.
             sessionStore = sessionStore
@@ -560,16 +1089,29 @@ class AppContainer(context: Context) {
             },
             // v1.3.3 (scope S6): a stored book opened with
             // repair symptoms is re-synced in the background.
+            // v1.5.26: the runner is background work, so its
+            // refreshes take the same details-only player gate
+            // as the worker and the sweeps.
             repairScheduler = { book ->
                 appScope.launch {
-                    runCatching { storedBookRepair.repairBook(book) }
+                    renderRuntime.asBackgroundWork {
+                        runCatching { storedBookRepair.repairBook(book) }
+                    }
                 }
-            }
+            },
+            // v1.5.26: the sync's background-work provider —
+            // the one marker every bulk initiator (worker,
+            // Check-for-updates, version sweeps, repair runner)
+            // already runs under.
+            backgroundWork = { renderRuntime.inBackgroundWork }
         )
     }
 
     val linkProber: app.xreader.data.extension.LinkProber by lazy {
-        app.xreader.data.extension.LinkProber(hostContextFactory, sessionStore)
+        linkProberOverride
+            ?: app.xreader.data.extension.LinkProber(
+                hostContextFactory, sessionStore
+            )
     }
 
     /** v1.0.2 (R20): the shared whole-library refresher — Library
@@ -633,11 +1175,47 @@ class AppContainer(context: Context) {
 
     // -- Phase 5: Gemini AI layer & sync -------------------------------------
 
+    /** v1.5.10 (A2): the container's one contained-failure
+     * recorder — CrashGuard's contained note writer (NO crash
+     * marker: the recovery screen stays reserved for real process
+     * deaths) AND a DiagnosticLog line carrying A1's top frames.
+     * Every root-scope containment site in this container routes
+     * here, so a contained failure always leaves both artefacts.
+     * Cancellation is never a failure. */
+    fun recordContainedFailure(
+        site: String,
+        throwable: Throwable,
+        threadName: String = Thread.currentThread().name
+    ) {
+        if (throwable is CancellationException) return
+        CrashGuard.recordContainedFailure(appContext, site, threadName, throwable)
+        DiagnosticLog.record(
+            tag = "contained",
+            message = "Contained failure at $site: " +
+                "${throwable.javaClass.name} — the app kept running.",
+            detail = CrashGuard.framesText(throwable)
+        )
+    }
+
     /** App-lifetime scope for best-effort background work (lore
-     * extraction triggers, settings caches). */
+     * extraction triggers, settings caches).
+     *
+     * v1.5.10 (A2): SupervisorJob (a child failure never cancels
+     * siblings — unchanged) PLUS CrashGuard's containment handler:
+     * an uncaught failure in any launch on this scope — including
+     * the children handed this scope (AiChapterHooks, the Komikku
+     * DataStore stores) — is recorded as a CONTAINED failure
+     * instead of reaching the default uncaught handler and
+     * killing the process. Sites that already wrap their bodies
+     * in runCatching (failover/repair schedulers, pending
+     * operations, startup passes) keep that first line; this
+     * handler is the backstop for everything else. */
     val appScope: kotlinx.coroutines.CoroutineScope =
         kotlinx.coroutines.CoroutineScope(
-            kotlinx.coroutines.SupervisorJob() + Dispatchers.IO
+            kotlinx.coroutines.SupervisorJob() + Dispatchers.IO +
+                CrashGuard.containmentHandler("appScope") { site, threadName, throwable ->
+                    recordContainedFailure(site, throwable, threadName)
+                }
         )
 
     /** v1.3.3 (scope S4): the session-saved bus. When the user
@@ -651,8 +1229,39 @@ class AppContainer(context: Context) {
             extraBufferCapacity = 8
         )
 
+    /** v1.5.5 (§3): the source-scoped session-update bus —
+     * the broadcast that replaced the exactly-once claim.
+     * Every surface holding a blocked operation for the saved
+     * session re-issues its OWN operation when this fires;
+     * the bus also stamps the solved-at registry the
+     * read-token road consults. The String flow above stays
+     * for the player bridge, whose latch is verification-
+     * based, not claim-based. */
+    val sessionUpdateBus =
+        app.xreader.data.extension.SessionUpdateBus()
+
     fun notifySessionSaved(sessionKey: String) {
         sessionSavedEvents.tryEmit(sessionKey)
+        // v1.5.5 (§3): stamp the solve FIRST (synchronously,
+        // so a collector's immediate re-fetch already sees
+        // the warm window), then broadcast on the bus with
+        // the source id resolved from the row when the key
+        // names one ("ext-<rowId>" → the row's first source).
+        app.xreader.data.extension.SessionSolvedRegistry
+            .noteSolved(sessionKey)
+        val rowId = sessionKey.removePrefix("ext-").toLongOrNull()
+        if (rowId == null) {
+            sessionUpdateBus.notifySaved(sessionKey, sourceId = null)
+            return
+        }
+        appScope.launch {
+            val sourceId = runCatching {
+                database.installedExtensionDao().getById(rowId)
+                    ?.sourceIds?.split(",")
+                    ?.firstOrNull()?.trim()?.ifEmpty { null }
+            }.getOrNull()
+            sessionUpdateBus.notifySaved(sessionKey, sourceId)
+        }
     }
 
     // ── Keiyoushi player core (K2) ──────────────────────────────────
@@ -732,12 +1341,35 @@ class AppContainer(context: Context) {
         // false and extension loads fail honestly as source errors
         // instead of taking the process down.
         runCatching {
+            // v1.5.3 (finding #1, spec §5.8): the mihonapp fork's
+            // Injekt patch — which REPLACES the global scope with
+            // a fresh empty one — runs exactly ONCE per process,
+            // here, before BOTH registrars import their modules
+            // into it (the donor's App.onCreate order: patch at
+            // App.kt:115, then importModule repeatedly). It used
+            // to live inside each registrar, so the Komikku
+            // reader's patch wiped the player's six registrations
+            // and the whole Keiyoushi shelf read "0 ready".
+            patchInjekt()
             PlayerRegistrar.register(playerApplication, playerNetworkHelper)
         }.onFailure { error ->
             DiagnosticLog.record(
                 tag = "player-start",
                 message = "Keiyoushi player didn't start; " +
                     "manga sources are unavailable this session.",
+                detail = "${error.javaClass.name}: ${error.message}"
+            )
+        }
+        // FIX-18: the Komikku reader's Injekt registration, in the
+        // same pattern — a failure here must not take startup (or
+        // novels) down with it; the manga reader reports honestly.
+        runCatching {
+            app.xreader.komikku.KomikkuReaderRegistrar.register(komikkuGlobalStore)
+        }.onFailure { error ->
+            DiagnosticLog.record(
+                tag = "komikku-reader-start",
+                message = "Komikku manga reader didn't start; " +
+                    "manga reading is unavailable this session.",
                 detail = "${error.javaClass.name}: ${error.message}"
             )
         }
@@ -763,18 +1395,6 @@ class AppContainer(context: Context) {
             runCatching {
                 app.xreader.data.extension.PinnedUserAgent
                     .capture(appContext)
-            }
-        }
-        // Keiyoushi player (K6): the kill switch's live wire —
-        // every flip of "Keiyoushi manga sources" (Customise →
-        // Sources & repairs) is pushed into the player manager,
-        // which empties or refills its live registry. The flow's
-        // first emission also re-seeds the flag before the
-        // shell's restore runs, so a switch left off is honoured
-        // from the first lookup of the session.
-        appScope.launch {
-            sourcePrefs.keiyoushiPlayerEnabled.collect { enabled ->
-                keiyoushiPlayerManager.setPlayerEnabled(enabled)
             }
         }
     }
@@ -1014,7 +1634,12 @@ class AppContainer(context: Context) {
 
     val webDavBackend: app.xreader.data.sync.WebDavBackend by lazy {
         appScope.launch {
-            syncPrefs.settings.collect { webdavUrlCache.set(it.webdavUrl) }
+            syncPrefs.settings.collect { settings ->
+                // v1.5.10 (A2): defensive per-emission apply, same
+                // shape as the player-enabled collector above.
+                runCatching { webdavUrlCache.set(settings.webdavUrl) }
+                    .onFailure { recordContainedFailure("webdav-url-cache", it) }
+            }
         }
         app.xreader.data.sync.WebDavBackend(
             transport = httpTransport,
@@ -1095,6 +1720,7 @@ class AppContainer(context: Context) {
                     bookMetaPrefs.set(bookId, meta.copy(status = parsed))
                 }
             },
+            deletedBookKeysProvider = { deletedBookKeysStore.all() },
             fileSync = bookFileSync,
             fileSyncEnabled = { syncPrefs.settings.first().syncBookFiles },
             organisationProvider = { keyByBookId ->
@@ -1133,8 +1759,10 @@ class AppContainer(context: Context) {
                     },
                     bookTags = allBookTags,
                     followedTagSlugs = tagDao.allFollows().map { it.slug },
-                    favouriteBookKeys = bookMetaPrefs.favourites.first()
-                        .mapNotNull { keyByBookId[it] },
+                    // v1.5.2 (§13.6): the store already speaks
+                    // natural keys — export reads it directly.
+                    favouriteBookKeys = bookMetaPrefs.favouritesByKey
+                        .first().toList(),
                     themeSync = app.xreader.data.sync.ThemeSyncRecord(
                         customSchemesEncoded =
                             app.xreader.data.prefs.AppearanceValidation
@@ -1219,8 +1847,9 @@ class AppContainer(context: Context) {
                     tagDao.follow(app.xreader.data.db.TagFollow(slug, now))
                 }
                 for (key in section.favouriteBookKeys) {
-                    val bookId = keyToBookId[key] ?: continue
-                    bookMetaPrefs.setFavourite(bookId, true)
+                    // v1.5.2 (§13.6): apply by natural key — no
+                    // row-id round-trip that could drop the key.
+                    bookMetaPrefs.setFavouriteByKey(key, true)
                 }
                 section.themeSync?.let { theme ->
                     val decoded = app.xreader.data.prefs.AppearanceValidation
@@ -1253,7 +1882,11 @@ class AppContainer(context: Context) {
             // v1.0.6.2: storage set — plugin-source chapters keep
             // their images too (fetched through each source's own
             // session; see ExtensionService.fetchBytes).
-            storage = bookStorage
+            storage = bookStorage,
+            // v1.5.17 (F1): the memo heal's chapter-list
+            // refresh — the sync apply path, resolved lazily
+            // at call time like every other cross-lazy wire.
+            chapterListHealer = { book -> sourceBookSync.refresh(book) }
         )
     }
 
@@ -1273,7 +1906,11 @@ class AppContainer(context: Context) {
                 UrlChapterFetcher(httpTransport, storage = bookStorage)
             },
             storage = bookStorage,
-            fetchPageFiles = true
+            fetchPageFiles = true,
+            // v1.5.17 (F1): the download road heals memo-less
+            // Keiyoushi chapters the same way (see the reader
+            // resolver above).
+            chapterListHealer = { book -> sourceBookSync.refresh(book) }
         )
     }
 
@@ -1281,7 +1918,7 @@ class AppContainer(context: Context) {
      * its source's config — the Library split, the Updates
      * filter and search grouping all resolve through this. */
     val bookKindResolver: app.xreader.data.library.BookKindResolver by lazy {
-        app.xreader.data.library.BookKindResolver(extensionService)
+        app.xreader.data.library.BookKindResolver(extensionService, database.bookDao())
     }
 
     // -- Phase 6: gamification, migration, file sync -------------------------
@@ -1332,6 +1969,63 @@ class AppContainer(context: Context) {
      * set by MainActivity from the shortcut's intent. */
     val pendingOpenSource =
         kotlinx.coroutines.flow.MutableStateFlow<Pair<Long, String>?>(null)
+
+    /** Source-update notification → app handoff (v1.5.39,
+     * item 4): set by MainActivity from the notification's
+     * tap intent; the shell observes it and opens the
+     * Keiyoushi shelf — the widget-tap pattern above. */
+    val pendingOpenSourceShelf =
+        kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    /**
+     * v1.5.39 (item 4): the daily Keiyoushi manga-source
+     * update check, run from the shell's startup chain
+     * beside the provider-pack check. Throttled to once a
+     * day by the SourcePrefs stamp (the ProviderPacks
+     * lastCheckAtMs pattern; the attempt stamps first, so a
+     * failed check doesn't retry until tomorrow either).
+     * Silent on failure — an update is something the app
+     * notices quietly, never an error the user must read.
+     * Detection itself is the player's own (its flags
+     * persist and drive the Explore badge and banner); this
+     * adds the one notification per NEWLY-flagged set: the
+     * (package, availableVersion) pairs already notified
+     * are remembered in SourcePrefs, so a still-waiting
+     * update never re-notifies. The player kill switch
+     * off means no check at all.
+     */
+    suspend fun checkKeiyoushiSourceUpdates() {
+        if (!sourcePrefs.keiyoushiPlayerEnabled.first()) {
+            return
+        }
+        val now = System.currentTimeMillis()
+        val lastCheck = sourcePrefs.keiyoushiLastCheckAtMs.first()
+        if (lastCheck > 0 &&
+            now - lastCheck < KEIYOUSHI_AUTO_CHECK_INTERVAL_MS
+        ) {
+            return
+        }
+        sourcePrefs.setKeiyoushiLastCheckAtMs(now)
+        val checked = keiyoushiPlayerManager.checkForUpdates()
+        if (checked !is app.xreader.core.error.AppResult.Ok) return
+        val pending = keiyoushiPlayerManager.records.value.values
+            .filter {
+                it.isInstalled &&
+                    it.availableVersionCode > it.installedVersionCode
+            }
+        if (pending.isEmpty()) return
+        val pendingKeys = pending
+            .map { "${it.packageName}:${it.availableVersionCode}" }
+            .toSet()
+        val notified = sourcePrefs.keiyoushiNotifiedUpdates.first()
+        val fresh = pending.filter {
+            "${it.packageName}:${it.availableVersionCode}" !in notified
+        }
+        if (fresh.isEmpty()) return
+        sourcePrefs.setKeiyoushiNotifiedUpdates(notified + pendingKeys)
+        app.xreader.data.update.SourceUpdateNotifier(appContext)
+            .showUpdates(fresh.map { it.displayName })
+    }
 
     val migrationService: app.xreader.data.migration.MigrationService by lazy {
         app.xreader.data.migration.MigrationService(
@@ -1441,6 +2135,33 @@ class AppContainer(context: Context) {
                 bookStorage.sweepOrphanedBookFiles(validIds)
             }
         }
+        // v1.5.22: this launch deliberately lives in the LAST
+        // init block — an init-launched coroutine may only touch
+        // properties declared above its init block. It used to
+        // launch from the player init block further up, which
+        // runs before keiyoushiPlayerManager's lazy delegate
+        // exists; a first emission fast enough to win that race
+        // read the still-null delegate and NPE'd (device-caught
+        // 2026-11-06, contained site "player-enabled"). Here
+        // every delegate exists, and the shell's restore is
+        // composition-driven after onCreate, so the first
+        // emission still lands before restore.
+        // Keiyoushi player (K6): the kill switch's live wire —
+        // every flip of "Keiyoushi manga sources" (Customise →
+        // Sources & repairs) is pushed into the player manager,
+        // which empties or refills its live registry. The flow's
+        // first emission also re-seeds the flag before the
+        // shell's restore runs, so a switch left off is honoured
+        // from the first lookup of the session.
+        appScope.launch {
+            sourcePrefs.keiyoushiPlayerEnabled.collect { enabled ->
+                // v1.5.10 (A2): a bad emission is skipped + recorded
+                // as contained; the collector keeps collecting and
+                // the scope handler backstops a flow-side throw.
+                runCatching { keiyoushiPlayerManager.setPlayerEnabled(enabled) }
+                    .onFailure { recordContainedFailure("player-enabled", it) }
+            }
+        }
     }
 
     /** v1.2.1 (Defect 3): the real image cache's size on disk —
@@ -1464,3 +2185,8 @@ class AppContainer(context: Context) {
         }
     }
 }
+
+/** v1.5.39 (item 4): the Keiyoushi source-update auto-check
+ * interval — once a day, ProviderPacks' own value. */
+private const val KEIYOUSHI_AUTO_CHECK_INTERVAL_MS =
+    24L * 60 * 60 * 1000

@@ -106,6 +106,40 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
     suspend fun setKeiyoushiPlayerEnabled(enabled: Boolean) =
         store.edit { it[KEY_KEIYOUSHI_PLAYER] = enabled }
 
+    // ── Keiyoushi update check (v1.5.39, item 4) ─────────────
+    //
+    // The daily auto-check's throttle stamp (the
+    // ProviderPacks lastCheckAtMs pattern) and the
+    // notification memory: the (package, availableVersion)
+    // pairs a "Source updates" notification has already
+    // been posted for, so a still-waiting update never
+    // re-notifies on a later check. Pairs are stored as
+    // "packageName:versionCode" rows in one string key,
+    // the house encoding.
+
+    val keiyoushiLastCheckAtMs: Flow<Long> = store.data.map { prefs ->
+        prefs[KEY_KEIYOUSHI_LAST_CHECK] ?: 0L
+    }
+
+    suspend fun setKeiyoushiLastCheckAtMs(atMs: Long) =
+        store.edit { it[KEY_KEIYOUSHI_LAST_CHECK] = atMs }
+
+    val keiyoushiNotifiedUpdates: Flow<Set<String>> =
+        store.data.map { prefs ->
+            decodeLines(prefs[KEY_KEIYOUSHI_NOTIFIED]).toSet()
+        }
+
+    suspend fun setKeiyoushiNotifiedUpdates(pairs: Set<String>) {
+        store.edit { prefs ->
+            if (pairs.isEmpty()) {
+                prefs.remove(KEY_KEIYOUSHI_NOTIFIED)
+            } else {
+                prefs[KEY_KEIYOUSHI_NOTIFIED] =
+                    pairs.joinToString("\n")
+            }
+        }
+    }
+
     // ── Repositories (R14) ───────────────────────────────────────
 
     val pinnedRepoIds: Flow<Set<Long>> = store.data.map { prefs ->
@@ -476,6 +510,12 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
             stringPreferencesKey("sources.content_visibility_pre_toggle")
         val KEY_KEIYOUSHI_PLAYER =
             booleanPreferencesKey("sources.keiyoushi_player_enabled")
+        val KEY_KEIYOUSHI_LAST_CHECK =
+            androidx.datastore.preferences.core.longPreferencesKey(
+                "sources.keiyoushi_last_update_check"
+            )
+        val KEY_KEIYOUSHI_NOTIFIED =
+            stringPreferencesKey("sources.keiyoushi_notified_updates")
         val KEY_PINNED_REPOS = stringPreferencesKey("sources.pinned_repos")
         val KEY_RECENT_REPOS = stringPreferencesKey("sources.recent_repos")
         val KEY_RECENT_SEARCHES = stringPreferencesKey("search.recent")

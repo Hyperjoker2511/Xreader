@@ -15,11 +15,19 @@ data class StorageBreakdown(
     val bookFilesBytes: Long,
     val coverCacheBytes: Long,
     val tempBytes: Long,
-    val otherBytes: Long
+    val otherBytes: Long,
+    /** v1.5.2 fix (Track B, §12.9/§12.11): read-cache bodies
+     * (AUTOMATIC origin) inside content/ — split out of
+     * [downloadedTextBytes] by the DB-aware storage accounting
+     * (CustomiseViewModel) so the storage screen's "Downloaded"
+     * row means the ONE predicate, never the whole content dir.
+     * The pure directory meter cannot know origins and leaves
+     * this 0; the screen never reads the meter's raw split. */
+    val cacheBodyBytes: Long = 0
 ) {
     val totalBytes: Long
         get() = downloadedTextBytes + bookFilesBytes + coverCacheBytes +
-            tempBytes + otherBytes
+            tempBytes + otherBytes + cacheBodyBytes
 }
 
 object StorageMeter {

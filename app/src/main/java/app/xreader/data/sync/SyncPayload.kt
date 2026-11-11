@@ -49,6 +49,11 @@ data class SyncPayload(
     val bookTags: List<BookTagRecord> = emptyList(),
     val followedTagSlugs: List<String> = emptyList(),
     val favouriteBookKeys: List<String> = emptyList(),
+    /** v1.5.2 (§15.6): full-book-deletion tombstones by natural key.
+     * Written ONLY by a full book deletion — NEVER by a History
+     * action. Retained indefinitely (ED-11 re-scoped). Defaulted so
+     * older payloads decode unchanged. */
+    val deletedBookKeys: List<DeletedBookKey> = emptyList(),
     /** Custom-theme PARAMETERS (seed/end/version), never derived
      * colours — the receiving device regenerates its own scheme. */
     val themeSync: ThemeSyncRecord? = null
@@ -229,6 +234,13 @@ data class ThemeSyncRecord(
 
 /** A deletion that must travel: [kind] is "bookmark" / "highlight" /
  * "lore" / "term" / "shelf"; [key] is the record's natural key. */
+@Serializable
+data class DeletedBookKey(
+    val bookKey: String,
+    val deletedAt: Long,
+    val deviceId: String = ""
+)
+
 @Serializable
 data class Tombstone(
     val kind: String,

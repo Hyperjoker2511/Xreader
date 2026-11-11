@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,6 +29,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -249,6 +251,163 @@ fun DialogDangerOption(label: String, onClick: () -> Unit) {
             textAlign = TextAlign.Start
         )
     }
+}
+
+/**
+ * v1.5.34 (item 2): THE book-delete sheet — one composable for
+ * every surface that deletes a book. Until now the sheet lived
+ * inline in the Library screen, so History rows — which can
+ * name books no longer in the Library — had no road to it at
+ * all (the owner's finding: History offered only "Add back to
+ * Library" + the record-only "Remove"). The sheet's words and
+ * choices are the Library's own, moved verbatim; the deletion
+ * itself runs through the caller's handlers, which delegate to
+ * the same container operations on every surface
+ * (LocalBookDeletion for local books; the soft/full remove for
+ * source books) — one sheet, one deletion logic, no forks.
+ *
+ * Local books get the three options (§3.7: Delete book /
+ * Delete book and forget my reading / Permanent delete from my
+ * device — the last with its own warning step); source books
+ * get the two (Remove book only / Remove book and downloaded
+ * chapters, with the downloaded size on the label).
+ */
+@Composable
+fun BookDeleteDialogs(
+    book: app.xreader.data.db.Book?,
+    downloadedSizeBytes: suspend (app.xreader.data.db.Book) -> Long,
+    onDismiss: () -> Unit,
+    onRemoveBook: (app.xreader.data.db.Book, deleteFiles: Boolean) -> Unit,
+    onRemoveLocalBook: (
+        app.xreader.data.db.Book,
+        app.xreader.data.library.LocalBookDeleteMode,
+        android.content.Context?
+    ) -> Unit
+) {
+    val target = book ?: return
+    var removeSizeMb by androidx.compose.runtime.remember(target.id) {
+        androidx.compose.runtime.mutableStateOf<String?>(null)
+    }
+    var permanentPending by androidx.compose.runtime.remember(target.id) {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(target.id) {
+        val bytes = runCatching { downloadedSizeBytes(target) }
+            .getOrDefault(0L)
+        removeSizeMb = "%.1f MB".format(bytes / 1_000_000.0)
+    }
+    // v1.5.6 (§3.7): the permanent option's own warning step,
+    // same as the book page's.
+    if (permanentPending) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { permanentPending = false },
+            title = { Text("Delete from your device?") },
+            text = {
+                Text(
+                    "This also deletes the file from your device — " +
+                        "it cannot be undone. Android may ask you to " +
+                        "confirm the file delete as well."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    permanentPending = false
+                    onDismiss()
+                    onRemoveLocalBook(
+                        target,
+                        app.xreader.data.library.LocalBookDeleteMode
+                            .PERMANENT,
+                        context
+                    )
+                }) { Text("Delete everything") }
+            },
+            dismissButton = {
+                TextButton(onClick = { permanentPending = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Remove “${target.title}”?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (target.sourceType ==
+                    app.xreader.data.db.SourceType.LOCAL_FILE
+                ) {
+                    // v1.5.6 (§3.7): a local book's three
+                    // options — no second copy, YouTube rule.
+                    Text(
+                        "This book reads from its own file. " +
+                            "Deleting the book never touches your " +
+                            "file unless you choose the last option."
+                    )
+                    androidx.compose.foundation.layout.Spacer(
+                        Modifier.height(8.dp)
+                    )
+                    DialogDangerOption(
+                        label = "Delete book",
+                        onClick = {
+                            onDismiss()
+                            onRemoveLocalBook(
+                                target,
+                                app.xreader.data.library
+                                    .LocalBookDeleteMode.DELETE_BOOK,
+                                null
+                            )
+                        }
+                    )
+                    DialogDangerOption(
+                        label = "Delete book and forget my reading",
+                        onClick = {
+                            onDismiss()
+                            onRemoveLocalBook(
+                                target,
+                                app.xreader.data.library
+                                    .LocalBookDeleteMode.FORGET,
+                                null
+                            )
+                        }
+                    )
+                    DialogDangerOption(
+                        label = "Permanent delete from my device",
+                        onClick = { permanentPending = true }
+                    )
+                } else {
+                    Text(
+                        "Removing the book also removes its reading " +
+                            "progress and bookmarks. Your original " +
+                            "file (if you imported one) stays where " +
+                            "it is."
+                    )
+                    androidx.compose.foundation.layout.Spacer(
+                        Modifier.height(8.dp)
+                    )
+                    DialogDangerOption(
+                        label = "Remove book only",
+                        onClick = {
+                            onDismiss()
+                            onRemoveBook(target, false)
+                        }
+                    )
+                    DialogDangerOption(
+                        label = "Remove book and downloaded chapters" +
+                            (removeSizeMb?.let { " ($it)" } ?: ""),
+                        onClick = {
+                            onDismiss()
+                            onRemoveBook(target, true)
+                        }
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Keep the book") }
+        }
+    )
 }
 
 /** The design's full-pill primary action (ember amber), with the

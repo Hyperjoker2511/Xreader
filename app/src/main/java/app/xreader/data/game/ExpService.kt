@@ -176,7 +176,9 @@ class ExpService(
                 if (inserted >= 0) ExpAwards.EXP_DAILY_GOAL else 0L))
             if (inserted >= 0) {
                 gained += ExpAwards.EXP_DAILY_GOAL
-                if (day.date == LocalDate.ofInstant(java.time.Instant.ofEpochMilli(clock()), zone).toString()) goalJustMet = true
+                // FIX-23: LocalDate.ofInstant is API 34+ — the
+                // atZone form is API 26-safe, identical semantics.
+                if (day.date == java.time.Instant.ofEpochMilli(clock()).atZone(zone).toLocalDate().toString()) goalJustMet = true
             }
         }
 
@@ -241,7 +243,8 @@ class ExpService(
             chaptersFinished = chapterDao.readCount(),
             totalActiveMinutes = sessionDao.totalActiveMinutes(),
             totalWordsRead = sessionDao.totalWordsRead(),
-            currentStreak = Streaks.currentStreak(activeDates, LocalDate.ofInstant(java.time.Instant.ofEpochMilli(clock()), zone)),
+            // FIX-23: atZone form (API 26-safe; ofInstant is API 34+).
+            currentStreak = Streaks.currentStreak(activeDates, java.time.Instant.ofEpochMilli(clock()).atZone(zone).toLocalDate()),
             bestStreak = Streaks.bestStreak(activeDates),
             focusSessions = sessionDao.focusSessionCount(),
             level = profile.level,
@@ -251,8 +254,9 @@ class ExpService(
         )
     }
 
+    // FIX-23: atZone form (API 26-safe; ofInstant is API 34+).
     private fun dayOf(epochMillis: Long): String =
-        LocalDate.ofInstant(Instant.ofEpochMilli(epochMillis), zone).toString()
+        Instant.ofEpochMilli(epochMillis).atZone(zone).toLocalDate().toString()
 
     private suspend fun addToDay(dateIso: String, exp: Long) {
         val existing = dailyDao.get(dateIso)

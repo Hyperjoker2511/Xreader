@@ -24,7 +24,15 @@ import kotlinx.serialization.json.Json
  * Writes are atomic (temp file + rename) so a killed process never
  * leaves a half-written chapter that the reader would trip over.
  */
-class BookStorage(val filesDir: File) {
+class BookStorage(
+    val filesDir: File,
+    /** v1.5.6 (§1.7a): the dispatcher the chapter-content reads
+     * hop to. Production keeps Dispatchers.IO; the §1.7a harness
+     * injects a recording dispatcher to prove the reads execute
+     * off the caller's dispatcher. */
+    private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher =
+        kotlinx.coroutines.Dispatchers.IO
+) {
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -45,6 +53,16 @@ class BookStorage(val filesDir: File) {
         File(importStagingRoot(), "$tag-${System.nanoTime()}").apply { mkdirs() }
 
     fun resolve(relativePath: String): File = File(filesDir, relativePath)
+
+    /** v1.5.7 (scope F smoothness): a content file's path
+     * WITHOUT creating its directory. [contentDir] mkdirs on
+     * every call, and read-side callers on the book-open path
+     * (the shell's assetFile seam, invoked during composition)
+     * paid a filesystem write on the main thread for a
+     * directory that either already exists or whose file
+     * cannot exist yet. Write paths keep using [contentDir]. */
+    fun contentFile(bookId: Long, fileName: String): File =
+        File(File(filesDir, "content/$bookId"), fileName)
 
     fun bookFileRelative(bookId: Long, fileName: String): String = "books/$bookId/$fileName"
     fun chapterContentRelative(bookId: Long, chapterId: Long): String =
@@ -110,11 +128,18 @@ class BookStorage(val filesDir: File) {
     }.mapStorageError("saving the chapter")
 
     suspend fun readChapterContent(bookId: Long, chapterId: Long): AppResult<ChapterContent> =
-        runCatchingAppSuspend {
-            val file = resolve(chapterContentRelative(bookId, chapterId))
-            if (!file.isFile) throw java.io.FileNotFoundException(file.name)
-            json.decodeFromString(ChapterContent.serializer(), file.readText())
-        }.mapStorageError("reading the chapter")
+        // v1.5.6 (§1.7a): the file read + JSON decode run on the IO
+        // dispatcher INSIDE the read, so every caller — including
+        // main-dispatcher reader paths — is fixed at once. This
+        // read used to execute synchronously on the caller's
+        // dispatcher and stalled the book-open transition app-wide.
+        kotlinx.coroutines.withContext(ioDispatcher) {
+            runCatchingAppSuspend {
+                val file = resolve(chapterContentRelative(bookId, chapterId))
+                if (!file.isFile) throw java.io.FileNotFoundException(file.name)
+                json.decodeFromString(ChapterContent.serializer(), file.readText())
+            }.mapStorageError("reading the chapter")
+        }
 
     /** Copies a staged asset (image/audio) into the book's content dir. */
     fun copyIntoContentDir(bookId: Long, staged: File, fileName: String): String {
@@ -146,11 +171,14 @@ class BookStorage(val filesDir: File) {
     }.mapStorageError("saving the translation")
 
     suspend fun readTranslatedContent(bookId: Long, chapterId: Long): AppResult<ChapterContent> =
-        runCatchingAppSuspend {
-            val file = resolve(translatedContentRelative(bookId, chapterId))
-            if (!file.isFile) throw java.io.FileNotFoundException(file.name)
-            json.decodeFromString(ChapterContent.serializer(), file.readText())
-        }.mapStorageError("reading the translation")
+        // v1.5.6 (§1.7a): same dispatcher fix as readChapterContent.
+        kotlinx.coroutines.withContext(ioDispatcher) {
+            runCatchingAppSuspend {
+                val file = resolve(translatedContentRelative(bookId, chapterId))
+                if (!file.isFile) throw java.io.FileNotFoundException(file.name)
+                json.decodeFromString(ChapterContent.serializer(), file.readText())
+            }.mapStorageError("reading the translation")
+        }
 
     fun deleteTranslatedContent(bookId: Long, chapterId: Long) {
         resolve(translatedContentRelative(bookId, chapterId)).delete()
@@ -179,6 +207,10 @@ class BookStorage(val filesDir: File) {
         add(File(filesDir, "lore-art/${book.id}"))
         book.filePath?.let { add(resolve(it)) }
         book.coverPath?.let { add(resolve(it)) }
+        // v1.5.6 (§3.6): an in-place book (filePath == null) counts
+        // ONLY what the app itself holds — content tree, lore art,
+        // cover. Its documentUri file lives on the device, is NOT
+        // app storage, and must never be resolved or counted here.
         return total
     }
 

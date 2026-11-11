@@ -1,5 +1,8 @@
 package app.xreader.data.extension.player
 
+import app.xreader.core.error.CrashGuard
+import app.xreader.data.extension.DiagnosticLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -41,7 +44,13 @@ class PlayerChallengeBridge(
     sessionSavedEvents: SharedFlow<String>,
     private val hasClearance: suspend (host: String) -> Boolean,
     private val sessionKey: String = SessionStoreCookieJar.PLAYER_SESSION_KEY,
-    private val timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS
+    private val timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
+    /** v1.5.2 (re-prompt cooldown): how long a dismissed or
+     * timed-out solve suppresses re-prompting for the same host. */
+    private val cooldownMillis: Long = DEFAULT_COOLDOWN_MILLIS,
+    /** Injectable clock so the cooldown is testable without
+     * waiting out real minutes. */
+    private val nowMs: () -> Long = System::currentTimeMillis
 ) {
 
     /** A challenge the shell should show the sanctioned screen for. */
@@ -60,21 +69,111 @@ class PlayerChallengeBridge(
     /** The prompt currently waiting for the user, if any. */
     val prompts: StateFlow<Prompt?> = _prompts.asStateFlow()
 
+    private val _challengePending = MutableStateFlow(false)
+
+    /**
+     * v1.5.4 (WS-1 item 6c): TRUE while ANY challenge for this
+     * host subsystem is in flight — an interactive prompt is
+     * waiting for the user ([prompts] non-null), or an
+     * unattended auto-solve (item 6a) is inside its 30 s latch.
+     * The book page reads this to say a check is pending
+     * instead of claiming to find chapters. Auto-solves are
+     * announced through [noteAutoSolveStart]/[noteAutoSolveEnd]
+     * and deliberately do NOT emit a [Prompt]: a prompt opens
+     * the sanctioned screen in the shell, and the auto-solved
+     * class must never summon the user (D5).
+     */
+    val challengePending: StateFlow<Boolean> = _challengePending.asStateFlow()
+
     private val lock = Any()
     private var pending: Pending? = null
+
+    /** The host whose auto-solve is in flight, if any. */
+    private var autoSolveHost: String? = null
+
+    private fun refreshChallengePendingLocked() {
+        _challengePending.value = pending != null || autoSolveHost != null
+    }
+
+    /** Announce an unattended auto-solve starting for [url]'s
+     * host (item 6a). Informational only — see
+     * [challengePending]. */
+    fun noteAutoSolveStart(url: HttpUrl) {
+        synchronized(lock) {
+            autoSolveHost = url.host
+            refreshChallengePendingLocked()
+        }
+    }
+
+    /** Announce the in-flight auto-solve ending (solved or
+     * not — the wait is over either way). */
+    fun noteAutoSolveEnd() {
+        synchronized(lock) {
+            autoSolveHost = null
+            refreshChallengePendingLocked()
+        }
+    }
+
+    /** v1.5.2 (re-prompt cooldown): host → the instant (per
+     * [nowMs]) its negative cooldown ends. Set when a prompt
+     * resolves UNSOLVED (dismissal or timeout): without it, an
+     * extension retrying the failed call re-entered the
+     * interceptor and popped the sanctioned screen again in the
+     * face of a user who had just dismissed it. */
+    private val cooldownUntilMs = HashMap<String, Long>()
 
     private class Pending(val host: String) {
         val latch = CountDownLatch(1)
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** v1.5.10 (A2 mop-up): a contained failure from the
+     * session-saved collector — recorded as a CONTAINED failure
+     * via a DiagnosticLog line carrying CrashGuard's top frames.
+     * That is the floor for this class: it holds no Context /
+     * filesDir, so it has no access to CrashGuard's contained-note
+     * recorder seam (the same DiagnosticLog-only default sink
+     * RenderRuntime uses). Cancellation is never a failure and
+     * is never recorded here. */
+    private fun reportContained(site: String, throwable: Throwable) {
+        if (throwable is CancellationException) return
+        runCatching {
+            DiagnosticLog.record(
+                tag = "contained",
+                message = "Contained failure at $site: " +
+                    "${throwable.javaClass.name} — the app kept running.",
+                detail = CrashGuard.framesText(throwable)
+            )
+        }
+    }
+
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            CrashGuard.containmentHandler(SITE_SCOPE) { site, _, throwable ->
+                reportContained(site, throwable)
+            }
+    )
 
     init {
         scope.launch {
             sessionSavedEvents.collect { key ->
-                val current = synchronized(lock) { pending } ?: return@collect
-                if (key == sessionKey && clearanceNow(current.host)) {
-                    current.latch.countDown()
+                // v1.5.10 (A2 mop-up): per-emission containment,
+                // mirroring AppContainer's player-enabled
+                // collector — a bad emission (e.g. a throw from
+                // clearanceNow) is skipped + recorded as a
+                // CONTAINED failure and the collector keeps
+                // collecting; the scope's containment handler
+                // backstops anything that escapes this.
+                // Cancellation is rethrown, never recorded or
+                // swallowed. No session/clearance behaviour changes.
+                runCatching {
+                    val current = synchronized(lock) { pending }
+                        ?: return@runCatching
+                    if (key == sessionKey && clearanceNow(current.host)) {
+                        current.latch.countDown()
+                    }
+                }.onFailure { failure ->
+                    if (failure is CancellationException) throw failure
+                    reportContained(SITE_COLLECT, failure)
                 }
             }
         }
@@ -91,6 +190,23 @@ class PlayerChallengeBridge(
         // our response was on the wire.
         if (clearanceNow(host)) return true
 
+        // v1.5.2 (re-prompt cooldown): a recent dismissal or
+        // timeout for this host fails fast — NO prompt is
+        // emitted. (A host whose clearance has since landed
+        // never reaches here: the store check above answered.)
+        val cooling = synchronized(lock) {
+            val until = cooldownUntilMs[host]
+            when {
+                until == null -> false
+                nowMs() < until -> true
+                else -> {
+                    cooldownUntilMs.remove(host)
+                    false
+                }
+            }
+        }
+        if (cooling) return false
+
         // Take the prompt slot, or join the in-flight prompt for this
         // host. A different host's prompt owns the screen meanwhile.
         var slot: Pending? = null
@@ -104,6 +220,7 @@ class PlayerChallengeBridge(
                         pending = mine
                         owner = true
                         _prompts.value = Prompt(host, url.toString(), sessionKey)
+                        refreshChallengePendingLocked()
                         slot = mine
                     }
                     current.host == host -> slot = current
@@ -123,10 +240,24 @@ class PlayerChallengeBridge(
                 if (pending === active) {
                     pending = null
                     _prompts.value = null
+                    refreshChallengePendingLocked()
+                }
+                // An unsolved prompt (dismissal or timeout)
+                // starts the host's re-prompt cooldown.
+                if (!solved) {
+                    cooldownUntilMs[host] = nowMs() + cooldownMillis
                 }
             }
         }
         return solved
+    }
+
+    /** v1.5.2: an explicit user-initiated check for [host] (the
+     * sources screen's sign-in/check action) clears its re-prompt
+     * cooldown — the user's own tap is never throttled by a
+     * dismissal they made earlier. */
+    fun clearCooldown(host: String) {
+        synchronized(lock) { cooldownUntilMs.remove(host) }
     }
 
     /** The shell calls this when the sanctioned screen's request clears
@@ -146,6 +277,14 @@ class PlayerChallengeBridge(
          * at a visible screen gets longer). */
         const val DEFAULT_TIMEOUT_MILLIS = 120_000L
 
+        /** The re-prompt cooldown after a dismissal or timeout. */
+        const val DEFAULT_COOLDOWN_MILLIS = 120_000L
+
         private const val SLOT_POLL_MILLIS = 250L
+
+        /** Containment site labels (A2 census): the scope
+         * backstop and the session-saved collector. */
+        const val SITE_SCOPE = "player-challenge-bridge"
+        const val SITE_COLLECT = "player-challenge-bridge:session-saved"
     }
 }

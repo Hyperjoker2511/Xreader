@@ -1,7 +1,6 @@
 package app.xreader.data.extension.player
 
 import android.app.Application
-import dev.mihon.injekt.patchInjekt
 import eu.kanade.tachiyomi.network.JavaScriptEngine
 import eu.kanade.tachiyomi.network.NetworkHelper
 import kotlinx.serialization.json.Json
@@ -83,11 +82,16 @@ class PlayerModule(
 }
 
 /**
- * One-time, process-wide registration. Called from AppContainer's
+ * Process-wide registration. Called from AppContainer's
  * construction — which XreaderApp.onCreate performs before anything
  * else can run — so registration always precedes any extension class
  * load (K3's loader only ever runs after the container exists).
- * Idempotent: later calls are no-ops.
+ * RE-ENTRANT by design: every call imports the module into the
+ * CURRENT Injekt scope (importModule overwrites factories in the
+ * active scope — donor semantics), so a call that follows a
+ * patchInjekt() reset genuinely re-registers instead of trusting a
+ * stale flag. [isRegistered] reports whether an import has
+ * happened; it is a diagnostic, never a gate on registering.
  */
 object PlayerRegistrar {
 
@@ -97,13 +101,28 @@ object PlayerRegistrar {
     fun isRegistered(): Boolean = registered
 
     fun register(application: Application, networkHelper: NetworkHelper) {
-        if (registered) return
         synchronized(this) {
-            if (registered) return
-            // The mihonapp injekt fork's patch: swaps the default
-            // registrar for its thread-safe one. Komikku calls this
-            // first in App.onCreate, before any importModule.
-            patchInjekt()
+            // v1.5.3 (finding #1): NO patchInjekt() here. The
+            // patch REPLACES the global Injekt scope with a fresh
+            // empty one, so it must happen exactly once per
+            // process: AppContainer performs it before BOTH
+            // registrars run (spec §5.8 — the donor's App.onCreate
+            // order). When each registrar patched for itself, the
+            // second patch wiped the first module's registrations
+            // wholesale (the "0 ready" Keiyoushi shelf).
+            //
+            // v1.5.3 (gate-repair, round-17 sift claim 8): NO
+            // `if (registered) return` early-return either. The
+            // flag was a one-way latch: after any later
+            // patchInjekt() replaced the scope, register()
+            // no-oped on the stale flag and left the fresh scope
+            // EMPTY while isRegistered() read true — the exact
+            // split the v1.5.3 gate's bootstrap test caught when
+            // an earlier AppContainer test in its Robolectric
+            // sandbox had set the flag. Re-import is harmless
+            // within a scope (factories are overwritten with the
+            // latest construction's instances) and REQUIRED after
+            // a patch, so register() now always imports.
             Injekt.importModule(PlayerModule(application, networkHelper))
             registered = true
         }

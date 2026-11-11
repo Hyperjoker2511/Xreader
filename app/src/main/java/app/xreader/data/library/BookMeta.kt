@@ -7,7 +7,12 @@ enum class ReadingStatus {
     READING,
     COMPLETED,
     ON_HOLD,
-    DROPPED
+    DROPPED,
+    // v1.5.3 (Library package): the fifth donor status
+    // (QuickNovel/NeoQN "Plan to Read"). Appended at the END —
+    // decoding is by NAME (see BookMeta.decode), so existing
+    // persisted lines are unaffected.
+    PLAN_TO_READ
 }
 
 /**

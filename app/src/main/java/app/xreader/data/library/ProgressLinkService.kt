@@ -71,6 +71,18 @@ class ProgressLinkService(
         if (!book.inLibrary || book.mergedIntoId != null) {
             return Outcome.NoChange
         }
+        // v1.5.6 (audit §9.3): an in-place local book's position is
+        // a document locator, not a chapter row — linking must
+        // never write a progress row pointing at a non-existent
+        // chapter for it. (Sibling-side, in-place books are also
+        // skipped below: they have no chapter rows to read a
+        // position from.) Fence, not a re-key, this round.
+        if (book.sourceType == SourceType.LOCAL_FILE &&
+            (book.documentUri != null || book.filePath != null) &&
+            chapterDao.forBook(bookId).isEmpty()
+        ) {
+            return Outcome.NoChange
+        }
         val library = libraryBooks()
         val refused = prefs.refusedPairs.first()
         val siblings = ProgressLinker.siblingsOf(book, library, refused)

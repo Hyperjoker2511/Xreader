@@ -223,7 +223,8 @@ private fun UpdateRow(
     GlassCard(Modifier.fillMaxWidth(), onClick = onOpen) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(
-                model = coverFile(shelf.book.coverPath),
+                model = coverFile(shelf.book.coverPath)
+                    ?: shelf.book.coverUrl?.takeIf { it.isNotBlank() },
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier

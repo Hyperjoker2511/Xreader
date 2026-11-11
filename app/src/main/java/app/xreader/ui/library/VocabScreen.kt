@@ -66,10 +66,10 @@ data class VocabUiState(
 class VocabViewModel(private val container: AppContainer) : ViewModel() {
 
     private val dictionaryDir: File
-        get() = File(container.applicationContext.filesDir, "dictionary")
+        get() = DictionaryLookup.dictionaryDir(container.applicationContext.filesDir)
 
     private fun dictionaryFile(): File? =
-        dictionaryDir.listFiles()?.firstOrNull { it.isFile }
+        DictionaryLookup.dictionaryFile(container.applicationContext.filesDir)
 
     private val refreshTick = kotlinx.coroutines.flow.MutableStateFlow(0)
 
@@ -125,21 +125,13 @@ class VocabViewModel(private val container: AppContainer) : ViewModel() {
 
     /** Look a word up in the user's offline dictionary file
      * (lines of `word<TAB>definition`). Null = no dictionary or
-     * no entry — the UI says so plainly. */
-    suspend fun lookup(word: String): String? {
-        val file = dictionaryFile() ?: return null
-        val needle = word.trim().lowercase()
-        if (needle.isEmpty()) return null
-        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching {
-                file.bufferedReader().useLines { lines ->
-                    lines.firstOrNull { line ->
-                        line.substringBefore('\t').trim().lowercase() == needle
-                    }?.substringAfter('\t', "")?.trim()?.takeIf { it.isNotEmpty() }
-                }
-            }.getOrNull()
-        }
-    }
+     * no entry — the UI says so plainly.
+     * v1.5.10 (F3): the body lives in [DictionaryLookup] now —
+     * the readers' Dictionary selection action calls the same
+     * core; this stays as the screen's seam, behaviour
+     * unchanged. */
+    suspend fun lookup(word: String): String? =
+        DictionaryLookup.lookupInFile(dictionaryFile(), word)
 
     /** Install the picked file as THE dictionary (replacing any
      * previous one — one dictionary, removable, per the plan). */

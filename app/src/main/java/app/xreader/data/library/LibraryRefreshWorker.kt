@@ -31,13 +31,62 @@ class LibraryRefreshWorker(
                 container.libraryRefresher.refreshAll()
             }
         }.fold(
-            onSuccess = { Result.success() },
-            onFailure = { Result.retry() }
+            // v1.5.3 (finding #9, strand D): a walk that COMPLETED
+            // is a success even when some books failed or were
+            // skipped — per-book outcomes are counted inside the
+            // Outcome, and partial success is still success.
+            // Result.retry() is reserved for the walk itself
+            // being unable to run at all (the exception path);
+            // before, any per-book trouble funnelled into retry
+            // and the pull-to-refresh indicator never cleared.
+            onSuccess = { outcome ->
+                android.util.Log.i(
+                    TAG,
+                    "Library refresh finished: checked=" +
+                        "${outcome.booksChecked} withNew=" +
+                        "${outcome.booksWithNew} totalNew=" +
+                        "${outcome.totalNew} failures=" +
+                        "${outcome.failures} skipped=${outcome.skipped}"
+                )
+                Result.success()
+            },
+            // v1.5.34 (item 1b): retries are BOUNDED. Before, ANY
+            // exception returned Result.retry() and WorkManager
+            // backed off and re-ran the job indefinitely — a
+            // permanently failing walk re-appeared as "the
+            // Library is refreshing again" on later visits, long
+            // after the owner's manual refresh had completed.
+            // Now the job retries at most MAX_RETRIES times and
+            // then ends in failure: finished, not pending.
+            onFailure = { error ->
+                if (runAttemptCount < MAX_RETRIES) {
+                    android.util.Log.w(
+                        TAG,
+                        "Library refresh attempt $runAttemptCount " +
+                            "failed (${error.message}); will retry"
+                    )
+                    Result.retry()
+                } else {
+                    android.util.Log.e(
+                        TAG,
+                        "Library refresh failed after " +
+                            "$runAttemptCount attempts; giving up",
+                        error
+                    )
+                    Result.failure()
+                }
+            }
         )
     }
 
     companion object {
+        private const val TAG = "LibraryRefreshWorker"
         const val UNIQUE_NAME = "library-refresh"
+
+        /** v1.5.34 (item 1b): the retry budget — the initial
+         * run plus at most this many retries, then the job
+         * ends in failure instead of retrying forever. */
+        private const val MAX_RETRIES = 2
 
         fun enqueue(context: Context) {
             WorkManager.getInstance(context).enqueueUniqueWork(

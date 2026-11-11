@@ -33,7 +33,21 @@ class XhtmlConverter(
         /** First h1/h2 text, if any (chapter-title fallback). */
         val heading: String?,
         /** The document <title>, if any. */
-        val titleTag: String?
+        val titleTag: String?,
+        /**
+         * v1.5.5 (§5): image elements whose reference(s) the
+         * resolver could not resolve — ONE entry per failed
+         * element (its primary reference), however many fallback
+         * candidates (srcset entries, dual hrefs) were tried.
+         * The EPUB parser counts the local ones into
+         * droppedImages; before v1.5.5 a failed plate page could
+         * convert to zero blocks and be skipped without the
+         * resolver ever being consulted for its constructs
+         * (srcset, CSS backgrounds), so nothing was counted.
+         */
+        val unresolvedImages: List<String> = emptyList(),
+        /** v1.5.5 (§5): image blocks actually emitted. */
+        val imagesEmitted: Int = 0
     )
 
     fun convert(input: InputStream): Result {
@@ -63,6 +77,34 @@ class XhtmlConverter(
         val blocks = mutableListOf<ChapterBlock>()
         var heading: String? = null
         var titleTag: String? = null
+        // v1.5.5 (§5): per-element image accounting (see Result).
+        val unresolvedImages = mutableListOf<String>()
+        var imagesEmitted = 0
+
+        /**
+         * v1.5.5 (§5): resolve ONE image element from its
+         * candidate references, in order, emitting at most one
+         * Image block. The candidates are the shapes real
+         * publisher markup uses for the same picture (src /
+         * href / xlink:href / srcset) — trying the next one when
+         * the resolver declines is what lets a dual-href SVG
+         * plate or a srcset-only <img> land. Only a total miss
+         * is recorded (once) in [unresolvedImages].
+         */
+        fun emitImage(candidates: List<String?>, alt: String) {
+            val refs = candidates.mapNotNull { it?.trim()?.takeIf { v -> v.isNotEmpty() } }
+                .distinct()
+            if (refs.isEmpty()) return
+            for (ref in refs) {
+                val fileName = imageResolver(ref)
+                if (fileName != null) {
+                    blocks += ChapterBlock.Image(fileName, alt)
+                    imagesEmitted++
+                    return
+                }
+            }
+            unresolvedImages += refs.first()
+        }
 
         var skipDepth = 0
         var inTitle = false
@@ -138,6 +180,19 @@ class XhtmlConverter(
                     val name = parser.name.lowercase()
                     if (name in SKIP_TAGS) skipDepth++
                     if (skipDepth == 0) {
+                        // v1.5.5 (§5): a CSS background plate —
+                        // a div/figure whose inline style paints
+                        // the illustration as background-image.
+                        // There is no <img> to walk; the style
+                        // attribute IS the reference. Checked for
+                        // every element before its own handling.
+                        parser.getAttributeValue(null, "style")?.let { style ->
+                            val urls = cssBackgroundUrls(style)
+                            if (urls.isNotEmpty()) {
+                                flushParagraph()
+                                emitImage(urls, "")
+                            }
+                        }
                         when (name) {
                             "title" -> inTitle = true
                             "b", "strong" -> boldDepth++
@@ -164,17 +219,42 @@ class XhtmlConverter(
                             }
                             "img", "image" -> {
                                 flushParagraph()
-                                val src = parser.getAttributeValue(null, "src")
-                                    ?: parser.getAttributeValue(null, "href")
-                                    ?: parser.getAttributeValue(
-                                        "http://www.w3.org/1999/xlink", "href"
-                                    )
+                                // v1.5.5 (§5): every reference
+                                // shape the element carries is a
+                                // candidate — a plain src, an SVG
+                                // <image>'s href AND xlink:href
+                                // (publisher plates commonly carry
+                                // both, one of them stale), and
+                                // the srcset's best entry for a
+                                // srcset-only <img>.
                                 val alt = parser.getAttributeValue(null, "alt") ?: ""
-                                if (src != null) {
-                                    imageResolver(src)?.let { fileName ->
-                                        blocks += ChapterBlock.Image(fileName, alt)
-                                    }
-                                }
+                                emitImage(
+                                    listOf(
+                                        parser.getAttributeValue(null, "src"),
+                                        parser.getAttributeValue(null, "href"),
+                                        parser.getAttributeValue(
+                                            "http://www.w3.org/1999/xlink", "href"
+                                        ),
+                                        bestSrcsetEntry(
+                                            parser.getAttributeValue(null, "srcset")
+                                        )
+                                    ),
+                                    alt
+                                )
+                            }
+                            "source" -> {
+                                // v1.5.5 (§5): a <picture>'s
+                                // <source srcset> is the plate's
+                                // only reference in some books.
+                                emitImage(
+                                    listOf(
+                                        parser.getAttributeValue(null, "src"),
+                                        bestSrcsetEntry(
+                                            parser.getAttributeValue(null, "srcset")
+                                        )
+                                    ),
+                                    ""
+                                )
                             }
                             "h1", "h2", "h3", "h4", "h5", "h6" -> {
                                 flushParagraph()
@@ -230,7 +310,11 @@ class XhtmlConverter(
             event = parser.next()
         }
         flushParagraph()
-        return Result(blocks, heading, titleTag?.takeIf { it.isNotEmpty() })
+        return Result(
+            blocks, heading, titleTag?.takeIf { it.isNotEmpty() },
+            unresolvedImages = unresolvedImages,
+            imagesEmitted = imagesEmitted
+        )
     }
 
     companion object {
@@ -260,6 +344,43 @@ class XhtmlConverter(
 
         private val ENTITY_PATTERN = Regex("&([a-zA-Z][a-zA-Z0-9]+);")
         private val XML_SAFE = setOf("amp", "lt", "gt", "quot", "apos")
+
+        private val CSS_URL = Regex(
+            """url\(\s*['"]?([^'")]+?)['"]?\s*\)""", RegexOption.IGNORE_CASE
+        )
+
+        /**
+         * v1.5.5 (§5): the url() references of an inline style's
+         * background declarations, in order. Only styles that
+         * actually paint a background are read — a stray url() in
+         * an unrelated property is not a plate.
+         */
+        fun cssBackgroundUrls(style: String): List<String> {
+            if (!style.contains("background", ignoreCase = true)) return emptyList()
+            return CSS_URL.findAll(style).map { it.groupValues[1].trim() }
+                .filter { it.isNotEmpty() }.toList()
+        }
+
+        /**
+         * v1.5.5 (§5): the best entry of a srcset attribute — the
+         * widest `w` candidate when widths are declared, else the
+         * first entry. Null for a blank srcset.
+         */
+        fun bestSrcsetEntry(srcset: String?): String? {
+            val value = srcset?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            val entries = value.split(',').mapNotNull { raw ->
+                val parts = raw.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+                if (parts.isEmpty()) {
+                    null
+                } else {
+                    val width = parts.getOrNull(1)
+                        ?.removeSuffix("w")?.toIntOrNull() ?: 0
+                    parts[0] to width
+                }
+            }
+            if (entries.isEmpty()) return null
+            return entries.maxByOrNull { it.second }?.first ?: entries.first().first
+        }
 
         /** Rewrites common named entities as numeric refs so a strict
          * XML parser accepts real-world XHTML. Unknown entities become

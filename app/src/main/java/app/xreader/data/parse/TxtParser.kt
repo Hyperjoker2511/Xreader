@@ -124,6 +124,17 @@ class TxtParser : BookParser {
                 )
             )
         } catch (e: Exception) {
+            // TEMP-CAPTURE (v1.5.2 re-scan, BigTxtStreamingTest one-off
+            // failure): ParseFailed's detail carries only the exception's
+            // simple class name, so the message + call site are swallowed
+            // here. This diagnostic print makes any recurrence name the
+            // exact exception in the console/test log. OBSERVABILITY ONLY
+            // — behaviour unchanged. To be reviewed/removed at closure of
+            // the BigTxt item in build-logs/V152-BUILD-REPORT.md.
+            System.err.println(
+                "TEMP-CAPTURE TxtParser.parse failed: ${e.javaClass.simpleName}: ${e.message}"
+            )
+            e.printStackTrace()
             AppResult.Err(AppError.ParseFailed("TXT", "the file couldn't be read", e.javaClass.simpleName))
         }
     }

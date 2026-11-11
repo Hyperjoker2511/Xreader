@@ -39,7 +39,13 @@ interface HttpTransport {
         /** Phase 6: a raw byte body (book-file sync uploads). Wins
          * over [body] when both are set — binary content must never
          * round-trip through a String. */
-        val bodyBytes: ByteArray? = null
+        val bodyBytes: ByteArray? = null,
+        /** v1.5.2 (§4): per-call total timeout override. Search
+         * passes [OkHttpTransport.SEARCH_CALL_TIMEOUT_SECONDS]
+         * (15 s) so a search call fits inside the 20 s per-source
+         * leg budget instead of inheriting the 300 s reading
+         * budget. Null = the client's own budget. */
+        val callTimeoutSeconds: Long? = null
     )
 
     class Response(
@@ -161,8 +167,41 @@ class OkHttpTransport(
             // on a dead connection, on an IO thread, never the
             // main thread), and a cancelled caller's result is
             // discarded by the withContext contract.
+            // v1.5.2 (§4, Failure C): coroutine cancellation MUST
+            // reach the socket. The blocking call runs inside a
+            // cancellable continuation whose cancellation handler
+            // cancels the OkHttp call itself — a timeout now kills
+            // the call, not just the coroutine that awaited it.
             try {
-                val response: Response = call.execute()
+                val effectiveCall = if (request.callTimeoutSeconds != null) {
+                    // v1.5.2 fix (FIX-3): the search-scoped client is
+                    // the base for search calls (15 s total), so the
+                    // printed §4 configuration is the one that runs.
+                    val base = if (request.callTimeoutSeconds ==
+                        SEARCH_CALL_TIMEOUT_SECONDS
+                    ) searchClient() else client
+                    base.newBuilder()
+                        .callTimeout(request.callTimeoutSeconds, TimeUnit.SECONDS)
+                        .build().newCall(call.request())
+                } else {
+                    call
+                }
+                val response: Response =
+                    kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                        cont.invokeOnCancellation { effectiveCall.cancel() }
+                        try {
+                            val r = effectiveCall.execute()
+                            if (cont.isActive) {
+                                cont.resumeWith(Result.success(r))
+                            } else {
+                                r.close()
+                            }
+                        } catch (e: Exception) {
+                            if (cont.isActive) {
+                                cont.resumeWith(Result.failure(e))
+                            }
+                        }
+                    }
                 AppResult.Ok(
                     HttpTransport.Response(
                         code = response.code,
@@ -193,6 +232,19 @@ class OkHttpTransport(
          * error. Downloads resume by Range, so a capped call
          * costs them nothing. */
         const val CALL_TIMEOUT_SECONDS = 300L
+
+        /** v1.5.2 (§4): the search-scoped total call timeout —
+         * fits inside the 20 s per-source search leg budget. */
+        const val SEARCH_CALL_TIMEOUT_SECONDS = 15L
+
+        /** v1.5.2 (§4): search-scoped client (15 s call timeout). */
+        fun searchClient(): OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .callTimeout(SEARCH_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)

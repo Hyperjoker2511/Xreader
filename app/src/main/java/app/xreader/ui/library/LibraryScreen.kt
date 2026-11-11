@@ -76,6 +76,7 @@ import app.xreader.ui.common.DialogDangerOption
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.GlassSheetActionRow
 import app.xreader.ui.common.KitEmptyState
+import app.xreader.ui.common.LoadingState
 import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.common.PrimaryPill
@@ -132,6 +133,9 @@ fun LibraryScreen(
     // ONE Filter sheet now — the toolbar keeps a single chip row.
     var filterSheetOpen by remember { mutableStateOf(false) }
     var removeTarget by remember { mutableStateOf<ShelfBook?>(null) }
+    // v1.5.34 (item 2): the permanent-warning step + context the
+    // delete sheet needed moved INTO the shared
+    // BookDeleteDialogs with the sheet itself.
     // v1.0.2 (R21/R23): quick actions, multi-select, shelf dialogs.
     var quickActionsFor by remember { mutableStateOf<ShelfBook?>(null) }
     var selection by remember { mutableStateOf<Set<Long>?>(null) }
@@ -369,6 +373,17 @@ fun LibraryScreen(
         }
         Spacer(Modifier.height(8.dp))
 
+        // v1.5.8 (J1/J15): the first load with an empty shelf
+        // used to render silent chrome over nothing — the state
+        // kit says what is happening while the shelf loads.
+        if (state.loading && state.books.isEmpty() && candidates.isEmpty()) {
+            LoadingState(
+                whatIsHappening = "Loading your library…",
+                modifier = Modifier.weight(1f)
+            )
+            return@Column
+        }
+
         // v1.0.4 (D3): the empty decision is the pure predicate in
         // LibraryEmptyState (unit-tested), and when it fires the
         // empty state OWNS the screen — search, toolbar and chips
@@ -568,7 +583,14 @@ fun LibraryScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 88.dp)
         ) {
-            (state.continueReading.takeIf { state.libraryPrefs.showContinueReading })?.let { hero ->
+            // v1.5.3 (§5.3, CONFIRMED; finding #9): the Continue
+            // hero belongs to the whole library — it renders ONLY
+            // when the All shelf is selected, never over a
+            // filtered shelf (Favourites, a status shelf, …).
+            (state.continueReading.takeIf {
+                state.libraryPrefs.showContinueReading &&
+                    state.selectedShelf == "all"
+            })?.let { hero ->
                 item(key = "continue") {
                     androidx.compose.animation.AnimatedVisibility(
                         visible = true,
@@ -612,11 +634,15 @@ fun LibraryScreen(
                                     .clickable { onOpenBook(book.id) }
                             ) {
                                 val cover = coverFile(book.coverPath)
+                                    ?.takeIf { it.exists() }
                                 val coverRequest =
                                     rememberSizedCover(cover, 96, 136)
-                                if (cover != null) {
+                                if (cover != null ||
+                                    !book.coverUrl.isNullOrBlank()
+                                ) {
                                     AsyncImage(
-                                        model = coverRequest ?: cover,
+                                        model = coverRequest ?: cover
+                                        ?: shelfBook.book.coverUrl?.takeIf { it.isNotBlank() },
                                         contentDescription = null,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier
@@ -659,6 +685,7 @@ fun LibraryScreen(
                         state = candidateState,
                         onImport = { viewModel.importCandidate(it) },
                         onDismiss = { viewModel.dismissCandidate(it) },
+                        onPassword = { cand, pw -> viewModel.importCandidate(cand, pw) },
                         modifier = Modifier.animateItem(placementSpec = listPlacementSpec())
                     )
                 }
@@ -702,13 +729,29 @@ fun LibraryScreen(
             } else if (memberFilter != null && candidates.isEmpty()) {
                 item(key = "shelf-empty") {
                     Text(
-                        if (state.selectedShelf ==
-                            app.xreader.data.library.ShelfLogic.BUILTIN_BEHIND_ON
-                        ) {
-                            "You're all caught up — nothing here is behind."
-                        } else {
-                            "Nothing on this shelf yet. Long-press a book " +
-                                "and choose “Add to shelf”."
+                        when {
+                            state.selectedShelf ==
+                                app.xreader.data.library.ShelfLogic.BUILTIN_BEHIND_ON ->
+                                "You're all caught up — nothing here is behind."
+                            // v1.5.3 (item 27, finding #9 strand
+                            // A1): "Add to shelf" writes MANUAL
+                            // shelves and can never populate
+                            // Favourites — name the act that works.
+                            state.selectedShelf ==
+                                app.xreader.data.library.ShelfLogic.BUILTIN_FAVOURITES ->
+                                "Nothing here yet. Open a book and " +
+                                    "tap Favourite to keep it here."
+                            // v1.5.3 (item 30): status shelves —
+                            // name the status and where it is set.
+                            app.xreader.data.library.ShelfLogic
+                                .statusForBuiltin(state.selectedShelf) != null ->
+                                "Nothing here yet. Mark a book as " +
+                                    app.xreader.data.library.ShelfLogic
+                                        .builtinName(state.selectedShelf) +
+                                    " from its book page."
+                            else ->
+                                "Nothing on this shelf yet. Long-press a book " +
+                                    "and choose “Add to shelf”."
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1159,52 +1202,22 @@ fun LibraryScreen(
             )
         }
 
-        removeTarget?.let { target ->
-            var removeSizeMb by remember(target.book.id) { mutableStateOf<String?>(null) }
-            LaunchedEffect(target.book.id) {
-                val bytes = viewModel.downloadedSizeBytes(target.book)
-                removeSizeMb = "%.1f MB".format(bytes / 1_000_000.0)
+        // v1.5.34 (item 2): the delete sheet is the shared
+        // BookDeleteDialogs (ui/common) — the same composable
+        // History's rows open, so both surfaces offer the one
+        // sheet with the one deletion logic. The handlers stay
+        // this ViewModel's own.
+        app.xreader.ui.common.BookDeleteDialogs(
+            book = removeTarget?.book,
+            downloadedSizeBytes = { viewModel.downloadedSizeBytes(it) },
+            onDismiss = { removeTarget = null },
+            onRemoveBook = { book, deleteFiles ->
+                viewModel.removeBook(book, deleteFiles)
+            },
+            onRemoveLocalBook = { book, mode, context ->
+                viewModel.removeLocalBook(book, mode, context)
             }
-            // v1.0.5 (D2): the dialog from the user's screenshot —
-            // its choices used to be a Column crammed into the
-            // confirm slot, so "Remove book and downloaded
-            // chapters (0.0 MB)" wrapped against "Keep the book".
-            // Now the choices stack full-width in the body and
-            // Keep sits alone in the button row.
-            AlertDialog(
-                onDismissRequest = { removeTarget = null },
-                title = { Text("Remove “${target.book.title}”?") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            "Removing the book also removes its reading progress and " +
-                                "bookmarks. Your original file (if you imported one) " +
-                                "stays where it is."
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        DialogDangerOption(
-                            label = "Remove book only",
-                            onClick = {
-                                removeTarget = null
-                                viewModel.removeBook(target.book, deleteFiles = false)
-                            }
-                        )
-                        DialogDangerOption(
-                            label = "Remove book and downloaded chapters" +
-                                (removeSizeMb?.let { " ($it)" } ?: ""),
-                            onClick = {
-                                removeTarget = null
-                                viewModel.removeBook(target.book, deleteFiles = true)
-                            }
-                        )
-                    }
-                },
-                confirmButton = {},
-                dismissButton = {
-                    TextButton(onClick = { removeTarget = null }) { Text("Keep the book") }
-                }
-            )
-        }
+        )
     }
 }
 
@@ -1395,6 +1408,7 @@ private fun CandidateState.token(): String = when (this) {
     is CandidateState.Importing -> candidate.token
     is CandidateState.Done -> candidate.token
     is CandidateState.Failed -> candidate.token
+    is CandidateState.PasswordNeeded -> candidate.token
 }
 
 @Composable
@@ -1478,7 +1492,8 @@ private fun ContinueReadingHero(
                         )
                 )
                 AsyncImage(
-                    model = heroCoverRequest ?: coverFile(hero.book.coverPath),
+                    model = heroCoverRequest ?: coverFile(hero.book.coverPath)
+                        ?: hero.book.coverUrl?.takeIf { it.isNotBlank() },
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -1574,9 +1589,16 @@ private fun ShelfRow(
 ) {
     val progress = animateProgressAsState(shelfBook.fraction, label = "shelfProgress")
     val cover = coverFile(shelfBook.book.coverPath)
+    // v1.5.7 (scope F smoothness): the cover's on-disk existence
+    // is probed ONCE per cover file, remembered — this row used
+    // to call File.exists() three times per recomposition (a
+    // filesystem stat on the main thread, per visible row, on
+    // every progress/download tick that recomposed the list).
+    val coverOnDisk = remember(cover) { cover?.exists() == true }
+    val coverFileOrNull = if (coverOnDisk) cover else null
     // v1.2.0 (WS4): decode the row cover near its drawn size.
     val coverRequest = rememberSizedCover(
-        cover?.takeIf { it.exists() },
+        coverFileOrNull,
         if (compact) 32 else 44,
         if (compact) 45 else 62
     )
@@ -1592,9 +1614,13 @@ private fun ShelfRow(
                 .combinedClickable(onClick = onOpen, onLongClick = onLongPress),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (cover != null && cover.exists()) {
+            if (coverOnDisk ||
+                !shelfBook.book.coverUrl.isNullOrBlank()
+            ) {
                 AsyncImage(
-                    model = coverRequest ?: cover,
+                    model = coverRequest
+                        ?: coverFileOrNull
+                        ?: shelfBook.book.coverUrl?.takeIf { it.isNotBlank() },
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = coverModifier
@@ -1664,6 +1690,7 @@ private fun ImportCandidateCard(
     state: CandidateState,
     onImport: (app.xreader.data.importer.ImportCandidate) -> Unit,
     onDismiss: (app.xreader.data.importer.ImportCandidate) -> Unit,
+    onPassword: (app.xreader.data.importer.ImportCandidate, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val candidate = when (state) {
@@ -1671,6 +1698,55 @@ private fun ImportCandidateCard(
         is CandidateState.Importing -> state.candidate
         is CandidateState.Done -> state.candidate
         is CandidateState.Failed -> state.candidate
+        is CandidateState.PasswordNeeded -> state.candidate
+    }
+    // v1.5.4 (WS-7, addendum C): the password prompt for a locked
+    // PDF. The entered text lives only in this composition until
+    // it is handed to the import call — never stored anywhere.
+    var passwordPrompt by remember { mutableStateOf(false) }
+    var passwordText by remember { mutableStateOf("") }
+    if (passwordPrompt) {
+        AlertDialog(
+            onDismissRequest = { passwordPrompt = false; passwordText = "" },
+            title = { Text("This file needs a password") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Enter the password to add “${candidate.displayName}”. " +
+                            "It's used once to open the file and never stored.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    OutlinedTextField(
+                        value = passwordText,
+                        onValueChange = { passwordText = it },
+                        label = { Text("Password") },
+                        singleLine = true,
+                        visualTransformation =
+                            androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = passwordText.isNotEmpty(),
+                    onClick = {
+                        val entered = passwordText
+                        passwordPrompt = false
+                        passwordText = ""
+                        onPassword(candidate, entered)
+                    }
+                ) { Text("Unlock and add") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { passwordPrompt = false; passwordText = "" }
+                ) { Text("Cancel") }
+            }
+        )
     }
     GlassCard(modifier = modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1694,6 +1770,7 @@ private fun ImportCandidateCard(
                         is CandidateState.Importing -> "Importing"
                         is CandidateState.Done -> "Done"
                         is CandidateState.Failed -> "Failed"
+                        is CandidateState.PasswordNeeded -> "Locked"
                     },
                     color = when (state) {
                         is CandidateState.Failed -> MaterialTheme.colorScheme.error
@@ -1754,17 +1831,57 @@ private fun ImportCandidateCard(
                         )
                     }
                 }
-                is CandidateState.Done -> Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                is CandidateState.Done -> Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "Added “${state.bookTitle}” to your library",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = sageTextColor(),
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { onDismiss(candidate) }) { Text("Dismiss") }
+                    }
+                    // v1.5.4 (WS-7): the honesty line — a partial
+                    // import says what it lost, in plain words. A
+                    // clean import (zero) shows no line at all.
+                    if (state.imagesDropped > 0) {
+                        Text(
+                            "Added — but ${state.imagesDropped} " +
+                                (if (state.imagesDropped == 1) "picture" else "pictures") +
+                                " in this file couldn't be read",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                is CandidateState.PasswordNeeded -> Column(
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        "Added “${state.bookTitle}” to your library",
+                        if (state.wrongPassword) {
+                            "That password didn't open this file. " +
+                                "Check it and try again."
+                        } else {
+                            "This file is locked with a password. " +
+                                "Enter it and the book is added in full."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
-                        color = sageTextColor(),
-                        modifier = Modifier.weight(1f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    TextButton(onClick = { onDismiss(candidate) }) { Text("Dismiss") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PrimaryPill(
+                            text = "Enter password",
+                            onClick = { passwordPrompt = true },
+                            modifier = Modifier,
+                            enabled = true
+                        )
+                        TextButton(onClick = { onDismiss(candidate) }) { Text("Dismiss") }
+                    }
                 }
                 is CandidateState.Failed -> Column {
                     Text(
@@ -1930,7 +2047,14 @@ private fun ManageShelvesDialog(
                 listOf(
                     app.xreader.data.library.ShelfLogic.BUILTIN_FAVOURITES to "Favourites",
                     app.xreader.data.library.ShelfLogic.BUILTIN_DOWNLOADED to "Downloaded",
-                    app.xreader.data.library.ShelfLogic.BUILTIN_BEHIND_ON to "Behind on"
+                    app.xreader.data.library.ShelfLogic.BUILTIN_BEHIND_ON to "Behind on",
+                    // v1.5.3 (item 30): the five status shelves
+                    // get the same hideable treatment.
+                    app.xreader.data.library.ShelfLogic.BUILTIN_STATUS_READING to "Reading",
+                    app.xreader.data.library.ShelfLogic.BUILTIN_STATUS_ON_HOLD to "On-Hold",
+                    app.xreader.data.library.ShelfLogic.BUILTIN_STATUS_PLAN_TO_READ to "Plan to Read",
+                    app.xreader.data.library.ShelfLogic.BUILTIN_STATUS_COMPLETED to "Completed",
+                    app.xreader.data.library.ShelfLogic.BUILTIN_STATUS_DROPPED to "Dropped"
                 ).forEach { (key, label) ->
                     Row(
                         Modifier.fillMaxWidth(),

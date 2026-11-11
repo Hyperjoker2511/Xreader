@@ -41,19 +41,115 @@ class BookMetaPrefs(private val store: DataStore<Preferences>) {
     // BookMeta line format is pinned by its tests, and favourites
     // deserve a set-shaped read for the shelf rail anyway.
 
-    val favourites: Flow<Set<Long>> = store.data.map { prefs ->
+    /** v1.5.2 (§13.1): resolvers between Room row ids and the sync
+     * layer's natural bookKeys, registered by AppContainer. When
+     * registered, the favourite set is stored BY NATURAL KEY
+     * (prefix [FAVK_PREFIX]) — immune to rowid reuse and row
+     * recreation. Unregistered (bare unit tests), the legacy row-id
+     * keys remain the fallback so isolated tests keep their shape. */
+    @Volatile var naturalKeyForId: (suspend (Long) -> String?)? = null
+    @Volatile var idForNaturalKey: (suspend (String) -> Long?)? = null
+
+    /** The favourite truth (§13.1): natural keys. */
+    val favouritesByKey: Flow<Set<String>> = store.data.map { prefs ->
         prefs.asMap().entries.mapNotNull { (key, value) ->
-            if (!key.name.startsWith(FAV_PREFIX)) return@mapNotNull null
+            if (!key.name.startsWith(FAVK_PREFIX)) return@mapNotNull null
             if (value != true) return@mapNotNull null
-            key.name.removePrefix(FAV_PREFIX).toLongOrNull()
+            key.name.removePrefix(FAVK_PREFIX)
         }.toSet()
     }
 
+    /** Row-id view for the existing shelf consumers: natural keys
+     * resolved against current books; unresolvable keys are simply
+     * absent (they name nothing — §13.4). */
+    val favourites: Flow<Set<Long>> = store.data.map { prefs ->
+        val byKey = prefs.asMap().entries.mapNotNull { (key, value) ->
+            if (!key.name.startsWith(FAVK_PREFIX)) return@mapNotNull null
+            if (value != true) return@mapNotNull null
+            key.name.removePrefix(FAVK_PREFIX)
+        }.toSet()
+        val resolver = idForNaturalKey
+        val resolved = if (resolver != null && byKey.isNotEmpty()) {
+            byKey.mapNotNull { resolver(it) }.toSet()
+        } else emptySet()
+        val legacy = prefs.asMap().entries.mapNotNull { (key, value) ->
+            if (!key.name.startsWith(FAV_PREFIX)) return@mapNotNull null
+            if (key.name.startsWith(FAVK_PREFIX)) return@mapNotNull null
+            if (value != true) return@mapNotNull null
+            key.name.removePrefix(FAV_PREFIX).toLongOrNull()
+        }.toSet()
+        resolved + legacy
+    }
+
     suspend fun setFavourite(bookId: Long, favourite: Boolean) {
-        store.edit { prefs ->
-            if (favourite) prefs[favKey(bookId)] = true
-            else prefs.remove(favKey(bookId))
+        val natural = naturalKeyForId?.invoke(bookId)
+        if (natural != null) {
+            setFavouriteByKey(natural, favourite)
+            // A stale legacy key for the same row must not resurrect.
+            store.edit { prefs -> prefs.remove(favKey(bookId)) }
+        } else {
+            store.edit { prefs ->
+                if (favourite) prefs[favKey(bookId)] = true
+                else prefs.remove(favKey(bookId))
+            }
         }
+    }
+
+    suspend fun setFavouriteByKey(bookKey: String, favourite: Boolean) {
+        store.edit { prefs ->
+            val k = androidx.datastore.preferences.core
+                .booleanPreferencesKey("$FAVK_PREFIX$bookKey")
+            if (favourite) prefs[k] = true else prefs.remove(k)
+        }
+    }
+
+    suspend fun clearFavouriteByKey(bookKey: String) = setFavouriteByKey(bookKey, false)
+
+    /**
+     * v1.5.2 (FIX-7, §13.5): the production merge transfer —
+     * when two rows of one book merge, the SURVIVOR's key is
+     * favourite if EITHER row's key was (union, never loss),
+     * and the duplicate's key is cleared. Called by
+     * BookDetailViewModel.mergeDuplicate.
+     */
+    suspend fun transferFavouriteOnMerge(
+        survivorKey: String,
+        duplicateKey: String
+    ) {
+        if (survivorKey == duplicateKey) return
+        val current = favouritesByKey.first()
+        val merged = FavouriteKeys.mergedKeys(
+            survivorKey, duplicateKey, current
+        )
+        if (survivorKey in merged) {
+            setFavouriteByKey(survivorKey, true)
+        }
+        if (duplicateKey in current) {
+            clearFavouriteByKey(duplicateKey)
+        }
+    }
+
+    /** §13.4/§13.6: one-time re-key of legacy row-id favourites,
+     * run by the §8 pass Phase 0 BEFORE any consumer migrates.
+     * Returns (converted, dropped) counts. */
+    suspend fun migrateLegacyFavourites(
+        rowIdToNaturalKey: Map<Long, String>
+    ): FavouriteKeys.Migration {
+        val legacy = store.data.first().asMap().entries.mapNotNull { (key, value) ->
+            if (!key.name.startsWith(FAV_PREFIX)) return@mapNotNull null
+            if (key.name.startsWith(FAVK_PREFIX)) return@mapNotNull null
+            if (value != true) return@mapNotNull null
+            key.name.removePrefix(FAV_PREFIX).toLongOrNull()
+        }.toSet()
+        val migration = FavouriteKeys.migrate(legacy, rowIdToNaturalKey)
+        store.edit { prefs ->
+            legacy.forEach { prefs.remove(favKey(it)) }
+            migration.converted.forEach { key ->
+                prefs[androidx.datastore.preferences.core
+                    .booleanPreferencesKey("$FAVK_PREFIX$key")] = true
+            }
+        }
+        return migration
     }
 
     private fun key(bookId: Long) = stringPreferencesKey("$PREFIX$bookId")
@@ -63,6 +159,7 @@ class BookMetaPrefs(private val store: DataStore<Preferences>) {
     companion object {
         const val PREFIX = "bookmeta."
         const val FAV_PREFIX = "bookfav."
+        const val FAVK_PREFIX = "bookfavk."
     }
 }
 

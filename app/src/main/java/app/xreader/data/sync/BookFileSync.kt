@@ -276,6 +276,15 @@ class BookFileSync(
     }
 
     private suspend fun localRelativePath(book: Book, syncPath: String): String? = when {
+        // v1.5.6 (audit §12.3): an in-place local book (documentUri)
+        // has NO chapter files and NO app copy to land a book-file
+        // on — its file lives on each device independently, and
+        // position/bookmarks travel via the payload sync instead.
+        // Content/book-file paths for it resolve to null (skipped),
+        // never to a phantom chapter row.
+        book.documentUri != null &&
+            (syncPath.startsWith("content/") || syncPath.startsWith("book-file/")) ->
+            null
         syncPath.startsWith("book-file/") ->
             storage.bookFileRelative(book.id, syncPath.removePrefix("book-file/"))
         syncPath.startsWith("cover/") -> {

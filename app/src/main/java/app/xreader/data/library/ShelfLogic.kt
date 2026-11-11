@@ -14,6 +14,13 @@ import app.xreader.data.db.SmartRule
  * can be hidden but not deleted. User shelves are Room rows; MANUAL
  * membership comes from shelf_books, SMART membership is evaluated
  * here from the same [BookFacts] for every book.
+ *
+ * v1.5.3 (Library package, owner decision 2026-11-04): the five
+ * reading-status shelves join the builtins after the original
+ * three, in the donor (QuickNovel/NeoQN) tab order. Membership is
+ * the book's MANUAL [ReadingStatus] exactly — never derived from
+ * progress (the legacy Filter-&-sort derivation must not leak in).
+ * Same hideable-but-not-deletable treatment as the other builtins.
  */
 object ShelfLogic {
 
@@ -21,12 +28,39 @@ object ShelfLogic {
     const val BUILTIN_DOWNLOADED = "downloaded"
     const val BUILTIN_BEHIND_ON = "behind_on"
 
-    val BUILTIN_KEYS = listOf(BUILTIN_FAVOURITES, BUILTIN_DOWNLOADED, BUILTIN_BEHIND_ON)
+    const val BUILTIN_STATUS_READING = "status_reading"
+    const val BUILTIN_STATUS_ON_HOLD = "status_on_hold"
+    const val BUILTIN_STATUS_PLAN_TO_READ = "status_plan_to_read"
+    const val BUILTIN_STATUS_COMPLETED = "status_completed"
+    const val BUILTIN_STATUS_DROPPED = "status_dropped"
+
+    val BUILTIN_KEYS = listOf(
+        BUILTIN_FAVOURITES, BUILTIN_DOWNLOADED, BUILTIN_BEHIND_ON,
+        BUILTIN_STATUS_READING, BUILTIN_STATUS_ON_HOLD,
+        BUILTIN_STATUS_PLAN_TO_READ, BUILTIN_STATUS_COMPLETED,
+        BUILTIN_STATUS_DROPPED
+    )
+
+    /** The status a status-builtin shelf selects, or null for the
+     * non-status builtins. */
+    fun statusForBuiltin(key: String): ReadingStatus? = when (key) {
+        BUILTIN_STATUS_READING -> ReadingStatus.READING
+        BUILTIN_STATUS_ON_HOLD -> ReadingStatus.ON_HOLD
+        BUILTIN_STATUS_PLAN_TO_READ -> ReadingStatus.PLAN_TO_READ
+        BUILTIN_STATUS_COMPLETED -> ReadingStatus.COMPLETED
+        BUILTIN_STATUS_DROPPED -> ReadingStatus.DROPPED
+        else -> null
+    }
 
     fun builtinName(key: String): String = when (key) {
         BUILTIN_FAVOURITES -> "Favourites"
         BUILTIN_DOWNLOADED -> "Downloaded"
         BUILTIN_BEHIND_ON -> "Behind on"
+        BUILTIN_STATUS_READING -> "Reading"
+        BUILTIN_STATUS_ON_HOLD -> "On-Hold"
+        BUILTIN_STATUS_PLAN_TO_READ -> "Plan to Read"
+        BUILTIN_STATUS_COMPLETED -> "Completed"
+        BUILTIN_STATUS_DROPPED -> "Dropped"
         else -> key
     }
 
@@ -47,6 +81,13 @@ object ShelfLogic {
         BUILTIN_FAVOURITES -> facts.filter { it.favourite }.map { it.bookId }
         BUILTIN_DOWNLOADED -> facts.filter { it.downloadedChapters > 0 }.map { it.bookId }
         BUILTIN_BEHIND_ON -> facts.filter { it.unseenNewChapters > 0 }.map { it.bookId }
+        // v1.5.3: status shelves — the MANUAL status only. A
+        // NONE book with progress is in NO status shelf (donor
+        // rule: reading never sets a status by itself).
+        BUILTIN_STATUS_READING, BUILTIN_STATUS_ON_HOLD,
+        BUILTIN_STATUS_PLAN_TO_READ, BUILTIN_STATUS_COMPLETED,
+        BUILTIN_STATUS_DROPPED ->
+            facts.filter { it.status == statusForBuiltin(key) }.map { it.bookId }
         else -> emptySet()
     }.toSet()
 

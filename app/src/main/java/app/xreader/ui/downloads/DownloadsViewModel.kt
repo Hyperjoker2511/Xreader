@@ -22,7 +22,11 @@ data class BookDownloads(
     val readyChapters: Int,
     val totalChapters: Int,
     /** v1.1.0 (§5.12): real bytes of this book's files on disk. */
-    val bytesOnDisk: Long = 0L
+    val bytesOnDisk: Long = 0L,
+    /** v1.5.6 (§3.1 row 12): an in-place local book — Downloads
+     * shows the FILE itself (its own size), never chapter states. */
+    val isLocalFile: Boolean = false,
+    val localFileBytes: Long = 0L
 ) {
     val activeItems: List<DownloadQueueItem>
         get() = items.filter {
@@ -42,6 +46,7 @@ data class BookDownloads(
         }
     val statusLine: String
         get() = when {
+            isLocalFile -> "The book's own file • ${formatBytes(localFileBytes)}"
             failedItems.isNotEmpty() && activeItems.isEmpty() ->
                 "${failedItems.size} couldn't download"
             activeItems.any { it.state == QueueState.PAUSED } && activeItems.none { it.state == QueueState.RUNNING } ->
@@ -79,7 +84,15 @@ data class DownloadsUiState(
      * the snapshot the "Waiting for Wi-Fi" chip reads, taken when
      * this state was built (the same NetworkGate the download
      * engine consults). */
-    val onMeteredNetwork: Boolean = false
+    val onMeteredNetwork: Boolean = false,
+    /** v1.5.2 fix (FIX-6c, §12.3): what Clean cache could NOT clear,
+     * in plain words — shown on the storage card, never silent. */
+    val cacheMessage: String? = null,
+    /** v1.5.2 fix (Track B, §12.3/§12.9): read-cache body bytes
+     * (AUTOMATIC origin) — the bucket Clean cache actually exists
+     * for. The card never counted it, so with 29 MB of read cache
+     * and no image cache the Clean cache button sat DISABLED. */
+    val readCacheBytes: Long = 0L
 ) {
     /** v1.0.6.2 (D2): the one plain header line — storage used
      * and how many books it belongs to. */
@@ -141,12 +154,16 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
     private val storageTick =
         kotlinx.coroutines.flow.MutableStateFlow(0)
 
+    private val cacheMessage =
+        kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
     val state: StateFlow<DownloadsUiState> = combine(
         queueDao.observeAll(),
         bookDao.observeShelf(),
         container.downloadPrefs.settings,
-        storageTick
-    ) { items, books, settings, _ ->
+        storageTick,
+        cacheMessage
+    ) { items, books, settings, _, cacheMsg ->
         val byBook = items.groupBy { it.bookId }
         // v1.2.0 (WS4, completing optimisation 1b): the projection
         // used to load EVERY chapter row of every queued book and
@@ -158,12 +175,46 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
         // miss; BookStorage invalidates on its own writes and
         // deletes, and clearCaches invalidates explicitly).
         val grouped = books.mapNotNull { book ->
-            val bookItems = byBook[book.id] ?: return@mapNotNull null
-            if (bookItems.isEmpty()) return@mapNotNull null
-            val ready = chapterDao.readyCount(book.id)
+            val bookItems = byBook[book.id] ?: emptyList()
+            // v1.5.6 (§3.1 row 12): an in-place local book lists
+            // here by its FILE — no queue rows, no chapter counts.
+            val isLocalFile = app.xreader.data.engine.BookEngine.isInPlaceBook(book)
+            // v1.5.2 fix (FIX-6a, §12.9): "finished"/ready counts are
+            // the ONE predicate (USER + READY) — a book with real
+            // downloads but no live queue rows still lists here.
+            val ready = chapterDao.downloadedCount(book.id)
+            if (bookItems.isEmpty() && ready == 0 && !isLocalFile) {
+                return@mapNotNull null
+            }
+            val localFileBytes = if (isLocalFile) {
+                when {
+                    book.filePath != null -> runCatching {
+                        container.bookStorage.resolve(book.filePath!!).length()
+                    }.getOrDefault(0L)
+                    book.documentUri != null -> runCatching {
+                        val uri = android.net.Uri.parse(book.documentUri!!)
+                        container.applicationContext.contentResolver
+                            .query(uri, null, null, null, null)?.use { cursor ->
+                                val idx = cursor.getColumnIndex(
+                                    android.provider.OpenableColumns.SIZE
+                                )
+                                if (idx >= 0 && cursor.moveToFirst()) {
+                                    cursor.getLong(idx)
+                                } else {
+                                    0L
+                                }
+                            } ?: 0L
+                    }.getOrDefault(0L)
+                    else -> 0L
+                }
+            } else {
+                0L
+            }
             BookDownloads(
                 book = book,
                 items = bookItems,
+                isLocalFile = isLocalFile,
+                localFileBytes = localFileBytes,
                 readyChapters = ready,
                 // When the book row knows no total, the ready
                 // count is the only honest chapter total left
@@ -188,24 +239,43 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
         val coverCacheBytes = container.bookStorage.coversDirSizeBytesCached()
         val imageCacheBytes = runCatching { container.imageCacheSizeBytes() }
             .getOrDefault(0L)
+        // v1.5.2 fix (Track B, §12.9): the read-cache bucket —
+        // AUTOMATIC bodies' bytes across the shelf's books, from
+        // the chapter rows' own origin stamps.
+        var readCacheBytes = 0L
+        for (book in books) {
+            for (chapter in chapterDao.forBook(book.id)) {
+                if (chapter.bodyOrigin ==
+                    app.xreader.data.download.BodyOrigin152.AUTOMATIC &&
+                    chapter.contentPath != null
+                ) {
+                    readCacheBytes += runCatching {
+                        container.bookStorage.resolve(chapter.contentPath!!).length()
+                    }.getOrDefault(0L)
+                }
+            }
+        }
         val deviceTotalBytes = runCatching {
             android.os.StatFs(container.bookStorage.filesDir.path).totalBytes
         }.getOrDefault(0L)
         DownloadsUiState(
             active = grouped.filter { it.activeItems.isNotEmpty() || it.failedItems.isNotEmpty() },
             finished = grouped.filter {
-                it.activeItems.isEmpty() && it.failedItems.isEmpty() && it.items.isNotEmpty()
+                it.activeItems.isEmpty() && it.failedItems.isEmpty() &&
+                    (it.readyChapters > 0 || it.isLocalFile)
             },
             wifiOnlyPrefetch = settings.wifiOnlyPrefetch,
             loading = false,
             storageBytes = grouped.sumOf { it.bytesOnDisk },
             coverCacheBytes = coverCacheBytes,
             imageCacheBytes = imageCacheBytes,
+            readCacheBytes = readCacheBytes,
             deviceTotalBytes = deviceTotalBytes,
             autoCleanCapMb = settings.autoCleanCapMb,
             onMeteredNetwork = runCatching {
                 !container.networkGate.onUnmeteredNetwork()
-            }.getOrDefault(false)
+            }.getOrDefault(false),
+            cacheMessage = cacheMsg
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DownloadsUiState())
 
@@ -218,27 +288,17 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
      * caches were clean. */
     fun clearCaches() {
         viewModelScope.launch(container.ioDispatcher) {
-            runCatching { container.clearImageCache() }
-            runCatching {
-                // v1.3.1 (item 57): one helper for every cache
-                // dir — the same StorageMeter.dirSize that
-                // measures them is the measure that must read
-                // ~0 after this runs.
-                app.xreader.data.files.StorageMeter.clearContents(
-                    container.bookStorage.coversDir()
-                )
-                app.xreader.data.files.StorageMeter.clearContents(
-                    container.bookStorage.downloadsTempDir()
-                )
-                app.xreader.data.files.StorageMeter.clearContents(
-                    container.bookStorage.importStagingRoot()
-                )
+            // v1.5.2 fix (FIX-6c): THE shared Clean cache (§12.3) —
+            // clears read chapter bodies + image cache + temp, and
+            // does NOT delete stored covers (per-book assets).
+            // Failures surface on the storage card in plain words.
+            val result = container.cleanCache()
+            cacheMessage.value = if (result.failures.isEmpty()) {
+                "Cache cleared."
+            } else {
+                "Some cache couldn't be cleared: " +
+                    result.failures.joinToString("; ")
             }
-            // The deletions above bypass BookStorage's own write
-            // paths, so its size caches would serve the pre-clear
-            // numbers forever — invalidate explicitly (the cached
-            // APIs' documented contract for out-of-band changes).
-            container.bookStorage.invalidateAllBookFileSizes()
             storageTick.value += 1
         }
     }

@@ -2,6 +2,8 @@ package app.xreader.domain.reader
 
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.DownloadState
+import app.xreader.ui.book.ChapterJump
+import kotlin.math.abs
 
 /**
  * v1.0.7 (draw-check ask): search + filters for the book
@@ -103,10 +105,31 @@ object ChapterListFilter {
                 }
             }
             if (needle.isNotEmpty()) {
-                val inTitle = chapter.title.lowercase().contains(needle)
-                val inNumber = needle.all { it.isDigit() } &&
-                    (chapter.index + 1).toString() == needle
-                if (!inTitle && !inNumber) return@filterIndexed false
+                // v1.5.38 (Fix C2, V1537-PROOF-FORENSICS §C):
+                // a purely numeric query is a CHAPTER-NUMBER
+                // search — it matches the chapter's own number
+                // ([ChapterJump.identityNumber], the same
+                // identity the jump resolves by), with the
+                // ordinal (index + 1) as the fallback for a
+                // chapter carrying no number of its own, across
+                // the FULL list the screen hands in. The title
+                // substring rung serves TEXT queries only: a
+                // numeric needle substring-matching titles was
+                // the flood that buried the real chapter (the
+                // v1.5.7 Finding-5 failure this field's split
+                // was built to kill).
+                val target = ChapterJump.parseNumber(needle)
+                if (target != null) {
+                    val number = ChapterJump.identityNumber(chapter)
+                        ?: (chapter.index + 1).toFloat()
+                    if (abs(number - target) >= 0.001f) {
+                        return@filterIndexed false
+                    }
+                } else if (
+                    !chapter.title.lowercase().contains(needle)
+                ) {
+                    return@filterIndexed false
+                }
             }
             true
         }

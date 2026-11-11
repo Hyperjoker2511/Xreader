@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -47,6 +48,21 @@ data class BookReaderOverride(
     val hasMangaOverrides: Boolean
         get() = imageMode != null || mangaTapLayout != null ||
             mangaOrientation != null || mangaCropBorders != null
+}
+
+/**
+ * v1.5.8 (E3/I5): the pure exclusion rule both read paths share —
+ * a chapter is filtered out exactly when its scanlator is in the
+ * book's exclusion set. A null scanlator is never filtered (the
+ * source credited nobody; hiding it would hide honest chapters).
+ */
+object ScanlatorFilter {
+    fun isExcluded(scanlator: String?, excluded: Set<String>): Boolean =
+        scanlator != null && scanlator in excluded
+
+    fun <T> apply(chapters: List<T>, scanlatorOf: (T) -> String?, excluded: Set<String>): List<T> =
+        if (excluded.isEmpty()) chapters
+        else chapters.filter { !isExcluded(scanlatorOf(it), excluded) }
 }
 
 class BookReaderPrefs(private val store: DataStore<Preferences>) {
@@ -137,6 +153,28 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    /**
+     * v1.5.8 (E3): this book's excluded scanlators — the donor's
+     * per-book chapter filter (ScanlatorFilterDialog). Chapters
+     * whose scanlator is in this set are hidden from the book
+     * page's chapter list and skipped by the manga reader's
+     * chapter-change selection (I5). Empty set = nothing hidden.
+     */
+    fun excludedScanlators(bookId: Long): Flow<Set<String>> =
+        store.data.map { prefs ->
+            prefs[excludedScanlatorsKey(bookId)] ?: emptySet()
+        }
+
+    suspend fun setExcludedScanlators(bookId: Long, excluded: Set<String>) {
+        store.edit { prefs ->
+            if (excluded.isEmpty()) {
+                prefs.remove(excludedScanlatorsKey(bookId))
+            } else {
+                prefs[excludedScanlatorsKey(bookId)] = excluded
+            }
+        }
+    }
+
     suspend fun clear(bookId: Long) {
         store.edit { prefs ->
             prefs.remove(paletteKey(bookId))
@@ -145,6 +183,7 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
             prefs.remove(mangaTapLayoutKey(bookId))
             prefs.remove(mangaOrientationKey(bookId))
             prefs.remove(mangaCropKey(bookId))
+            prefs.remove(excludedScanlatorsKey(bookId))
         }
     }
 
@@ -167,4 +206,7 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
         androidx.datastore.preferences.core.booleanPreferencesKey(
             "bookreader.$bookId.manga_crop"
         )
+
+    private fun excludedScanlatorsKey(bookId: Long) =
+        stringSetPreferencesKey("bookreader.$bookId.excluded_scanlators")
 }

@@ -6,7 +6,6 @@ import app.xreader.data.db.ReadingSession
 import app.xreader.data.db.ReadingSessionDao
 import app.xreader.domain.reader.SessionTracker
 import app.xreader.domain.reader.WpmEstimator
-import java.time.LocalDate
 import java.time.ZoneId
 
 /**
@@ -61,9 +60,9 @@ class SessionRecorder(
                 activeSeconds = snapshot.activeMinutes * 60.0
             )
         }
-        val date = LocalDate.ofInstant(
-            java.time.Instant.ofEpochMilli(snapshot.endedAt), zone
-        ).toString()
+        // FIX-23: atZone form (API 26-safe; ofInstant is API 34+).
+        val date = java.time.Instant.ofEpochMilli(snapshot.endedAt)
+            .atZone(zone).toLocalDate().toString()
         val existing = dailyDao.get(date)
         dailyDao.upsert(
             DailyActivity(

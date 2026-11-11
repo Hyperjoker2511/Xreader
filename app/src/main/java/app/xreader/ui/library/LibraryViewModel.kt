@@ -105,8 +105,26 @@ data class LibraryUiState(
 sealed interface CandidateState {
     data class Ready(val candidate: ImportCandidate) : CandidateState
     data class Importing(val candidate: ImportCandidate, val progress: Float?) : CandidateState
-    data class Done(val candidate: ImportCandidate, val bookTitle: String) : CandidateState
+    data class Done(
+        val candidate: ImportCandidate,
+        val bookTitle: String,
+        /** v1.5.4 (WS-7): pictures the file referenced that
+         * couldn't be read — the card states the loss in plain
+         * words when this is non-zero. */
+        val imagesDropped: Int = 0
+    ) : CandidateState
     data class Failed(val candidate: ImportCandidate, val message: String) : CandidateState
+
+    /** v1.5.4 (WS-7, addendum C): a PDF that needs its user
+     * password — a solvable state, never a dead end. The card
+     * offers password entry; [wrongPassword] marks a retry after
+     * a password that didn't open the file. The password itself
+     * is never part of this state (entered once, used once,
+     * never stored). */
+    data class PasswordNeeded(
+        val candidate: ImportCandidate,
+        val wrongPassword: Boolean = false
+    ) : CandidateState
 }
 
 /**
@@ -154,9 +172,22 @@ class LibraryViewModel(
             shelf.firstOrNull { it.book.id == progress.bookId }
                 ?.copy(fraction = progress.fraction)
         }
+        // v1.5.4 (item 18, finding #2): the metas this state
+        // carries are scoped to the SHELF's book ids. Every
+        // consumer of state.metas reads it shelf-keyed (per-book
+        // badges, the Updates surface's side-book filter, the
+        // shelf facts), so scoping changes none of their numbers
+        // — but the Novels|Manga switch label SUMS this map
+        // (LibrarySplit.newChaptersBySide), and the unscoped map
+        // (a meta for every book ever opened, preview and
+        // history rows included) poured phantom new-chapter
+        // counts into that sum: "Novels · 12121" over a 1-book
+        // library. The store itself (BookMetaPrefs) stays whole;
+        // its other owners read their own books directly.
+        val shelfIds = books.mapTo(HashSet()) { it.id }
         LibraryUiState(
             books = shelf,
-            metas = metas,
+            metas = metas.filterKeys { it in shelfIds },
             libraryPrefs = libraryPrefs,
             continueReading = hero,
             continueChapterIndex = heroProgress?.chapterIndex ?: 0,
@@ -271,9 +302,16 @@ class LibraryViewModel(
                     app.xreader.data.library.LibraryRefreshWorker.UNIQUE_NAME
                 )
                 .collect { infos ->
+                    // v1.5.34 (item 1c): the indicator reflects
+                    // RUNNING work only. ENQUEUED also matches a
+                    // job sitting in WorkManager's retry backoff —
+                    // not running, possibly minutes from its next
+                    // attempt — and counting it is what made the
+                    // Library look like it was "refreshing again"
+                    // on later visits after the owner's manual
+                    // refresh had finished.
                     pullRefreshingFlow.value = infos.any {
-                        it.state == androidx.work.WorkInfo.State.RUNNING ||
-                            it.state == androidx.work.WorkInfo.State.ENQUEUED
+                        it.state == androidx.work.WorkInfo.State.RUNNING
                     }
                 }
         }
@@ -318,7 +356,14 @@ class LibraryViewModel(
                 // v1.0.2: the loop lives in LibraryRefresher so the
                 // button, the pull gesture's worker and any future
                 // scheduled check behave identically.
-                val outcome = container.libraryRefresher.refreshAll()
+                // v1.5.26: the button's walk is background work
+                // exactly like the worker's (which already wraps
+                // itself) — the user may leave the Library while
+                // it runs, so its player chapter walks take the
+                // details-only gate in SourceBookSync.
+                val outcome = container.renderRuntime.asBackgroundWork {
+                    container.libraryRefresher.refreshAll()
+                }
                 _messages.emit(
                     if (outcome.totalNew > 0) {
                         "${outcome.booksWithNew} book(s) have new chapters — " +
@@ -357,17 +402,40 @@ class LibraryViewModel(
     suspend fun downloadedSizeBytes(book: Book): Long =
         container.bookStorage.bookFilesSizeBytesCached(book)
 
-    /** Remove from library (v1.0.1): cancel downloads, one
-     * cascading delete, app-side files only on request. */
+    /** v1.5.2 (§15): "Remove book only" is the SOFT tier — the
+     * inLibrary flip (§15.1): shelves + hero stop offering the book
+     * in the same commit, while progress, downloads, History and
+     * the favourite survive (recoverable from History).
+     * "Remove book and downloaded chapters" is a FULL book
+     * deletion (§15.6): row, files, History record, favourite key
+     * and a sync tombstone — gone forever. */
     fun removeBook(book: Book, deleteFiles: Boolean) {
         viewModelScope.launch {
-            runCatching { container.downloadController.cancelAllForBook(book.id) }
-            container.database.bookDao().delete(book)
-            container.bookMetaPrefs.set(book.id, app.xreader.data.library.BookMeta())
             if (deleteFiles) {
-                runCatching { container.bookStorage.deleteBookFiles(book) }
+                container.deleteBookFully(book)
+            } else {
+                container.removeFromLibrarySoft(book)
             }
             _messages.emit("Removed “${book.title}” from your library.")
+        }
+    }
+
+    /** v1.5.6 (§3.7): the local-book three-option delete from the
+     * Library's remove confirm — the same modes the book page
+     * offers, through the same data operation. PERMANENT needs a
+     * [android.content.Context] for the device file's delete. */
+    fun removeLocalBook(
+        book: Book,
+        mode: app.xreader.data.library.LocalBookDeleteMode,
+        context: android.content.Context?
+    ) {
+        viewModelScope.launch {
+            when (container.localBookDeletion.deleteLocalBook(book, mode, context)) {
+                is app.xreader.core.error.AppResult.Ok ->
+                    _messages.emit("Removed “${book.title}”.")
+                is app.xreader.core.error.AppResult.Err ->
+                    _messages.emit("That delete didn't finish — the book is still here.")
+            }
         }
     }
 
@@ -377,11 +445,20 @@ class LibraryViewModel(
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
-    /** Stages each picked file; streams are opened by the caller (SAF). */
-    fun stagePicked(displayNames: List<String>, openStream: (Int) -> InputStream?) {
+    /** Stages each picked file; streams are opened by the caller (SAF).
+     * v1.5.6 (§3.4(d)): [documentUris] carries each pick's document
+     * URI (string form) alongside its name, so EPUB/PDF imports can
+     * register in place against the file where it lives. */
+    fun stagePicked(
+        displayNames: List<String>,
+        openStream: (Int) -> InputStream?,
+        documentUris: List<String?> = emptyList()
+    ) {
         viewModelScope.launch {
             displayNames.forEachIndexed { index, name ->
-                when (val result = importer.stage(name) { openStream(index) }) {
+                when (val result = importer.stage(
+                    name, documentUri = documentUris.getOrNull(index)
+                ) { openStream(index) }) {
                     is AppResult.Ok -> {
                         val candidate = result.value
                         if (candidate.unsupportedReason != null) {
@@ -398,18 +475,48 @@ class LibraryViewModel(
         }
     }
 
-    fun importCandidate(candidate: ImportCandidate) {
+    fun importCandidate(candidate: ImportCandidate, password: String? = null) {
         viewModelScope.launch {
             replace(candidate, CandidateState.Importing(candidate, null))
-            when (val result = importer.importStaged(candidate) { progress ->
-                replace(candidate, CandidateState.Importing(candidate, progress))
-            }) {
+            var droppedImages = 0
+            when (val result = importer.importStaged(
+                candidate,
+                onProgress = { progress ->
+                    replace(candidate, CandidateState.Importing(candidate, progress))
+                },
+                onDroppedImages = { droppedImages = it },
+                password = password
+            )) {
                 is AppResult.Ok -> {
-                    replace(candidate, CandidateState.Done(candidate, result.value.title))
+                    replace(
+                        candidate,
+                        CandidateState.Done(candidate, result.value.title, droppedImages)
+                    )
                     _messages.emit("Added “${result.value.title}” to your library")
                 }
-                is AppResult.Err ->
-                    replace(candidate, CandidateState.Failed(candidate, ErrorText.displayText(result.error)))
+                is AppResult.Err -> {
+                    // v1.5.4 (WS-7, addendum C): a locked PDF is a
+                    // solvable state — offer password entry (a
+                    // retry after a wrong password says so). EPUB
+                    // locks are vendor DRM, not user passwords, and
+                    // keep the plain Failed state: no password
+                    // entry unlocks them.
+                    if (result.error is app.xreader.core.error.AppError.DrmProtected &&
+                        candidate.format == app.xreader.data.db.BookFormat.PDF
+                    ) {
+                        replace(
+                            candidate,
+                            CandidateState.PasswordNeeded(
+                                candidate, wrongPassword = password != null
+                            )
+                        )
+                    } else {
+                        replace(
+                            candidate,
+                            CandidateState.Failed(candidate, ErrorText.displayText(result.error))
+                        )
+                    }
+                }
             }
         }
     }
@@ -423,7 +530,11 @@ class LibraryViewModel(
 
     fun clearFinishedCandidates() {
         _candidates.value = _candidates.value.filter {
-            it is CandidateState.Ready || it is CandidateState.Importing
+            // A password-pending card is NOT finished — clearing
+            // it would strand the kept staged file with no way
+            // back to it.
+            it is CandidateState.Ready || it is CandidateState.Importing ||
+                it is CandidateState.PasswordNeeded
         }
     }
 
@@ -432,6 +543,7 @@ class LibraryViewModel(
         is CandidateState.Importing -> candidate.token
         is CandidateState.Done -> candidate.token
         is CandidateState.Failed -> candidate.token
+        is CandidateState.PasswordNeeded -> candidate.token
     }
 
     private fun replace(candidate: ImportCandidate, next: CandidateState) {
@@ -441,9 +553,25 @@ class LibraryViewModel(
     }
 
     /** SAF document display name lookup happens in the screen; the
-     * picker there passes plain names + a stream opener per index. */
+     * picker there passes plain names + a stream opener per index.
+     * v1.5.6 (§3.4(d)): the URI reaches the importer from here —
+     * lasting read permission is taken for each pick first (the
+     * picker is OpenMultipleDocuments, whose grants are transient
+     * until persisted), so an in-place book stays readable after
+     * the pick. A failed persist degrades to a null URI for that
+     * file (the retained-copy path files it instead). */
     fun stagePickedUris(uris: List<Uri>, names: List<String>, opener: (Uri) -> InputStream?) {
-        stagePicked(names) { index -> opener(uris[index]) }
+        val resolver = container.applicationContext.contentResolver
+        val documentUris = uris.map { uri ->
+            val persisted = runCatching {
+                resolver.takePersistableUriPermission(
+                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+                true
+            }.getOrDefault(false)
+            if (persisted) uri.toString() else null
+        }
+        stagePicked(names, { index -> opener(uris[index]) }, documentUris)
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -452,7 +580,14 @@ class LibraryViewModel(
     // ─────────────────────────────────────────────────────────────
 
     fun setFavourite(bookId: Long, favourite: Boolean) {
-        viewModelScope.launch { container.bookMetaPrefs.setFavourite(bookId, favourite) }
+        viewModelScope.launch {
+            container.bookMetaPrefs.setFavourite(bookId, favourite)
+            // v1.5.3 (item 24): favouriting is a membership act —
+            // promote a preview row in the same action (see
+            // BookDetailViewModel.setFavourite). Unfavouriting
+            // never demotes membership.
+            if (favourite) container.sourceBookSync.markInLibrary(bookId)
+        }
     }
 
     fun selectShelf(ref: String) {
@@ -566,7 +701,12 @@ class LibraryViewModel(
 
     fun bulkSetFavourite(bookIds: Collection<Long>, favourite: Boolean) {
         viewModelScope.launch {
-            bookIds.forEach { id -> container.bookMetaPrefs.setFavourite(id, favourite) }
+            bookIds.forEach { id ->
+                container.bookMetaPrefs.setFavourite(id, favourite)
+                // v1.5.3 (item 24, bulk path): same membership
+                // act as the single-book writers.
+                if (favourite) container.sourceBookSync.markInLibrary(id)
+            }
         }
     }
 
@@ -584,7 +724,16 @@ class LibraryViewModel(
                 val book = container.database.bookDao().getById(id) ?: return@forEach
                 runCatching { container.downloadController.cancelAllForBook(id) }
                 freed += downloadedSizeBytes(book)
-                runCatching { container.bookStorage.deleteDownloadedContent(book) }
+                // v1.5.7 (scope F smoothness): the recursive
+                // per-book file deletion runs on IO — on Main
+                // (this scope's dispatcher) a bulk delete over
+                // several large books froze the Library for
+                // the whole walk.
+                kotlinx.coroutines.withContext(container.ioDispatcher) {
+                    runCatching {
+                        container.bookStorage.deleteDownloadedContent(book)
+                    }
+                }
                 // v1.2.0 (audit D10): the chapter rows must agree
                 // with the files just deleted (READY + a
                 // contentPath pointing at a gone file is a lie

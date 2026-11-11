@@ -19,7 +19,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -47,6 +49,8 @@ import app.xreader.data.db.DownloadKind
 import app.xreader.data.db.QueueState
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.KitEmptyState
+import app.xreader.ui.common.LoadingState
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.PrimaryPill
@@ -107,6 +111,19 @@ fun DownloadsScreen(
             .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
         ScreenHeader(title = "Downloads", eyebrow = "Queue")
+        if (stateNow.loading) {
+            // v1.5.8 (J5/J15): while the first load runs, the
+            // storage card would show 0-byte numbers that are
+            // not true yet — the state kit says what is
+            // happening instead; real numbers land with the load.
+            Spacer(Modifier.height(16.dp))
+            LoadingState(
+                whatIsHappening = "Counting your downloads " +
+                    "and storage…",
+                modifier = Modifier.weight(1f)
+            )
+            return@Column
+        }
         // v1.2.0 (WS4 declutter): the old "N active • M finished"
         // line under the header repeated the segmented pills'
         // counts verbatim a few centimetres below it. The pills
@@ -147,7 +164,14 @@ fun DownloadsScreen(
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
-                "Cached covers · ${formatBytes(coversBytes)}",
+                // §12.1: stored covers are per-book assets that
+                // SURVIVE Clean cache — never "cached covers".
+                "Stored covers · ${formatBytes(coversBytes)}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "Reading cache · ${formatBytes(stateNow.readCacheBytes)}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -184,8 +208,21 @@ fun DownloadsScreen(
                     // on covers alone, so with 0 B of covers and
                     // megabytes of image cache it sat disabled
                     // and "Clean cache doesn't clean".
-                    enabled = (coversBytes + imageCacheBytes) > 0L,
+                    // v1.5.2 fix (Track B, §12.3): covers no longer
+                    // count toward enabling (Clean cache never
+                    // clears them now); the READ cache — the
+                    // button's main target — does.
+                    enabled = (imageCacheBytes + stateNow.readCacheBytes) > 0L,
                     onClick = { viewModel.clearCaches() }
+                )
+            }
+            // v1.5.2 fix (FIX-6c, §12.3): Clean cache failures (and
+            // success) surface here in plain words — never silent.
+            if (stateNow.cacheMessage != null) {
+                Text(
+                    stateNow.cacheMessage!!,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
             Spacer(Modifier.height(4.dp))
@@ -313,10 +350,14 @@ fun DownloadsScreen(
                 }
                 if (stateNow.active.isEmpty()) {
                     item(key = "active-empty") {
-                        Text(
-                            "Nothing in progress right now.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        // v1.5.8 (J5/J15): a deliberate empty
+                        // state, not a bare line — what would
+                        // fill it, in plain words.
+                        KitEmptyState(
+                            icon = Icons.Filled.Download,
+                            message = "Nothing in progress right now. " +
+                                "Downloads you start from a book page " +
+                                "will show here while they run."
                         )
                     }
                 }
@@ -354,10 +395,11 @@ fun DownloadsScreen(
                 }
                 if (stateNow.finished.isEmpty()) {
                     item(key = "finished-empty") {
-                        Text(
-                            "No finished downloads yet.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        KitEmptyState(
+                            icon = Icons.Filled.CheckCircle,
+                            message = "No finished downloads yet. " +
+                                "When a download completes, the book " +
+                                "waits here, ready to read offline."
                         )
                     }
                 }
@@ -422,7 +464,8 @@ private fun ActiveDownloadCard(
     GlassCard(modifier = modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth()) {
             AsyncImage(
-                model = coverRequest ?: coverFile(group.book.coverPath),
+                model = coverRequest ?: coverFile(group.book.coverPath)
+                ?: group.book.coverUrl?.takeIf { it.isNotBlank() },
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -439,7 +482,11 @@ private fun ActiveDownloadCard(
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1
                 )
-                val chapterLine = if (group.totalChapters > 0) {
+                val chapterLine = if (group.isLocalFile) {
+                    // v1.5.6 (§3.1 row 12): the file itself, no
+                    // per-chapter download states.
+                    group.statusLine
+                } else if (group.totalChapters > 0) {
                     "${group.readyChapters} of ${group.totalChapters} chapters"
                 } else {
                     group.statusLine
@@ -544,7 +591,8 @@ private fun FinishedDownloadRow(
             // Cover with the downloaded check badge (§5.12.5).
             Box {
                 AsyncImage(
-                    model = coverRequest ?: coverFile(group.book.coverPath),
+                    model = coverRequest ?: coverFile(group.book.coverPath)
+                ?: group.book.coverUrl?.takeIf { it.isNotBlank() },
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -575,11 +623,18 @@ private fun FinishedDownloadRow(
             ) {
                 Text(group.book.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                 StatusPill(
-                    text = "Downloaded • ${group.readyChapters} chapters",
+                    text = if (group.isLocalFile) {
+                        // v1.5.6 (§3.1 row 12): the file itself.
+                        group.statusLine
+                    } else {
+                        "Downloaded • ${group.readyChapters} chapters"
+                    },
                     color = MaterialTheme.colorScheme.secondary
                 )
                 Text(
-                    formatBytes(group.bytesOnDisk),
+                    formatBytes(
+                        if (group.isLocalFile) group.localFileBytes else group.bytesOnDisk
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

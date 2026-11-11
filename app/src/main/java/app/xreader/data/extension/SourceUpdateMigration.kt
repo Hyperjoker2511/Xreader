@@ -158,6 +158,13 @@ class SourceUpdateMigration(
                     "one-time sign-in/check first; its saved " +
                     "rules stay until then"
             }
+            is LinkProber.Outcome.NotProven -> {
+                markNeedsChecking(row)
+                lines += "MIGRATE kept \"${row.displayName}\" " +
+                    "($domain) — re-derivation found rules but " +
+                    "couldn't prove reading (${outcome.missingLegs.joinToString()}); " +
+                    "its saved rules stay until the next update"
+            }
             is LinkProber.Outcome.Failed -> {
                 markNeedsChecking(row)
                 lines += "MIGRATE kept \"${row.displayName}\" " +

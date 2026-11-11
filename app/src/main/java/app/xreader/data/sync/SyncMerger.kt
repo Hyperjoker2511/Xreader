@@ -27,11 +27,32 @@ object SyncMerger {
     fun merge(local: SyncPayload, remote: SyncPayload, now: Long): Result {
         val conflicts = mutableListOf<String>()
 
-        val books = mergeBy(local.books, remote.books, key = { it.syncKey }) { a, b ->
+        // v1.5.2 (§15.6): book tombstones — union (newest per key),
+        // then honoured: a tombstoned book NEVER resurrects through
+        // union merge. An explicit re-add NEWER than the tombstone
+        // clears it (the book record's updatedAt is the re-add's
+        // evidence).
+        val deletedBookKeys = (local.deletedBookKeys + remote.deletedBookKeys)
+            .groupBy { it.bookKey }
+            .values.map { group -> group.maxByOrNull { it.deletedAt }!! }
+        val deletedByKey = deletedBookKeys.associateBy { it.bookKey }
+
+        var books = mergeBy(local.books, remote.books, key = { it.syncKey }) { a, b ->
             if (a.updatedAt >= b.updatedAt) a else b
         }
+        books = books.filterNot { book ->
+            val tomb = deletedByKey[book.syncKey]
+            tomb != null && tomb.deletedAt >= book.updatedAt
+        }
+        val survivingDeleted = deletedBookKeys.filter { tomb ->
+            books.none { it.syncKey == tomb.bookKey }
+        }
 
-        val progress = mergeProgress(local, remote, conflicts)
+        var progress = mergeProgress(local, remote, conflicts)
+        progress = progress.filterNot { rec ->
+            rec.bookKey in deletedByKey &&
+                books.none { it.syncKey == rec.bookKey }
+        }
 
         var bookmarks = mergeBy(local.bookmarks, remote.bookmarks, key = { it.naturalKey }) { a, b ->
             pickNewer(a, b, local.deviceId, remote.deviceId)
@@ -147,8 +168,11 @@ object SyncMerger {
             tags = tags,
             bookTags = bookTags,
             followedTagSlugs = followedTags,
-            favouriteBookKeys = favourites,
-            themeSync = themeSync
+            favouriteBookKeys = favourites.filterNot {
+                it in deletedByKey && books.none { b -> b.syncKey == it }
+            },
+            themeSync = themeSync,
+            deletedBookKeys = survivingDeleted
         )
         return Result(merged, conflicts)
     }

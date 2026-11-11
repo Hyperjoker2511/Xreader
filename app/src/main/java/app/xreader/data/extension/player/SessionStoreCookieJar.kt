@@ -68,21 +68,78 @@ class SessionStoreCookieJar(
                     store.mergeCookies(PLAYER_SESSION_KEY, url.host, live)
                 }
                 if (dead.isNotEmpty()) {
-                    removeCookies(url.host, dead)
+                    removeFromPlayerRecord(url.host, dead)
                 }
             }
         }
     }
 
-    /** Drop one cookie from the player record (the Cloudflare path
-     * clears a stale cf_clearance before a fresh solve, the donor way). */
+    /** Drop one cookie for [host] (the Cloudflare path clears a
+     * stale cf_clearance before a fresh solve, the donor way). */
     fun removeCookie(host: String, name: String) {
+        removeCookies(host, listOf(name))
+    }
+
+    /**
+     * v1.5.2 fix (FIX-13): the Cloudflare clear is CROSS-RECORD.
+     * Reads merge cookies across ALL session records per host
+     * (keys visited in sorted order, later records winning) —
+     * so clearing a name from the player record alone left any
+     * same-named cookie in another record (a link-add session, a
+     * per-source sign-in) in place, and when that record's key
+     * sorted after the player's, its STALE value won the merge
+     * after a fresh solve: the solve landed, requests kept
+     * sending the stale clearance, and the site challenged again
+     * (a solve-then-challenge-again loop). Clearing a name for
+     * a host now removes it from every record, from every jar
+     * that resolves for the host (the host itself plus its
+     * parent-domain chain — the read path's own rule).
+     */
+    fun removeCookies(host: String, names: List<String>) {
+        if (names.isEmpty()) return
         runCatching {
-            runBlocking { removeCookies(host, listOf(name)) }
+            runBlocking { clearAcrossRecords(host, names) }
         }
     }
 
-    private suspend fun removeCookies(host: String, names: List<String>) {
+    private suspend fun clearAcrossRecords(host: String, names: List<String>) {
+        val h = host.normaliseHost()
+        // The stored domains whose cookies resolve for this host:
+        // the host itself plus each parent domain (SessionData's
+        // own chain rule).
+        val chain = generateSequence(h) { current ->
+            val dot = current.indexOf('.')
+            if (dot < 0 || current.count { it == '.' } <= 1) null
+            else current.substring(dot + 1)
+        }.toSet()
+        val prefix = KeyVault.sessionCookies("")
+        val sessionKeys = vault.presentKeys.value
+            .filter { it.startsWith(prefix) }
+            .map { it.removePrefix(prefix) }
+        for (key in sessionKeys) {
+            val current = store.load(key) ?: continue
+            var changed = false
+            val next = current.cookies.toMutableMap()
+            for (domain in current.cookies.keys) {
+                if (domain.normaliseHost() !in chain) continue
+                val remaining = current.cookies.getValue(domain) - names.toSet()
+                if (remaining.size != current.cookies.getValue(domain).size) {
+                    changed = true
+                    if (remaining.isEmpty()) next.remove(domain)
+                    else next[domain] = remaining
+                }
+            }
+            if (changed) {
+                store.save(key, current.copy(cookies = next))
+            }
+        }
+    }
+
+    /** Record-local removal for the player's own response-expiry
+     * path: a cookie THIS record's responses expired dies in this
+     * record only (another record's same-named cookie is a
+     * different cookie and is not this path's to clear). */
+    private suspend fun removeFromPlayerRecord(host: String, names: List<String>) {
         val current = store.load(PLAYER_SESSION_KEY) ?: return
         val key = current.cookies.keys
             .firstOrNull { it.normaliseHost() == host.normaliseHost() } ?: return

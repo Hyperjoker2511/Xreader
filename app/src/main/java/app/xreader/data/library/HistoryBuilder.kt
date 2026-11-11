@@ -34,6 +34,9 @@ object HistoryBuilder {
         val bookId: String,
         val title: String,
         val coverPath: String? = null,
+        /** v1.5.2 (§14.1): the canonical cover URL — the surface
+         * falls back to it when no cached file exists. */
+        val coverUrl: String? = null,
         val chapterTitle: String? = null,
         val chapterIndex: Int,
         val fraction: Float,
@@ -93,8 +96,10 @@ object HistoryBuilder {
     fun resumeRoute(bookId: String, chapterIndex: Int): String =
         "reader/$bookId/${chapterIndex.coerceAtLeast(0)}"
 
+    // FIX-23: atZone form (API 26-safe; LocalDate.ofInstant is
+    // API 34+ and threw NoSuchMethodError on older devices).
     private fun localDate(epochMillis: Long, zone: ZoneId): LocalDate =
-        LocalDate.ofInstant(Instant.ofEpochMilli(epochMillis), zone)
+        Instant.ofEpochMilli(epochMillis).atZone(zone).toLocalDate()
 
     private fun labelFor(date: LocalDate, today: LocalDate): String = when (date) {
         today -> "Today"

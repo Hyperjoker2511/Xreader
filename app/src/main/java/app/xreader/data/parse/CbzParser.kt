@@ -45,6 +45,51 @@ object NaturalSort : Comparator<String> {
 }
 
 /**
+ * Content-based image detection (FIX-18, donor DirectoryPageLoader
+ * semantics — Komikku's ImageUtil.isImage: extension OR content).
+ * Sniffs the first bytes for the donor ImageType family's magic:
+ * JPEG, PNG, GIF, WebP, AVIF, HEIF, JXL. Pure and testable.
+ */
+object ImageSniff {
+
+    fun isImageContent(head: ByteArray): Boolean {
+        if (head.size < 4) return false
+        fun u(i: Int): Int = head[i].toInt() and 0xFF
+        fun ascii(from: Int, text: String): Boolean {
+            if (head.size < from + text.length) return false
+            return text.indices.all { head[from + it] == text[it].code.toByte() }
+        }
+        return when {
+            // JPEG: FF D8 FF
+            u(0) == 0xFF && u(1) == 0xD8 && u(2) == 0xFF -> true
+            // PNG: 89 50 4E 47
+            u(0) == 0x89 && ascii(1, "PNG") -> true
+            // GIF: "GIF8"
+            ascii(0, "GIF8") -> true
+            // WebP: "RIFF"...."WEBP"
+            ascii(0, "RIFF") && ascii(8, "WEBP") -> true
+            // AVIF / HEIF: "ftyp" box with an image brand
+            ascii(4, "ftyp") && (
+                ascii(8, "avif") || ascii(8, "avis") ||
+                    ascii(8, "heic") || ascii(8, "heix") ||
+                    ascii(8, "mif1") || ascii(8, "msf1")
+                ) -> true
+            // JXL codestream: FF 0A; container: 00 00 00 0C "JXL "
+            (u(0) == 0xFF && u(1) == 0x0A) || ascii(4, "JXL ") -> true
+            else -> false
+        }
+    }
+
+    fun isImageFile(file: File): Boolean = runCatching {
+        file.inputStream().use { stream ->
+            val head = ByteArray(32)
+            val read = stream.read(head)
+            read > 0 && isImageContent(head.copyOf(read))
+        }
+    }.getOrDefault(false)
+}
+
+/**
  * Shared image-book assembly for CBZ/CBR (PLAN §4): pages are copied
  * into the staged assets dir in natural order and become ONE chapter
  * of image blocks (a comic is read as a single flow of pages; the
@@ -62,31 +107,46 @@ internal object ImageBookBuilder {
         extractPage: (archiveName: String, dest: File) -> Boolean,
         pageNames: List<String>
     ): AppResult<ParsedBook> {
-        val images = pageNames
-            .filter { name -> IMAGE_EXTENSIONS.any { name.lowercase().endsWith(it) } }
+        // FIX-18 (donor DirectoryPageLoader semantics): pages are
+        // the archive's entries in NATURAL order (page2 before
+        // page10 — NaturalSort), detected as images by extension
+        // OR by content (ImageUtil.isImage's rule: an image with
+        // no/foreign extension still counts; a text file named
+        // .jpg does not). Content detection needs the bytes, so
+        // non-extension entries are extracted and sniffed, and
+        // dropped when the sniff fails.
+        val candidates = pageNames
             .filterNot { it.startsWith("__MACOSX") || it.substringAfterLast('/').startsWith('.') }
             .sortedWith(NaturalSort)
-        if (images.isEmpty()) {
-            return AppResult.Err(
-                AppError.ParseFailed(format.name, "the archive contains no page images")
-            )
-        }
         val assetsDir = File(workDir, "assets").apply { mkdirs() }
         val used = mutableSetOf<String>()
         val blocks = mutableListOf<ChapterBlock>()
         var coverFile: File? = null
         var copied = 0
-        for (name in images) {
+        var extractedAny = false
+        for (name in candidates) {
             val stagedName = ZipPaths.assetFileName(name, used)
             val dest = File(assetsDir, stagedName)
-            if (extractPage(name, dest)) {
-                blocks += ChapterBlock.Image(stagedName)
-                if (coverFile == null) {
-                    coverFile = File(workDir, "cover.${stagedName.substringAfterLast('.', "jpg")}")
-                    dest.copyTo(coverFile, overwrite = true)
-                }
-                copied++
+            if (!extractPage(name, dest)) continue
+            extractedAny = true
+            val byExtension = IMAGE_EXTENSIONS.any { name.lowercase().endsWith(it) }
+            if (!byExtension && !ImageSniff.isImageFile(dest)) {
+                dest.delete()
+                continue
             }
+            blocks += ChapterBlock.Image(stagedName)
+            if (coverFile == null) {
+                coverFile = File(workDir, "cover.${stagedName.substringAfterLast('.', "jpg")}")
+                dest.copyTo(coverFile, overwrite = true)
+            }
+            copied++
+        }
+        if (copied == 0 && extractedAny) {
+            // Entries extracted fine but none was an image (by
+            // extension or content) — the no-images verdict.
+            return AppResult.Err(
+                AppError.ParseFailed(format.name, "the archive contains no page images")
+            )
         }
         if (copied == 0) {
             return AppResult.Err(AppError.ParseFailed(format.name, "the pages couldn't be extracted"))

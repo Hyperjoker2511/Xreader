@@ -52,14 +52,37 @@ object LibrarySplit {
      * labels: the sum of each book's unseen-new count
      * ([BookMeta.newChapterCount], fed by the library-update
      * pass) over the books of that kind.
+     *
+     * This whole-map shape sums EVERY entry it is handed. It is
+     * correct only for a caller whose [metas] is already the
+     * population being labelled — a label for a subset (the
+     * Library shelf) must use the shelf-scoped overload below,
+     * or the counts of books outside the subset pour in
+     * (v1.5.4, finding #2: "Novels · 12121" over a 1-book
+     * library, from preview/history metas summed whole).
      */
     fun newChaptersBySide(
         metas: Map<Long, BookMeta>,
         kinds: Map<Long, MediaKind>
+    ): Map<MediaKind, Int> =
+        newChaptersBySide(metas, kinds, metas.keys)
+
+    /**
+     * Shelf-scoped shape (v1.5.4, item 18): sums ONLY the
+     * metas whose bookId is in [shelfIds] — the books actually
+     * in the library. [kinds] is the shelf's resolved kind map;
+     * a shelf book missing from it still counts, on the Novels
+     * side, by [kindOf]'s never-lost law.
+     */
+    fun newChaptersBySide(
+        metas: Map<Long, BookMeta>,
+        kinds: Map<Long, MediaKind>,
+        shelfIds: Set<Long>
     ): Map<MediaKind, Int> {
         var novels = 0
         var manga = 0
         for ((bookId, meta) in metas) {
+            if (bookId !in shelfIds) continue
             if (meta.newChapterCount <= 0) continue
             when (kindOf(bookId, kinds)) {
                 MediaKind.TEXT -> novels += meta.newChapterCount

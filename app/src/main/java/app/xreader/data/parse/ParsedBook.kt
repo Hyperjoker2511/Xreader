@@ -22,7 +22,29 @@ data class ParsedBook(
     val chapters: List<ParsedChapterMeta>,
     val chaptersDir: File,
     /** Directory of image/audio assets referenced by chapter content. */
-    val assetsDir: File?
+    val assetsDir: File?,
+    /**
+     * v1.5.4 (WS-7): pictures the source file referenced that the
+     * parser could not read (an EPUB image reference resolving to
+     * no entry; a PDF embedded image that failed to decode). The
+     * importer surfaces a non-zero count in the Adding-books
+     * result ("Added — but N pictures in this file couldn't be
+     * read") — a partial import never poses as a complete one.
+     * Parsers that cannot lose pictures leave the default.
+     */
+    val droppedImages: Int = 0,
+    /**
+     * v1.5.5 (§4): chapters the parser assembled but whose body
+     * fell under the per-chapter PROSE FLOOR (printable prose
+     * below the floor and no image to carry the chapter — the
+     * heading-only hollow shape of the V154 PDF finding). The
+     * chapters are still stored (their titles are real), but the
+     * count rides to the importer exactly the way [droppedImages]
+     * does, so a book full of hollow chapters can never pose as
+     * a complete import. Parsers without a prose floor leave
+     * the default.
+     */
+    val droppedChapters: Int = 0
 )
 
 data class ParsedChapterMeta(
@@ -54,6 +76,15 @@ internal class ChapterFileWriter(private val chaptersDir: File) {
     private var index = 0
     val metas = mutableListOf<ParsedChapterMeta>()
 
+    /**
+     * v1.5.5 (§4): fired after each chapter file is fully
+     * written, with its meta — the importer's progressive-commit
+     * hook (chapter 1 lands in the Library the moment it exists,
+     * the rest stream in behind it). Null (every legacy caller)
+     * keeps the write-only behaviour.
+     */
+    var onChapterWritten: ((ParsedChapterMeta) -> Unit)? = null
+
     init {
         chaptersDir.mkdirs()
     }
@@ -73,6 +104,7 @@ internal class ChapterFileWriter(private val chaptersDir: File) {
             contentFileName = name
         )
         metas += meta
+        onChapterWritten?.invoke(meta)
         return meta
     }
 }

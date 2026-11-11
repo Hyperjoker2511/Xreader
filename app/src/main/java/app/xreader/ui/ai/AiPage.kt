@@ -102,7 +102,13 @@ fun AiPage(
                     onValueChange = { question = it },
                     label = { Text("Ask about the story…") },
                     modifier = Modifier.weight(1f),
-                    singleLine = true
+                    singleLine = true,
+                    // v1.5.8 (J11 restyle only): the input joins
+                    // the one shape language — the 24dp card
+                    // radius, like the design's input fields —
+                    // instead of the raw Material default corner.
+                    shape = androidx.compose.foundation.shape
+                        .RoundedCornerShape(24.dp)
                 )
                 Spacer(Modifier.width(8.dp))
                 TextButton(

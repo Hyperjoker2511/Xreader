@@ -17,6 +17,7 @@ import eu.kanade.tachiyomi.source.Source
 import eu.kanade.tachiyomi.source.online.HttpSource
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -187,6 +188,106 @@ class KeiyoushiPlayerManager(
     fun allLiveSources(): Map<String, Source> =
         if (playerEnabledFlag) liveSources.toMap() else emptyMap()
 
+    /** v1.5.7 (Finding 4, §6): the normalised hosts the
+     * CACHED catalogue claims — every package's sources'
+     * homeUrl hosts (KeiyoushiIndex.Entry.host's twin for
+     * the installable form). This sits inside source
+     * lookups, so it NEVER fetches. v1.5.8 (A6): when the
+     * cache is COLD it falls back to the persisted records'
+     * source hosts instead of answering the empty set —
+     * the v1.5.7 shape made the stamp a first-materialisation
+     * race (F1 M1). ExtensionService stamps a link-added
+     * declarative config whose host is claimed here as
+     * MANGA at load time, so a Keiyoushi site added by link
+     * routes to the manga reader instead of the prose road. */
+    fun claimedHosts(): Set<String> {
+        val catalog = catalogCache
+        if (catalog != null) {
+            return catalog.packages
+                .flatMap { pkg -> pkg.sources.map { it.homeUrl } }
+                .map { it.normaliseHost() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+        }
+        // v1.5.8 (A6 / F1 M1): the COLD-cache fallback — the
+        // stamp must be deterministic, not a race against
+        // whoever fetched the catalogue first. The manager's
+        // PERSISTED records already carry each installed
+        // package's source hosts ([KeiyoushiPlayerRecord
+        // .sourceHosts], the data noteCoverHosts maintains
+        // and restore publishes into [_records]); a cold
+        // cache answers from them, so a declarative row
+        // materialised before any catalog() call is stamped
+        // exactly as one materialised after. Cache-warm
+        // behaviour above is unchanged.
+        return _records.value.values
+            .filter { it.isInstalled }
+            .flatMap { it.sourceHosts }
+            .map { it.normaliseHost() }
+            .filter { it.isNotEmpty() }
+            .toSet()
+    }
+
+    /** v1.5.4 (WS-1 item 7b, closed at integration): cover
+     * hosts a package's OWN sources actually return, reported
+     * by the Mihon adapter from the thumbnails it maps
+     * (catalogue rows + book details). A player row's
+     * permission domains are derived in [upsertRowLocked]
+     * from the record's hosts — at load time those can only
+     * cover the sources' own hosts, so a cover served from
+     * an unrelated image-CDN host was refused by construction
+     * (SourceBookSync's CoverFetch.RefusedPermission) and the
+     * book never got a local cover file. Hosts the trusted
+     * package's own sources hand out are that package's own
+     * traffic: they join the record's sourceHosts and the row
+     * is re-derived, so the §9.1 whitelist grows only by the
+     * package's observed behaviour — never by a fetch attempt
+     * (fetchCoverTyped's check is untouched). Called from the
+     * adapter's background threads; the fast path is a plain
+     * read, the merge runs under the state mutex and is a
+     * no-op when nothing is new. */
+    fun noteCoverHosts(packageName: String, hosts: Collection<String>) {
+        val cleaned = hosts.map { it.normaliseHost() }
+            .filter { it.isNotEmpty() }.distinct()
+        if (cleaned.isEmpty()) return
+        val snapshot = _records.value[packageName] ?: return
+        if (!snapshot.isInstalled) return
+        if (snapshot.sourceHosts.map { it.normaliseHost() }
+                .containsAll(cleaned)
+        ) {
+            return
+        }
+        runBlocking {
+            mutex.withLock {
+                val current = _records.value[packageName]
+                    ?: return@withLock
+                if (!current.isInstalled) return@withLock
+                val known = current.sourceHosts
+                    .map { it.normaliseHost() }.toSet()
+                val fresh = cleaned.filter { it !in known }
+                if (fresh.isEmpty()) return@withLock
+                val updated = current.copy(
+                    sourceHosts = current.sourceHosts + fresh
+                )
+                publishRecordLocked(updated)
+                // Re-derive the row NOW so this session's cover
+                // fetches see the widened domains. The row's
+                // source ids are re-derived from the record's
+                // namespaced ids; if they can't be (a record
+                // written before they were stamped), the upsert
+                // is skipped rather than blanking the row's ids
+                // — the merge above still lands, and the next
+                // load's host assembly starts from sourceHosts.
+                val mihonIds = current.sourceIds.mapNotNull {
+                    it.substringAfterLast(':').toLongOrNull()
+                }
+                if (mihonIds.isNotEmpty()) {
+                    upsertRowLocked(updated, mihonIds)
+                }
+            }
+        }
+    }
+
     // ── catalogue ───────────────────────────────────────────
 
     /** Fetch (or reuse) the installable catalogue. An
@@ -269,6 +370,24 @@ class KeiyoushiPlayerManager(
                 )
             }
         }
+    }
+
+    /** v1.5.2 (§8.4 backfill): after restore, every installed
+     * record with a null stamp is stamped from the index — from
+     * the warm catalogue cache when present, else ONE catalog()
+     * fetch. Restore never waits on user action, and the healing
+     * fetch is no longer reachable only for sources Browse can
+     * already see (Failure E's chicken-and-egg). */
+    suspend fun backfillRatings() {
+        val unstamped = _records.value.values.any {
+            it.isInstalled && it.contentRatingName == null
+        }
+        if (!unstamped) return
+        if (catalogCache != null) {
+            catalogCache?.let { stampRatingsLocked(it) }
+            return
+        }
+        runCatching { catalog() }
     }
 
     /** Compare the catalogue against installed records and

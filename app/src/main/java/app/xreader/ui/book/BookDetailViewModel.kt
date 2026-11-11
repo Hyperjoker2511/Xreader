@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.room.withTransaction
+import app.xreader.core.error.AppResult
 import app.xreader.data.db.Book
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.DownloadState
@@ -11,9 +12,12 @@ import app.xreader.data.db.ReadingProgress
 import app.xreader.di.AppContainer
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -34,6 +38,29 @@ data class BookDetailUiState(
      * failure are VISIBLE, never a silent blank list. */
     val chaptersLoading: Boolean = false,
     val chaptersError: String? = null,
+    /** v1.5.37 (combined build, S6): the head-missing verdict
+     * for THIS chapters emission, computed once in the state
+     * combine. The per-row edge trigger used to re-run the
+     * full-list scan on the main thread for every row
+     * composed during a fling (BIG-BOOK-REFRESH-FORENSICS
+     * Q8b); every consumer now reads this cached verdict. */
+    val headMissing: Boolean = false,
+    /** v1.5.4 (WS-1 item 6c): a site check is pending for this
+     * book's source subsystem (an interactive prompt is up, or
+     * an unattended auto-solve is inside its latch) — while
+     * chapters load, the pill says a check is pending instead
+     * of claiming to find chapters. Fed from
+     * PlayerChallengeBridge.challengePending. */
+    val challengePending: Boolean = false,
+    /** v1.5.10 (B1): the chapter wait for this book has
+     * crossed the honest bound (CHAPTER_PENDING_UI_BOUND_MS
+     * from its refresh start, aged in SourceBookSync's
+     * ChapterWaitRegistry — process-scoped, so the verdict
+     * survives leaving and returning). The pill flips to
+     * "Still finding chapters — this source is slow" with a
+     * visible Retry; the underlying call is never cancelled
+     * or restarted by the flip. */
+    val chaptersStalled: Boolean = false,
     /** v1.0.5 (B1): this book's source is a link source — the
      * Chapters section may offer its "Go to Repair" door (Repair
      * lives on the source's Details page and works on the link
@@ -64,6 +91,10 @@ data class BookDetailUiState(
     val enrichmentLoaded: Boolean = false,
     // ── v1.0.2 (R05/R11/R12/R22 + sweep) ─────────────────────────
     val favourite: Boolean = false,
+    /** v1.5.2 fix (FIX-8c): chapters whose STORED body is a stub
+     * (login-wall/preview shape) — their stored wordCount renders
+     * NOWHERE. Computed off the render path by the VM. */
+    val stubChapterIds: Set<Long> = emptySet(),
     /** Visible (non-suppressed) tag rows for this book. */
     val tags: List<app.xreader.data.db.BookTag> = emptyList(),
     /** "Next chapter expected…" line, or null when the rhythm
@@ -121,9 +152,19 @@ data class BookDetailUiState(
      * there is no progress. Computed from the chapters' own
      * numbers, never assumed to be stored index 0 (a
      * newest-first store keeps chapter 1 at its END). */
-    val startChapterIndex: Int = 0
+    val startChapterIndex: Int = 0,
+    /** v1.5.8 (E3): this book's excluded scanlators (the
+     * per-book filter in BookReaderPrefs). [chapters] above is
+     * ALREADY filtered by this set; [allScanlators] lists every
+     * scanlator present in the book's full chapter list, for
+     * the chapter-settings sheet's checkboxes. */
+    val excludedScanlators: Set<String> = emptySet(),
+    val allScanlators: List<String> = emptyList()
 ) {
-    val downloadedCount: Int get() = chapters.count { it.downloadState == DownloadState.READY }
+    /** v1.5.2 fix (FIX-6a, §12.9): the ONE predicate — USER + READY. */
+    val downloadedCount: Int get() = chapters.count {
+        app.xreader.data.download.BodyOrigin152.isDownloaded(it)
+    }
     /** v1.3.2 (item 79): Continue follows saved progress
      * (already identity-anchored); Start follows identity —
      * the chapter whose own number is 1. */
@@ -138,7 +179,20 @@ data class BookDetailUiState(
                 app.xreader.data.db.SourceType.EXTENSION,
             chapterCount = chapters.size,
             pageLoading = loading,
-            chaptersLoading = chaptersLoading
+            chaptersLoading = chaptersLoading,
+            // v1.5.8 (A3): the verdict follows the recorded
+            // reality — a stored chapters error means the fetch
+            // THREW; no error with an empty settled list means
+            // the list CAME BACK EMPTY.
+            verdict = if (chaptersError != null) {
+                ChaptersVerdict.ERROR
+            } else {
+                ChaptersVerdict.EMPTY_SOURCE
+            },
+            chaptersError = chaptersError,
+            // v1.5.8 (A4): Repair is a link-source door only.
+            isLinkSource = isLinkSource,
+            chaptersStalled = chaptersStalled
         )
     /** v1.5.1 (item 4): the CTA state model — see
      * ChapterReadGuard.ctaState. */
@@ -148,7 +202,15 @@ data class BookDetailUiState(
                 app.xreader.data.db.SourceType.EXTENSION,
             chapterCount = chapters.size,
             pageLoading = loading,
-            chaptersLoading = chaptersLoading
+            chaptersLoading = chaptersLoading,
+            verdict = if (chaptersError != null) {
+                ChaptersVerdict.ERROR
+            } else {
+                ChaptersVerdict.EMPTY_SOURCE
+            },
+            chaptersError = chaptersError,
+            isLinkSource = isLinkSource,
+            chaptersStalled = chaptersStalled
         )
     val hasUndownloadedChapters: Boolean
         get() = chapters.any {
@@ -166,17 +228,70 @@ data class BookDetailUiState(
  * lists are an import fact, not a broken source. Pure, so the
  * truth table is unit-tested.
  */
+/** v1.5.8 (A3): WHY the chapter list is empty — the fetch threw
+ * (ERROR) or the source answered with an empty list
+ * (EMPTY_SOURCE). The pill's wording follows the reality; a
+ * slow-but-alive source never reads as "broken". */
+enum class ChaptersVerdict { ERROR, EMPTY_SOURCE }
+
 object ChapterReadGuard {
     fun blockedReason(
         isExtensionBook: Boolean,
         chapterCount: Int,
         pageLoading: Boolean,
-        chaptersLoading: Boolean
+        chaptersLoading: Boolean,
+        verdict: ChaptersVerdict = ChaptersVerdict.ERROR,
+        chaptersError: String? = null,
+        isLinkSource: Boolean = false,
+        chaptersStalled: Boolean = false
     ): String? {
         if (!isExtensionBook || chapterCount > 0) return null
+        // v1.5.10 (B1): a stalled-but-alive wait is not an
+        // unavailability verdict — the honest slow state
+        // (FINDING_CHAPTERS + the slow pill) owns the surface
+        // until chapters land or the wait truly fails.
+        if (chaptersStalled) return null
         if (pageLoading || chaptersLoading) return null
-        return "No chapters found — this source may be broken. " +
+        // v1.5.8 (A4): the recovery door named is the door that
+        // EXISTS for this source kind — Repair rebuilds link
+        // sources only; every other kind is re-checked here or
+        // test-driven from My Sources.
+        val door = if (isLinkSource) {
             "Try Repair on the source's Details page."
+        } else {
+            "Try Re-check on this page, or open the source's " +
+                "test-drive from My Sources."
+        }
+        return when (verdict) {
+            ChaptersVerdict.ERROR -> {
+                val detail = chaptersError?.takeIf { it.isNotBlank() }
+                // v1.5.37 (combined build, item 4): the
+                // no-chapters-yet refusal — the only "total"
+                // behind it was the source config's own
+                // floor, and the site declares no chapters
+                // for this book. Word it as the plain state
+                // it is and name NO recovery door: there is
+                // nothing broken to repair
+                // (BRIGHTNOVEL-EMPTY-CHAPTERS-CHECK).
+                if (detail != null && detail.contains(
+                        app.xreader.data.extension.DeclarativeSource
+                            .ENDPOINT_NO_CHAPTERS_YET_MARKER
+                    )
+                ) {
+                    "No chapters on the site yet — the site " +
+                        "lists this book, but it hasn't " +
+                        "published any chapters for it."
+                } else if (detail != null) {
+                    "The chapter list couldn't be loaded — $detail $door"
+                } else {
+                    "The chapter list couldn't be loaded — " +
+                        "the source didn't answer. $door"
+                }
+            }
+            ChaptersVerdict.EMPTY_SOURCE ->
+                "No chapters found — the chapter list came back " +
+                    "empty. $door"
+        }
     }
 
     /** v1.5.1 (item 4, ChatGPT sift #8): the Read CTA's state
@@ -192,13 +307,18 @@ object ChapterReadGuard {
         isExtensionBook: Boolean,
         chapterCount: Int,
         pageLoading: Boolean,
-        chaptersLoading: Boolean
+        chaptersLoading: Boolean,
+        verdict: ChaptersVerdict = ChaptersVerdict.ERROR,
+        chaptersError: String? = null,
+        isLinkSource: Boolean = false,
+        chaptersStalled: Boolean = false
     ): ReadCtaState = when {
         blockedReason(
-            isExtensionBook, chapterCount, pageLoading, chaptersLoading
+            isExtensionBook, chapterCount, pageLoading, chaptersLoading,
+            verdict, chaptersError, isLinkSource, chaptersStalled
         ) != null -> ReadCtaState.CHAPTERS_UNAVAILABLE
         isExtensionBook && chapterCount == 0 &&
-            (pageLoading || chaptersLoading) ->
+            (pageLoading || chaptersLoading || chaptersStalled) ->
             ReadCtaState.FINDING_CHAPTERS
         else -> ReadCtaState.READY
     }
@@ -206,6 +326,62 @@ object ChapterReadGuard {
 
 /** The book page Read CTA's three states (see ChapterReadGuard). */
 enum class ReadCtaState { READY, FINDING_CHAPTERS, CHAPTERS_UNAVAILABLE }
+
+/**
+ * v1.5.8 (K5): the book page's Copy details text — it must tell
+ * the truth a screenshot can't: the chapters error when there
+ * is one, the latest `sync`-seam DiagnosticLog lines (A3's
+ * record), and, for Fenrir books, the `fenrir-unlock` lines
+ * (C4) that say which half of the unlock failed. Pure, so the
+ * truth table is unit-tested; the screen feeds it the live
+ * state + the log's current entries.
+ */
+object BookCopyDetails {
+    fun build(
+        title: String,
+        author: String,
+        chapterCount: Int,
+        downloadedCount: Int,
+        statusLabel: String?,
+        description: String,
+        chaptersError: String?,
+        isFenrirBook: Boolean,
+        logEntries: List<app.xreader.data.extension.DiagnosticLog.Entry>
+    ): String = buildString {
+        append(title)
+        if (author.isNotBlank()) append("\nby $author")
+        append("\n$chapterCount chapters · $downloadedCount downloaded")
+        statusLabel?.let { append("\nStatus: $it") }
+        if (description.isNotBlank()) append("\n\n$description")
+        if (!chaptersError.isNullOrBlank()) {
+            append("\n\nChapters error: $chaptersError")
+        }
+        val syncLines = logEntries.filter { it.tag == "sync" }
+        if (syncLines.isNotEmpty()) {
+            append("\n\nRecent sync:")
+            syncLines.forEach { entry ->
+                append("\n[${entry.timeText()}] ${entry.message}")
+                if (entry.detail.isNotBlank()) append(" — ${entry.detail}")
+            }
+        }
+        if (isFenrirBook) {
+            val unlockLines = logEntries.filter { it.tag == "fenrir-unlock" }
+            if (unlockLines.isNotEmpty()) {
+                append("\n\nFenrir unlock:")
+                unlockLines.forEach { entry ->
+                    append("\n[${entry.timeText()}] ${entry.message}")
+                    if (entry.detail.isNotBlank()) append(" — ${entry.detail}")
+                }
+            }
+        }
+    }
+
+    /** A book is a Fenrir book when its provider/source naming
+     * says so — the page resolves the provider name already. */
+    fun isFenrir(providerName: String, sourceName: String = ""): Boolean =
+        providerName.contains("fenrir", ignoreCase = true) ||
+            sourceName.contains("fenrir", ignoreCase = true)
+}
 
 enum class OtherSourcesState { NOT_LOADED, LOADING, LOADED, FAILED }
 
@@ -242,11 +418,43 @@ class BookDetailViewModel(
 
     private val storyLocal = kotlinx.coroutines.flow.MutableStateFlow(BookDetailUiState())
 
+    /** v1.5.6 (§3.1 row 7): an in-place local book's Contents —
+     * its local_outline rows (title + targetJson). Empty for every
+     * other book population. */
+    val localOutline: StateFlow<List<app.xreader.data.db.LocalOutline>> =
+        container.database.localOutlineDao().observeForBook(bookId)
+            .stateIn(
+                viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
+            )
+
+    /** v1.5.5 (§3): true while this page's state chain is
+     * being collected. This surface's [state] is a combined
+     * StateFlow, which (unlike the MutableStateFlow-backed
+     * surfaces) exposes no subscriptionCount — so the signal
+     * is taken from the WhileSubscribed combine itself: the
+     * onStart/onCompletion pair wrapped around [storyLocal]
+     * below fires exactly when the chain gains / loses its
+     * collector (the shell's collectAsStateWithLifecycle),
+     * subject to the same 5 s WhileSubscribed tail the other
+     * surfaces have. */
+    private val pageCollected =
+        kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    /** v1.5.5 (§3): the post-save retry gate for this surface
+     * — RESUMED while the page's state has subscribers (the
+     * shell collects it with collectAsStateWithLifecycle). */
+    private val sessionRetryGate =
+        app.xreader.data.extension.SurfaceRetryGate("book-detail") {
+            pageCollected.value
+        }
+
     private val baseDetailState: StateFlow<BookDetailUiState> = combine(
         container.database.bookDao().observeById(bookId),
         container.database.chapterDao().observeForBook(bookId),
         container.database.readingProgressDao().observeForBook(bookId),
-        storyLocal,
+        storyLocal
+            .onStart { pageCollected.value = true }
+            .onCompletion { pageCollected.value = false },
         container.bookMetaPrefs.all
     ) { book, chapters, progress, story, metas ->
         // v1.3.1 (V120-CHECK 55): progress keys on chapter
@@ -258,11 +466,19 @@ class BookDetailViewModel(
         // pointers are re-anchored to the row's CURRENT index;
         // dangling pointers show as no progress at all.
         val resolvedProgress = progress?.let { p ->
-            val anchor = chapters.firstOrNull { it.id == p.chapterId }
-            when {
-                anchor != null -> p.copy(chapterIndex = anchor.index)
-                chapters.isNotEmpty() -> null
-                else -> p
+            // v1.5.6 (§3, audit §1.5 trap): a LOCAL book's progress
+            // is locator-keyed (chapterId = 0, no chapter rows) —
+            // the identity re-anchor below would NULL it out. Local
+            // progress is read from the locator directly.
+            if (book?.sourceType == app.xreader.data.db.SourceType.LOCAL_FILE) {
+                p
+            } else {
+                val anchor = chapters.firstOrNull { it.id == p.chapterId }
+                when {
+                    anchor != null -> p.copy(chapterIndex = anchor.index)
+                    chapters.isNotEmpty() -> null
+                    else -> p
+                }
             }
         }
         BookDetailUiState(
@@ -299,6 +515,8 @@ class BookDetailViewModel(
             bookMeta = metas[bookId] ?: app.xreader.data.library.BookMeta(),
             chaptersLoading = story.chaptersLoading,
             chaptersError = story.chaptersError,
+            challengePending = story.challengePending,
+            chaptersStalled = story.chaptersStalled,
             // v1.3.2 (scope A2 + item 79): the hand-off the
             // chapters error calls for, and the identity-first
             // chapter's stored index for Start Reading.
@@ -325,6 +543,7 @@ class BookDetailViewModel(
             tagSuggestions = story.tagSuggestions,
             tagSuggestBusy = story.tagSuggestBusy,
             tagSuggestNote = story.tagSuggestNote,
+            stubChapterIds = story.stubChapterIds,
             expectedNextLabel = app.xreader.data.library.UpdateRhythm.estimate(
                 chapters.map { it.updatedAt }, System.currentTimeMillis()
             )?.let { estimate ->
@@ -335,20 +554,65 @@ class BookDetailViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BookDetailUiState())
 
+    /** v1.5.8 (E3): the per-book scanlator exclusion set — one
+     * of the two named read paths for BookReaderPrefs'
+     * excludedScanlators (the manga reader's skip-filtered, I5,
+     * is the other). */
+    val excludedScanlatorsFlow: StateFlow<Set<String>> =
+        container.bookReaderPrefs.excludedScanlators(bookId)
+            .stateIn(
+                viewModelScope, SharingStarted.WhileSubscribed(5_000),
+                emptySet()
+            )
+
+    /** v1.5.8 (E3): the chapter-settings sheet's write door. */
+    fun setExcludedScanlators(excluded: Set<String>) {
+        viewModelScope.launch {
+            container.bookReaderPrefs.setExcludedScanlators(bookId, excluded)
+        }
+    }
+
     /** v1.0.2: organisation/appearance extras, combined on top so
      * the base builder above stays as it was. */
+    @Suppress("UNCHECKED_CAST")
     val state: StateFlow<BookDetailUiState> = combine(
         baseDetailState,
         container.bookMetaPrefs.favourites,
         container.database.tagDao().observeForBook(bookId),
         container.database.bookDao().observeAllBooks(),
-        container.appearancePrefs.state
-    ) { base, favourites, tagRows, allBooks, appearance ->
+        container.appearancePrefs.state,
+        container.bookReaderPrefs.excludedScanlators(bookId)
+    ) { values ->
+        val base = values[0] as BookDetailUiState
+        val favourites = values[1] as Set<Long>
+        val tagRows = values[2] as List<app.xreader.data.db.BookTag>
+        val allBooks = values[3] as List<Book>
+        val appearance = values[4] as app.xreader.data.prefs.AppearanceState
+        val excludedScanlators = values[5] as Set<String>
         val book = base.book
         val policy = app.xreader.data.prefs.PerformancePolicy.resolve(
             appearance.performanceMode, container.totalRamMb(), appearance.coverGlow
         )
+        val displayedChapters = app.xreader.data.prefs.ScanlatorFilter
+            .apply(
+                base.chapters, { it.scanlator }, excludedScanlators
+            )
         base.copy(
+            // v1.5.8 (E3): the displayed chapter list is the
+            // full list minus the excluded scanlators; the
+            // sheet's choices come from the FULL list.
+            chapters = displayedChapters,
+            // v1.5.37 (S6): the head-missing verdict for this
+            // emission, computed ONCE here — consumers (the
+            // edge trigger, the entry heal, "load the full
+            // list") read the cached field instead of
+            // re-scanning the list per call.
+            headMissing = ChapterListIntegrity.headMissing(
+                displayedChapters
+            ),
+            excludedScanlators = excludedScanlators,
+            allScanlators = base.chapters.mapNotNull { it.scanlator }
+                .distinct().sorted(),
             favourite = bookId in favourites,
             tags = tagRows.filter { !it.suppressed },
             backdropEnabled = true,
@@ -450,6 +714,17 @@ class BookDetailViewModel(
     fun onChapterNearEdge(index: Int) {
         val current = state.value
         val book = current.book ?: return
+        // v1.5.7 (Finding 5): a headless list must never be
+        // GROWN — the progressive walk resumes from its saved
+        // cursor and appends at the tail, so the missing
+        // beginning would never come back. Heal instead (once;
+        // the full refresh restores the whole ordered list).
+        // v1.5.37 (S6): the verdict is the state combine's
+        // cached field, not a fresh full-list scan per call.
+        if (current.headMissing) {
+            healHeadOnce()
+            return
+        }
         if (book.chapterListComplete) return
         if (index < current.chapters.size -
             app.xreader.data.extension.SourceBookSync.EDGE_TRIGGER
@@ -475,7 +750,27 @@ class BookDetailViewModel(
     private fun launchGrow(book: app.xreader.data.db.Book, target: Int) {
         if (edgeJob?.isActive == true) return
         edgeJob = viewModelScope.launch {
-            container.sourceBookSync.ensureChapters(book, target)
+            // v1.5.4 (WS-8, owner addendum 3): growth stays
+            // silent while it works, but a FAILED grow is the
+            // one honest surfacing — it lands in chaptersError,
+            // which the page renders as a plain-words retry row
+            // (and as the recovery card when nothing is loaded).
+            // A grow that lands clears a stale error: chapters
+            // arriving proves the source healthy.
+            when (
+                val result = container.sourceBookSync
+                    .ensureChapters(book, target)
+            ) {
+                is app.xreader.core.error.AppResult.Ok -> {
+                    if (storyLocal.value.chaptersError != null) {
+                        storyLocal.value = storyLocal.value.copy(
+                            chaptersError = null
+                        )
+                    }
+                }
+                is app.xreader.core.error.AppResult.Err ->
+                    noteChaptersError(result.error)
+            }
         }
     }
 
@@ -484,6 +779,15 @@ class BookDetailViewModel(
      * browse or search the WHOLE list now, without
      * downloading anything. Mirrors Refresh's state handling. */
     fun loadFullChapterList() {
+        // v1.5.7 (Finding 5): "load the full list" on a
+        // headless book IS the heal — a full re-fetch, not a
+        // walk-cursor completion (which would stamp the
+        // headless list "complete" and entrench the loss).
+        // v1.5.37 (S6): the combine-cached verdict.
+        if (state.value.headMissing) {
+            refreshChapters()
+            return
+        }
         viewModelScope.launch {
             val book = container.database.bookDao().getById(bookId)
                 ?: return@launch
@@ -584,11 +888,11 @@ class BookDetailViewModel(
     fun openRelated(related: app.xreader.extensionapi.SourceBook, onOpened: (Long) -> Unit) {
         viewModelScope.launch {
             val book = container.database.bookDao().getById(bookId) ?: return@launch
-            val extensionId = book.extensionId ?: return@launch
-            val (sourceId, _) = app.xreader.data.extension.SourceBookIds
-                .decode(book.remoteId) ?: return@launch
+            if (book.extensionId == null) return@launch
+            // v1.5.10 (B5): book-aware resolution (stable
+            // identity + heal on a row-id miss).
             val handle = when (
-                val found = container.extensionService.source(extensionId, sourceId)
+                val found = container.extensionService.resolveBookSource(book)
             ) {
                 is app.xreader.core.error.AppResult.Ok -> found.value
                 is app.xreader.core.error.AppResult.Err -> return@launch
@@ -604,6 +908,49 @@ class BookDetailViewModel(
     private var autoLoadTried = false
 
     init {
+        // v1.5.4 (WS-1 item 6c): mirror the challenge
+        // subsystem's pending state into this page's state —
+        // while a check is pending (the user is solving one on
+        // the sanctioned screen, or an auto-solve is inside
+        // its 30 s latch), the chapters pill names the check
+        // instead of claiming to find chapters.
+        viewModelScope.launch {
+            container.playerChallengeBridge.challengePending.collect { pending ->
+                storyLocal.value =
+                    storyLocal.value.copy(challengePending = pending)
+            }
+        }
+        // v1.5.10 (B1): mirror the page-side chapter-wait
+        // registry's verdict into state. The registry lives
+        // on the SourceBookSync singleton (process scope), so
+        // a wait begun before this page existed — or still
+        // running detached after its refresh returned — ages
+        // honestly here. Poll is 1 s while a wait stands,
+        // 2 s while none does; the state write happens only
+        // on a verdict change. The poll NEVER touches the
+        // shared call: Retry (refreshChapters) re-joins it
+        // through the adapter's single-flight registry.
+        viewModelScope.launch {
+            var lastStalled = false
+            while (kotlinx.coroutines.currentCoroutineContext()
+                    .isActive
+            ) {
+                val entry = container.sourceBookSync.chapterWaits
+                    .entry(bookId)
+                val stalled = entry != null &&
+                    container.sourceBookSync.chapterWaits
+                        .isStalled(bookId)
+                if (stalled != lastStalled) {
+                    lastStalled = stalled
+                    storyLocal.value = storyLocal.value.copy(
+                        chaptersStalled = stalled
+                    )
+                }
+                kotlinx.coroutines.delay(
+                    if (entry != null) 1_000 else 2_000
+                )
+            }
+        }
         // v1.0.6.2 (F6a): a local book with an empty synopsis whose
         // file is still on the phone gets ONE metadata re-read —
         // books imported before descriptions were mapped heal
@@ -653,6 +1000,32 @@ class BookDetailViewModel(
                 }
             }
         }
+        // v1.5.2 fix (FIX-8c, §14.4): stub-body detection for the
+        // display layer — chapters whose stored body fails the
+        // integrity gate contribute NO count anywhere. Runs on IO,
+        // keyed by the stored-body set so it re-runs only when the
+        // set of stored bodies changes. ALSO the §1 wiring for this
+        // surface: register the pending operation for the book's
+        // source session key so a solve heard at ANY evaluation
+        // point re-issues this page's blocked action exactly once.
+        viewModelScope.launch(container.ioDispatcher) {
+            var lastKey: Set<Long> = emptySet()
+            container.database.chapterDao().observeForBook(bookId).collect { chapters ->
+                val stored = chapters.filter { it.contentPath != null }
+                val key = stored.map { it.id }.toSet()
+                if (key == lastKey) return@collect
+                lastKey = key
+                val stubs = stored.mapNotNull { chapter ->
+                    val content = container.bookStorage
+                        .readChapterContent(bookId, chapter.id).getOrNull()
+                        ?: return@mapNotNull null
+                    if (app.xreader.data.download.ChapterTruth152
+                            .isStubBody(content.plainText())
+                    ) chapter.id else null
+                }.toSet()
+                storyLocal.value = storyLocal.value.copy(stubChapterIds = stubs)
+            }
+        }
         // R26: prime the AI suggestions surface once per book
         // (key presence + any cached answer; never an API call).
         viewModelScope.launch {
@@ -681,16 +1054,25 @@ class BookDetailViewModel(
         // chapters against the fresh session, automatically.
         // The hand-off returns the user to a working page, not
         // to the same wall they left.
+        // v1.5.5 (§3): the session-update broadcast — this
+        // surface re-issues its OWN chapter reload for the
+        // saved source; no surface can claim the retry away
+        // from another any more. A save landing while this
+        // page is in the backstack parks on the gate and
+        // fires when the page is next resumed.
         viewModelScope.launch {
-            container.sessionSavedEvents.collect { key ->
-                val book = container.database.bookDao()
-                    .getById(bookId) ?: return@collect
-                val extId = book.extensionId ?: return@collect
-                if (key ==
-                    app.xreader.data.extension.ExtensionHttpClient
-                        .sessionKeyFor(extId)
-                ) {
-                    refreshChapters()
+            pageCollected.collect { collected ->
+                if (collected) {
+                    sessionRetryGate.onResumed()?.let { key ->
+                        retryAfterSessionSave(key)
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            container.sessionUpdateBus.events.collect { event ->
+                if (sessionRetryGate.onSessionUpdated(event.sessionKey)) {
+                    retryAfterSessionSave(event.sessionKey)
                 }
             }
         }
@@ -700,7 +1082,13 @@ class BookDetailViewModel(
         // v1.0.6 (W4.3): the same resolution decides the site-
         // check door — a browser-view source whose health verdict
         // is NEEDS_SETUP almost always wants its human check.
-        viewModelScope.launch {
+        // v1.5.7 (scope F smoothness): this resolution reads the
+        // extension's definition FILE (extensionStore.readText
+        // below) — file IO that used to run on the Main
+        // dispatcher this launch inherits, on the book-open
+        // path. The whole block now runs on the IO dispatcher
+        // (the DAO/flow reads inside are dispatcher-agnostic).
+        viewModelScope.launch(container.ioDispatcher) {
             val book = container.database.bookDao().getById(bookId)
                 ?: return@launch
             val extensionId = book.extensionId ?: return@launch
@@ -786,6 +1174,57 @@ class BookDetailViewModel(
             state.first { it.book != null && it.chapters.isNotEmpty() }
             runProgressLinkReconcile(growthRetried = false)
         }
+        // v1.5.7 (Finding 5, PRIMARY): the head-loss heal. A
+        // stored list whose beginning is gone (its earliest
+        // chapter number sits past chapter 1 — see
+        // ChapterListIntegrity) heals ITSELF on open: one full
+        // re-fetch through the shared seam (refreshChapters —
+        // the same fetch the page's Refresh button runs), no
+        // owner action. Attempted at most once per page open;
+        // a failed fetch leaves the stored list untouched
+        // (refresh's own contract), and the manual Refresh
+        // stays available regardless.
+        viewModelScope.launch {
+            state.first { it.book != null && it.chapters.isNotEmpty() }
+            val current = state.value
+            if (current.book?.sourceType ==
+                app.xreader.data.db.SourceType.EXTENSION &&
+                current.headMissing
+            ) {
+                healHeadOnce()
+            }
+        }
+    }
+
+    /** v1.5.7 (Finding 5): one automatic head heal per page
+     * instance — the full shared-seam refresh, which restores
+     * the complete ordered list atomically when it lands and
+     * changes no chapter rows when it fails.
+     *
+     * v1.5.37 (combined build, S7): the per-instance flag
+     * alone re-armed the heal on EVERY page entry — a heal
+     * whose refresh couldn't restore the head (a slow walk
+     * cut by the page bound, a truncated re-walk) left the
+     * list headless, so the next entry fired another full
+     * refresh: the owner's endless "Refreshing…" on entry
+     * (BIG-BOOK-REFRESH-FORENSICS Q8c). The sync seam now
+     * remembers the attempt against the head's stamp for
+     * the whole session: the heal fires at most once per
+     * book per session UNLESS a heal changed the head (the
+     * stamp then lags the list and a later entry may try
+     * again). The manual Refresh is never gated. */
+    private var headHealAttempted = false
+
+    private fun healHeadOnce() {
+        if (headHealAttempted) return
+        headHealAttempted = true
+        val stamp = container.sourceBookSync
+            .headStampOf(state.value.chapters)
+        if (container.sourceBookSync.headHealSpent(bookId, stamp)) {
+            return
+        }
+        container.sourceBookSync.noteHeadHealAttempt(bookId, stamp)
+        refreshChapters()
     }
 
     /** Cycle 1 (F3): one reconcile pass against the link
@@ -905,19 +1344,105 @@ class BookDetailViewModel(
         }
     }
 
+    /** v1.5.5 (§3): this surface's OWN post-save retry — the
+     * chapter reload, re-issued for THIS book's source only.
+     * The durable operation (when one was registered for the
+     * key) is finished as a record; it no longer decides
+     * whether the retry happens. */
+    private suspend fun retryAfterSessionSave(key: String) {
+        val book = container.database.bookDao()
+            .getById(bookId) ?: return
+        val extId = book.extensionId ?: return
+        if (key !=
+            app.xreader.data.extension.ExtensionHttpClient
+                .sessionKeyFor(extId)
+        ) {
+            return
+        }
+        app.xreader.data.extension.DiagnosticLog.record(
+            "fenrir-unlock",
+            "[FenrirUnlock] surface=book-detail retried=true",
+            key
+        )
+        val hasOp = container.database.pendingOperationDao()
+            .getByKey(key) != null
+        refreshChapters()
+        if (hasOp) container.finishPendingOperation(key, true)
+    }
+
     /** Phase 3: for source books, re-pull details + the chapter list
-     * (new chapters appear; downloaded ones keep their content). */
+     * (new chapters appear; downloaded ones keep their content).
+     *
+     * v1.5.7 (owner-ordered 2026-11-04, re-demanded 2026-11-05):
+     * this is the book page's first-class Refresh — the visible
+     * button in the primary action row calls exactly this, and
+     * the Finding-5 automatic head heal calls it too, so the
+     * button and the heal can never disagree about what "the
+     * full list" is: both are SourceBookSync.refresh, the shared
+     * seam every novel (and manga) source flows through.
+     * The result message names the stored truth after the fetch:
+     * the chapter count, how many are new when that is knowable
+     * (the stored count grew), and the heal when a headless list
+     * got its beginning back. A failure leaves the stored list
+     * untouched — refresh writes no chapter rows on its error
+     * paths, and its zero-chapter guard keeps a stored list a
+     * walled fetch came back empty against. */
     fun refreshChapters() {
         viewModelScope.launch {
             val book = container.database.bookDao().getById(bookId) ?: return@launch
             if (book.sourceType != app.xreader.data.db.SourceType.EXTENSION) return@launch
+            val before = container.database.chapterDao().forBook(bookId)
+            val headWasMissing = ChapterListIntegrity.headMissing(before)
             storyLocal.value = storyLocal.value.copy(
                 chaptersLoading = true, chaptersError = null
             )
-            when (val result = container.sourceBookSync.refresh(book)) {
+            // v1.5.39 (item 1): containment — a storage throw
+            // out of the refresh lands in the SAME failed-
+            // refresh state as an Err (noteChaptersError plus
+            // the plain-words message), never as an uncaught
+            // crash on the main dispatcher: the convicted
+            // v1.5.38 crash reached the user through exactly
+            // this unguarded launch (V1538-CRASH-FORENSICS).
+            // SourceBookSync.refresh converts the same throws
+            // itself; this is the second net, at the caller
+            // the forensics named.
+            val result = try {
+                container.sourceBookSync.refresh(book)
+            } catch (
+                e: android.database.sqlite.SQLiteConstraintException
+            ) {
+                app.xreader.core.error.AppResult.Err(
+                    app.xreader.core.error.AppError.StorageFailed(
+                        "saving the chapter list"
+                    )
+                )
+            } catch (e: java.sql.SQLException) {
+                app.xreader.core.error.AppResult.Err(
+                    app.xreader.core.error.AppError.StorageFailed(
+                        "saving the chapter list"
+                    )
+                )
+            }
+            when (result) {
                 is app.xreader.core.error.AppResult.Ok -> {
                     storyLocal.value = storyLocal.value.copy(chaptersLoading = false)
-                    _messages.tryEmit("Chapter list refreshed — ${result.value.totalChapters} chapters")
+                    val after = container.database.chapterDao().forBook(bookId)
+                    val newCount = (after.size - before.size).coerceAtLeast(0)
+                    val healed = headWasMissing &&
+                        !ChapterListIntegrity.headMissing(after) &&
+                        after.isNotEmpty()
+                    _messages.tryEmit(
+                        when {
+                            healed ->
+                                "Chapter list refreshed — ${after.size} chapters · " +
+                                    "the beginning is back"
+                            newCount > 0 ->
+                                "Chapter list refreshed — ${after.size} chapters " +
+                                    "($newCount new)"
+                            else ->
+                                "Chapter list refreshed — ${after.size} chapters"
+                        }
+                    )
                 }
                 is app.xreader.core.error.AppResult.Err -> {
                     noteChaptersError(result.error)
@@ -1008,13 +1533,18 @@ class BookDetailViewModel(
     private suspend fun recheckNote(): String {
         val book = container.database.bookDao().getById(bookId)
             ?: return "The source couldn't be checked — the book is gone."
-        val extensionId = book.extensionId
-            ?: return "This book has no source to check."
-        val (sourceId, _) = app.xreader.data.extension.SourceBookIds
-            .decode(book.remoteId)
-            ?: return "This book's source couldn't be identified for a check."
+        if (book.extensionId == null) {
+            return "This book has no source to check."
+        }
+        if (app.xreader.data.extension.SourceBookIds
+                .decode(book.remoteId) == null
+        ) {
+            return "This book's source couldn't be identified for a check."
+        }
+        // v1.5.10 (B5): book-aware resolution (stable
+        // identity + heal on a row-id miss).
         val handle = when (
-            val found = container.extensionService.source(extensionId, sourceId)
+            val found = container.extensionService.resolveBookSource(book)
         ) {
             is app.xreader.core.error.AppResult.Ok -> found.value
             is app.xreader.core.error.AppResult.Err ->
@@ -1036,6 +1566,16 @@ class BookDetailViewModel(
     fun setReadingStatus(status: app.xreader.data.library.ReadingStatus) {
         viewModelScope.launch {
             container.bookMetaPrefs.update(bookId) { it.copy(status = status) }
+            // v1.5.3 (item 30): setting a status is a membership
+            // act (donor parity — QuickNovel bookmarking shelves
+            // the book): a non-NONE status promotes a preview row
+            // exactly like favouriting does (item 24), or the
+            // status shelves could never show it (every Library
+            // surface reads observeShelf(), inLibrary = 1).
+            // Setting NONE never demotes membership.
+            if (status != app.xreader.data.library.ReadingStatus.NONE) {
+                container.sourceBookSync.markInLibrary(bookId)
+            }
         }
     }
 
@@ -1092,10 +1632,16 @@ class BookDetailViewModel(
     }
 
     /** Size of this book's app-side files (downloaded chapters +
-     * parsed content), for the confirmations ("Free 212 MB"). */
+     * parsed content), for the confirmations ("Free 212 MB").
+     * v1.5.7 (scope F smoothness): the raw recursive disk walk
+     * runs on the IO dispatcher — its callers sit on Main (the
+     * cleanup dialogs), and walking a several-thousand-chapter
+     * book's tree there is a book-open freeze class. */
     suspend fun downloadedSizeBytes(): Long {
         val book = container.database.bookDao().getById(bookId) ?: return 0L
-        return container.bookStorage.bookFilesSizeBytes(book)
+        return kotlinx.coroutines.withContext(container.ioDispatcher) {
+            container.bookStorage.bookFilesSizeBytes(book)
+        }
     }
 
     /** E: free the space, keep the book + progress + bookmarks. */
@@ -1124,9 +1670,74 @@ class BookDetailViewModel(
             }
             val book = container.database.bookDao().getById(bookId)
             if (book != null) {
-                runCatching { container.bookStorage.deleteDownloadedContent(book) }
+                // v1.5.7 (scope F smoothness): the recursive
+                // file deletion leaves the Main dispatcher —
+                // deleting a large book's downloads here used
+                // to freeze the page for the whole walk.
+                kotlinx.coroutines.withContext(container.ioDispatcher) {
+                    runCatching {
+                        container.bookStorage.deleteDownloadedContent(book)
+                    }
+                }
             }
             _messages.tryEmit("Downloaded chapters deleted — the book and your place in it are kept.")
+        }
+    }
+
+    /** v1.5.6 (§3.7): the local-book three-option delete. Modes
+     * map 1:1 onto [app.xreader.data.library.LocalBookDeletion];
+     * PERMANENT needs a [android.content.Context] for the device
+     * file's document delete. */
+    fun removeLocalBook(
+        mode: app.xreader.data.library.LocalBookDeleteMode,
+        context: android.content.Context?,
+        onDone: () -> Unit
+    ) {
+        viewModelScope.launch {
+            val book = container.database.bookDao().getById(bookId) ?: run {
+                onDone()
+                return@launch
+            }
+            when (val result = container.localBookDeletion.deleteLocalBook(book, mode, context)) {
+                is AppResult.Ok -> {
+                    _messages.tryEmit("Removed “${book.title}”.")
+                    onDone()
+                }
+                is AppResult.Err -> _messages.tryEmit(
+                    "That delete didn't finish — the book is still here."
+                )
+            }
+        }
+    }
+
+    /**
+     * v1.5.6 (§3.4(b)): the legacy lane's re-add — stage the
+     * re-picked original and attach it to THIS book row through
+     * the importer's seam, so the book starts reading in place,
+     * exactly as published. Place and bookmarks are the book's
+     * own rows and stay untouched.
+     */
+    fun reAddPicked(
+        displayName: String,
+        documentUri: String,
+        openStream: () -> java.io.InputStream?
+    ) {
+        viewModelScope.launch {
+            val staged = container.bookImporter.stage(
+                displayName, documentUri = documentUri, openStream = openStream
+            )
+            val result = when (staged) {
+                is AppResult.Err -> staged
+                is AppResult.Ok -> container.bookImporter.registerReAdd(bookId, staged.value)
+            }
+            when (result) {
+                is AppResult.Ok -> _messages.tryEmit(
+                    "The original file is attached — this book now reads exactly as published."
+                )
+                is AppResult.Err -> _messages.tryEmit(
+                    "That file couldn't be attached to this book."
+                )
+            }
         }
     }
 
@@ -1144,11 +1755,11 @@ class BookDetailViewModel(
                 onDone()
                 return@launch
             }
-            runCatching { container.downloadController.cancelAllForBook(bookId) }
-            container.database.bookDao().delete(book)
-            container.bookMetaPrefs.set(bookId, app.xreader.data.library.BookMeta())
+            // v1.5.2 (§15): soft flip vs full deletion (§15.1/§15.6).
             if (deleteFiles) {
-                runCatching { container.bookStorage.deleteBookFiles(book) }
+                container.deleteBookFully(book)
+            } else {
+                container.removeFromLibrarySoft(book)
             }
             _messages.tryEmit("Removed “${book.title}” from your library.")
             onDone()
@@ -1160,7 +1771,17 @@ class BookDetailViewModel(
     // ─────────────────────────────────────────────────────────────
 
     fun setFavourite(favourite: Boolean) {
-        viewModelScope.launch { container.bookMetaPrefs.setFavourite(bookId, favourite) }
+        viewModelScope.launch {
+            container.bookMetaPrefs.setFavourite(bookId, favourite)
+            // v1.5.3 (item 24, finding #9 strand A4): favouriting
+            // is a membership act — a favourited PREVIEW row must
+            // surface on the Favourites shelf, and every Library
+            // surface reads observeShelf() (inLibrary = 1), so
+            // the mark alone could never appear (Favourites · 0
+            // despite two marked books). Mirrors the download
+            // promotion. Unfavouriting never demotes membership.
+            if (favourite) container.sourceBookSync.markInLibrary(bookId)
+        }
     }
 
     /** R22: add a tag by the name the user typed (or a seed name).
@@ -1407,7 +2028,12 @@ class BookDetailViewModel(
                             )
                         )
                     val downloaded = inLibrary?.let {
-                        container.database.chapterDao().readyCount(it.id)
+                        // v1.5.2 fix (Track B, §12.9): the ONE
+                        // predicate (USER + READY) — readyCount()
+                        // counted cache bodies as downloads on this
+                        // book-page surface, disagreeing with every
+                        // other surface by construction.
+                        container.database.chapterDao().downloadedCount(it.id)
                     } ?: 0
                     found += OtherSourceCandidate(
                         extensionId = handle.extension.id,
@@ -1607,6 +2233,28 @@ class BookDetailViewModel(
             container.database.bookDao().update(
                 duplicate.copy(mergedIntoId = bookId)
             )
+            // v1.5.2 fix (FIX-7, §13.2): the favourite UNION transfer
+            // in production — the survivor gains the natural key if
+            // EITHER row had it (FavouriteKeys.mergedKeys, wired).
+            runCatching {
+                val survivorPkg = container.database.bookDao().getById(bookId)
+                    ?.extensionId?.let {
+                        container.database.installedExtensionDao().getById(it)?.packageId
+                    }
+                val survivorBook = container.database.bookDao().getById(bookId)
+                if (survivorBook != null) {
+                    val survivorKey = app.xreader.data.sync.SyncKeys.bookKey(
+                        survivorBook, survivorPkg
+                    )
+                    val dupPkg = duplicate.extensionId?.let {
+                        container.database.installedExtensionDao().getById(it)?.packageId
+                    }
+                    val dupKey = app.xreader.data.sync.SyncKeys.bookKey(duplicate, dupPkg)
+                    container.bookMetaPrefs.transferFavouriteOnMerge(
+                        survivorKey, dupKey
+                    )
+                }
+            }
             _messages.tryEmit(
                 "Merged “${duplicate.title}” into this book. " +
                     "Unmerge any time — nothing was deleted."

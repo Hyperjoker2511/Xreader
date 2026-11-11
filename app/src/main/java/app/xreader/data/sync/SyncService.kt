@@ -71,6 +71,9 @@ class SyncService(
     private val applyBookStatus: suspend (Long, String) -> Unit = { _, _ -> },
     /** Phase 6: the opt-in book-file channel. Null (tests, or a
      * build without it) = metadata-only sync, the Phase 5 shape. */
+    /** v1.5.2 (§15.6): full-book-deletion tombstones by natural key. */
+    private val deletedBookKeysProvider: suspend () -> List<DeletedBookKey> =
+        { emptyList() },
     private val fileSync: BookFileSync? = null,
     private val fileSyncEnabled: suspend () -> Boolean = { false },
     /** v1.0.2 (R02): organisation bridges — gather receives the
@@ -173,7 +176,13 @@ class SyncService(
                 )
             }
             highlightDao.forBook(book.id).forEach { highlight ->
+                // v1.5.6 (audit §12.2): a local book's highlights
+                // are locator-keyed (chapterId = 0, no rows) — the
+                // index comes from the locator itself, never a
+                // silent drop.
                 val index = indexByChapterId[highlight.chapterId]
+                    ?: app.xreader.data.library.ReadingMemoryCodec
+                        .locatorIndex(highlight.locatorJson)
                     ?: return@forEach
                 highlights += HighlightRecord(
                     bookKey = key,
@@ -247,7 +256,8 @@ class SyncService(
             bookTags = organisation.bookTags,
             followedTagSlugs = organisation.followedTagSlugs,
             favouriteBookKeys = organisation.favouriteBookKeys,
-            themeSync = organisation.themeSync
+            themeSync = organisation.themeSync,
+            deletedBookKeys = deletedBookKeysProvider()
         )
     }
 
@@ -260,6 +270,12 @@ class SyncService(
      * record applies only when it is strictly further along than
      * what's stored (an identical record is a no-op, so re-syncs
      * stay quiet). */
+    /** v1.5.6 (§3): a local book that reads in place from its own
+     * file (no chapter rows by construction). */
+    private fun isInPlaceLocal(book: Book): Boolean =
+        book.sourceType == app.xreader.data.db.SourceType.LOCAL_FILE &&
+            (book.documentUri != null || book.filePath != null)
+
     private fun strictlyFurther(
         existing: ReadingProgress,
         record: ProgressRecord
@@ -314,7 +330,13 @@ class SyncService(
         var progressApplied = 0
         for (record in merged.progress) {
             val book = byKey[record.bookKey] ?: continue
-            val chapter = chapterDao.getByIndex(book.id, record.chapterIndex) ?: continue
+            val chapter = chapterDao.getByIndex(book.id, record.chapterIndex)
+            // v1.5.6 (audit §12.2 — the silent-drop trap): an
+            // in-place local book has NO chapter rows, so the row
+            // lookup always misses. Apply the record in locator
+            // form (legacyChapter) instead of dropping it; the
+            // local reader resolves it by index/fraction.
+            if (chapter == null && !isInPlaceLocal(book)) continue
             val existing = progressDao.getForBook(book.id)
             if (existing == null || record.updatedAt > existing.updatedAt ||
                 (record.updatedAt == existing.updatedAt &&
@@ -323,13 +345,20 @@ class SyncService(
                 progressDao.upsert(
                     ReadingProgress(
                         bookId = book.id,
-                        chapterId = chapter.id,
+                        chapterId = chapter?.id ?: 0L,
                         chapterIndex = record.chapterIndex,
                         charOffset = record.charOffset,
                         fraction = record.fraction,
                         scrollFraction = record.scrollFraction,
                         updatedAt = record.updatedAt,
-                        deviceId = record.deviceId
+                        deviceId = record.deviceId,
+                        locatorJson = if (chapter == null) {
+                            existing?.locatorJson
+                                ?: app.xreader.data.library.ReadingMemoryCodec
+                                    .legacyLocator(record.chapterIndex, record.charOffset)
+                        } else {
+                            existing?.locatorJson
+                        }
                     )
                 )
                 progressApplied++
@@ -339,7 +368,10 @@ class SyncService(
         var bookmarksApplied = 0
         for (record in merged.bookmarks) {
             val book = byKey[record.bookKey] ?: continue
-            val chapter = chapterDao.getByIndex(book.id, record.chapterIndex) ?: continue
+            val chapter = chapterDao.getByIndex(book.id, record.chapterIndex)
+            // v1.5.6 (audit §12.2): locator-form apply for
+            // in-place local books — never a silent drop.
+            if (chapter == null && !isInPlaceLocal(book)) continue
             val existing = bookmarkDao.forBook(book.id).firstOrNull {
                 it.chapterIndex == record.chapterIndex &&
                     it.charOffset == record.charOffset
@@ -348,12 +380,18 @@ class SyncService(
                 bookmarkDao.insert(
                     Bookmark(
                         bookId = book.id,
-                        chapterId = chapter.id,
+                        chapterId = chapter?.id ?: 0L,
                         chapterIndex = record.chapterIndex,
                         charOffset = record.charOffset,
                         label = record.label,
                         createdAt = record.createdAt,
-                        updatedAt = record.updatedAt
+                        updatedAt = record.updatedAt,
+                        locatorJson = if (chapter == null) {
+                            app.xreader.data.library.ReadingMemoryCodec
+                                .legacyLocator(record.chapterIndex, record.charOffset)
+                        } else {
+                            null
+                        }
                     )
                 )
                 bookmarksApplied++
@@ -361,7 +399,7 @@ class SyncService(
                 bookmarkDao.delete(existing)
                 bookmarkDao.insert(
                     existing.copy(
-                        chapterId = chapter.id,
+                        chapterId = chapter?.id ?: existing.chapterId,
                         label = record.label,
                         updatedAt = record.updatedAt
                     )
@@ -373,9 +411,12 @@ class SyncService(
         var highlightsApplied = 0
         for (record in merged.highlights) {
             val book = byKey[record.bookKey] ?: continue
-            val chapter = chapterDao.getByIndex(book.id, record.chapterIndex) ?: continue
+            val chapter = chapterDao.getByIndex(book.id, record.chapterIndex)
+            // v1.5.6 (audit §12.2): locator-form apply for
+            // in-place local books — never a silent drop.
+            if (chapter == null && !isInPlaceLocal(book)) continue
             val existing = highlightDao.forBook(book.id).firstOrNull {
-                it.chapterId == chapter.id &&
+                (if (chapter != null) it.chapterId == chapter.id else it.chapterId == 0L) &&
                     it.startOffset == record.startOffset &&
                     it.endOffset == record.endOffset
             }
@@ -383,14 +424,24 @@ class SyncService(
                 highlightDao.insert(
                     Highlight(
                         bookId = book.id,
-                        chapterId = chapter.id,
+                        chapterId = chapter?.id ?: 0L,
                         startOffset = record.startOffset,
                         endOffset = record.endOffset,
                         quotedText = record.quotedText,
                         color = record.color,
                         note = record.note,
                         createdAt = record.createdAt,
-                        updatedAt = record.updatedAt
+                        updatedAt = record.updatedAt,
+                        locatorJson = if (chapter == null) {
+                            app.xreader.data.library.ReadingMemoryCodec
+                                .legacyHighlightLocator(
+                                    record.chapterIndex,
+                                    record.startOffset,
+                                    record.endOffset
+                                )
+                        } else {
+                            null
+                        }
                     )
                 )
                 highlightsApplied++
