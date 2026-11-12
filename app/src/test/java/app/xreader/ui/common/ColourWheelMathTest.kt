@@ -33,19 +33,19 @@ class ColourWheelMathTest {
         for (shift in listOf(16, 8, 0)) {
             val a = ((argb shr shift) and 0xFF)
             val b = ((back shr shift) and 0xFF)
-            assertEquals("channel at shift $shift", a, b, 1L)
+            assertEquals("channel at shift $shift", a.toDouble(), b.toDouble(), 1.0)
         }
     }
 
     @Test
     fun `known hsv landmarks`() {
         val red = ColourWheelMath.argbToHsv(0xFFFF0000L)
-        assertEquals(0f, red[0], 0.01f)
-        assertEquals(1f, red[1], 0.01f)
-        assertEquals(1f, red[2], 0.01f)
+        assertEquals(0.0, red[0].toDouble(), 0.01)
+        assertEquals(1.0, red[1].toDouble(), 0.01)
+        assertEquals(1.0, red[2].toDouble(), 0.01)
         val grey = ColourWheelMath.argbToHsv(0xFF808080L)
-        assertEquals(0f, grey[1], 0.01f)
-        assertEquals(0.5f, grey[2], 0.01f)
+        assertEquals(0.0, grey[1].toDouble(), 0.01)
+        assertEquals(0.5, grey[2].toDouble(), 0.01)
     }
 
     @Test
