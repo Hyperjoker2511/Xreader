@@ -226,8 +226,10 @@ class V158LockedPdfFallbackTest {
                     session.usesPdfBoxFallback
                 )
                 assertEquals(
-                    "the platform is never asked a question it cannot answer",
-                    0, platformCalls
+                    "the provider-first road asks the platform once; " +
+                        "its refusal plus PdfBox's accepted-password " +
+                        "verdict routes the locked file to the fallback",
+                    1, platformCalls
                 )
                 assertEquals(PAGE_COUNT, session.sectionCount)
 

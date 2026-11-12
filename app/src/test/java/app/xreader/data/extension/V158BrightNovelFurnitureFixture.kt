@@ -5,6 +5,7 @@ import app.xreader.data.FakeTransport
 import app.xreader.extensionapi.SourceBook
 import app.xreader.extensionapi.SourceException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
@@ -27,17 +28,17 @@ import org.junit.rules.TemporaryFolder
  * carrying ENDPOINT provenance.
  *
  * RE-DERIVED (v1.5.12, Front 1 S3): the shipped definition
- * now declares the suspicious-empty floor (totalCount = 1),
- * so against the SHIPPED config an endpoint [] correctly
- * raises the suspicious-empty SourceException
- * (endpoint-answered-empty-against-a-stated-total) instead
- * of returning Ok(empty). The fixture's core property is
- * unchanged and still asserted: an empty endpoint NEVER
+ * now declares the floor (totalCount = 1), so against the
+ * SHIPPED config an endpoint [] correctly raises a
+ * SourceException instead of returning Ok(empty). Since
+ * v1.5.37, a hint sourced only from that spec floor carries
+ * the no-chapters-yet flavour. The fixture's core property
+ * is unchanged and still asserted: an empty endpoint NEVER
  * yields substituted furniture rows — the shipped-config
- * case now surfaces the honest-unproven failure rather
- * than any rows at all, and the hint-less case below keeps
- * the original honest-empty + ENDPOINT-provenance shape
- * (verified in DeclarativeSource.fetchJsonEndpointPageStrict:
+ * case now surfaces the honest no-chapters-yet failure
+ * rather than any rows at all, and the hint-less case below
+ * keeps the original honest-empty + ENDPOINT-provenance
+ * shape (verified in DeclarativeSource.fetchJsonEndpointPageStrict:
  * hint 0 returns the valid empty page).
  */
 class V158BrightNovelFurnitureFixture {
@@ -82,7 +83,7 @@ class V158BrightNovelFurnitureFixture {
     }
 
     @Test
-    fun `valid empty endpoint answer against the shipped floor yields suspicious-empty, never furniture`() {
+    fun `valid empty endpoint answer against the shipped floor yields no-chapters-yet, never furniture`() {
         val config = BundledSingles.brightNovel(
             "bundled-brightnovel", "BrightNovel"
         )
@@ -96,7 +97,7 @@ class V158BrightNovelFurnitureFixture {
         // The core property: the call must NOT return
         // furniture rows. Under the shipped floor it does
         // not return rows at all — it raises the honest
-        // suspicious-empty failure.
+        // no-chapters-yet failure.
         try {
             val rows = source.chapters(
                 SourceBook(id = bookUrl, title = "The Dullard")
@@ -107,7 +108,13 @@ class V158BrightNovelFurnitureFixture {
             )
         } catch (e: SourceException) {
             assertTrue(
-                "the suspicious-empty tier must be the one that fires; got: ${e.message}",
+                "the floor-only hint must fire the no-chapters-yet tier; got: ${e.message}",
+                e.message.orEmpty().contains(
+                    DeclarativeSource.ENDPOINT_NO_CHAPTERS_YET_MARKER
+                )
+            )
+            assertFalse(
+                "the floor alone must not be treated as a site-declared total",
                 e.message.orEmpty().contains(
                     DeclarativeSource.ENDPOINT_SUSPICIOUS_EMPTY_MARKER
                 )

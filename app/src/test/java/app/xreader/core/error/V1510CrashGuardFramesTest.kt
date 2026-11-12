@@ -9,9 +9,12 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 /**
- * v1.5.10 (A1, Finding 7's D1 instrument): CrashGuard notes record
- * the throwable's top 3 stack frames as className.methodName ONLY —
- * no message text (privacy), no file names, no line numbers.
+ * v1.5.10 (A1, Finding 7's D1 instrument), re-derived for the
+ * v1.5.21 note shape: CrashGuard notes render the whole cause
+ * chain — each link's bounded message and its top 5 stack
+ * frames as className.methodName ONLY (no file names or line
+ * numbers). The separate [CrashGuard.topFrames] helper keeps
+ * its original top-3 shape for bounded log details.
  */
 class V1510CrashGuardFramesTest {
 
@@ -32,7 +35,7 @@ class V1510CrashGuardFramesTest {
     }
 
     @Test
-    fun `crash note carries exactly the top 3 frames as class plus method`() {
+    fun `crash note carries the top 5 chain frames as class plus method`() {
         val note = CrashGuard.formatNote(0L, "worker-1", synthetic())
         val framesSection = note.substringAfter("Frames:\n")
         val frameLines = framesSection.lines().filter { it.isNotBlank() }
@@ -40,18 +43,20 @@ class V1510CrashGuardFramesTest {
             listOf(
                 "com.example.alpha.Foo.bar",
                 "com.example.beta.Baz.qux",
-                "com.example.gamma.Quux.zap"
+                "com.example.gamma.Quux.zap",
+                "com.example.delta.Extra.more"
             ),
             frameLines
         )
-        // The 4th frame is NOT recorded.
-        assertFalse(note.contains("com.example.delta.Extra"))
+        // All four synthetic frames fit under the five-frame
+        // chain cap and are recorded.
+        assertTrue(note.contains("com.example.delta.Extra"))
     }
 
     @Test
-    fun `crash note contains no message text and no line numbers or file names`() {
+    fun `crash note contains the bounded message and no line numbers or file names`() {
         val note = CrashGuard.formatNote(0L, "worker-1", synthetic())
-        assertFalse(note.contains("secret-npe-message-xyz"))
+        assertTrue(note.contains("Message: secret-npe-message-xyz"))
         assertFalse(note.contains("31337"))
         assertFalse(note.contains("42424"))
         assertFalse(note.contains("55555"))
@@ -87,14 +92,14 @@ class V1510CrashGuardFramesTest {
     }
 
     @Test
-    fun `contained note carries the marker, the site and the frames - no message`() {
+    fun `contained note carries the marker, the site, the frames and bounded message`() {
         val note = CrashGuard.formatContainedNote(
             0L, "worker-2", "appScope", synthetic()
         )
         assertTrue(note.contains(CrashGuard.CONTAINED_MARKER))
         assertTrue(note.contains("Site: appScope"))
         assertTrue(note.contains("com.example.alpha.Foo.bar"))
-        assertFalse(note.contains("secret-npe-message-xyz"))
+        assertTrue(note.contains("Message: secret-npe-message-xyz"))
         assertFalse(note.contains("31337"))
     }
 

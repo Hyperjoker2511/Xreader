@@ -5,6 +5,7 @@ import app.xreader.data.FakeTransport
 import app.xreader.extensionapi.SourceBook
 import app.xreader.extensionapi.SourceException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
@@ -25,7 +26,9 @@ import org.junit.rules.TemporaryFolder
  *    RecordShapeMiss tier;
  *  - a literal [] with no declared total is an honest
  *    Ok(0)-complete;
- *  - a literal [] against a declared total is the
+ *  - a literal [] whose only hint is the spec's declared
+ *    total is the no-chapters-yet tier, while a literal []
+ *    against a total stated by the site itself is the
  *    suspicious-empty tier;
  *  - a valid 2-page walk whose page 2 fails ERRORS (never a
  *    truncate-commit);
@@ -53,7 +56,8 @@ class V155EndpointWalkTierTest {
 
     private fun config(
         singleShot: Boolean = false,
-        totalCount: Int? = null
+        totalCount: Int? = null,
+        totalCountPattern: String? = null
     ): DeclarativeConfig {
         val list = ListSpec(
             url = "$base/popular",
@@ -79,6 +83,7 @@ class V155EndpointWalkTierTest {
                     jsonLinkField = "slug",
                     jsonLinkTemplate = "$base/book/walk-tale/{value}",
                     totalCount = totalCount,
+                    totalCountPattern = totalCountPattern,
                     pagination = ChapterListPagination(
                         urlTemplate = if (singleShot) {
                             "$base/api/books/{bookSlug}/chapters?loaded=0"
@@ -97,11 +102,12 @@ class V155EndpointWalkTierTest {
 
     private fun source(
         config: DeclarativeConfig,
-        pages: Map<String, Pair<Int, String>>
+        pages: Map<String, Pair<Int, String>>,
+        pageHtml: String = bookPage
     ): DeclarativeSource {
         val transport = FakeTransport { request ->
             when (request.url) {
-                bookUrl -> FakeTransport.ok(bookPage)
+                bookUrl -> FakeTransport.ok(pageHtml)
                 else -> {
                     val scripted = pages[request.url]
                     if (scripted == null) {
@@ -134,9 +140,10 @@ class V155EndpointWalkTierTest {
     private fun expectWalkError(
         config: DeclarativeConfig,
         pages: Map<String, Pair<Int, String>>,
-        minCount: Int = 10
+        minCount: Int = 10,
+        pageHtml: String = bookPage
     ): SourceException {
-        val source = source(config, pages)
+        val source = source(config, pages, pageHtml)
         try {
             source.chaptersFirst(
                 SourceBook(id = bookUrl, title = "Walk Tale"), minCount
@@ -207,7 +214,7 @@ class V155EndpointWalkTierTest {
     }
 
     @Test
-    fun `empty page against a declared total is suspicious`() {
+    fun `empty page against only a spec-declared total has no chapters yet`() {
         val error = expectWalkError(
             config(totalCount = 12),
             mapOf(endpoint(1) to (200 to "{\"chapters\":[]}"))
@@ -215,7 +222,39 @@ class V155EndpointWalkTierTest {
         assertTrue(
             error.message!!,
             error.message!!.contains(
+                DeclarativeSource.ENDPOINT_NO_CHAPTERS_YET_MARKER
+            )
+        )
+        assertFalse(
+            error.message!!,
+            error.message!!.contains(
                 DeclarativeSource.ENDPOINT_SUSPICIOUS_EMPTY_MARKER
+            )
+        )
+    }
+
+    @Test
+    fun `empty page against a book-page stated total is suspicious`() {
+        val statedPage = """
+            <html><head><title>Walk Tale</title></head><body>
+            <h1>Walk Tale</h1><p>12 chapters</p>
+            </body></html>
+        """.trimIndent()
+        val error = expectWalkError(
+            config(totalCountPattern = "([\\d,]+)\\s+chapters"),
+            mapOf(endpoint(1) to (200 to "{\"chapters\":[]}")),
+            pageHtml = statedPage
+        )
+        assertTrue(
+            error.message!!,
+            error.message!!.contains(
+                DeclarativeSource.ENDPOINT_SUSPICIOUS_EMPTY_MARKER
+            )
+        )
+        assertFalse(
+            error.message!!,
+            error.message!!.contains(
+                DeclarativeSource.ENDPOINT_NO_CHAPTERS_YET_MARKER
             )
         )
     }

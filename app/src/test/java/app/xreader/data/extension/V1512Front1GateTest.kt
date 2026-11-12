@@ -45,7 +45,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *    full-render budget and remains available after a mint
  *    — see the second-refusal test below.
  *  - S3: BrightNovel's endpoint [] against its declared
- *    floor fires the suspicious-empty tier (never a
+ *    floor fires the no-chapters-yet tier (never a
  *    proven-complete 0), and a non-empty endpoint still
  *    parses normally.
  */
@@ -750,12 +750,12 @@ class V1512Front1GateTest {
         )
         assertEquals(
             "the definitions epoch must have moved so installed rows receive the fix",
-            3, BundledDefaults.BUNDLED_DEFINITIONS_EPOCH
+            6, BundledDefaults.BUNDLED_DEFINITIONS_EPOCH
         )
     }
 
     @Test
-    fun `S3 endpoint empty against the floor fires suspicious-empty instead of proven-complete zero`() {
+    fun `S3 endpoint empty against the floor fires no-chapters-yet instead of proven-complete zero`() {
         val source = brightNovelSource("{\"chapters\":[]}")
         val failure = runCatching {
             source.detailsAndChapters(brightBook)
@@ -765,8 +765,13 @@ class V1512Front1GateTest {
             failure is SourceException
         )
         assertTrue(
-            "the suspicious-empty tier must be the one that fires; got: ${failure?.message}",
+            "the floor-only hint must fire the no-chapters-yet tier; got: ${failure?.message}",
             failure!!.message.orEmpty()
+                .contains(DeclarativeSource.ENDPOINT_NO_CHAPTERS_YET_MARKER)
+        )
+        assertFalse(
+            "the floor alone must not be treated as a site-declared total",
+            failure.message.orEmpty()
                 .contains(DeclarativeSource.ENDPOINT_SUSPICIOUS_EMPTY_MARKER)
         )
     }

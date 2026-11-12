@@ -22,18 +22,19 @@ import org.junit.Test
  *
  * RE-DERIVED (v1.5.12, Front 1 S3): the shipped definition
  * NOW deliberately declares totalCount = 1 — not a wire
- * hint (nothing on the wire states it) but the
- * suspicious-empty FLOOR. Conviction: the endpoint's
- * literal [] was stamped proven-complete with 0 chapters
- * (the v1.5.11 proof failure), and with no hint of any
- * kind the strict road's suspicious-empty tier could
- * never fire for this config. A published series this
- * endpoint serves always has at least one chapter, so
- * the floor's only live effect is that an endpoint []
- * now fires suspicious-empty instead of stamping 0.
- * BUNDLED_DEFINITIONS_EPOCH moved to 3 with it. The two
- * tests below still pin the original D3 evidence (no
- * recorded shape states a total for a wire hint).
+ * hint (nothing on the wire states it) but the floor that
+ * keeps an endpoint [] from being stamped proven-complete.
+ * Conviction: the endpoint's literal [] was stamped
+ * proven-complete with 0 chapters (the v1.5.11 proof
+ * failure), and with no hint of any kind the strict road
+ * had no stated expectation to check it against. Since
+ * v1.5.37, a hint whose only source is this spec floor
+ * fires the no-chapters-yet flavour rather than
+ * suspicious-empty. BUNDLED_DEFINITIONS_EPOCH moved to 3
+ * with the floor and has since moved to 6 with later
+ * bundled-definition changes. The two tests below still
+ * pin the original D3 evidence (no recorded shape states
+ * a total for a wire hint).
  */
 class V158BrightNovelHintTest {
 
@@ -43,7 +44,7 @@ class V158BrightNovelHintTest {
         }.readBytes().toString(Charsets.UTF_8)
 
     @Test
-    fun `shipped brightnovel declares no wire total hint, only the v1_5_12 suspicious-empty floor`() {
+    fun `shipped brightnovel declares no wire total hint, only the v1_5_12 floor`() {
         val chapters = BundledSingles.brightNovel(
             "bundled-brightnovel", "BrightNovel"
         ).details.chapters
@@ -56,12 +57,12 @@ class V158BrightNovelHintTest {
             chapters.totalCountPattern
         )
         assertEquals(
-            "the v1.5.12 suspicious-empty floor is declared (see class doc)",
+            "the v1.5.12 floor is declared (see class doc)",
             1, chapters.totalCount ?: 0
         )
         assertEquals(
             "the definitions epoch must have moved so installed rows receive the floor",
-            3, BundledDefaults.BUNDLED_DEFINITIONS_EPOCH
+            6, BundledDefaults.BUNDLED_DEFINITIONS_EPOCH
         )
     }
 

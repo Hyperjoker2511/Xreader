@@ -160,10 +160,25 @@ class V1512PdfZoomLatchTest {
         assertTrue(reader.contains("pdfPagerUserScrollEnabled("))
         assertFalse(reader.contains("userScrollEnabled = !activeZoomed"))
         assertFalse(reader.contains("resetActiveZoom === reset"))
-        // P3: the transform detector is gated on actual zoom.
-        assertTrue(
+        // P3: the transform loop is always installed, but
+        // self-gates on the cell's actual zoom state. It
+        // enters transform mode when already zoomed or when
+        // a second pointer makes the gesture a pinch, and
+        // reports each claim to the pager synchronously.
+        assertFalse(
             reader.contains("pdfTransformGesturesActive(zoomState.isZoomed)")
         )
+        assertTrue(
+            reader.contains("var transformMode = zoomStateRef.value.isZoomed")
+        )
+        assertTrue(
+            reader.contains("if (!transformMode && pressed >= 2)")
+        )
+        assertEquals(
+            2,
+            reader.split("onZoomActivity(page, true, resetHandle)").size - 1
+        )
+        assertTrue(reader.contains("if (transformMode) {"))
         // P1: the paged cell keys its render effect on the
         // session's published pager state.
         assertTrue(

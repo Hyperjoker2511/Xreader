@@ -54,10 +54,12 @@ class ErrorTextTest {
     }
 
     @Test
-    fun `crash note carries time thread and class only`() {
+    fun `crash note carries time thread class and bounded message`() {
         val note = CrashGuard.formatNote(0L, "main", IllegalArgumentException("secret text"))
         assertTrue(note.contains("Xreader crash note"))
+        assertTrue(note.contains("When: "))
+        assertTrue(note.contains("Thread: main"))
         assertTrue(note.contains("java.lang.IllegalArgumentException"))
-        assertFalse(note.contains("secret text"))
+        assertTrue(note.contains("Message: secret text"))
     }
 }

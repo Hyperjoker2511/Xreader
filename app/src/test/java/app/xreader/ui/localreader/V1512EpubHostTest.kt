@@ -181,7 +181,7 @@ class V1512EpubHostTest {
         )
         assertTrue(
             "the listener effect is keyed on the navigator, not a chapter",
-            reader.contains("DisposableEffect(navigator, inputListener)")
+            reader.contains("DisposableEffect(navigator, registerInputListener)")
         )
         assertTrue(
             "the locator collector is one LaunchedEffect(navigator)",

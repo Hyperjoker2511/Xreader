@@ -124,7 +124,7 @@ class V1510ContainmentTest {
         val noteText = notesDir.listFiles()!!.single().readText()
         assertTrue(noteText.contains(CrashGuard.CONTAINED_MARKER))
         assertTrue(noteText.contains("com.example.alpha.Foo.bar"))
-        assertFalse(noteText.contains("must-never-appear"))
+        assertTrue(noteText.contains("Message: must-never-appear"))
         assertFalse(File(filesDir, CrashGuard.MARKER_FILE).exists())
 
         // DiagnosticLog artefact: one contained entry whose detail

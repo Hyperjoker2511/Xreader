@@ -9,10 +9,12 @@ import org.junit.Test
  * v1.5.8 (G5 + H8): the permanent slim status line — one
  * component, two payloads. EPUB state (chapter 3 of 49, 1.4%)
  * renders the line's fields; the PDF case renders outline
- * chapter + 14/227. The line renders in the chrome-HIDDEN
- * state: both readers compose it OUTSIDE the chrome
- * AnimatedVisibility (structural assertion — the point of the
- * item).
+ * chapter + 14/227. The EPUB line renders in the
+ * chrome-HIDDEN state, outside the chrome AnimatedVisibility.
+ * The PDF reader's current v1.5.35 structure is different by
+ * design: its status facts are the first row inside the
+ * bottom chrome capsule, present only while that chrome is
+ * open, and no permanent line sits over the page.
  */
 class V158StatusLineTest {
 
@@ -61,23 +63,50 @@ class V158StatusLineTest {
     }
 
     @Test
-    fun `both readers compose the line outside the chrome gate`() {
-        for (name in listOf("EpubBookReader.kt", "PdfDocumentReader.kt")) {
-            val source = sourceFile(name).readText()
-            // The CALL site (header comments name the component
-            // in prose; the composed call carries the lambda).
-            val lineIndex = source.indexOf("LiveReaderStatusLine {")
-            assertTrue("$name must compose the status line", lineIndex >= 0)
-            // The status line call must not sit inside a
-            // top/bottom-bar AnimatedVisibility block: in both
-            // files it appears in the Scaffold CONTENT (after
-            // the bottomBar slot closes), not in a bar slot.
-            val bottomBarEnd = source.indexOf(") { padding ->")
-            assertTrue(
-                "$name status line must be in the content, not a bar slot",
-                lineIndex > bottomBarEnd
-            )
-        }
+    fun `both readers compose the line in their current chrome structure`() {
+        val epub = sourceFile("EpubBookReader.kt").readText()
+        val epubLineIndex = epub.indexOf("LiveReaderStatusLine {")
+        assertTrue("EpubBookReader.kt must compose the status line", epubLineIndex >= 0)
+        // The EPUB status line call must not sit inside a
+        // top/bottom-bar AnimatedVisibility block: it appears
+        // in the Scaffold CONTENT (after the bottomBar slot
+        // closes), not in a bar slot.
+        val epubBottomBarEnd = epub.indexOf(") { padding ->")
+        assertTrue(
+            "EpubBookReader.kt status line must be in the content, not a bar slot",
+            epubLineIndex > epubBottomBarEnd
+        )
+
+        val pdf = sourceFile("PdfDocumentReader.kt").readText()
+        val pdfLineIndex = pdf.indexOf("LiveReaderStatusLine(bare = true) {")
+        assertTrue("PdfDocumentReader.kt must compose the bare status line", pdfLineIndex >= 0)
+        assertTrue(
+            "PdfDocumentReader.kt no longer uses the removed Scaffold content shape",
+            !pdf.contains(") { padding ->")
+        )
+        // The line is PdfBottomChrome's first status row.
+        val bottomChromeStart = pdf.indexOf("private fun PdfBottomChrome(")
+        assertTrue(
+            "PdfDocumentReader.kt status line must live inside PdfBottomChrome",
+            bottomChromeStart >= 0 && pdfLineIndex > bottomChromeStart
+        )
+        val insideMarkerIndex = pdf.indexOf(
+            "// v1.5.35 (item 4): the status facts, INSIDE"
+        )
+        assertTrue(
+            "PdfDocumentReader.kt status line must follow the v1.5.35 inside-bar marker",
+            insideMarkerIndex >= 0 && pdfLineIndex > insideMarkerIndex
+        )
+        // …and that bottom chrome is itself invoked only
+        // inside the controlsVisible AnimatedVisibility.
+        val snackbarIndex = pdf.indexOf("SnackbarHost(snackbar)")
+        val bottomGateIndex = pdf.indexOf("AnimatedVisibility(", snackbarIndex)
+        val bottomChromeCall = pdf.indexOf("PdfBottomChrome(", bottomGateIndex)
+        assertTrue(
+            "PdfDocumentReader.kt bottom chrome must be inside the chrome gate",
+            snackbarIndex >= 0 && bottomGateIndex > snackbarIndex &&
+                bottomChromeCall > bottomGateIndex
+        )
     }
 
     private fun sourceFile(name: String): File {
