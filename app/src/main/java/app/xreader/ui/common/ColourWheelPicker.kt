@@ -2,6 +2,7 @@ package app.xreader.ui.common
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -251,6 +253,60 @@ private fun ColourChip(argb: Long, label: String) {
             label,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * v1.5.41: the wheel's DOOR — a full-width pill button, not a
+ * text link. On the owner's v1.5.40 phone proof the wheel hid
+ * behind two small purple "Pick the … colour exactly…" links
+ * ("No wheel" / "very hidden" — he scrolled the whole sheet
+ * without finding it). This button is the fix: the full row
+ * width, a 48dp tap target, a filled violet pill in the
+ * Nocturne language with a rainbow swatch on its left and the
+ * plain label "Pick exact colour". Every sheet that opens
+ * [ColourWheelPickerDialog] opens it through this button, one
+ * per colour.
+ */
+@Composable
+fun PickExactColourButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val rainbow = remember {
+        listOf(
+            Color.Red, Color.Yellow, Color.Green, Color.Cyan,
+            Color.Blue, Color.Magenta, Color.Red
+        )
+    }
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.primary)
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            Modifier
+                .width(30.dp)
+                .height(18.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(Brush.horizontalGradient(rainbow))
+                .border(
+                    1.dp,
+                    Color.White.copy(alpha = 0.65f),
+                    RoundedCornerShape(9.dp)
+                )
+        )
+        Text(
+            "Pick exact colour",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onPrimary
         )
     }
 }

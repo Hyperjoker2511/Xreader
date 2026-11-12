@@ -645,8 +645,22 @@ fun ReaderSettingsSheet(
 
                 // v1.3.2 (item 87): the spacing choice in plain
                 // words — three named stops writing the same
-                // stored dp value the slider used to write.
+                // stored dp value; v1.5.41 adds the exact-gap
+                // slider back beneath them (see the section).
                 SheetSection("Paragraph spacing") {
+                    // v1.5.41 (audit item 3): the three named
+                    // stops stay as quick picks, and the slider
+                    // beneath sets the exact gap — the stored
+                    // value was always a plain dp float, so a
+                    // custom gap needs no storage change. Chips
+                    // now light ONLY on an exact match (the old
+                    // nearest-stop match lit a chip for values
+                    // that were not that stop); a custom value
+                    // lights none and the slider's readout says
+                    // "Custom" — the state is never dressed up
+                    // as a preset. Both ways stay in sync: a
+                    // chip tap moves the slider, the slider
+                    // landing exactly on a stop lights its chip.
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -658,7 +672,7 @@ fun ReaderSettingsSheet(
                                 label = spacing.label,
                                 selected =
                                     app.xreader.domain.reader.ParagraphSpacing
-                                        .of(config.paragraphSpacingDp) == spacing,
+                                        .exact(config.paragraphSpacingDp) == spacing,
                                 onClick = {
                                     onUpdate {
                                         it.copy(paragraphSpacingDp = spacing.dp)
@@ -669,6 +683,25 @@ fun ReaderSettingsSheet(
                             )
                         }
                     }
+                    val spacingExact =
+                        app.xreader.domain.reader.ParagraphSpacing
+                            .exact(config.paragraphSpacingDp)
+                    SheetSlider(
+                        label = "Exact gap",
+                        valueText = if (spacingExact != null) {
+                            "${config.paragraphSpacingDp.roundToInt()} dp" +
+                                " · ${spacingExact.label}"
+                        } else {
+                            "${config.paragraphSpacingDp.roundToInt()} dp" +
+                                " · Custom"
+                        },
+                        value = config.paragraphSpacingDp,
+                        range = app.xreader.domain.reader
+                            .ReaderValidation.PARAGRAPH_SPACING_RANGE,
+                        onChange = { v ->
+                            onUpdate { it.copy(paragraphSpacingDp = v) }
+                        }
+                    )
                 }
                 SheetSection("Custom colours") {
                     // v1.5.40: which colour the wheel is picking
@@ -699,10 +732,17 @@ fun ReaderSettingsSheet(
                                 },
                                 modifier = Modifier,
                                 dotColor = null,
-                            
+
                             )
                         }
                     }
+                    // v1.5.41: the wheel's door is a full-width
+                    // button under each colour — on the v1.5.40
+                    // phone proof the small text links here were
+                    // "very hidden" and the wheel went unfound.
+                    app.xreader.ui.common.PickExactColourButton(
+                        onClick = { wheelFor = "page" }
+                    )
                     Text("Words", style = MaterialTheme.typography.labelMedium)
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -722,21 +762,12 @@ fun ReaderSettingsSheet(
                             )
                         }
                     }
-                    // v1.5.40: the colour wheel — any colour at
-                    // all, picked on the square + rainbow strip
-                    // or typed as a hex value. It writes the same
-                    // custom colours the preset chips write, under
-                    // the same scope (the sheet's This book /
-                    // All books choice), and the contrast verdict
-                    // below judges wheel colours too.
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        TextButton(onClick = { wheelFor = "page" }) {
-                            Text("Pick the page colour exactly…")
-                        }
-                        TextButton(onClick = { wheelFor = "words" }) {
-                            Text("Pick the word colour exactly…")
-                        }
-                    }
+                    // v1.5.41: the second door, for the word
+                    // colour — same button, same wheel, writing
+                    // the same custom colour the chips write.
+                    app.xreader.ui.common.PickExactColourButton(
+                        onClick = { wheelFor = "words" }
+                    )
                     when (wheelFor) {
                         "page" -> app.xreader.ui.common.ColourWheelPickerDialog(
                             title = "Page colour",
@@ -1296,6 +1327,13 @@ fun ListenSheet(
         }
 
         SheetSection("Speed") {
+            // v1.5.41 (audit item 3): the five rates stay as
+            // quick picks and the slider beneath sets any rate
+            // in the validated range — speech rate is a
+            // continuous quantity and was capped at the chips.
+            // The stored value was always a plain float, so no
+            // storage change; chip selection was already exact,
+            // so a custom rate lights no chip.
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1307,13 +1345,37 @@ fun ListenSheet(
                         onClick = { onRateChange(rate) },
                         modifier = Modifier,
                         dotColor = null,
-                    
+
                     )
                 }
             }
+            SheetSlider(
+                label = "Exact speed",
+                valueText = "%.2f×".format(speechRate),
+                value = speechRate,
+                range = app.xreader.domain.reader
+                    .ReaderValidation.SPEECH_RATE_RANGE,
+                onChange = { v -> onRateChange(v) }
+            )
         }
 
         SheetSection("Sleep timer") {
+            // v1.5.41 (audit item 3): the 10/20/30 picks stay,
+            // and the slider beneath sets any length — the
+            // timer's model (SleepMode.AfterMinutes) always
+            // took a plain minute count, so no storage change.
+            // The slider mirrors the active AfterMinutes value
+            // when there is one (FocusSheet idiom: presets and
+            // slider in sync both ways); a custom length lights
+            // no preset chip.
+            var customSleepMinutes by remember {
+                mutableStateOf(
+                    (ttsState.sleepMode as? SleepMode.AfterMinutes)
+                        ?.minutes?.toFloat() ?: 20f
+                )
+            }
+            val activeSleepMinutes =
+                (ttsState.sleepMode as? SleepMode.AfterMinutes)?.minutes
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1324,16 +1386,19 @@ fun ListenSheet(
                     onClick = { onSleepChange(SleepMode.Off) },
                     modifier = Modifier,
                     dotColor = null,
-                
+
                 )
                 for (minutes in listOf(10, 20, 30)) {
                     NocturneChip(
                         label = "$minutes min",
                         selected = ttsState.sleepMode == SleepMode.AfterMinutes(minutes),
-                        onClick = { onSleepChange(SleepMode.AfterMinutes(minutes)) },
+                        onClick = {
+                            customSleepMinutes = minutes.toFloat()
+                            onSleepChange(SleepMode.AfterMinutes(minutes))
+                        },
                         modifier = Modifier,
                         dotColor = null,
-                    
+
                     )
                 }
                 NocturneChip(
@@ -1342,9 +1407,23 @@ fun ListenSheet(
                     onClick = { onSleepChange(SleepMode.EndOfChapter) },
                     modifier = Modifier,
                     dotColor = null,
-                
+
                 )
             }
+            SheetSlider(
+                label = "Exact length",
+                valueText =
+                    "${(activeSleepMinutes?.toFloat() ?: customSleepMinutes).roundToInt()} min",
+                value = activeSleepMinutes?.toFloat()
+                    ?: customSleepMinutes,
+                range = 5f..120f,
+                onChange = { v ->
+                    customSleepMinutes = v
+                    onSleepChange(
+                        SleepMode.AfterMinutes(v.roundToInt())
+                    )
+                }
+            )
             val remaining = ttsState.sleepRemainingMs
             if (remaining != null && ttsState.sleepMode != SleepMode.Off) {
                 Text(

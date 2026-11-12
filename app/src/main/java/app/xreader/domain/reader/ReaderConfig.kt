@@ -78,6 +78,12 @@ enum class ReaderFontChoice { LITERATA, LORA, MERRIWEATHER, NOTO_SERIF, JAKARTA,
  * It writes through to [ReaderConfig.paragraphSpacingDp] — the
  * stored value stays a dp float exactly as before; the choice is
  * just the three named stops on that scale.
+ *
+ * v1.5.41: the sheet's exact-gap slider writes any dp in the
+ * validation range, so a stored value can sit BETWEEN stops.
+ * [of] still answers "nearest stop" for summaries that want a
+ * word for a value; the sheet's chips use [exact] so a custom
+ * gap never lights a preset it is not.
  */
 enum class ParagraphSpacing(val dp: Float, val label: String) {
     COMPACT(4f, "Compact"),
@@ -88,6 +94,11 @@ enum class ParagraphSpacing(val dp: Float, val label: String) {
         /** The named stop nearest a stored dp value. */
         fun of(dp: Float): ParagraphSpacing =
             entries.minByOrNull { kotlin.math.abs(it.dp - dp) } ?: NORMAL
+
+        /** The named stop a stored dp value matches EXACTLY,
+         * or null when the value is a custom gap. */
+        fun exact(dp: Float): ParagraphSpacing? =
+            entries.firstOrNull { it.dp == dp }
     }
 }
 

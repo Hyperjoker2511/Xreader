@@ -317,9 +317,8 @@ fun CountUpText(
 
 // ─────────────────────────────────────────────────────────────────
 // v1.0.2 (R29/R30): the Identity Card — the Me showpiece's centre.
-// A+B hybrid: Ember Stage stage-lighting behind, Identity Card in
-// front. It tilts in 3D toward the finger while dragged, throws a
-// moving glare, and flips to a stats back. Every effect settles
+// It tilts in 3D toward the finger while dragged, throws a
+// moving sheen, and flips to a stats back. Every effect settles
 // still under Reduce Motion and scales down on the low-RAM tier;
 // nothing here blocks a tap.
 //
@@ -333,9 +332,22 @@ fun CountUpText(
 // moment the motion stops it springs back to a true flat
 // rectangle — a steady hold, at any angle, leaves it flat.
 // Drag tilt already settled flat on release and is unchanged;
-// the flip (a deliberate tap) is unchanged. The stage glow is
-// clipped to the card's own outline so it can no longer crown
-// above the top edge like a dome.
+// the flip (a deliberate tap) is unchanged.
+//
+// v1.5.41 (owner's phone proof of v1.5.40 — "It's rectangle
+// but under semi circle it should be consistent beautiful"):
+// clipping the Ember Stage glow INSIDE the card did not fix
+// the silhouette — the circular radial-gradient blobs still
+// crowned the card's top as a semicircle, now inside the
+// border. The stage canvas is GONE entirely: no radial-
+// gradient circles behind or inside the card. The only light
+// left is a subtle LINEAR sheen across the card's own face —
+// its lighting follows the card's rounded-rectangle geometry,
+// so the card reads as one consistent shape. The tilt feed
+// also gained a warm-up: the first sensor readings adopt the
+// phone's held angle as the baseline outright, so opening the
+// page can no longer lean the card while the filter converges
+// — the resting state is flat from the first frame.
 // ─────────────────────────────────────────────────────────────────
 
 /** Device tilt (game rotation vector) as -1..1 pitch/roll, or
@@ -427,12 +439,31 @@ fun IdentityCard3D(
     // i.e. while the phone is actively being tilted — and a
     // settle job springs it back to flat the moment the motion
     // stops. A steady hold at any angle therefore rests flat.
+    // v1.5.41 adds the warm-up seeding inside the effect: the
+    // first readings set the baseline directly, so the card is
+    // flat from the first frame after the page opens.
     var tiltBaseline by remember { mutableStateOf(Offset.Zero) }
     var settleJob by remember {
         mutableStateOf<kotlinx.coroutines.Job?>(null)
     }
+    // v1.5.41: warm-up counter — the first few readings seed
+    // the baseline (see below).
+    var tiltReadings by remember { mutableStateOf(0) }
     LaunchedEffect(deviceTilt) {
         if (!motionTiltEnabled || reduceMotion) return@LaunchedEffect
+        tiltReadings++
+        if (tiltReadings <= 3) {
+            // Warm-up: adopt the phone's CURRENT held angle as
+            // the baseline outright. Without this, the baseline
+            // starts at level (Offset.Zero) and the low-pass
+            // takes ~a second of sensor events to converge to
+            // the angle the phone is actually held at — during
+            // which every reading "deviates" and the card sits
+            // leaned after the page opens. Seeding first makes
+            // the resting state flat from the first frame.
+            tiltBaseline = deviceTilt
+            return@LaunchedEffect
+        }
         tiltBaseline = Offset(
             tiltBaseline.x + (deviceTilt.x - tiltBaseline.x) * 0.08f,
             tiltBaseline.y + (deviceTilt.y - tiltBaseline.y) * 0.08f
@@ -467,57 +498,18 @@ fun IdentityCard3D(
         }
     }
     val primary = MaterialTheme.colorScheme.primary
-    val tertiary = MaterialTheme.colorScheme.tertiary
 
-    // v1.5.40: hoisted above the stage canvas — the glow layer
-    // and the card share ONE shape (see below).
     val cardGlass = LocalGlassSettings.current
     val cardShape = androidx.compose.foundation.shape
         .RoundedCornerShape(cardGlass.cardRadius)
 
     Box(modifier.fillMaxWidth()) {
-        // Ember Stage: two stage-light blobs at different parallax
-        // depths behind the card, tinted from the scheme.
-        // v1.5.40: the canvas carries the card's own padding and
-        // is CLIPPED to the card's shape — the glow stays inside
-        // the card's outline instead of crowning above its top
-        // edge like a dome (owner's screenshot verdict).
-        if (!lowRam) {
-            Canvas(
-                Modifier
-                    .fillMaxWidth()
-                    .height(190.dp)
-                    .padding(horizontal = 4.dp, vertical = 10.dp)
-                    .clip(cardShape)
-            ) {
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        listOf(
-                            primary.copy(alpha = 0.30f),
-                            Color.Transparent
-                        )
-                    ),
-                    radius = size.minDimension * 0.75f,
-                    center = Offset(
-                        size.width * 0.22f + tiltY.value * 6f,
-                        size.height * 0.35f + tiltX.value * 4f
-                    )
-                )
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        listOf(
-                            tertiary.copy(alpha = 0.22f),
-                            Color.Transparent
-                        )
-                    ),
-                    radius = size.minDimension * 0.6f,
-                    center = Offset(
-                        size.width * 0.85f - tiltY.value * 10f,
-                        size.height * 0.7f - tiltX.value * 6f
-                    )
-                )
-            }
-        }
+        // v1.5.41: NO stage canvas behind the card. The old
+        // stage's two radial-gradient blobs — even clipped
+        // inside the card in v1.5.40 — still crowned the top
+        // as a semicircle on the owner's phone. The card now
+        // stands on the plain page background, one rounded
+        // rectangle and nothing else (see the section header).
         // v1.5.8 (J6): the card's faces join the token system —
         // the fill is the shared glass surface (REAL Haze
         // backdrop blur under FROSTED via the same frostedGlass
@@ -526,9 +518,9 @@ fun IdentityCard3D(
         // (24dp at scale 1), and the hairline is the scheme
         // outline — replacing the old surfaceVariant→surface
         // linear-gradient wash (slop tell 1). The flip, drag
-        // tilt and glare are the preserved showpiece spirit;
-        // v1.5.40 changed only the resting silhouette and the
-        // glow's containment (see the section header).
+        // tilt and sheen are the preserved showpiece spirit;
+        // v1.5.40/v1.5.41 changed only the resting silhouette
+        // and the card's lighting (see the section header).
         Box(
             Modifier
                 .fillMaxWidth()
@@ -598,22 +590,32 @@ fun IdentityCard3D(
                 }
                 .clickable { flipped = !flipped }
         ) {
-            // The moving glare.
+            // The moving sheen. v1.5.41: a LINEAR band across
+            // the card's own face, sliding with the tilt — the
+            // old radial-gradient glare was one more circle
+            // inside the card, and circles are what the owner
+            // rejected. A diagonal band clipped by the card's
+            // own shape keeps the light without the dome.
             if (!reduceMotion) {
+                val sheenShift = tiltY.value / 24f * 300f
                 Box(
                     Modifier
                         .fillMaxSize()
                         .background(
-                            Brush.radialGradient(
-                                listOf(
-                                    Color.White.copy(alpha = 0.16f),
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.10f),
                                     Color.Transparent
                                 ),
-                                center = Offset(
-                                    (0.5f + tiltY.value / 24f) * 900f,
-                                    (0.5f - tiltX.value / 24f) * 400f
+                                start = Offset(
+                                    -200f + sheenShift,
+                                    0f
                                 ),
-                                radius = 420f
+                                end = Offset(
+                                    300f + sheenShift,
+                                    400f
+                                )
                             )
                         )
                 )

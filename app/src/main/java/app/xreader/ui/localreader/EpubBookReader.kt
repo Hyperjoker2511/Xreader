@@ -3331,10 +3331,11 @@ internal fun EpubSettingsSheet(
                             updateSettings { it.copy(textColorArgb = argb) }
                         }
                     )
-                    ReaderStadiumChip(
-                        selected = false,
-                        onClick = { wheelFor = "text" },
-                        label = { Text("Exact colour…") }
+                    // v1.5.41: the wheel's door is the shared
+                    // full-width button, not the small chip
+                    // that hid it on the v1.5.40 phone proof.
+                    app.xreader.ui.common.PickExactColourButton(
+                        onClick = { wheelFor = "text" }
                     )
                     Text("Page colour", style = MaterialTheme.typography.labelLarge)
                     EpubColourRow(
@@ -3353,10 +3354,10 @@ internal fun EpubSettingsSheet(
                             }
                         }
                     )
-                    ReaderStadiumChip(
-                        selected = false,
-                        onClick = { wheelFor = "page" },
-                        label = { Text("Exact colour…") }
+                    // v1.5.41: the second door, for the page
+                    // colour — same button, same wheel.
+                    app.xreader.ui.common.PickExactColourButton(
+                        onClick = { wheelFor = "page" }
                     )
                     when (wheelFor) {
                         "text" -> app.xreader.ui.common
