@@ -13,6 +13,7 @@ import app.xreader.data.engine.PdfBoxPageProvider
 import app.xreader.data.engine.PdfPageFilter
 import app.xreader.data.engine.PdfPageProvider
 import app.xreader.data.engine.PdfSession
+import app.xreader.data.engine.PdfStripState
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
@@ -25,6 +26,7 @@ import com.tom_roush.pdfbox.pdmodel.graphics.image.JPEGFactory
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -252,7 +254,19 @@ class V158LockedPdfFallbackTest {
                 // The strip is WIRED for locked books: it runs
                 // over the password-opened document (session
                 // password, in memory only) and lands complete.
-                val text = withTimeout(STRIP_TIMEOUT_MS) { session.textAt(0) }
+                // textAt returning no longer proves the landing:
+                // since v1.5.11 it answers from a one-page lazy
+                // extraction while the whole-book strip finishes
+                // in the background, so the strip's own completion
+                // signal is awaited too, inside the same 120 s
+                // budget: stripState reaching Ready, which
+                // PdfStripSession publishes only after the result
+                // is set and the record persisted.
+                val text = withTimeout(STRIP_TIMEOUT_MS) {
+                    val firstPage = session.textAt(0)
+                    session.stripState.first { it is PdfStripState.Ready }
+                    firstPage
+                }
                 assertTrue(text.contains("Fixture page 1"))
                 val strip = session.stripSnapshot()
                 assertNotNull(strip)
