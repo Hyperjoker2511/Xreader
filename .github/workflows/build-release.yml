@@ -1,0 +1,84 @@
+# DRAFT — Xreader GitHub Actions workflow (for the 2026-11-12 planning discussion)
+#
+# If the owner picks build route (a) in NEXT-UPDATE-PLAN.md question 1, he adds
+# this file on the website as .github/workflows/build-release.yml (the connector
+# cannot push workflow files — 403). Nothing here runs until he does.
+#
+# How it differs from ReTranslate's proven workflow (TranslateYou-Novels
+# .github/workflows/build-release.yml), and why:
+#  1. TEST GATE FIRST: :app:testDebugUnitTest runs before any APK is built.
+#     A red gate = no artifact. This is the CONSTRAINTS.md bar enforced in CI.
+#  2. NO real signing in CI: Xreader's real key never leaves home (PLAN §11.3).
+#     CI generates a THROWAWAY keystore at the exact path the build expects
+#     (release/xreader-release.jks — that folder is never in the repo) and
+#     signs with it. Muse re-signs the artifact locally with the real key,
+#     exactly as v1.5.39 was signed, before it reaches the owner.
+#  3. NO GitHub Release step: ReTranslate creates a release from CI; Xreader
+#     does not — the owner publishes (tag = build version, signed APK,
+#     SHA-256 line, short plain notes). CI only uploads the APK as an artifact.
+#  4. SIZE CAP enforced: the job fails if the APK is 100 MB or more.
+#
+# Known caveat (flagged, not hidden): ubuntu-latest is assumed to carry
+# Android platform 36 (compileSdk/targetSdk 36). If the first run fails on a
+# missing platform, add android-actions/setup-android@v3 before the build step.
+# Unminified is already the build's own setting (app/build.gradle.kts,
+# isMinifyEnabled = false, isShrinkResources = false — permanent rule).
+
+name: Build and release app
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*'
+
+jobs:
+  build:
+    name: Gate, build and upload APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: gradle/actions/wrapper-validation@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+          cache: "gradle"
+
+      - name: Test gate (full unit suite — must be 0 failures)
+        run: ./gradlew --no-daemon :app:testDebugUnitTest
+
+      - name: Throwaway CI keystore (real key never leaves home)
+        run: |
+          mkdir -p release
+          keytool -genkeypair -v \
+            -keystore release/xreader-release.jks \
+            -alias xreader -keyalg RSA -keysize 2048 -validity 1 \
+            -storepass throwaway -keypass throwaway \
+            -dname "CN=Xreader CI, O=CI"
+
+      - name: Build release APK (unminified, per build rules)
+        env:
+          XR_STORE_PASSWORD: throwaway
+          XR_KEY_PASSWORD: throwaway
+          XR_KEY_ALIAS: xreader
+        run: ./gradlew --no-daemon :app:assembleRelease
+
+      - name: Enforce 100 MB size cap
+        run: |
+          SIZE=$(stat -c%s app/build/outputs/apk/release/app-release.apk)
+          echo "APK size: $SIZE bytes"
+          if [ "$SIZE" -ge 104857600 ]; then
+            echo "APK is 100 MB or more — over the hard cap" >&2
+            exit 1
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xreader-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          
