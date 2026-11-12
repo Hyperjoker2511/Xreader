@@ -87,7 +87,7 @@ class UpdateDownloadManagerTest {
         val hooks = Hooks()
         val gate = CompletableDeferred<Unit>()
         val apkFile = File(dir, "xreader-1.5.42.apk")
-        val manager = manager(backgroundScope, dir, hooks) { _, onProgress ->
+        val manager = manager(this, dir, hooks) { _, onProgress ->
             onProgress(50L, 100L)
             gate.await()
             AppUpdateRepository.DownloadOutcome.Ready(
@@ -124,7 +124,7 @@ class UpdateDownloadManagerTest {
     fun `checksum failures land on failed with the plain words`() = runTest {
         val dir = Files.createTempDirectory("xr-mgr-bad").toFile()
         val hooks = Hooks()
-        val manager = manager(backgroundScope, dir, hooks) { release, _ ->
+        val manager = manager(this, dir, hooks) { release, _ ->
             AppUpdateRepository.DownloadOutcome.ChecksumMismatch(release)
         }
         manager.start(release())
@@ -142,7 +142,7 @@ class UpdateDownloadManagerTest {
         val dir = Files.createTempDirectory("xr-mgr-dupe").toFile()
         val hooks = Hooks()
         val gate = CompletableDeferred<Unit>()
-        val manager = manager(backgroundScope, dir, hooks) { _, onProgress ->
+        val manager = manager(this, dir, hooks) { _, onProgress ->
             onProgress(10L, 100L)
             gate.await()
             AppUpdateRepository.DownloadOutcome.Failed("boom")
@@ -166,7 +166,7 @@ class UpdateDownloadManagerTest {
             writeBytes(byteArrayOf(1, 2, 3))
         }
         val never = CompletableDeferred<Unit>()
-        val manager = manager(backgroundScope, dir, hooks) { _, onProgress ->
+        val manager = manager(this, dir, hooks) { _, onProgress ->
             onProgress(10L, 100L)
             never.await()
             AppUpdateRepository.DownloadOutcome.Failed("unreachable")
@@ -202,7 +202,7 @@ class UpdateDownloadManagerTest {
             val neighbour = File(dir, "notes.txt").apply {
                 writeText("keep me")
             }
-            val manager = manager(backgroundScope, dir, hooks) { _, _ ->
+            val manager = manager(this, dir, hooks) { _, _ ->
                 AppUpdateRepository.DownloadOutcome.Failed("unused")
             }
             // Fresh process, phase None: the orphan from a
@@ -217,7 +217,7 @@ class UpdateDownloadManagerTest {
             val apkFile = File(dir, "xreader-1.5.42.apk").apply {
                 writeBytes(byteArrayOf(7))
             }
-            val readyManager = manager(backgroundScope, dir, hooks) { release, _ ->
+            val readyManager = manager(this, dir, hooks) { release, _ ->
                 AppUpdateRepository.DownloadOutcome.Ready(apkFile, release)
             }
             readyManager.start(release())
@@ -235,7 +235,7 @@ class UpdateDownloadManagerTest {
         val dir = Files.createTempDirectory("xr-mgr-perm").toFile()
         val hooks = Hooks()
         val apkFile = File(dir, "xreader-1.5.42.apk")
-        val manager = manager(backgroundScope, dir, hooks) { release, _ ->
+        val manager = manager(this, dir, hooks) { release, _ ->
             AppUpdateRepository.DownloadOutcome.Ready(apkFile, release)
         }
         // No verified file yet: the detour is unreachable.
