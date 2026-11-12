@@ -194,14 +194,34 @@ class BookFileSync(
                 skipped++
                 continue
             }
+            // A path that resolves to null (an in-place book's
+            // content, an unknown shape, or — v1.5.40 P1 — a
+            // traversal the containment check refused) can never
+            // be placed: skip it before spending a download.
             val target = localTarget(book, entry.syncPath)
-            if (target != null && target.isFile && sha256(target) == entry.sha256) {
+            if (target == null) {
+                skipped++
+                continue
+            }
+            if (target.isFile && sha256(target) == entry.sha256) {
                 continue
             }
             val data = when (val read = backend.read(remoteName(entry.bookKey, entry.syncPath))) {
                 is AppResult.Err -> return read
                 is AppResult.Ok -> read.value
             } ?: continue
+            // v1.5.40 (sync review P2): the downloaded bytes are
+            // verified against the manifest (size AND SHA-256)
+            // BEFORE anything is placed — a truncated, corrupt
+            // or swapped blob never installs as book content.
+            // A mismatch is counted with the skipped files and
+            // the local copy (if any) stays untouched.
+            if (data.size.toLong() != entry.size ||
+                sha256(data) != entry.sha256
+            ) {
+                skipped++
+                continue
+            }
             placeFile(book, entry.syncPath, data)
             downloaded++
             bytes += data.size
@@ -250,11 +270,29 @@ class BookFileSync(
                 continue
             }
             if (staged == null || !staged.isFile) continue
+            // Same null-target rule as pull(): an unresolvable
+            // or containment-refused path is skipped, counted.
             val target = localTarget(book, entry.syncPath)
-            if (target != null && target.isFile && sha256(target) == entry.sha256) {
+            if (target == null) {
+                skipped++
                 continue
             }
-            placeFile(book, entry.syncPath, staged.readBytes())
+            if (target.isFile && sha256(target) == entry.sha256) {
+                continue
+            }
+            // v1.5.40 (sync review P2): same pre-placement
+            // verification as pull() — staged bytes are checked
+            // against the manifest (size AND SHA-256) before
+            // they land; a mismatch is skipped and counted,
+            // never placed.
+            val data = staged.readBytes()
+            if (data.size.toLong() != entry.size ||
+                sha256(data) != entry.sha256
+            ) {
+                skipped++
+                continue
+            }
+            placeFile(book, entry.syncPath, data)
             downloaded++
             bytes += staged.length()
         }
@@ -285,8 +323,21 @@ class BookFileSync(
         book.documentUri != null &&
             (syncPath.startsWith("content/") || syncPath.startsWith("book-file/")) ->
             null
-        syncPath.startsWith("book-file/") ->
-            storage.bookFileRelative(book.id, syncPath.removePrefix("book-file/"))
+        // v1.5.40 (sync review P1): the manifest is remote
+        // input — a `book-file/../../…` rest would walk out of
+        // the book's folder (even out of the files dir) through
+        // resolve(). The branch now lands only when the
+        // canonical target stays inside books/<id>/.
+        syncPath.startsWith("book-file/") -> {
+            val rel = storage.bookFileRelative(
+                book.id, syncPath.removePrefix("book-file/")
+            )
+            rel.takeIf {
+                containedIn(
+                    storage.resolve(it), File(storage.filesDir, "books/${book.id}")
+                )
+            }
+        }
         syncPath.startsWith("cover/") -> {
             val ext = syncPath.substringAfterLast('.', "")
             if (ext.isBlank()) null else storage.coverRelative(book.id, ext)
@@ -303,9 +354,33 @@ class BookFileSync(
             val chapter = index?.let { chapterDao.getByIndex(book.id, it) }
             chapter?.let { storage.translatedContentRelative(book.id, it.id) }
         }
-        syncPath.startsWith("content/img-") ->
-            "content/${book.id}/${syncPath.removePrefix("content/")}"
+        // v1.5.40 (sync review P1): same containment for the
+        // image branch — `content/img-…/../../…` must stay
+        // inside this book's content folder.
+        syncPath.startsWith("content/img-") -> {
+            val rel = "content/${book.id}/${syncPath.removePrefix("content/")}"
+            rel.takeIf {
+                containedIn(
+                    storage.resolve(it), File(storage.filesDir, "content/${book.id}")
+                )
+            }
+        }
         else -> null
+    }
+
+    /** Canonical containment: [target] must resolve STRICTLY
+     * under [root] — a file inside it, never [root] itself.
+     * Canonical paths normalise `.`/`..` segments, so traversal
+     * in a manifest path is judged by where it would actually
+     * land, and a path that lands ON the root (`book-file/`,
+     * `content/img-..` — the directory itself) is refused like
+     * any escape: placing bytes onto a directory throws out of
+     * placeFile, or replaces an empty folder with a file.
+     * (v1.5.40 re-scan D1.) */
+    private fun containedIn(target: File, root: File): Boolean {
+        val canonicalRoot = root.canonicalPath
+        val canonicalTarget = target.canonicalPath
+        return canonicalTarget.startsWith(canonicalRoot + File.separator)
     }
 
     /** Writes the bytes and fixes the rows that point at the file,
@@ -352,10 +427,21 @@ class BookFileSync(
     // -- names + hashes ---------------------------------------------------------------
 
     /** Flat backend blob name (Drive is flat; WebDAV stays one
-     * folder deep — no collections to create). */
+     * folder deep — no collections to create). v1.5.40 (sync
+     * review, minor fold-in): the name is built on an allowlist
+     * — letters, digits, dot, dash, underscore survive; every
+     * other character (separators, spaces, `#`, `?`, controls)
+     * becomes `_`, so a local file name can never shape the
+     * remote path. */
     fun remoteName(bookKey: String, syncPath: String): String =
         "xreader-file-" + shortHash(bookKey) + "-" +
-            syncPath.replace('/', '_').replace(' ', '_')
+            syncPath.map { c ->
+                if (c.isLetterOrDigit() || c == '.' || c == '-' || c == '_') {
+                    c
+                } else {
+                    '_'
+                }
+            }.joinToString("")
 
     fun backupEntryName(bookKey: String, syncPath: String): String =
         "files/" + shortHash(bookKey) + "/" + syncPath
@@ -378,6 +464,12 @@ class BookFileSync(
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
+
+    /** SHA-256 of in-memory bytes (the pre-placement manifest
+     * check, v1.5.40 sync review P2). */
+    private fun sha256(data: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(data)
+            .joinToString("") { "%02x".format(it) }
 
     companion object {
         const val MANIFEST_NAME = "xreader-files.json"

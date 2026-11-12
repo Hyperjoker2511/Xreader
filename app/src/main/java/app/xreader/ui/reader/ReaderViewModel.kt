@@ -1247,9 +1247,10 @@ class ReaderViewModel(
                         app.xreader.data.extension.FetchClassification
                             .Kind.TEMPORARILY_UNAVAILABLE -> {
                         // The ErrorText words for a RateLimited:
-                        // 503-flavoured "temporarily unavailable"
-                        // vs 429-flavoured "too many requests",
-                        // with the wait the site named. Retry only.
+                        // 503-flavoured "isn't answering right
+                        // now" (v1.5.40) vs 429-flavoured "too
+                        // many requests", with the wait the site
+                        // named. Retry only.
                         val words = app.xreader.core.error.ErrorText.of(
                             app.xreader.core.error.AppError.RateLimited(
                                 serviceId = "site",

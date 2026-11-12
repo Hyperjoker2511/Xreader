@@ -3277,6 +3277,122 @@ internal fun EpubSettingsSheet(
                 }
 
                 EpubSheetSection.THEME -> {
+                    // v1.5.40: this section is "Text & colours",
+                    // ordered like the novel reader's page of the
+                    // same name — text size and paragraph spacing
+                    // first (moved here from Typography), then the
+                    // colours (swatches plus the colour wheel),
+                    // and the named themes below them.
+                    Text(
+                        "Text & colours",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                    EpubSliderRow(
+                        label = "Text size",
+                        display = "${(settings.fontSize * 100).toInt()}%",
+                        value = settings.fontSize.toFloat(),
+                        range = 0.5f..2.0f,
+                        onChange = { v ->
+                            updateSettings { it.copy(fontSize = v.toDouble()) }
+                        },
+                        dragDisplay = { v -> "${(v * 100).toInt()}%" }
+                    )
+                    EpubSliderRow(
+                        label = "Space between paragraphs",
+                        display = settings.paragraphSpacing?.let { "%.1f em".format(it) } ?: "Book's own",
+                        value = (settings.paragraphSpacing ?: 0.5).toFloat(),
+                        range = 0f..2f,
+                        onChange = { v ->
+                            updateSettings {
+                                it.copy(paragraphSpacing = v.toDouble())
+                            }
+                        }
+                    )
+
+                    // v1.5.40: the shared colour wheel, one per
+                    // colour. With no stored colour ("Theme") the
+                    // wheel starts from the row's plain swatch —
+                    // Black for words, White for the page.
+                    var wheelFor by remember {
+                        mutableStateOf<String?>(null)
+                    }
+                    Text("Text colour", style = MaterialTheme.typography.labelLarge)
+                    EpubColourRow(
+                        selected = settings.textColorArgb,
+                        colours = listOf(
+                            null to "Theme",
+                            0xFF000000.toInt() to "Black",
+                            0xFF1F2430.toInt() to "Ink",
+                            0xFF5B4636.toInt() to "Warm brown",
+                            0xFFF5EFE0.toInt() to "Cream",
+                            0xFFFFFFFF.toInt() to "White"
+                        ),
+                        onPick = { argb ->
+                            updateSettings { it.copy(textColorArgb = argb) }
+                        }
+                    )
+                    ReaderStadiumChip(
+                        selected = false,
+                        onClick = { wheelFor = "text" },
+                        label = { Text("Exact colour…") }
+                    )
+                    Text("Page colour", style = MaterialTheme.typography.labelLarge)
+                    EpubColourRow(
+                        selected = settings.backgroundColorArgb,
+                        colours = listOf(
+                            null to "Theme",
+                            0xFFFFFFFF.toInt() to "White",
+                            0xFFF7F0DC.toInt() to "Cream paper",
+                            0xFFEAD9B0.toInt() to "Sepia paper",
+                            0xFF0B0B12.toInt() to "Midnight",
+                            0xFF000000.toInt() to "Black"
+                        ),
+                        onPick = { argb ->
+                            updateSettings {
+                                it.copy(backgroundColorArgb = argb)
+                            }
+                        }
+                    )
+                    ReaderStadiumChip(
+                        selected = false,
+                        onClick = { wheelFor = "page" },
+                        label = { Text("Exact colour…") }
+                    )
+                    when (wheelFor) {
+                        "text" -> app.xreader.ui.common
+                            .ColourWheelPickerDialog(
+                                title = "Text colour",
+                                initialArgb =
+                                    (settings.textColorArgb
+                                        ?: 0xFF000000.toInt())
+                                        .toLong() and 0xFFFFFFFFL,
+                                onDismiss = { wheelFor = null },
+                                onPick = { argb ->
+                                    updateSettings {
+                                        it.copy(textColorArgb = argb.toInt())
+                                    }
+                                    wheelFor = null
+                                }
+                            )
+                        "page" -> app.xreader.ui.common
+                            .ColourWheelPickerDialog(
+                                title = "Page colour",
+                                initialArgb =
+                                    (settings.backgroundColorArgb
+                                        ?: 0xFFFFFFFF.toInt())
+                                        .toLong() and 0xFFFFFFFFL,
+                                onDismiss = { wheelFor = null },
+                                onPick = { argb ->
+                                    updateSettings {
+                                        it.copy(
+                                            backgroundColorArgb = argb.toInt()
+                                        )
+                                    }
+                                    wheelFor = null
+                                }
+                            )
+                    }
+
                     // G7: named presets over the same keys the
                     // free swatches write.
                     Text("Theme", style = MaterialTheme.typography.labelLarge)
@@ -3302,39 +3418,6 @@ internal fun EpubSettingsSheet(
                             )
                         }
                     }
-
-                    Text("Text colour", style = MaterialTheme.typography.labelLarge)
-                    EpubColourRow(
-                        selected = settings.textColorArgb,
-                        colours = listOf(
-                            null to "Theme",
-                            0xFF000000.toInt() to "Black",
-                            0xFF1F2430.toInt() to "Ink",
-                            0xFF5B4636.toInt() to "Warm brown",
-                            0xFFF5EFE0.toInt() to "Cream",
-                            0xFFFFFFFF.toInt() to "White"
-                        ),
-                        onPick = { argb ->
-                            updateSettings { it.copy(textColorArgb = argb) }
-                        }
-                    )
-                    Text("Page colour", style = MaterialTheme.typography.labelLarge)
-                    EpubColourRow(
-                        selected = settings.backgroundColorArgb,
-                        colours = listOf(
-                            null to "Theme",
-                            0xFFFFFFFF.toInt() to "White",
-                            0xFFF7F0DC.toInt() to "Cream paper",
-                            0xFFEAD9B0.toInt() to "Sepia paper",
-                            0xFF0B0B12.toInt() to "Midnight",
-                            0xFF000000.toInt() to "Black"
-                        ),
-                        onPick = { argb ->
-                            updateSettings {
-                                it.copy(backgroundColorArgb = argb)
-                            }
-                        }
-                    )
                 }
 
                 EpubSheetSection.TYPOGRAPHY -> {
@@ -3413,16 +3496,8 @@ internal fun EpubSettingsSheet(
                         )
                     }
 
-                    EpubSliderRow(
-                        label = "Text size",
-                        display = "${(settings.fontSize * 100).toInt()}%",
-                        value = settings.fontSize.toFloat(),
-                        range = 0.5f..2.0f,
-                        onChange = { v ->
-                            updateSettings { it.copy(fontSize = v.toDouble()) }
-                        },
-                        dragDisplay = { v -> "${(v * 100).toInt()}%" }
-                    )
+                    // v1.5.40: "Text size" moved up into
+                    // "Text & colours" (the THEME section above).
                     EpubSliderRow(
                         label = "Text weight",
                         display = when {
@@ -3464,17 +3539,8 @@ internal fun EpubSettingsSheet(
                             updateSettings { it.copy(wordSpacing = v.toDouble()) }
                         }
                     )
-                    EpubSliderRow(
-                        label = "Space between paragraphs",
-                        display = settings.paragraphSpacing?.let { "%.1f em".format(it) } ?: "Book's own",
-                        value = (settings.paragraphSpacing ?: 0.5).toFloat(),
-                        range = 0f..2f,
-                        onChange = { v ->
-                            updateSettings {
-                                it.copy(paragraphSpacing = v.toDouble())
-                            }
-                        }
-                    )
+                    // v1.5.40: "Space between paragraphs" moved
+                    // up into "Text & colours" as well.
                     EpubSliderRow(
                         label = "Paragraph indent",
                         display = settings.paragraphIndent?.let { "%.1f em".format(it) } ?: "None",

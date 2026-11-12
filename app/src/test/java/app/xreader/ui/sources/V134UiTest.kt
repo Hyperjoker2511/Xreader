@@ -134,8 +134,12 @@ class V134UiTest {
                 FetchClassification.Kind.TEMPORARILY_UNAVAILABLE
             )
         )!!
-        assertTrue(unavailable.contains("temporarily unavailable"))
+        // v1.5.40 (honest error words): the outage sentence is
+        // "isn't answering right now" (was "temporarily
+        // unavailable") — never the DNS/address sentence.
+        assertTrue(unavailable.contains("isn't answering right now"))
         assertFalse(unavailable.contains("too many requests"))
+        assertFalse(unavailable.contains("address"))
 
         val limited = CatalogueCopy.failureMessage(
             classification(

@@ -21,7 +21,10 @@ import org.junit.Test
  *    it never renders, never escalates, never becomes an
  *    empty success;
  *  - 429 is its own flavour ("too many requests") with the
- *    Retry-After carried; 503 is "temporarily unavailable";
+ *    Retry-After carried; 503 is the not-answering state
+ *    (v1.5.40 wording: "isn't answering right now"), and the
+ *    rest of the 5xx class, timeouts and refused connections
+ *    classify with it — never as DNS;
  *  - DNS is its own plain-words state, and NO user-facing
  *    string anywhere carries a raw transport code;
  *  - the shared park fails fast: after a 429 with a
@@ -133,15 +136,74 @@ class V134ClassificationTest {
     }
 
     @Test
-    fun `503 copy says temporarily unavailable, not too many requests`() {
+    fun `503 copy says the site isn't answering, not too many requests`() {
+        // v1.5.40 (honest error words): the 503 sentence changed
+        // from "temporarily unavailable" to the owner's words —
+        // a down site says it isn't answering.
         val error = AppError.RateLimited(
             "source", retryAfterSeconds = 30,
             detail = "the site is temporarily unavailable (HTTP 503)"
         )
         val words = ErrorText.of(error).message
-        assertTrue(words.contains("temporarily unavailable"))
+        assertTrue(words.contains("isn't answering right now"))
         assertFalse(words.contains("Too many requests"))
         assertTrue(words.contains("30 seconds"))
+    }
+
+    @Test
+    fun `a 522 classifies as not answering, never as dns`() {
+        // The Novelight shape (2026-11-09): the site answered
+        // 522 — down behind its proxy — and the app showed the
+        // address sentence. 5xx is an availability state now.
+        val classified = FetchClassification.classifyDetail(
+            null, "the site answered HTTP 522"
+        )
+        assertEquals(
+            FetchClassification.Kind.TEMPORARILY_UNAVAILABLE,
+            classified.kind
+        )
+        assertFalse(classified.rateLimited)
+    }
+
+    @Test
+    fun `the whole 5xx class classifies as not answering`() {
+        for (code in listOf(500, 502, 503, 504, 522, 530)) {
+            val classified = FetchClassification.classifyDetail(
+                null, "the site answered HTTP $code"
+            )
+            assertEquals(
+                "HTTP $code must be an availability failure",
+                FetchClassification.Kind.TEMPORARILY_UNAVAILABLE,
+                classified.kind
+            )
+        }
+    }
+
+    @Test
+    fun `timeout and refused classify as not answering, dns stays dns`() {
+        assertEquals(
+            FetchClassification.Kind.TEMPORARILY_UNAVAILABLE,
+            FetchClassification.classifyDetail(
+                null,
+                app.xreader.data.net.HttpTransport.TIMEOUT_DETAIL
+            ).kind
+        )
+        assertEquals(
+            FetchClassification.Kind.TEMPORARILY_UNAVAILABLE,
+            FetchClassification.classifyDetail(null, "ConnectException").kind
+        )
+        assertEquals(
+            FetchClassification.Kind.DNS_FAILURE,
+            FetchClassification.classifyDetail(
+                null, FetchClassification.DNS_MARKER
+            ).kind
+        )
+        assertEquals(
+            FetchClassification.Kind.DNS_FAILURE,
+            FetchClassification.classifyDetail(
+                null, "UnknownHostException"
+            ).kind
+        )
     }
 
     @Test

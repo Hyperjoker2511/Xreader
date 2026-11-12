@@ -11,6 +11,10 @@ import app.xreader.core.error.AppError
  *    429/503 (or said so plainly) — a distinct state that
  *    carries the Retry-After when the site named one. A
  *    non-success status NEVER becomes an empty success.
+ *    v1.5.40: the whole not-answering family joins it — any
+ *    5xx status, a timeout, a refused/reset connection —
+ *    and its user words are "the site isn't answering
+ *    right now", never the DNS sentence.
  *  - [Kind.DNS_FAILURE]: the site's address didn't resolve —
  *    its own plain-words state ("couldn't find the site's
  *    address"), never a wall verdict, never a raw code.
@@ -48,6 +52,12 @@ object FetchClassification {
 
     /** The availability marker detail (plain words). */
     const val AVAILABILITY_MARKER = "temporarily unavailable"
+
+    /** An HTTP 5xx status as the fetch layers stamp it in a
+     * detail ("the site answered HTTP 522", "(HTTP 503)").
+     * The space after "http" keeps a URL in a detail from
+     * ever matching. */
+    private val HTTP_5XX = Regex("""http (5\d\d)\b""")
 
     /** The mint-refusal markers (diagnostics-grade; the UI
      * copy for them comes from [SessionNeed]'s words). */
@@ -90,6 +100,25 @@ object FetchClassification {
         }
         if (AVAILABILITY_MARKER in text || "(http 503)" in text ||
             "http 503" in text
+        ) {
+            return Result(Kind.TEMPORARILY_UNAVAILABLE)
+        }
+        // v1.5.40 (honest error words): the rest of the
+        // not-answering family lands in the same state —
+        //  - any other 5xx status in the detail (a 522, origin
+        //    unreachable behind its proxy, used to fall through
+        //    to GENERIC and could surface with address words
+        //    while the site was simply down);
+        //  - a timeout ("took too long" — the transport's
+        //    TIMEOUT_DETAIL and the WebView phrase alike);
+        //  - a refused/reset connection (the exception class
+        //    names are the detail the transport maps);
+        //  - the WebView "couldn't be reached" phrase.
+        // A genuine DNS failure still classifies DNS above —
+        // the two states keep their different sentences.
+        if (HTTP_5XX.containsMatchIn(text) || "took too long" in text ||
+            "connectexception" in text || "socketexception" in text ||
+            "couldn't be reached" in text
         ) {
             return Result(Kind.TEMPORARILY_UNAVAILABLE)
         }

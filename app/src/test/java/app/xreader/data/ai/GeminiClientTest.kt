@@ -5,6 +5,7 @@ import app.xreader.core.error.AppResult
 import app.xreader.data.FakeTransport
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -115,6 +116,44 @@ class GeminiClientTest {
         assertTrue(result is AppResult.Err)
         assertTrue((result as AppResult.Err).error is AppError.RateLimited)
         assertEquals(1, transport.requests.size)
+    }
+
+    @Test
+    fun `a zero limit 429 says the key has no painting allowance`() {
+        // v1.5.40 (honest error words): Google gives free keys
+        // a quota limit of 0 for image models — that is not
+        // "too many requests", and waiting can never heal it.
+        val body = """{"error":{"code":429,"message":"Quota exceeded for """ +
+            """quota metric 'Generate Content API requests per minute' """ +
+            """and limit 'GenerateContent request limit' of service """ +
+            """'generativelanguage.googleapis.com'.","status":""" +
+            """"RESOURCE_EXHAUSTED","details":[{"@type":""" +
+            """"type.googleapis.com/google.rpc.QuotaFailure",""" +
+            """"violations":[{"quotaMetric":"generativelanguage.""" +
+            """googleapis.com/generate_content_free_tier_requests",""" +
+            """"quotaValue":"0"}]}]}}"""
+        val gemini = client(FakeTransport { FakeTransport.ok("{}") })
+        val error = gemini.httpError(429, body)
+        assertTrue(error is AppError.RateLimited)
+        val words = app.xreader.core.error.ErrorText.of(error).message
+        assertTrue(
+            "the words must name the missing allowance, were: $words",
+            words.contains("no painting allowance")
+        )
+        assertTrue(words.contains("billing"))
+        // Google's raw quota text does not ride into the detail.
+        assertFalse(
+            error.detail.orEmpty().contains("Quota exceeded for quota metric")
+        )
+
+        // A plain 429 (a real rate limit) keeps its own words.
+        val busy = gemini.httpError(
+            429,
+            """{"error":{"code":429,"message":"Quota exceeded.",""" +
+                """"status":"RESOURCE_EXHAUSTED"}}"""
+        )
+        val busyWords = app.xreader.core.error.ErrorText.of(busy).message
+        assertTrue(busyWords.contains("Too many requests"))
     }
 
     @Test

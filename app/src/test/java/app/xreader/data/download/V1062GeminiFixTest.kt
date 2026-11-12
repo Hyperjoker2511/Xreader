@@ -247,6 +247,58 @@ class V1062GeminiFixTest {
         )
     }
 
+    @Test
+    fun enqueueBookChunksBulkIdListsUnderTheSqliteCap() = runTest {
+        // v1.5.40: old SQLite caps a statement at 999 bound
+        // variables — a 2,050-chapter book must reach the two
+        // bulk setters in slices of at most 900, inside the one
+        // transaction, and still land completely.
+        val storage = BookStorage(temp.newFolder("g3c"))
+        val bookId = bookDao.insert(Book(title = "T", addedAt = 1, updatedAt = 1))
+        val total = 2_050
+        repeat(total) { index ->
+            chapterDao.insert(
+                Chapter(
+                    bookId = bookId, index = index,
+                    title = "Chapter ${index + 1}",
+                    remoteId = "https://src.test/$index", updatedAt = 1
+                )
+            )
+        }
+        val stateCallSizes = mutableListOf<Int>()
+        val originCallSizes = mutableListOf<Int>()
+        val recording = object : ChapterDao by chapterDao {
+            override suspend fun setDownloadStateForIds(
+                ids: List<Long>, state: DownloadState
+            ) {
+                stateCallSizes += ids.size
+                chapterDao.setDownloadStateForIds(ids, state)
+            }
+
+            override suspend fun setBodyOriginForIds(
+                ids: List<Long>, origin: String?
+            ) {
+                originCallSizes += ids.size
+                chapterDao.setBodyOriginForIds(ids, origin)
+            }
+        }
+        val controller = DownloadController(
+            queueDao, recording, bookDao, storage, WorkEnqueuer { }
+        ) { 1_000L }
+        controller.enqueueBook(bookId)
+        assertEquals(listOf(900, 900, 250), stateCallSizes)
+        assertEquals(listOf(900, 900, 250), originCallSizes)
+        assertEquals(
+            total, queueDao.items.value.count { it.bookId == bookId }
+        )
+        assertTrue(
+            chapterDao.forBook(bookId).all {
+                it.downloadState == DownloadState.QUEUED &&
+                    it.bodyOrigin == BodyOrigin152.USER
+            }
+        )
+    }
+
     // -- G4 ---------------------------------------------------------------
 
     @Test

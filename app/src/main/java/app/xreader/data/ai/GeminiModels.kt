@@ -79,6 +79,22 @@ object GeminiModels {
             body.contains("api key not valid", ignoreCase = true)
     }
 
+    private val ZERO_LIMIT = Regex(
+        """limit"?\s*:\s*"?0"?\b|quotaValue"?\s*:\s*"?0"?\b"""
+    )
+
+    /**
+     * v1.5.40: true when a 429 body says the key's quota limit
+     * is literally 0 — Google gives free keys a zero image
+     * allowance, so the call can NEVER succeed by waiting or
+     * slowing down. The body carries it as `limit: 0` in the
+     * quota failure (or a `"quotaValue": "0"` violation).
+     */
+    fun isZeroLimitQuota(errorBody: String?): Boolean {
+        if (errorBody.isNullOrBlank()) return false
+        return ZERO_LIMIT.containsMatchIn(errorBody)
+    }
+
     /** Google's own error message out of an error body, capped for the
      * Details line (PLAN §1.5: HTTP code + ≤200 chars of their words). */
     fun googleMessage(errorBody: String?): String? {

@@ -188,8 +188,11 @@ object CatalogueCopy {
                 "Too many requests — the site asked us to " +
                     "slow down.$wait"
             } else {
-                "The site is temporarily unavailable — it's " +
-                    "having trouble right now.$wait"
+                // v1.5.40 (honest error words): an outage says
+                // the site isn't answering — the address/DNS
+                // sentence belongs to DNS failures only.
+                "The site isn't answering right now." +
+                    wait.ifEmpty { " Try again in a little while." }
             }
         }
         app.xreader.data.extension.FetchClassification

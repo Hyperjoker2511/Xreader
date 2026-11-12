@@ -212,7 +212,7 @@ class AiSheetViewModel(
                     } else {
                         _state.value.copy(
                             summarizing = false,
-                            summaryError = ErrorText.displayText(result.error)
+                            summaryError = plainWords(result.error)
                         )
                     }
             }
@@ -253,7 +253,7 @@ class AiSheetViewModel(
                     } else {
                         _state.value.copy(
                             catchingUp = false,
-                            catchUpError = ErrorText.displayText(result.error)
+                            catchUpError = plainWords(result.error)
                         )
                     }
             }
@@ -345,7 +345,7 @@ class AiSheetViewModel(
                         runCatching { container.expService.settle() }
                     }
                     is app.xreader.data.ai.GeminiClient.StreamEvent.Failed ->
-                        finishChatWithError(ErrorText.displayText(event.error))
+                        finishChatWithError(plainWords(event.error))
                 }
             }
             if (_state.value.chatBusy) {
@@ -429,7 +429,7 @@ class AiSheetViewModel(
                         } else {
                             _state.value.copy(
                                 translating = false,
-                                translationError = ErrorText.displayText(event.error)
+                                translationError = plainWords(event.error)
                             )
                         }
                 }
@@ -478,12 +478,24 @@ class AiSheetViewModel(
                         result.error.message
                     } else {
                         "Couldn't paint this moment.\n" +
-                            ErrorText.displayText(result.error)
+                            plainWords(result.error)
                     }
                 )
             }
         }
     }
+
+    /**
+     * v1.5.40 (honest error words): the Ask AI sheet shows the
+     * PLAIN summary only — never [ErrorText.displayText]'s
+     * Details line, which carries the provider's own raw error
+     * text (Google's quota wording and all). This sheet has no
+     * Details affordance to hide it behind, so the summary is
+     * the whole message here; other surfaces keep their
+     * Details line.
+     */
+    private fun plainWords(error: app.xreader.core.error.AppError): String =
+        ErrorText.of(error).message
 
     companion object {
         private const val PREVIEW_CHARS = 900

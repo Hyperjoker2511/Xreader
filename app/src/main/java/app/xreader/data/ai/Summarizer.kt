@@ -115,8 +115,9 @@ class Summarizer(
         val prompt = """
             Below are short summaries of the chapters of the novel "$bookTitle" up to
             chapter ${throughChapter.index + 1}. Write a "story so far" recap as a JSON
-            array of exactly 4 short bullet-point strings: where the story stands, what
-            the main character wants, who matters most right now, and what is unresolved.
+            array of exactly 5 short bullet-point strings, one line each: where the
+            story stands, what the main character wants, who matters most right now,
+            what the main character has gained or lost so far, and what is unresolved.
             Answer with ONLY the JSON array.
 
             $digest
@@ -124,7 +125,7 @@ class Summarizer(
         val result = client.generateText(prompt, jsonMode = true)
         val generated = when (result) {
             is AppResult.Err -> return result
-            is AppResult.Ok -> parseBullets(result.value.text, expected = 4) to result.value.modelUsed
+            is AppResult.Ok -> parseBullets(result.value.text, expected = 5) to result.value.modelUsed
         }
         summaryDao.upsert(
             AiSummary(
@@ -159,7 +160,8 @@ class Summarizer(
         text: String
     ): AppResult<Pair<List<String>, String>> {
         // Long chapters are chunk-summarised first, then the chunk
-        // notes are summarised into the chapter's 3 bullets.
+        // notes are summarised into the chapter's 5 bullets
+        // (v1.5.40: 3 → 5, "detailed but not long").
         val chunks = chunkText(text, CHUNK_CHARS)
         var modelUsed = ""
         val notes = mutableListOf<String>()
@@ -175,7 +177,7 @@ class Summarizer(
                 is AppResult.Ok -> {
                     modelUsed = result.value.modelUsed
                     if (chunks.size == 1) {
-                        return AppResult.Ok(parseBullets(result.value.text, expected = 3) to modelUsed)
+                        return AppResult.Ok(parseBullets(result.value.text, expected = 5) to modelUsed)
                     }
                     notes += result.value.text.trim()
                 }
@@ -187,7 +189,7 @@ class Summarizer(
         return when (val result = client.generateText(finalPrompt, jsonMode = true)) {
             is AppResult.Err -> result
             is AppResult.Ok -> AppResult.Ok(
-                parseBullets(result.value.text, expected = 3) to result.value.modelUsed
+                parseBullets(result.value.text, expected = 5) to result.value.modelUsed
             )
         }
     }
@@ -195,8 +197,9 @@ class Summarizer(
     private fun chapterPrompt(bookTitle: String, chapterTitle: String, text: String): String =
         """
         Summarize this chapter of the novel "$bookTitle" (chapter title: "$chapterTitle")
-        as a JSON array of exactly 3 short bullet-point strings: the key events, in the
-        order they happen, in plain words a reader would understand. Answer with ONLY
+        as a JSON array of exactly 5 short bullet-point strings, one line each: the main
+        events in the order they happen, who did what, and the ending hook the chapter
+        leaves hanging — in plain words a reader would understand. Answer with ONLY
         the JSON array.
 
         $text

@@ -170,7 +170,7 @@ fun ReaderSettingsSheet(
                 Text(
                     when (page) {
                         "reading" -> "Reading"
-                        "page" -> "Page & text"
+                        "page" -> "Text & colours"
                         "terms" -> "Terms for this book"
                         "manga" -> "Manga — this series"
                         else -> "Extras"
@@ -224,6 +224,22 @@ fun ReaderSettingsSheet(
                     }
                 }
 
+                // v1.5.40: "Text & colours" is the FIRST row —
+                // the community-feedback lesson (a reader could
+                // not find text size, paragraph spacing or font
+                // colour) was that these controls sat behind the
+                // wrong door. Text size, paragraph gap and the
+                // colours lead this page now; "Reading" below it
+                // keeps only reading behaviour.
+                RowItem(
+                    icon = Icons.Filled.Palette,
+                    label = "Text & colours",
+                    value = "Size · spacing · colours · ${config.paletteName}",
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { page = "page" },
+                    badge = null,
+
+                )
                 RowItem(
                     icon = Icons.Filled.MenuBook,
                     label = "Reading",
@@ -231,16 +247,7 @@ fun ReaderSettingsSheet(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = { page = "reading" },
                     badge = null,
-                
-                )
-                RowItem(
-                    icon = Icons.Filled.Palette,
-                    label = "Page & text",
-                    value = "Page theme · ${config.paletteName}",
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = { page = "page" },
-                    badge = null,
-                
+
                 )
                 RowItem(
                     icon = Icons.Filled.Science,
@@ -624,6 +631,163 @@ fun ReaderSettingsSheet(
             }
 
             "page" -> {
+                // v1.5.40: this page leads with what a reader
+                // reaches for — text size, paragraph spacing
+                // and the colours (presets + the colour wheel);
+                // themes and fonts sit below them.
+                SheetSlider(
+                    label = "Text size",
+                    valueText = "${config.fontSizeSp.roundToInt()} sp",
+                    value = config.fontSizeSp,
+                    range = 12f..34f,
+                    onChange = { v -> onUpdate { it.copy(fontSizeSp = v) } }
+                )
+
+                // v1.3.2 (item 87): the spacing choice in plain
+                // words — three named stops writing the same
+                // stored dp value the slider used to write.
+                SheetSection("Paragraph spacing") {
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        for (spacing in
+                            app.xreader.domain.reader.ParagraphSpacing.entries) {
+                            NocturneChip(
+                                label = spacing.label,
+                                selected =
+                                    app.xreader.domain.reader.ParagraphSpacing
+                                        .of(config.paragraphSpacingDp) == spacing,
+                                onClick = {
+                                    onUpdate {
+                                        it.copy(paragraphSpacingDp = spacing.dp)
+                                    }
+                                },
+                                modifier = Modifier,
+                                dotColor = null,
+                            )
+                        }
+                    }
+                }
+                SheetSection("Custom colours") {
+                    // v1.5.40: which colour the wheel is picking
+                    // ("page" / "words"), or null when it is shut.
+                    var wheelFor by remember { mutableStateOf<String?>(null) }
+                    val pageChoices = listOf(
+                        "Black" to 0xFF000000L, "Deep blue" to 0xFF0E1524L,
+                        "Deep green" to 0xFF14201AL, "Brown" to 0xFF211712L,
+                        "Cream" to 0xFFF5EDDCL, "White" to 0xFFFFFFFFL
+                    )
+                    val textChoices = listOf(
+                        "White" to 0xFFFFFFFFL, "Cream" to 0xFFEFDFC8L,
+                        "Pale blue" to 0xFFD7E3F4, "Pale green" to 0xFFDCE8D8,
+                        "Black" to 0xFF000000L, "Dark brown" to 0xFF2A1D12L
+                    )
+                    Text("Page", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState())
+                    ) {
+                        pageChoices.forEach { (label, argb) ->
+                            NocturneChip(
+                                label = label,
+                                selected = config.paletteName == "Custom" &&
+                                    config.customPageArgb == argb,
+                                onClick = {
+                                    onUpdate { it.copy(paletteName = "Custom", customPageArgb = argb) }
+                                },
+                                modifier = Modifier,
+                                dotColor = null,
+                            
+                            )
+                        }
+                    }
+                    Text("Words", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState())
+                    ) {
+                        textChoices.forEach { (label, argb) ->
+                            NocturneChip(
+                                label = label,
+                                selected = config.paletteName == "Custom" &&
+                                    config.customTextArgb == argb,
+                                onClick = {
+                                    onUpdate { it.copy(paletteName = "Custom", customTextArgb = argb) }
+                                },
+                                modifier = Modifier,
+                                dotColor = null,
+                            
+                            )
+                        }
+                    }
+                    // v1.5.40: the colour wheel — any colour at
+                    // all, picked on the square + rainbow strip
+                    // or typed as a hex value. It writes the same
+                    // custom colours the preset chips write, under
+                    // the same scope (the sheet's This book /
+                    // All books choice), and the contrast verdict
+                    // below judges wheel colours too.
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(onClick = { wheelFor = "page" }) {
+                            Text("Pick the page colour exactly…")
+                        }
+                        TextButton(onClick = { wheelFor = "words" }) {
+                            Text("Pick the word colour exactly…")
+                        }
+                    }
+                    when (wheelFor) {
+                        "page" -> app.xreader.ui.common.ColourWheelPickerDialog(
+                            title = "Page colour",
+                            initialArgb = config.customPageArgb,
+                            onDismiss = { wheelFor = null },
+                            onPick = { argb ->
+                                onUpdate {
+                                    it.copy(
+                                        paletteName = "Custom",
+                                        customPageArgb = argb
+                                    )
+                                }
+                                wheelFor = null
+                            }
+                        )
+                        "words" -> app.xreader.ui.common.ColourWheelPickerDialog(
+                            title = "Word colour",
+                            initialArgb = config.customTextArgb,
+                            onDismiss = { wheelFor = null },
+                            onPick = { argb ->
+                                onUpdate {
+                                    it.copy(
+                                        paletteName = "Custom",
+                                        customTextArgb = argb
+                                    )
+                                }
+                                wheelFor = null
+                            }
+                        )
+                    }
+                    if (config.paletteName == "Custom") {
+                        val ratio = app.xreader.ui.theme.Contrast.ratio(
+                            androidx.compose.ui.graphics.Color(config.customTextArgb.toInt()),
+                            androidx.compose.ui.graphics.Color(config.customPageArgb.toInt())
+                        )
+                        if (ratio < 4.5) {
+                            Text(
+                                "Hard to read — too close in brightness. Pick lighter words or a darker page.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = app.xreader.ui.theme.errorTextColor()
+                            )
+                        } else {
+                            Text(
+                                "That pair is easy to read.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
                 SheetSection("Page theme") {
                     // v1.0.6.2 (F8c): exactly THREE cards in ONE
                     // visible row — AMOLED (default), Sepia, Paper.
@@ -691,110 +855,6 @@ fun ReaderSettingsSheet(
                         checked = config.highContrastText,
                         onChange = { v -> onUpdate { it.copy(highContrastText = v) } }
                     )
-                }
-
-                SheetSection("Custom colours") {
-                    val pageChoices = listOf(
-                        "Black" to 0xFF000000L, "Deep blue" to 0xFF0E1524L,
-                        "Deep green" to 0xFF14201AL, "Brown" to 0xFF211712L,
-                        "Cream" to 0xFFF5EDDCL, "White" to 0xFFFFFFFFL
-                    )
-                    val textChoices = listOf(
-                        "White" to 0xFFFFFFFFL, "Cream" to 0xFFEFDFC8L,
-                        "Pale blue" to 0xFFD7E3F4, "Pale green" to 0xFFDCE8D8,
-                        "Black" to 0xFF000000L, "Dark brown" to 0xFF2A1D12L
-                    )
-                    Text("Page", style = MaterialTheme.typography.labelMedium)
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.horizontalScroll(rememberScrollState())
-                    ) {
-                        pageChoices.forEach { (label, argb) ->
-                            NocturneChip(
-                                label = label,
-                                selected = config.paletteName == "Custom" &&
-                                    config.customPageArgb == argb,
-                                onClick = {
-                                    onUpdate { it.copy(paletteName = "Custom", customPageArgb = argb) }
-                                },
-                                modifier = Modifier,
-                                dotColor = null,
-                            
-                            )
-                        }
-                    }
-                    Text("Words", style = MaterialTheme.typography.labelMedium)
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.horizontalScroll(rememberScrollState())
-                    ) {
-                        textChoices.forEach { (label, argb) ->
-                            NocturneChip(
-                                label = label,
-                                selected = config.paletteName == "Custom" &&
-                                    config.customTextArgb == argb,
-                                onClick = {
-                                    onUpdate { it.copy(paletteName = "Custom", customTextArgb = argb) }
-                                },
-                                modifier = Modifier,
-                                dotColor = null,
-                            
-                            )
-                        }
-                    }
-                    if (config.paletteName == "Custom") {
-                        val ratio = app.xreader.ui.theme.Contrast.ratio(
-                            androidx.compose.ui.graphics.Color(config.customTextArgb.toInt()),
-                            androidx.compose.ui.graphics.Color(config.customPageArgb.toInt())
-                        )
-                        if (ratio < 4.5) {
-                            Text(
-                                "Hard to read — too close in brightness. Pick lighter words or a darker page.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = app.xreader.ui.theme.errorTextColor()
-                            )
-                        } else {
-                            Text(
-                                "That pair is easy to read.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-
-                SheetSlider(
-                    label = "Text size",
-                    valueText = "${config.fontSizeSp.roundToInt()} sp",
-                    value = config.fontSizeSp,
-                    range = 12f..34f,
-                    onChange = { v -> onUpdate { it.copy(fontSizeSp = v) } }
-                )
-
-                SheetSection("Brightness") {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "Use the phone's brightness",
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f)
-                        )
-                        NocturneSwitch(
-                            checked = config.brightness == null,
-                            onCheckedChange = { system ->
-                                onUpdate { it.copy(brightness = if (system) null else 0.7f) }
-                            },
-                            modifier = Modifier,
-                            enabled = true,
-                        
-                        )
-                    }
-                    if (config.brightness != null) {
-                        Slider(
-                            value = config.brightness,
-                            onValueChange = { v -> onUpdate { it.copy(brightness = v) } },
-                            valueRange = 0.05f..1f
-                        )
-                    }
                 }
 
                 SheetSection("Font") {
@@ -867,6 +927,32 @@ fun ReaderSettingsSheet(
                     )
                 }
 
+                SheetSection("Brightness") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Use the phone's brightness",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        NocturneSwitch(
+                            checked = config.brightness == null,
+                            onCheckedChange = { system ->
+                                onUpdate { it.copy(brightness = if (system) null else 0.7f) }
+                            },
+                            modifier = Modifier,
+                            enabled = true,
+                        
+                        )
+                    }
+                    if (config.brightness != null) {
+                        Slider(
+                            value = config.brightness,
+                            onValueChange = { v -> onUpdate { it.copy(brightness = v) } },
+                            valueRange = 0.05f..1f
+                        )
+                    }
+                }
+
                 SheetSlider(
                     label = "Line height",
                     valueText = "%.2f×".format(config.lineHeightMultiplier),
@@ -874,33 +960,6 @@ fun ReaderSettingsSheet(
                     range = 1.1f..2.2f,
                     onChange = { v -> onUpdate { it.copy(lineHeightMultiplier = v) } }
                 )
-                // v1.3.2 (item 87): the spacing choice in plain
-                // words — three named stops writing the same
-                // stored dp value the slider used to write.
-                SheetSection("Paragraph spacing") {
-                    androidx.compose.foundation.layout.FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        for (spacing in
-                            app.xreader.domain.reader.ParagraphSpacing.entries) {
-                            NocturneChip(
-                                label = spacing.label,
-                                selected =
-                                    app.xreader.domain.reader.ParagraphSpacing
-                                        .of(config.paragraphSpacingDp) == spacing,
-                                onClick = {
-                                    onUpdate {
-                                        it.copy(paragraphSpacingDp = spacing.dp)
-                                    }
-                                },
-                                modifier = Modifier,
-                                dotColor = null,
-                            )
-                        }
-                    }
-                }
                 SheetSlider(
                     label = "Side margins",
                     valueText = "${config.marginHorizontalDp.roundToInt()} dp",

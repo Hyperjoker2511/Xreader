@@ -16,6 +16,15 @@ data class ErrorUi(
  */
 object ErrorText {
 
+    /**
+     * v1.5.40: the marker the Gemini error mapping stamps into
+     * a 429's detail when the key's quota limit is literally 0
+     * (GeminiClient.httpError writes this exact phrase). A
+     * zero-limit quota is a missing allowance, not a busy
+     * service, so it gets its own words below.
+     */
+    const val NO_ALLOWANCE_MARKER = "quota limit: 0"
+
     fun of(error: AppError): ErrorUi = when (error) {
         AppError.NoNetwork ->
             ErrorUi("No internet connection.", "Try again")
@@ -25,8 +34,8 @@ object ErrorText {
 
         is AppError.RateLimited -> {
             // v1.3.4 (T3 refinement): 429 ≠ 503 in the user's
-            // words. A 503 is the SITE having trouble
-            // ("temporarily unavailable"); a 429 is the site
+            // words. A 503 is the SITE having trouble (v1.5.40:
+            // "isn't answering right now"); a 429 is the site
             // asking US to slow down ("too many requests") —
             // with the wait it named, when it named one.
             val waitSeconds = error.retryAfterSeconds ?: 0
@@ -37,10 +46,21 @@ object ErrorText {
                     " Try again in about $waitSeconds seconds."
                 else -> ""
             }
-            if ("503" in (error.detail ?: "")) {
+            if (NO_ALLOWANCE_MARKER in (error.detail ?: "")) {
+                // v1.5.40 (honest error words): a quota whose
+                // limit is 0 is not "too many requests" — the
+                // free key was never given an allowance for
+                // this at all, and waiting cannot heal it.
                 ErrorUi(
-                    "The site is temporarily unavailable — it's having " +
-                        "trouble right now.$wait",
+                    "Your free key has no painting allowance — " +
+                        "painting needs billing on the key.",
+                    "Check settings"
+                )
+            } else if ("503" in (error.detail ?: "")) {
+                // v1.5.40: the 503 words are the answering
+                // words, matching the source surfaces.
+                ErrorUi(
+                    "The site isn't answering right now.$wait",
                     "Try again"
                 )
             } else {

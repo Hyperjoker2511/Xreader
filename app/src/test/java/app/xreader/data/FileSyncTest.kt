@@ -12,9 +12,11 @@ import app.xreader.data.sync.SyncPayload
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.security.MessageDigest
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -195,6 +197,193 @@ class FileSyncTest {
             bookBytes,
             b.storage.resolve("books/${b.bookId}/novel.epub").readBytes()
         )
+    }
+
+    // -- v1.5.40: adversarial manifests (sync review P1 + P2) --------
+
+    private fun sha256Hex(data: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(data)
+            .joinToString("") { "%02x".format(it) }
+
+    /** Plants a hand-made manifest + blobs on the backend, as a
+     * crafted sync folder / backup would present them. */
+    private fun plantManifest(
+        backend: FakeBackend,
+        sync: BookFileSync,
+        entries: List<BookFileSync.FileEntry>,
+        blobs: Map<String, ByteArray>
+    ) {
+        for ((syncPath, blob) in blobs) {
+            backend.files[sync.remoteName(entries.first().bookKey, syncPath)] = blob
+        }
+        backend.files[BookFileSync.MANIFEST_NAME] =
+            BookFileSync.encodeManifest(
+                BookFileSync.FileManifest(entries = entries)
+            ).toByteArray(Charsets.UTF_8)
+    }
+
+    @Test
+    fun `pull refuses traversal sync paths in both vulnerable branches`() =
+        runTest {
+            val b = Device("victim").apply { seed(withFiles = false) }
+            val backend = FakeBackend()
+            val sync = b.fileSync()
+            val key = SyncKeys.bookKey(b.bookDao.getById(b.bookId)!!, null)
+            val blob = byteArrayOf(0x0B, 0x0A, 0x0D)
+            // Both entries are integrity-VALID (size + hash match
+            // the blob): only the containment check can stop them.
+            val entries = listOf(
+                BookFileSync.FileEntry(
+                    key, "book-file/../../../escaped.epub",
+                    blob.size.toLong(), sha256Hex(blob)
+                ),
+                BookFileSync.FileEntry(
+                    key, "content/img-../../../../escaped.png",
+                    blob.size.toLong(), sha256Hex(blob)
+                )
+            )
+            plantManifest(
+                backend, sync, entries,
+                mapOf(
+                    "book-file/../../../escaped.epub" to blob,
+                    "content/img-../../../../escaped.png" to blob
+                )
+            )
+
+            val report = (sync.pull(backend) as AppResult.Ok).value
+            assertEquals(0, report.downloaded)
+            assertEquals(2, report.skippedUnmatched)
+            // Nothing landed at either escape target: the
+            // book-file payload aimed above the device dir, the
+            // image payload at the device dir root.
+            assertFalse(File(temp.root, "escaped.epub").exists())
+            assertFalse(File(b.dir, "escaped.png").exists())
+            assertEquals(null, b.bookDao.getById(b.bookId)?.filePath)
+        }
+
+    @Test
+    fun `pull and backup refuse paths that land on the folder itself`() =
+        runTest {
+            val b = Device("rooted").apply { seed(withFiles = false) }
+            val sync = b.fileSync()
+            val key = SyncKeys.bookKey(b.bookDao.getById(b.bookId)!!, null)
+            // The folders the crafted entries aim at, standing
+            // as directories before anything runs.
+            val bookDir = File(b.dir, "books/${b.bookId}").apply { mkdirs() }
+            val contentDir =
+                File(b.dir, "content/${b.bookId}").apply { mkdirs() }
+            val blob = byteArrayOf(0x0B, 0x0A, 0x0D)
+            // Integrity-VALID entries (size + hash match) whose
+            // paths land ON the book/content directory itself:
+            // an empty rest, a "." rest, an img name that climbs
+            // back to the content root. Containment must refuse
+            // the root, not just escapes — before the fix these
+            // reached placeFile, which threw on the directory
+            // (aborting the pull, leaving a .tmp) or replaced an
+            // empty folder with the blob file.
+            val paths = listOf("book-file/", "book-file/.", "content/img-/..")
+            val entries = paths.map {
+                BookFileSync.FileEntry(
+                    key, it, blob.size.toLong(), sha256Hex(blob)
+                )
+            }
+
+            // Pull leg: all three refused, nothing thrown.
+            val backend = FakeBackend()
+            plantManifest(backend, sync, entries, paths.associateWith { blob })
+            val pullReport = (sync.pull(backend) as AppResult.Ok).value
+            assertEquals(0, pullReport.downloaded)
+            assertEquals(3, pullReport.skippedUnmatched)
+
+            // Backup leg: same manifest, staged integrity-valid
+            // files under the entries' backup names.
+            val staging = temp.newFolder("rooted-staged")
+            val extracted = entries.mapIndexed { index, entry ->
+                sync.backupEntryName(entry.bookKey, entry.syncPath) to
+                    File(staging, "blob-$index").apply { writeBytes(blob) }
+            }.toMap()
+            val backupReport = sync.applyFromBackup(
+                BookFileSync.FileManifest(entries = entries), extracted
+            )
+            assertEquals(0, backupReport.downloaded)
+            assertEquals(3, backupReport.skippedUnmatched)
+
+            // Both folders survived as directories, no staging
+            // temp was left beside either, and no row was
+            // pointed at a folder.
+            assertTrue(bookDir.isDirectory)
+            assertTrue(contentDir.isDirectory)
+            assertFalse(File(b.dir, "books/${b.bookId}.tmp").exists())
+            assertFalse(File(b.dir, "content/${b.bookId}.tmp").exists())
+            assertEquals(null, b.bookDao.getById(b.bookId)?.filePath)
+        }
+
+    @Test
+    fun `pull never places bytes that fail the manifest check`() = runTest {
+        val b = Device("checker").apply { seed(withFiles = false) }
+        val backend = FakeBackend()
+        val sync = b.fileSync()
+        val key = SyncKeys.bookKey(b.bookDao.getById(b.bookId)!!, null)
+        // Entry 1: the blob is TRUNCATED — size and hash both
+        // disagree with the manifest.
+        // Entry 2: the blob is the right SIZE but different
+        // bytes — only the hash can catch it.
+        val entries = listOf(
+            BookFileSync.FileEntry(
+                key, "book-file/novel.epub",
+                bookBytes.size.toLong(), sha256Hex(bookBytes)
+            ),
+            BookFileSync.FileEntry(
+                key, "cover/cover.jpg",
+                coverBytes.size.toLong(), sha256Hex(coverBytes)
+            )
+        )
+        plantManifest(
+            backend, sync, entries,
+            mapOf(
+                "book-file/novel.epub" to bookBytes.dropLast(1).toByteArray(),
+                "cover/cover.jpg" to
+                    ByteArray(coverBytes.size) { 0x11.toByte() }
+            )
+        )
+
+        val report = (sync.pull(backend) as AppResult.Ok).value
+        assertEquals(0, report.downloaded)
+        assertEquals(2, report.skippedUnmatched)
+        assertFalse(
+            b.storage.resolve("books/${b.bookId}/novel.epub").exists()
+        )
+        assertFalse(b.storage.resolve("covers/${b.bookId}.jpg").exists())
+        val book = b.bookDao.getById(b.bookId)!!
+        assertEquals(null, book.filePath)
+        assertEquals(null, book.coverPath)
+    }
+
+    @Test
+    fun `backup restore never places a tampered staged file`() = runTest {
+        val a = Device("src").apply { seed(withFiles = true) }
+        val b = Device("dst").apply { seed(withFiles = false) }
+        val (manifest, _) = a.fileSync().collectForBackup()
+        val bookEntry = manifest.entries.first {
+            it.syncPath.startsWith("book-file/")
+        }
+        // The staged bytes under the entry's name are NOT the
+        // bytes the manifest describes.
+        val staging = temp.newFolder("tampered")
+        val tampered = File(staging, "book.epub")
+        tampered.writeBytes(byteArrayOf(0x50, 0x4B, 0x03))
+        val extracted = mapOf(
+            a.fileSync().backupEntryName(bookEntry.bookKey, bookEntry.syncPath) to
+                tampered
+        )
+
+        val report = b.fileSync().applyFromBackup(manifest, extracted)
+        assertEquals(0, report.downloaded)
+        assertEquals(1, report.skippedUnmatched)
+        assertFalse(
+            b.storage.resolve("books/${b.bookId}/novel.epub").exists()
+        )
+        assertEquals(null, b.bookDao.getById(b.bookId)?.filePath)
     }
 
     @Test

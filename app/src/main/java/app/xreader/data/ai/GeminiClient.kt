@@ -289,6 +289,19 @@ class GeminiClient(
             GeminiModels.isKeyInvalid(code, body) || code == 401 ->
                 AppError.AuthFailed(SERVICE_ID, detail)
             code == 403 -> AppError.AuthFailed(SERVICE_ID, detail)
+            // v1.5.40 (honest error words): a 429 whose quota
+            // limit is 0 is a MISSING allowance (free keys get
+            // zero image quota), not a rate limit — waiting or
+            // slowing down can never heal it. The detail carries
+            // the NO_ALLOWANCE_MARKER phrase ErrorText keys on,
+            // and Google's raw quota text does NOT ride along.
+            code == 429 && GeminiModels.isZeroLimitQuota(body) ->
+                AppError.RateLimited(
+                    SERVICE_ID,
+                    detail = "HTTP 429: " +
+                        app.xreader.core.error.ErrorText.NO_ALLOWANCE_MARKER +
+                        " — this key has no free allowance"
+                )
             // v1.0.6.3 (P7): a 429 keeps Google's own words in the
             // detail — "quota exceeded, check your plan" is the
             // TRUTH an Illustrate failure must show, not a bare

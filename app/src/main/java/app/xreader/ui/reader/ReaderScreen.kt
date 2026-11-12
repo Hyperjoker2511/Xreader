@@ -1338,9 +1338,10 @@ private fun ReaderChrome(
                     // and Auto folded into the settings sheet —
                     // verified present there by symbol before
                     // folding (ReaderSheets.kt): typography on the
-                    // "Page & text" sub-page (SheetSection "Font",
-                    // the fontSizeSp SheetSlider, line height /
-                    // margins / alignment), theme in SheetSection
+                    // "Text & colours" sub-page (v1.5.40 rename;
+                    // SheetSection "Font", the fontSizeSp
+                    // SheetSlider, line height / margins /
+                    // alignment), theme in SheetSection
                     // "Page theme" on the same sub-page, and
                     // auto-scroll in SheetSection "Auto-scroll"
                     // (SheetSwitch "Auto-scroll / auto page-turn")

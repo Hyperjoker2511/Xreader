@@ -96,6 +96,12 @@ class DownloadController(
         // plus one bulk state flip — instead of two writes per
         // chapter racing every other database user on a big book.
         // A failure mid-batch now rolls back to nothing written.
+        // v1.5.40: the two bulk setters bind their id list into a
+        // `WHERE id IN (:ids)` statement — old SQLite (the
+        // Android 9 generation) caps a statement at 999 bound
+        // variables, so the lists are fed in ID_CHUNK_SIZE slices
+        // INSIDE the same transaction; the batch still lands
+        // whole or not at all.
         if (toEnqueue.isNotEmpty()) {
             inTransaction {
                 queueDao.insertAll(toEnqueue.map { chapter ->
@@ -105,15 +111,20 @@ class DownloadController(
                         enqueuedAt = now, updatedAt = now
                     )
                 })
-                chapterDao.setDownloadStateForIds(
-                    toEnqueue.map { it.id }, DownloadState.QUEUED
-                )
+                val ids = toEnqueue.map { it.id }
+                ids.chunked(ID_CHUNK_SIZE).forEach { chunk ->
+                    chapterDao.setDownloadStateForIds(
+                        chunk, DownloadState.QUEUED
+                    )
+                }
                 // Download-all is a USER action (§12.4): stamp the
                 // rows at enqueue, like enqueueChapter does.
-                chapterDao.setBodyOriginForIds(
-                    toEnqueue.map { it.id },
-                    app.xreader.data.download.BodyOrigin152.USER
-                )
+                ids.chunked(ID_CHUNK_SIZE).forEach { chunk ->
+                    chapterDao.setBodyOriginForIds(
+                        chunk,
+                        app.xreader.data.download.BodyOrigin152.USER
+                    )
+                }
             }
         }
         enqueuer.enqueueDrain()
@@ -208,5 +219,12 @@ class DownloadController(
     suspend fun touchBook(bookId: Long) {
         val book = bookDao.getById(bookId) ?: return
         bookDao.update(book.copy(updatedAt = clock()))
+    }
+
+    private companion object {
+        /** v1.5.40: slice size for the bulk id setters in
+         * [enqueueBook] — under old SQLite's 999-variable
+         * statement cap, with headroom. */
+        const val ID_CHUNK_SIZE = 900
     }
 }

@@ -69,6 +69,41 @@ class SummarizerTest {
     }
 
     @Test
+    fun `chapter summary asks for five bullets and keeps five`() = runBlocking {
+        // v1.5.40: summaries are 5 tight bullets (was 3) — the
+        // prompt must ask for exactly 5 and a 5-bullet answer
+        // must survive the parser whole.
+        var promptSeen = ""
+        val transport = FakeTransport { request ->
+            promptSeen = request.body.orEmpty()
+            FakeTransport.ok(
+                textBody("""["One","Two","Three","Four","Five"]""")
+            )
+        }
+        val summarizer = summarizer(transport, FakeAiSummaryDao())
+        val text = "A chapter with enough happening for five bullets. ".repeat(30)
+
+        val result = summarizer.chapterSummary(1, "Star Fall", chapter(11, 0), text)
+        assertTrue(result is AppResult.Ok)
+        assertTrue(
+            "the prompt must ask for exactly 5 bullets, was: $promptSeen",
+            promptSeen.contains("exactly 5")
+        )
+        assertEquals(
+            listOf("One", "Two", "Three", "Four", "Five"),
+            (result as AppResult.Ok).value.bullets
+        )
+    }
+
+    @Test
+    fun `bullet parser at five keeps a five bullet answer intact`() {
+        val parsed = Summarizer.parseBullets(
+            """["A","B","C","D","E"]""", expected = 5
+        )
+        assertEquals(listOf("A", "B", "C", "D", "E"), parsed)
+    }
+
+    @Test
     fun `book so far needs chapter summaries and caches against them`() = runBlocking {
         var calls = 0
         val transport = FakeTransport {
