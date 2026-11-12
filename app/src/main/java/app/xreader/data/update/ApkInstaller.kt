@@ -21,7 +21,22 @@ object ApkInstaller {
 
     /** True when Android will let Xreader start an install. */
     fun canInstall(context: Context): Boolean =
-        context.packageManager.canRequestPackageInstalls()
+        canInstall { context.packageManager.canRequestPackageInstalls() }
+
+    /**
+     * The guard behind [canInstall] (v1.5.42 hotfix): the
+     * platform call throws SecurityException when the manifest
+     * lacks REQUEST_INSTALL_PACKAGES, and that throw crashed
+     * the app on the Install tap. Any failure of the query
+     * reads as "not granted", which routes the user to the
+     * polite settings explanation instead of a crash.
+     */
+    internal fun canInstall(query: () -> Boolean): Boolean =
+        try {
+            query()
+        } catch (t: Throwable) {
+            false
+        }
 
     /** The system-installer intent for a downloaded APK,
      * served through the app's FileProvider (the `updates/`

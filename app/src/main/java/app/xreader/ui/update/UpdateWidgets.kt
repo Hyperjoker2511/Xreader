@@ -9,25 +9,27 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import app.xreader.data.update.UpdateDownloadPhase
 import app.xreader.ui.common.XreaderPrimaryButton
 
 /**
  * The update flow's shared pieces (v1.3.5): the card, the
  * What's New screen and the Settings section all present
  * the SAME download state the same way, driven by
- * [AppUpdateViewModel].
+ * the download's owner (UpdateDownloadManager, mirrored
+ * into [AppUpdateViewModel]'s state).
  */
 
 /** Download progress / failure / permission copy, in plain
  * words, sized for a card or a screen section alike. */
 @Composable
 fun UpdateProgressBlock(
-    phase: AppUpdateViewModel.DownloadPhase,
+    phase: UpdateDownloadPhase,
     modifier: Modifier = Modifier
 ) {
     when (phase) {
-        AppUpdateViewModel.DownloadPhase.None -> Unit
-        is AppUpdateViewModel.DownloadPhase.Running -> {
+        UpdateDownloadPhase.None -> Unit
+        is UpdateDownloadPhase.Running -> {
             Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (phase.fraction != null) {
                     LinearProgressIndicator(
@@ -49,28 +51,28 @@ fun UpdateProgressBlock(
                 }
             }
         }
-        AppUpdateViewModel.DownloadPhase.Verifying ->
+        UpdateDownloadPhase.Verifying ->
             Text(
                 "Checking the downloaded file…",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = modifier
             )
-        is AppUpdateViewModel.DownloadPhase.Ready ->
+        is UpdateDownloadPhase.Ready ->
             Text(
                 "Downloaded and checked — ready to install.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = modifier
             )
-        is AppUpdateViewModel.DownloadPhase.Failed ->
+        is UpdateDownloadPhase.Failed ->
             Text(
                 phase.text,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
                 modifier = modifier
             )
-        AppUpdateViewModel.DownloadPhase.NeedsInstallPermission ->
+        UpdateDownloadPhase.NeedsInstallPermission ->
             Text(
                 "Android needs your OK before Xreader can install " +
                     "updates. Tap Open settings, turn on “Allow from " +
@@ -88,34 +90,35 @@ fun UpdateProgressBlock(
  * the permission detour routes to Settings. */
 @Composable
 fun UpdatePrimaryButton(
-    phase: AppUpdateViewModel.DownloadPhase,
+    phase: UpdateDownloadPhase,
     onUpdateNow: () -> Unit,
     onInstall: () -> Unit,
     onOpenInstallSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     when (phase) {
-        AppUpdateViewModel.DownloadPhase.None ->
+        UpdateDownloadPhase.None ->
             XreaderPrimaryButton("Update now", onUpdateNow, modifier)
-        is AppUpdateViewModel.DownloadPhase.Running ->
+        is UpdateDownloadPhase.Running ->
             XreaderPrimaryButton("Downloading…", {}, modifier, enabled = false)
-        AppUpdateViewModel.DownloadPhase.Verifying ->
+        UpdateDownloadPhase.Verifying ->
             XreaderPrimaryButton("Checking…", {}, modifier, enabled = false)
-        is AppUpdateViewModel.DownloadPhase.Ready ->
+        is UpdateDownloadPhase.Ready ->
             XreaderPrimaryButton("Install", onInstall, modifier)
-        is AppUpdateViewModel.DownloadPhase.Failed ->
+        is UpdateDownloadPhase.Failed ->
             XreaderPrimaryButton("Try again", onUpdateNow, modifier)
-        AppUpdateViewModel.DownloadPhase.NeedsInstallPermission ->
+        UpdateDownloadPhase.NeedsInstallPermission ->
             XreaderPrimaryButton("Open settings", onOpenInstallSettings, modifier)
     }
 }
 
-/** `57,915,742` bytes → "55 MB" — a person's unit, not a
- * byte count. */
+/** `71,383,446` bytes → "71.4 MB" — a person's unit, not a
+ * byte count, with one decimal (v1.5.42 card anatomy: the
+ * size rides the "You're on …" line and must read exactly). */
 fun formatDownloadSize(bytes: Long): String = when {
     bytes <= 0 -> ""
     bytes >= 1_000_000_000 -> "%.1f GB".format(bytes / 1_000_000_000.0)
-    bytes >= 1_000_000 -> "${(bytes / 1_000_000.0).roundToInt()} MB"
+    bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
     bytes >= 1_000 -> "${(bytes / 1_000.0).roundToInt()} KB"
     else -> "$bytes B"
 }

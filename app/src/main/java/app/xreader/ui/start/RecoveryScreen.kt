@@ -2,11 +2,14 @@ package app.xreader.ui.start
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +45,14 @@ import app.xreader.ui.common.ScreenHeader
  * [onSafeAppearance] is the crash-loop escape: it persistently
  * switches glass to Tinted BEFORE entering the app, so a bad
  * appearance state can never lock the user out.
+ *
+ * v1.5.42 (hotfix): the note card takes the column's flexible
+ * space and the note text scrolls INSIDE the card, so the
+ * actions below are always on screen. Before this, the column
+ * never scrolled and a long crash note pushed Continue off
+ * the bottom of small screens — and since the note is cleared
+ * only from those actions, the screen returned on every
+ * launch and locked the user out.
  */
 @Composable
 fun RecoveryScreen(
@@ -72,17 +83,24 @@ fun RecoveryScreen(
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
                     shape = RoundedCornerShape(24.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
                 ) {
                     Column(
-                        Modifier.padding(16.dp),
+                        Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text("Crash note", style = MaterialTheme.typography.titleMedium)
                         Text(
                             note.trim(),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(rememberScrollState())
                         )
                         Text(
                             "Only the time and the kind of error — never your " +
@@ -93,6 +111,8 @@ fun RecoveryScreen(
                         )
                     }
                 }
+            } else {
+                Spacer(Modifier.weight(1f))
             }
             PrimaryPill(
                 text = "Continue to your library",

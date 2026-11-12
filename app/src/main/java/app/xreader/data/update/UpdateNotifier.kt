@@ -59,9 +59,36 @@ class UpdateNotifier(private val context: Context) {
      * (unknown length) shows the indeterminate bar. */
     fun showProgress(version: String, fraction: Float?) {
         if (!manager.areNotificationsEnabled()) return
+        runCatching {
+            manager.notify(
+                NOTIFICATION_ID,
+                buildProgressNotification(version, fraction)
+            )
+        }
+    }
+
+    /**
+     * The progress notification itself, built without posting
+     * (v1.5.42): UpdateDownloadService needs the object for
+     * its startForeground call, and [showProgress] posts the
+     * same object for the running updates. The Cancel action
+     * routes to the service, which cancels the download in
+     * [UpdateDownloadManager] — the download's one explicit
+     * stop, available even with the app hidden.
+     */
+    fun buildProgressNotification(
+        version: String,
+        fraction: Float?
+    ): android.app.Notification {
         val builder = baseBuilder()
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Downloading Xreader $version")
+            .setContentTitle(
+                if (version.isNotBlank()) {
+                    "Downloading Xreader $version"
+                } else {
+                    "Downloading the Xreader update"
+                }
+            )
             .setContentText(
                 if (fraction != null) {
                     "${(fraction * 100).toInt()}% downloaded"
@@ -69,12 +96,22 @@ class UpdateNotifier(private val context: Context) {
                     "Downloading…"
                 }
             )
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Cancel",
+                PendingIntent.getService(
+                    context, 1,
+                    UpdateDownloadService.cancelIntent(context),
+                    PendingIntent.FLAG_UPDATE_CURRENT or
+                        PendingIntent.FLAG_IMMUTABLE
+                )
+            )
         if (fraction != null) {
             builder.setProgress(100, (fraction * 100).toInt(), false)
         } else {
             builder.setProgress(0, 0, true)
         }
-        runCatching { manager.notify(NOTIFICATION_ID, builder.build()) }
+        return builder.build()
     }
 
     fun showReady(version: String) {
@@ -107,6 +144,10 @@ class UpdateNotifier(private val context: Context) {
 
     companion object {
         private const val CHANNEL_ID = "app_updates"
-        private const val NOTIFICATION_ID = 4201
+
+        /** Shared with UpdateDownloadService, whose
+         * startForeground call posts under the same id the
+         * progress updates use — one notification throughout. */
+        const val NOTIFICATION_ID = 4201
     }
 }

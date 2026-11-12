@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -62,6 +63,7 @@ import app.xreader.core.motion.stackPopExit
 import app.xreader.core.motion.tabEnter
 import app.xreader.core.motion.tabExit
 import app.xreader.core.motion.specFor
+import app.xreader.core.motion.toSpec
 import app.xreader.core.motion.SpringMotionEngine
 import app.xreader.data.db.Book
 import app.xreader.data.extension.player.PlayerChallengeBridge
@@ -112,6 +114,8 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import dev.chrisbanes.haze.hazeSource
 import java.io.File
 import kotlinx.coroutines.flow.first
@@ -618,9 +622,10 @@ fun MainScaffold(
                 packViewModel = packViewModel
             )
         }
-        // v1.3.5: the floating update card, over the Library
-        // only, above the dock — at most once a day, and it
-        // never blocks reading.
+        // v1.3.5: the update card — v1.5.42 makes it a
+        // centred modal over a dimmed scrim (see
+        // UpdateCardOverlay), presented over the Library
+        // only, at most once a day.
         UpdateCardOverlay(
             navController = navController,
             viewModel = appUpdateViewModel,
@@ -631,12 +636,15 @@ fun MainScaffold(
 }
 
 /**
- * v1.3.5: the floating update card's host. It floats over
- * the Library (the app's home) above the navigation dock,
- * appears only while the updater has a card to present —
- * the ViewModel enforces the once-a-day rule — and floats
- * over the content without ever blocking it: the Library
- * stays fully usable around and under it.
+ * v1.3.5: the update card's host — v1.5.42 redesign: a
+ * CENTRED modal over a dimmed scrim, springing in on the
+ * app's Dialog profile, presented over the Library (the
+ * app's home) only while the updater has a card to present
+ * — the ViewModel enforces the once-a-day rule. Every exit
+ * that is not Cancel (scrim tap, the card's own doors,
+ * Android Back) routes to the ViewModel's dismiss, which
+ * only closes the card: during a download the download
+ * continues in the background.
  */
 @Composable
 private fun UpdateCardOverlay(
@@ -647,30 +655,74 @@ private fun UpdateCardOverlay(
     val backStack by navController.currentBackStackEntryAsState()
     val onLibrary = backStack?.destination?.route == Tab.Library.route
     val state by viewModel.state.collectAsStateWithLifecycle()
-    androidx.compose.animation.AnimatedVisibility(
-        visible = onLibrary && state.cardRelease != null,
-        enter = fadeIn(fadeTween<Float>()),
-        exit = fadeOut(fadeTween<Float>()),
+    val visible = onLibrary && state.cardRelease != null
+    // Keep the last presented state through the exit
+    // animation — dismissing clears cardRelease at once,
+    // and the card must not vanish a frame before the
+    // scrim fades.
+    var lastState by remember {
+        mutableStateOf<app.xreader.ui.update.AppUpdateViewModel.UiState?>(null)
+    }
+    androidx.compose.runtime.LaunchedEffect(state) {
+        if (state.cardRelease != null) lastState = state
+    }
+    val shownState = if (visible) state else lastState
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(fadeTween<Float>()) + scaleIn(
+            initialScale = 0.86f,
+            animationSpec = SpringMotionEngine.Dialog.toSpec()
+        ),
+        exit = fadeOut(fadeTween<Float>()) + scaleOut(
+            targetScale = 0.94f,
+            animationSpec = SpringMotionEngine.Dialog.toSpec()
+        ),
         modifier = Modifier.fillMaxSize()
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .padding(horizontal = 20.dp)
-                // Above the floating dock (64dp) + its margin,
-                // and clear of the phone's dead bottom strip.
-                .padding(bottom = 108.dp),
-            contentAlignment = Alignment.BottomCenter
-        ) {
-            app.xreader.ui.update.UpdateCard(
-                state = state,
-                onUpdateNow = { viewModel.startDownload() },
-                onIgnore = { viewModel.ignoreCard() },
-                onReadMore = onReadMore,
-                onInstall = { viewModel.install() },
-                onCancelDownload = { viewModel.cancelDownload() },
-                onOpenInstallSettings = { viewModel.openInstallPermissionSettings() }
+        val cardState = shownState ?: return@AnimatedVisibility
+        Box(Modifier.fillMaxSize()) {
+            // The scrim: a tap outside the card dismisses
+            // (during a download: hides — it keeps going).
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.38f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { viewModel.dismissCard() }
             )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 22.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                // The card swallows its own taps so they
+                // never fall through to the scrim.
+                Box(
+                    Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { }
+                ) {
+                    app.xreader.ui.update.UpdateCard(
+                        state = cardState,
+                        onUpdateNow = { viewModel.startDownload() },
+                        onDismiss = { viewModel.dismissCard() },
+                        onReadMore = onReadMore,
+                        onInstall = { viewModel.install() },
+                        onCancelDownload = { viewModel.cancelDownload() },
+                        onOpenInstallSettings = {
+                            viewModel.openInstallPermissionSettings()
+                        },
+                        modifier = Modifier.widthIn(max = 410.dp)
+                    )
+                }
+            }
+        }
+        androidx.activity.compose.BackHandler(enabled = true) {
+            viewModel.dismissCard()
         }
     }
 }
@@ -2043,7 +2095,12 @@ private fun XreaderNavHost(
                 onCheckNow = { appUpdateViewModel.checkManually() },
                 onAutoCheckChange = { appUpdateViewModel.setAutoCheck(it) },
                 onOpenWhatsNew = { navController.navigate("whatsNew") },
-                onOpenAbout = { navController.navigate("about") }
+                onOpenAbout = { navController.navigate("about") },
+                onUpdateNow = { appUpdateViewModel.startDownload() },
+                onInstall = { appUpdateViewModel.install() },
+                onOpenInstallSettings = {
+                    appUpdateViewModel.openInstallPermissionSettings()
+                }
             )
         }
         // v1.3.5: the full release notes, read inside the

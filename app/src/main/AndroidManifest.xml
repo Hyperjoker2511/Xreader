@@ -4,7 +4,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Required beside the dataSync foreground-service type
+         at targetSdk 34+ (the update download's service). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- In-app updater: the system answers
+         PackageManager.canRequestPackageInstalls() with a
+         SecurityException when this permission is not declared,
+         which crashed the Install tap (v1.5.42 hotfix). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Labs eye-tracking only (Phase 4): requested at runtime solely
          when the user enables the experiment. -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -40,6 +48,14 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@style/Theme.Xreader" />
+
+        <!-- v1.5.42: the update download's foreground shell —
+             keeps the process alive while UpdateDownloadManager
+             downloads in the background; dataSync type. -->
+        <service
+            android:name=".data.update.UpdateDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- Quote-card sharing (Phase 6): hands the rendered PNG to
              the share sheet; exposes only the quote-cards cache dir. -->

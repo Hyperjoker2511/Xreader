@@ -64,7 +64,10 @@ fun UpdatesAboutScreen(
     onCheckNow: () -> Unit,
     onAutoCheckChange: (Boolean) -> Unit,
     onOpenWhatsNew: () -> Unit,
-    onOpenAbout: () -> Unit
+    onOpenAbout: () -> Unit,
+    onUpdateNow: () -> Unit,
+    onInstall: () -> Unit,
+    onOpenInstallSettings: () -> Unit
 ) {
     val context = LocalContext.current
     fun openUrl(url: String) {
@@ -112,6 +115,18 @@ fun UpdatesAboutScreen(
                 subtitle = "Read the release notes and update",
                 onClick = onOpenWhatsNew,
                 trailing = { Chevron() }
+            )
+            // v1.5.42: the direct action lives HERE too —
+            // Update / Install per phase, on the same
+            // manager state as the card, not only a link
+            // onward to the What's New screen.
+            UpdateProgressBlock(state.download)
+            UpdatePrimaryButton(
+                phase = state.download,
+                onUpdateNow = onUpdateNow,
+                onInstall = onInstall,
+                onOpenInstallSettings = onOpenInstallSettings,
+                modifier = Modifier.fillMaxWidth()
             )
         }
         UpdateRow(

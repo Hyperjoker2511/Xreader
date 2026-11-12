@@ -1943,6 +1943,46 @@ class AppContainer(
         )
     }
 
+    /** v1.5.42: the update download's owner — app-scoped, so
+     * a download started from the card continues with the
+     * card hidden and the app left behind (the owner's
+     * "not background" fix). The hooks speak through
+     * UpdateNotifier, and the download's start also starts
+     * the thin foreground service that keeps the process
+     * alive; the service stops itself at the terminal phase.
+     * The start is belt-and-braces runCatching: the download
+     * itself never depends on the service, only its process
+     * priority does. */
+    val updateDownloadManager: app.xreader.data.update.UpdateDownloadManager by lazy {
+        val notifier = app.xreader.data.update.UpdateNotifier(appContext)
+        app.xreader.data.update.UpdateDownloadManager(
+            scope = appScope,
+            downloadAndVerify = { release, onProgress ->
+                updateRepository.downloadAndVerify(
+                    release,
+                    java.io.File(appContext.cacheDir, "updates"),
+                    onProgress
+                )
+            },
+            updatesDir = { java.io.File(appContext.cacheDir, "updates") },
+            onDownloadStarted = { version ->
+                runCatching {
+                    androidx.core.content.ContextCompat.startForegroundService(
+                        appContext,
+                        app.xreader.data.update.UpdateDownloadService
+                            .startIntent(appContext, version)
+                    )
+                }
+            },
+            onProgress = { version, fraction ->
+                notifier.showProgress(version, fraction)
+            },
+            onReady = { version -> notifier.showReady(version) },
+            onFailed = { notifier.showFailed() },
+            onCancelled = { notifier.clear() }
+        )
+    }
+
     /** The EXP engine: every settle() is idempotent, so callers
      * (reader close, shell start, Profile open) can fire it freely. */
     val expService: app.xreader.data.game.ExpService =
