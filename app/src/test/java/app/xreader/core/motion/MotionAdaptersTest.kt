@@ -22,14 +22,18 @@ class MotionAdaptersTest {
     }
 
     @Test
-    fun `nav parallax is the quarter offset`() {
-        // D8 geometry: covered/returning screens drift width / 4.
-        assertEquals(25, SpringMotionEngine.navParallaxOffset(100))
-        assertEquals(270, SpringMotionEngine.navParallaxOffset(1080))
+    fun `nav parallax is a quarter of the travel`() {
+        // Patch 8 geometry (owner decision 2026-11-14, re-pinning the
+        // D8 pin below): pushed screens travel width / 6 and covered /
+        // returning screens drift a quarter OF THAT TRAVEL = width / 24.
+        // D8's original geometry (full-width travel, drift width / 4)
+        // pinned 25 / 270 / 1 with divisor 4 until this patch.
+        assertEquals(4, SpringMotionEngine.navParallaxOffset(100))
+        assertEquals(45, SpringMotionEngine.navParallaxOffset(1080))
         assertEquals(0, SpringMotionEngine.navParallaxOffset(0))
-        assertEquals(1, SpringMotionEngine.navParallaxOffset(7))
+        assertEquals(0, SpringMotionEngine.navParallaxOffset(7))
         assertEquals(400, SpringMotionEngine.NAV_TRANSITION_MS)
-        assertEquals(4, SpringMotionEngine.NAV_PARALLAX_DIVISOR)
+        assertEquals(24, SpringMotionEngine.NAV_PARALLAX_DIVISOR)
     }
 
     @Test

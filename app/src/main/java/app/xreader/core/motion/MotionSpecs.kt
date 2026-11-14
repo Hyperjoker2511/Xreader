@@ -125,14 +125,19 @@ fun sharedAxisXPopExit(reduceMotion: Boolean): ExitTransition =
     else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) { it / 6 } +
         fadeOut(fadeTween())
 
-// --- Nav stack (v1.0.4, D8): the user's Apple-style transitions.
-// --- Geometry is the design and is not negotiable: pushed screens
-// --- travel the FULL width; the covered screen (forward) and the
-// --- returning screen (back) drift only the engine's quarter
-// --- parallax offset. The curve is the paste's timed 400 ms — iOS
-// --- stack motion is a timed curve, and the number lives in the
-// --- engine (NAV_TRANSITION_MS), never in a screen. Tab switches
-// --- use the plain crossfade below (Apple's tabs don't slide).
+// --- Nav stack (v1.0.4, D8; retuned by Patch 8, Orion piece 2):
+// --- the user's Apple-style transitions. Geometry: pushed screens
+// --- travel a SHORT distance — 1/6 of the width, the shared-axis
+// --- distance (D8's original travelled the FULL width); the
+// --- covered screen (forward) and the returning screen (back)
+// --- drift only the engine's parallax offset, which scales with
+// --- the travel (width/24 — the drift stays a quarter OF THE
+// --- TRAVEL, so the background never outruns the foreground).
+// --- The curve is the paste's timed 400 ms — iOS stack motion is
+// --- a timed curve, and the number lives in the engine
+// --- (NAV_TRANSITION_MS), never in a screen. Tab switches use
+// --- the crossfade below (D8) plus Patch 8's gentle 12.dp
+// --- directional nudge — never a full-width slide.
 
 /** The nav slide curve (IntOffset travel): the D8 timed token. */
 fun navSlideSpec() = tween<IntOffset>(
@@ -146,35 +151,59 @@ fun navFadeSpec() = tween<Float>(
     easing = FadeEasing
 )
 
-/** Pushed screen arriving: full slide in from the right + fade. */
+/** Pushed screen arriving: short slide in from the right — 1/6 of
+ * the width (Patch 8 retune; D8's original travelled the full
+ * width) + fade. */
 fun stackEnter(reduceMotion: Boolean): EnterTransition =
     if (reduceMotion) fadeIn(fadeTween())
-    else slideInHorizontally(navSlideSpec()) { it } + fadeIn(navFadeSpec())
+    else slideInHorizontally(navSlideSpec()) { it / 6 } + fadeIn(navFadeSpec())
 
-/** Screen being covered: parallax drift to the quarter offset + fade. */
+/** Screen being covered: parallax drift to the engine's offset
+ * (width/24 after Patch 8) + fade. */
 fun stackExit(reduceMotion: Boolean): ExitTransition =
     if (reduceMotion) fadeOut(fadeTween())
     else slideOutHorizontally(navSlideSpec()) {
         -SpringMotionEngine.navParallaxOffset(it)
     } + fadeOut(navFadeSpec())
 
-/** Screen being returned to: starts at the quarter offset + fade. */
+/** Screen being returned to: starts at the engine's parallax
+ * offset (width/24 after Patch 8) + fade. */
 fun stackPopEnter(reduceMotion: Boolean): EnterTransition =
     if (reduceMotion) fadeIn(fadeTween())
     else slideInHorizontally(navSlideSpec()) {
         -SpringMotionEngine.navParallaxOffset(it)
     } + fadeIn(navFadeSpec())
 
-/** Popped screen leaving: full slide out to the right + fade. */
+/** Popped screen leaving: short slide out to the right — 1/6 of
+ * the width (Patch 8) + fade. */
 fun stackPopExit(reduceMotion: Boolean): ExitTransition =
     if (reduceMotion) fadeOut(fadeTween())
-    else slideOutHorizontally(navSlideSpec()) { it } + fadeOut(navFadeSpec())
+    else slideOutHorizontally(navSlideSpec()) { it / 6 } + fadeOut(navFadeSpec())
 
-/** Tab-to-tab: the existing calm crossfade — tabs never slide (D8). */
-fun tabEnter(): EnterTransition = fadeIn(fadeTween())
+/**
+ * Tab-to-tab: the D8 calm crossfade, plus Patch 8's gentle
+ * directional nudge. [direction] is the sign of the tab-ordinal
+ * travel: +1 toward a LATER tab (the incoming tab starts [slidePx]
+ * to the right and settles in), −1 toward an EARLIER tab (mirror),
+ * 0 for same-tab/unknown — the plain crossfade. [slidePx] is the
+ * nudge distance in px (the shell resolves 12.dp and passes 0
+ * under reduced motion, which also yields the plain crossfade).
+ * The nudge rides the crossfade's own curve ([fadeTween]) so the
+ * fade and the slide stay phase-locked; the defaults keep the
+ * original crossfade for any caller that passes nothing.
+ */
+fun tabEnter(direction: Int = 0, slidePx: Int = 0): EnterTransition =
+    if (direction == 0 || slidePx == 0) fadeIn(fadeTween())
+    else slideInHorizontally(fadeTween()) { direction * slidePx } +
+        fadeIn(fadeTween())
 
-/** Tab-to-tab exit: the existing calm crossfade (D8). */
-fun tabExit(): ExitTransition = fadeOut(fadeTween())
+/** Tab-to-tab exit: the D8 crossfade; the outgoing tab drifts
+ * [slidePx] AGAINST the travel direction (Patch 8) — toward a
+ * later tab it drifts left, toward an earlier tab right. */
+fun tabExit(direction: Int = 0, slidePx: Int = 0): ExitTransition =
+    if (direction == 0 || slidePx == 0) fadeOut(fadeTween())
+    else slideOutHorizontally(fadeTween()) { -direction * slidePx } +
+        fadeOut(fadeTween())
 
 /** Shared Axis Y for sheets: rises on the Sheet (heavy) spring. */
 fun sharedAxisYEnter(reduceMotion: Boolean): EnterTransition =

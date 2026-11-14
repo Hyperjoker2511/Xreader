@@ -1079,6 +1079,25 @@ private fun RailShell(
     }
 }
 
+/**
+ * Patch 8: the tab-travel direction for the NavHost transitions'
+ * directional nudge — +1 when [toRoute] is a LATER tab than
+ * [fromRoute] in the Tab enum's declared order, −1 when earlier,
+ * 0 when either endpoint is not a tab or both are the same tab.
+ * Direction comes from Tab.entries ordinals: the shell's tabRoutes
+ * set carries membership only, never order, so it cannot be read
+ * for this.
+ */
+private fun tabTravelDirection(fromRoute: String?, toRoute: String?): Int {
+    val from = Tab.entries.firstOrNull { it.route == fromRoute } ?: return 0
+    val to = Tab.entries.firstOrNull { it.route == toRoute } ?: return 0
+    return when {
+        to.ordinal > from.ordinal -> 1
+        to.ordinal < from.ordinal -> -1
+        else -> 0
+    }
+}
+
 @Composable
 private fun XreaderNavHost(
     navController: NavHostController,
@@ -1206,11 +1225,19 @@ private fun XreaderNavHost(
     androidx.compose.runtime.LaunchedEffect(syncViewModel) {
         syncViewModel.autoSyncIfDue()
     }
-    // v1.0.4 (D8): the user's Apple stack geometry for PUSHED
-    // routes (full slide in, quarter-offset parallax out/back);
-    // tab-to-tab switches crossfade and never slide. The branch is
-    // the engine's pure isTabSwitch over the two endpoint routes.
+    // v1.0.4 (D8) + Patch 8 (Orion transitions retune): PUSHED
+    // routes use the user's Apple stack geometry, shortened by
+    // Patch 8 — slide in over 1/6 of the width, parallax drift
+    // scaled to match (width/24, in the engine); tab-to-tab
+    // switches keep the D8 crossfade and gain a gentle 12.dp
+    // directional nudge. The branch is the engine's pure
+    // isTabSwitch over the two endpoint routes.
     val tabRoutes = remember { Tab.entries.map { it.route }.toSet() }
+    // Patch 8: the tab nudge distance in px (12.dp), resolved here
+    // where density lives; reduced motion zeroes it, and the tab
+    // switches stay the plain D8 crossfade.
+    val tabSlidePx = if (reduceMotion) 0
+        else with(LocalDensity.current) { 12.dp.toPx() }.roundToInt()
     // Liquid Glass, piece 3 (Dock Glass): the destination content
     // itself is a haze source (zIndex 1, above the MeshBackdrop
     // base at zIndex 0), so the dock's glass samples the ACTUAL
@@ -1236,28 +1263,48 @@ private fun XreaderNavHost(
                     initialState.destination.route,
                     targetState.destination.route, tabRoutes
                 )
-            ) tabEnter() else stackEnter(reduceMotion)
+            ) tabEnter(
+                tabTravelDirection(
+                    initialState.destination.route, targetState.destination.route
+                ),
+                tabSlidePx
+            ) else stackEnter(reduceMotion)
         },
         exitTransition = {
             if (SpringMotionEngine.isTabSwitch(
                     initialState.destination.route,
                     targetState.destination.route, tabRoutes
                 )
-            ) tabExit() else stackExit(reduceMotion)
+            ) tabExit(
+                tabTravelDirection(
+                    initialState.destination.route, targetState.destination.route
+                ),
+                tabSlidePx
+            ) else stackExit(reduceMotion)
         },
         popEnterTransition = {
             if (SpringMotionEngine.isTabSwitch(
                     initialState.destination.route,
                     targetState.destination.route, tabRoutes
                 )
-            ) tabEnter() else stackPopEnter(reduceMotion)
+            ) tabEnter(
+                tabTravelDirection(
+                    initialState.destination.route, targetState.destination.route
+                ),
+                tabSlidePx
+            ) else stackPopEnter(reduceMotion)
         },
         popExitTransition = {
             if (SpringMotionEngine.isTabSwitch(
                     initialState.destination.route,
                     targetState.destination.route, tabRoutes
                 )
-            ) tabExit() else stackPopExit(reduceMotion)
+            ) tabExit(
+                tabTravelDirection(
+                    initialState.destination.route, targetState.destination.route
+                ),
+                tabSlidePx
+            ) else stackPopExit(reduceMotion)
         }
     ) {
         composable(Tab.Library.route) {

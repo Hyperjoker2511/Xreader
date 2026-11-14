@@ -106,25 +106,36 @@ object SpringMotionEngine {
 
     val pressProfiles: List<SpringProfile> = listOf(ApplePress)
 
-    // ── Nav stack family (v1.0.4, D8 — user-supplied) ──────────
+    // ── Nav stack family (v1.0.4, D8 — user-supplied; geometry
+    // retuned by Patch 8) ──────────
     // The THIRD user-directed exception, again kept out of
     // [profiles]: the user pasted Apple's stack transitions and
-    // their geometry is the design — new screens travel the FULL
-    // width, the screen being covered (or returned to) drifts only
-    // a QUARTER (parallax). iOS drives that geometry with a timed
-    // curve, not a spring, so the nav token is a duration: 400 ms,
-    // the paste's number verbatim. Tab-to-tab switches never slide
-    // (Apple's tabs don't either) — the shell crossfades those; the
-    // pure decision + offset math live here so they are testable.
+    // their geometry is the design. D8's original geometry: new
+    // screens travel the FULL width, the screen being covered (or
+    // returned to) drifts only a QUARTER of that (parallax).
+    // Patch 8 (Orion transitions) shortens the travel to 1/6 of
+    // the width and scales the drift WITH it (width / 24), so the
+    // drift stays a quarter OF THE TRAVEL — the depth cue holds
+    // and the background never outruns the foreground. iOS drives
+    // that geometry with a timed curve, not a spring, so the nav
+    // token is a duration: 400 ms, the paste's number verbatim.
+    // Tab-to-tab switches crossfade (D8) with a gentle 12.dp
+    // directional nudge (Patch 8) — the shell crossfades those;
+    // the pure decision + offset math live here so they are
+    // testable.
 
     /** Nav stack transition duration (user-supplied, D8). */
     const val NAV_TRANSITION_MS = 400
 
-    /** The parallax divisor: covered screens drift width / this. */
-    const val NAV_PARALLAX_DIVISOR = 4
+    /** The parallax divisor: covered screens drift width / this.
+     * Patch 8: 24 — the drift scaled with the shortened 1/6 travel
+     * (D8's 4 was against the old full-width travel). */
+    const val NAV_PARALLAX_DIVISOR = 24
 
-    /** How far a covered/returning screen drifts for a full-width
-     * travel of [fullPx] — the quarter-offset parallax (D8). */
+    /** How far a covered/returning screen drifts for a container
+     * width of [fullPx] — a quarter of the 1/6-width travel,
+     * i.e. width / 24 (Patch 8; D8's was width / 4 against the
+     * full-width travel). */
     fun navParallaxOffset(fullPx: Int): Int = fullPx / NAV_PARALLAX_DIVISOR
 
     /**
