@@ -70,6 +70,7 @@ import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.common.ProgressPillBar
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.common.StatusPill
+import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.ReaderPalettes
 import app.xreader.ui.theme.maxContrast
 import kotlinx.coroutines.flow.SharingStarted
@@ -487,6 +488,10 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
 
     fun setGridColumns(value: Int) {
         viewModelScope.launch { container.libraryPrefs.setGridColumns(value) }
+    }
+
+    fun clearGridColumns() {
+        viewModelScope.launch { container.libraryPrefs.clearGridColumns() }
     }
 
     fun setShowContinueReading(value: Boolean) {
@@ -1120,13 +1125,29 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             }
             if (library.layout == LibraryLayout.GRID) {
                 Text("Columns across", style = MaterialTheme.typography.bodyLarge)
+                // Adaptive metrics (Patch 5): the chips show what
+                // the Library actually renders. In AUTO (no stored
+                // choice) the width tier decides, so the Auto chip
+                // carries the tier's count and shows selected, and
+                // no number chip is picked — the stored placeholder
+                // is NOT presented as the user's choice. Tapping a
+                // number stores the explicit value and ends auto;
+                // tapping Auto removes the stored key and hands
+                // the count back to the tier.
+                val uiMetrics = LocalUiMetrics.current
                 androidx.compose.foundation.layout.FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    FilterChip(
+                        selected = library.gridColumnsAuto,
+                        onClick = { viewModel.clearGridColumns() },
+                        label = { Text("Auto (${uiMetrics.gridColumns})") }
+                    )
                     listOf(2, 3, 4).forEach { columns ->
                         FilterChip(
-                            selected = library.gridColumns == columns,
+                            selected = !library.gridColumnsAuto &&
+                                library.gridColumns == columns,
                             onClick = { viewModel.setGridColumns(columns) },
                             label = { Text("$columns") }
                         )

@@ -248,12 +248,17 @@ fun XreaderTheme(
         LocalHazeState provides if (hazeReady) hazeState else null,
         androidx.compose.ui.platform.LocalDensity provides scaledDensity
     ) {
-        MaterialTheme(
-            colorScheme = colors,
-            typography = XreaderTypography,
-            shapes = glass.shapes(),
-            content = content
-        )
+        // Adaptive metrics (Patch 5): LocalUiMetrics installed at
+        // the root from the live window width, beside the other
+        // theme-level locals, so any screen can read its tier row.
+        ProvideUiMetrics {
+            MaterialTheme(
+                colorScheme = colors,
+                typography = XreaderTypography,
+                shapes = glass.shapes(),
+                content = content
+            )
+        }
     }
 }
 

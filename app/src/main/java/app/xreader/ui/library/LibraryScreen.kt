@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.errorTextColor
 import app.xreader.ui.theme.sageTextColor
 
@@ -217,6 +218,20 @@ fun LibraryScreen(
         )
         val byId = inShelf.associateBy { it.book.id }
         ordered.mapNotNull { byId[it.bookId] }
+    }
+
+    // Adaptive metrics (Patch 5, spec correction): the cover
+    // grid's column count. An explicit Customise choice always
+    // wins (gridColumnsAuto == false — the user tapped a chip);
+    // a user who never chose gets the width tier's count for the
+    // phone in hand. Only the RESOLVED count changes — the
+    // chunked-row mechanics below are untouched, and the bento
+    // layout keeps its own fixed 3.
+    val uiMetrics = LocalUiMetrics.current
+    val gridColumns = if (state.libraryPrefs.gridColumnsAuto) {
+        uiMetrics.gridColumns
+    } else {
+        state.libraryPrefs.gridColumns
     }
 
     fun onBookClick(shelfBook: ShelfBook) {
@@ -819,7 +834,7 @@ fun LibraryScreen(
                 app.xreader.data.library.LibraryLayout.GRID
             ) {
                 items(
-                    visibleBooks.chunked(state.libraryPrefs.gridColumns),
+                    visibleBooks.chunked(gridColumns),
                     key = { row -> "gridrow-" + row.joinToString("-") { it.book.id.toString() } }
                 ) { rowBooks ->
                     Row(
@@ -848,7 +863,7 @@ fun LibraryScreen(
                                 modifier = Modifier.weight(1f)
                             )
                         }
-                        repeat(state.libraryPrefs.gridColumns - rowBooks.size) {
+                        repeat(gridColumns - rowBooks.size) {
                             Spacer(Modifier.weight(1f))
                         }
                     }

@@ -42,7 +42,17 @@ data class LibraryState(
     val autoDownloadTracked: Boolean = false,
     val searchQuery: String = "",
     val sort: LibrarySort = LibrarySort.RECENTLY_READ,
-    val statusFilter: String = "ALL"
+    val statusFilter: String = "ALL",
+    /** Adaptive metrics (Patch 5): true while the user has NEVER
+     * stored an explicit column choice (the columns key is
+     * absent — a reset also removes it, returning to auto). In
+     * auto the Library resolves its column count from the width
+     * tier (UiMetrics.gridColumns); [gridColumns] above then
+     * carries only the placeholder default and the Customise
+     * chips keep editing the explicit value — the moment a chip
+     * is tapped the key is stored, auto ends, and the explicit
+     * choice wins on every phone. */
+    val gridColumnsAuto: Boolean = true
 )
 
 enum class LibrarySort { RECENTLY_READ, TITLE, MOST_CHAPTERS, RECENTLY_ADDED }
@@ -100,6 +110,7 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
         LibraryState(
             layout = parse(prefs[KEY_LAYOUT], LibraryLayout.GRID),
             gridColumns = (prefs[KEY_COLUMNS] ?: 3).coerceIn(2, 4),
+            gridColumnsAuto = prefs[KEY_COLUMNS] == null,
             showContinueReading = prefs[KEY_HERO] ?: true,
             showBadges = prefs[KEY_BADGES] ?: true,
             navBarStyle = parse(prefs[KEY_NAV_STYLE], NavBarStyle.FLOATING_PILL),
@@ -112,6 +123,15 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
     suspend fun setLayout(value: LibraryLayout) = store.edit { it[KEY_LAYOUT] = value.name }
     suspend fun setGridColumns(value: Int) =
         store.edit { it[KEY_COLUMNS] = value.coerceIn(2, 4) }
+
+    /** Adaptive metrics (Patch 5): back to AUTO columns — removes
+     * ONLY the stored explicit choice, so the Library resolves
+     * its count from the width tier again. The single-key
+     * equivalent of the KEY_COLUMNS removal resetViewToDefaults
+     * performs on the whole view set. */
+    suspend fun clearGridColumns() {
+        store.edit { prefs -> prefs.remove(KEY_COLUMNS) }
+    }
     suspend fun setShowContinueReading(value: Boolean) = store.edit { it[KEY_HERO] = value }
     suspend fun setShowBadges(value: Boolean) = store.edit { it[KEY_BADGES] = value }
     suspend fun setNavBarStyle(value: NavBarStyle) = store.edit { it[KEY_NAV_STYLE] = value.name }
