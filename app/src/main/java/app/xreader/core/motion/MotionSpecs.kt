@@ -289,6 +289,16 @@ fun itemEnter(reduceMotion: Boolean): EnterTransition =
 fun itemExit(reduceMotion: Boolean): ExitTransition =
     if (reduceMotion) fadeOut(tween(0)) else fadeOut(fadeTween())
 
+// --- Gooey nav (Liquid Glass, piece 4) ---------------------------------
+
+/**
+ * The gooey dock indicator's melt spring: the Animatable driving
+ * the melt's travel progress runs on the engine's GooeyMelt
+ * profile — the values live in [SpringMotionEngine], never in the
+ * shell.
+ */
+fun gooeyMeltSpec(): SpringSpec<Float> = SpringMotionEngine.GooeyMelt.toSpec()
+
 // --- Parallax (PLAN §2.2: Library header background at ~0.5× rate) -------
 
 /**

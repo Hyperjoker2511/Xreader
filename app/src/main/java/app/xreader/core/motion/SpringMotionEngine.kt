@@ -141,6 +141,24 @@ object SpringMotionEngine {
         initialRoute != null && targetRoute != null &&
             initialRoute in tabRoutes && targetRoute in tabRoutes
 
+    // ── Gooey nav family (Liquid Glass, piece 4) ───────────────
+    // The FOURTH sanctioned exception to the subtle default, kept
+    // out of [profiles] like the families above: the dock's
+    // selection indicator MELTS between slots (the owner's React
+    // Bits Gooey Nav pick), and a melt needs a visible settle —
+    // ζ 0.72 gives a ~4% overshoot in the travel progress, which
+    // the gooey geometry turns into a barely-there blob overshoot
+    // before the pill lands exactly. The stiffness is the Spatial
+    // family's 380, so the melt travels at the dock's usual pace.
+    // It lives HERE (never as a screen-local constant); reduced
+    // motion and the MINIMAL tier skip the melt entirely, by the
+    // indicator's own gate.
+
+    /** Gooey dock indicator melt: stiffness 380, dampingRatio 0.72. */
+    val GooeyMelt = SpringProfile("GooeyMelt", stiffness = 380f, dampingRatio = 0.72f)
+
+    val gooeyProfiles: List<SpringProfile> = listOf(GooeyMelt)
+
     /**
      * Quantum Animation Engine 3.0's dynamic damping, as three mass
      * classes over a base profile: light elements run stiffer and a

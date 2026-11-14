@@ -2303,16 +2303,6 @@ private fun FloatingNavBar(
     val pillWidth = NavGeometry.pillWidthPx(barWidthPx, itemCount, hInsetPx)
     val pillHeight = NavGeometry.pillHeightPx(barHeightPx, vInsetPx)
     val targetX = NavGeometry.pillTargetXPx(barWidthPx, itemCount, selectedIndex, hInsetPx)
-    val animatedX by animateFloatAsState(
-        targetValue = targetX.toFloat(),
-        animationSpec = if (reduceMotion) {
-            androidx.compose.animation.core.snap()
-        } else {
-            specFor(SpringMotionEngine.Spatial, SpringMotionEngine.MassClass.Light)
-        },
-        label = "navPillX"
-    )
-    val pillX = NavGeometry.clampPillXPx(animatedX, barWidthPx, pillWidth)
     val pillY = NavGeometry.pillTargetYPx(barHeightPx, vInsetPx)
 
     val docked = barStyle == app.xreader.data.library.NavBarStyle.DOCKED_BAR
@@ -2325,13 +2315,18 @@ private fun FloatingNavBar(
     // the same call AppContainer and the readers use), so a
     // SMOOTH performance choice never earns the shader leg.
     val ramMb = container.totalRamMb()
+    // Piece 4 (Gooey Nav): the resolved tier is hoisted — the gooey
+    // indicator below consumes the SAME value, so the melt's
+    // MINIMAL-tier instant fallback can never disagree with the
+    // glass tier the surface resolved.
+    val perfTier = app.xreader.data.prefs.PerformancePolicy.resolve(
+        appearance.performanceMode, ramMb, appearance.coverGlow
+    ).tier
     val dockTier = app.xreader.data.prefs.resolveGlassTier(
         choice = appearance.glassStyle,
         sdkInt = android.os.Build.VERSION.SDK_INT,
         totalRamMb = ramMb,
-        perfTier = app.xreader.data.prefs.PerformancePolicy.resolve(
-            appearance.performanceMode, ramMb, appearance.coverGlow
-        ).tier
+        perfTier = perfTier
     )
     Box(
         Modifier
@@ -2367,20 +2362,24 @@ private fun FloatingNavBar(
                     .onSizeChanged { barWidthPx = it.width }
             ) {
                 if (pillWidth > 0 && pillHeight > 0) {
-                    Box(
-                        Modifier
-                            .offset { IntOffset(pillX.roundToInt(), pillY) }
-                            .size(
-                                width = with(density) { pillWidth.toDp() },
-                                height = with(density) { pillHeight.toDp() }
-                            )
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.fillMaxSize()
-                        ) {}
-                    }
+                    // Liquid Glass, piece 4 (Gooey Nav): the
+                    // selection indicator melts between slots
+                    // (GooeyIndicator) — drawn first inside the
+                    // bar's content box so the slots sit above it.
+                    // The tint is the pill's own colour read
+                    // verbatim: the theme's primary at full
+                    // strength, exactly what the old Surface pill
+                    // used (no alpha is applied anywhere).
+                    GooeyIndicator(
+                        targetCentreX = targetX + pillWidth / 2f,
+                        slotWidthPx = pillWidth.toFloat(),
+                        topPx = pillY.toFloat(),
+                        heightPx = pillHeight.toFloat(),
+                        colour = MaterialTheme.colorScheme.primary,
+                        perfTier = perfTier,
+                        reduceMotion = reduceMotion,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
                 Row(Modifier.fillMaxSize()) {
                     Tab.entries.forEach { tab ->
