@@ -64,6 +64,7 @@ import app.xreader.ui.theme.EmberAmber
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import java.io.File
+import app.xreader.ui.theme.LocalUiMetrics
 
 /** The finished list's sort choices — all over real book fields. */
 private enum class FinishedSort(val label: String) {
@@ -108,7 +109,7 @@ fun DownloadsScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(start = 24.dp, end = 24.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
     ) {
         ScreenHeader(title = "Downloads", eyebrow = "Queue")
         if (stateNow.loading) {

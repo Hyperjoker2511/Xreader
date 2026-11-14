@@ -84,6 +84,7 @@ import java.util.Date
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * Profile & progress (Stitch "Xreader Profile", PLAN §8): identity
@@ -142,7 +143,7 @@ fun ProfileScreen(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .padding(horizontal = 24.dp, vertical = 16.dp)
+                .padding(start = 24.dp, end = 24.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) {

@@ -319,7 +319,7 @@ fun BookDetailScreen(
         Row(
             Modifier
                 .statusBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+                .padding(start = 8.dp, end = 8.dp, top = LocalUiMetrics.current.topGap, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {

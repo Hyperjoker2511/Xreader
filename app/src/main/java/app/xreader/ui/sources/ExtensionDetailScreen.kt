@@ -82,7 +82,7 @@ fun ExtensionDetailScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(start = 24.dp, end = 24.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
     ) {
         // ── v1.0.4 (D14): the parser-rules editor takes over the
         // page while it's open (a labelled destination from the

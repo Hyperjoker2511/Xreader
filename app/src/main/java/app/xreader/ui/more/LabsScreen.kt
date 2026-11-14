@@ -25,6 +25,7 @@ import app.xreader.domain.reader.ReaderConfig
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.NocturneSwitch
 import kotlinx.coroutines.launch
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * Labs (PLAN §0.2 / Amendment 3): experimental features live here,
@@ -41,7 +42,7 @@ fun LabsScreen(container: AppContainer, onBack: () -> Unit) {
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 16.dp),
+            .padding(start = 20.dp, end = 20.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

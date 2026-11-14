@@ -37,6 +37,7 @@ import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.theme.NocturneOverline
 import app.xreader.ui.theme.primaryTextColor
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * Migration Studio (screen #19, PLAN §8). Komga / Kavita /
@@ -73,7 +74,7 @@ fun MigrationScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 16.dp)
+            .padding(start = 20.dp, end = 20.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {

@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * A tag's page (v1.0.2, R22): every library book carrying the tag,
@@ -122,7 +123,7 @@ fun TagPageScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(start = 24.dp, end = 24.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
     ) {
         ScreenHeader(
             title = state.displayName,

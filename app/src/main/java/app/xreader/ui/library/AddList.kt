@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * "Add a list" (v1.0.2, R27): paste book titles (one per line),
@@ -173,7 +174,7 @@ fun AddListScreen(viewModel: AddListViewModel, onBack: () -> Unit) {
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(start = 24.dp, end = 24.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
     ) {
         ScreenHeader(title = "Add a list", eyebrow = "Your library")
         Spacer(Modifier.height(8.dp))

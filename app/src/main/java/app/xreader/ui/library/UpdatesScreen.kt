@@ -40,6 +40,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * The Updates page (v1.0.2, R20 Q2 addendum): QuickNovel-style —
@@ -94,7 +95,7 @@ fun UpdatesScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 16.dp)
+            .padding(start = 20.dp, end = 20.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
     ) {
         // Nocturne §5.2 header: overline + Jakarta headline, with
         // the Check now primary pill on the right.

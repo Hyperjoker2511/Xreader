@@ -45,6 +45,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * Reader Terms (P0): the global list's home in Settings — the
@@ -86,7 +87,7 @@ fun TermsScreen(
             .fillMaxSize()
             .statusBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 16.dp)
+            .padding(start = 20.dp, end = 20.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
             .padding(bottom = 72.dp)
     ) {
         ScreenHeader(title = "Reader terms", eyebrow = "Settings")

@@ -28,6 +28,7 @@ import app.xreader.BuildConfig
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.SectionHeader
+import app.xreader.ui.theme.LocalUiMetrics
 
 /** About & licences (PLAN §3): what this build is, and the open-source
  * licences of everything bundled in it. */
@@ -42,7 +43,7 @@ fun AboutScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 16.dp)
+            .padding(start = 20.dp, end = 20.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {

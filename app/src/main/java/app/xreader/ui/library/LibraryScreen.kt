@@ -260,7 +260,7 @@ fun LibraryScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 10.dp)
+            .padding(start = 20.dp, end = 20.dp, top = LocalUiMetrics.current.topGap, bottom = 10.dp)
     ) {
         ScreenHeader(
             title = "Library",

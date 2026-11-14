@@ -36,6 +36,7 @@ import app.xreader.ui.common.LoadingState
 import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.QuickActionTile
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * "Add source from link" (Amendment 7): paste a book page link →
@@ -73,7 +74,7 @@ fun AddFromLinkScreen(
             .fillMaxSize()
             .statusBarsPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(start = 24.dp, end = 24.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
     ) {
         androidx.compose.foundation.layout.Row(
             verticalAlignment = Alignment.CenterVertically

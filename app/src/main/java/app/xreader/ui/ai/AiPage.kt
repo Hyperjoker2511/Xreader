@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.data.prefs.AiFeature
 import app.xreader.ui.theme.FloatingChromeLift
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * v1.0.6.2 (F9b): Ask AI as a full PAGE — a real navigation
@@ -56,7 +57,7 @@ fun AiPage(
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(start = 8.dp, end = 8.dp, top = LocalUiMetrics.current.topGap, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {

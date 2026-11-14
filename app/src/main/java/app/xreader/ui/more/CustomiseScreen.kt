@@ -26,6 +26,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -37,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -542,11 +545,23 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
     ) { uri ->
         if (uri != null) viewModel.setBackgroundImage(screenContext, uri)
     }
+    // Patch 7 (Part B): the accordion's open section — the
+    // index into the section order below (0 = Colour theme).
+    // One section open at a time; the first starts open.
+    // Composition state (rememberSaveable), so a rotation
+    // keeps the reader's place in the index.
+    var openSection by rememberSaveable { mutableStateOf<Int?>(0) }
+    fun toggleSection(index: Int) {
+        openSection = if (openSection == index) null else index
+    }
     Column(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(
+                start = 24.dp, end = 24.dp,
+                top = LocalUiMetrics.current.topGap, bottom = 16.dp
+            )
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -633,7 +648,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             }
         }
 
-        CustomiseSection("Colour theme") {
+        CustomiseSection(
+            title = "Colour theme",
+            expanded = openSection == 0,
+            onToggle = { toggleSection(0) }
+        ) {
             Text(
                 "The colours the whole app wears.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -933,7 +952,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             }
         }
 
-        CustomiseSection("Glass & surfaces") {
+        CustomiseSection(
+            title = "Glass & surfaces",
+            expanded = openSection == 1,
+            onToggle = { toggleSection(1) }
+        ) {
             // v1.0.7 (AnymeX port): bloom, grain, liquid background.
             Row(
                 Modifier
@@ -1102,7 +1125,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             )
         }
 
-        CustomiseSection("Library layout") {
+        CustomiseSection(
+            title = "Library layout",
+            expanded = openSection == 2,
+            onToggle = { toggleSection(2) }
+        ) {
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1168,7 +1195,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             )
         }
 
-        CustomiseSection("Navigation") {
+        CustomiseSection(
+            title = "Navigation",
+            expanded = openSection == 3,
+            onToggle = { toggleSection(3) }
+        ) {
             Text("Bottom bar style", style = MaterialTheme.typography.bodyLarge)
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1229,7 +1260,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             }
         }
 
-        CustomiseSection("Reader") {
+        CustomiseSection(
+            title = "Reader",
+            expanded = openSection == 4,
+            onToggle = { toggleSection(4) }
+        ) {
             Text(
                 "Page themes — the preview is a real page in those colours.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1563,13 +1598,21 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         // The legacy ReaderConfig manga rows above remain for the
         // text reader's image chapters; the manga reader itself
         // reads these Komikku preferences.
-        CustomiseSection("Manga reader") {
+        CustomiseSection(
+            title = "Manga reader",
+            expanded = openSection == 5,
+            onToggle = { toggleSection(5) }
+        ) {
             app.xreader.komikku.presentation.settings
                 .KomikkuGlobalDefaultsSection(prefs = viewModel.komikkuGlobalPrefs)
         }
 
         // ── Your themes: the full make-your-own editor (R04/R07) ──
-        CustomiseSection("Your themes") {
+        CustomiseSection(
+            title = "Your themes",
+            expanded = openSection == 6,
+            onToggle = { toggleSection(6) }
+        ) {
             Text(
                 "Themes you made yourself, from one colour. Up to three.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1605,7 +1648,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         }
 
         // ── Book colours (R05) ───────────────────────────────────
-        CustomiseSection("Book colours") {
+        CustomiseSection(
+            title = "Book colours",
+            expanded = openSection == 7,
+            onToggle = { toggleSection(7) }
+        ) {
             Text(
                 "Each book's cover can lend its colours to the book page. " +
                     "The reading page itself never changes colour this way.",
@@ -1655,7 +1702,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         }
 
         // ── Performance (R06) ────────────────────────────────────
-        CustomiseSection("Performance") {
+        CustomiseSection(
+            title = "Performance",
+            expanded = openSection == 8,
+            onToggle = { toggleSection(8) }
+        ) {
             Text(
                 "How hard Xreader pushes effects on this device. " +
                     "Automatic is right for almost everyone.",
@@ -1710,7 +1761,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         }
 
         // ── Sources & repairs (R11 preference) ───────────────────
-        CustomiseSection("Sources & repairs") {
+        CustomiseSection(
+            title = "Sources & repairs",
+            expanded = openSection == 9,
+            onToggle = { toggleSection(9) }
+        ) {
             // v1.0.6 (W2.4): the one master switch for the browser
             // view — default on; off restores static-only reading.
             CustomiseSwitch(
@@ -1826,7 +1881,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         // Settings. The auto-download switch came from the Library,
         // the Wi-Fi-only switch from the Downloads screen; both
         // keep their full labels and their exact prefs.
-        CustomiseSection("Downloads") {
+        CustomiseSection(
+            title = "Downloads",
+            expanded = openSection == 10,
+            onToggle = { toggleSection(10) }
+        ) {
             CustomiseSwitch(
                 label = "Auto-download new chapters for tracked books (Wi-Fi)",
                 description = "Books you track fetch their new chapters on their own, " +
@@ -1877,7 +1936,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         }
 
         // ── Storage (R07/G16) ────────────────────────────────────
-        CustomiseSection("Storage") {
+        CustomiseSection(
+            title = "Storage",
+            expanded = openSection == 11,
+            onToggle = { toggleSection(11) }
+        ) {
             val storage by viewModel.storage.collectAsStateWithLifecycle()
             val sizes = storage
             if (sizes == null) {
@@ -2013,7 +2076,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         }
 
         // ── Accessibility & motion (R07/R29) ─────────────────────
-        CustomiseSection("Accessibility & motion") {
+        CustomiseSection(
+            title = "Accessibility & motion",
+            expanded = openSection == 12,
+            onToggle = { toggleSection(12) }
+        ) {
             Text("App text size", style = MaterialTheme.typography.bodyLarge)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -2052,7 +2119,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         }
 
         // ── Advanced (R07): reset lives here, behind a confirm ───
-        CustomiseSection("Advanced") {
+        CustomiseSection(
+            title = "Advanced",
+            expanded = openSection == 13,
+            onToggle = { toggleSection(13) }
+        ) {
             var confirmReset by remember { mutableStateOf(false) }
             TextButton(onClick = { confirmReset = true }) {
                 Text("Reset customisation")
@@ -2242,14 +2313,44 @@ private fun SeedSwatchRow(
 }
 
 @Composable
-private fun CustomiseSection(title: String, content: @Composable () -> Unit) {
-    // v1.1.0 (§5.16): every section stays, in its current order —
-    // the restyle is furniture only: GlassCard section + the kit
-    // SectionHeader, controls untouched inside.
+private fun CustomiseSection(
+    title: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    // Patch 7 (Part B): every section stays, in its current
+    // order, with its controls untouched inside — what changed
+    // is the furniture: the section is now a collapsible
+    // category card in the screen's accordion. The header row
+    // (the kit SectionHeader in its existing style + a
+    // chevron) is the toggle; a CLOSED section never composes
+    // its content, so the screen's composition is the category
+    // index plus the one open section — not all fourteen
+    // sections' controls at once (the owner's "full of
+    // clutter, very big" verdict on the old all-open scroll).
     GlassCard(Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            SectionHeader(title = title, modifier = Modifier.fillMaxWidth())
-            content()
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggle),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SectionHeader(title = title, modifier = Modifier.weight(1f))
+                Icon(
+                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (expanded) {
+                        "Close $title"
+                    } else {
+                        "Open $title"
+                    },
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (expanded) {
+                content()
+            }
         }
     }
 }

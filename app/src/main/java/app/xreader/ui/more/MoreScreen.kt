@@ -5,8 +5,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Row
@@ -17,7 +20,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FindReplace
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
@@ -34,14 +36,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.ScreenHeader
+import app.xreader.ui.theme.UiTier
+import app.xreader.ui.theme.rememberUiMetrics
 
 /**
  * Me hub (PLAN §3; v1.1.0 §5.15 Nocturne pass): identity mini-card,
- * the What's-new and heal-note banners, then the uniform door list.
+ * the What's-new and heal-note banners, then the ten doors.
+ * Patch 7: the doors render as an Orion-style card dashboard
+ * (see MeDoorCard) instead of the old one-line rows.
  *
  * v1.1.0 (§7): the Appearance row is REMOVED — AppearanceScreen is
  * dead code whose route already redirects to Customise, so the row
@@ -85,6 +92,10 @@ fun MoreScreen(
     // the parameter stays part of the contract until the shell
     // drops its argument).
     onAppearance
+    // Patch 7: the dashboard's tier read — COMPACT lays the door
+    // cards in a single column, and the root top gap is the
+    // tier's standard topGap (Part C).
+    val metrics = rememberUiMetrics()
     Column(
         Modifier
             .fillMaxSize()
@@ -94,7 +105,10 @@ fun MoreScreen(
             // v1.1.0: bottom padding totals 88dp (dock + the
             // phone's dead bottom strip clearance).
             .verticalScroll(androidx.compose.foundation.rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(
+                start = 24.dp, end = 24.dp,
+                top = metrics.topGap, bottom = 16.dp
+            )
             .padding(bottom = 72.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -190,100 +204,134 @@ fun MoreScreen(
                 }
             }
         }
-        MeDoor(
-            icon = Icons.Filled.Palette,
-            title = "Customise",
-            subtitle = "Colours, glass, library layout, navigation, reader look, downloads",
-            onClick = onCustomise
+        // Patch 7 (Orion dashboard): the ten doors as a card
+        // grid inside this same scrolling Column — chunked
+        // rows, never a LazyVerticalGrid nested in the scroll.
+        // Each row's cards share one height and every subtitle
+        // gets two lines (see MeDoorCard). COMPACT width lays
+        // the cards in a single column instead.
+        val doors = listOf(
+            MeDoorData(
+                icon = Icons.Filled.Palette,
+                title = "Customise",
+                subtitle = "Colours, glass, library layout, navigation, reader look, downloads",
+                onClick = onCustomise
+            ),
+            MeDoorData(
+                icon = Icons.AutoMirrored.Filled.MenuBook,
+                title = "Words I'm learning",
+                subtitle = "Words you saved while reading, with spaced review",
+                onClick = onVocab
+            ),
+            MeDoorData(
+                icon = Icons.Filled.FindReplace,
+                title = "Reader terms",
+                subtitle = "Fix names and words in every book",
+                onClick = onReaderTerms
+            ),
+            MeDoorData(
+                icon = Icons.Filled.History,
+                title = "History",
+                subtitle = "Everything you've been reading, in time order",
+                onClick = onHistory
+            ),
+            MeDoorData(
+                icon = Icons.Filled.VpnKey,
+                title = "Providers & keys",
+                subtitle = "Gemini key, model choice, AI features",
+                onClick = onProviders
+            ),
+            MeDoorData(
+                icon = Icons.Filled.Sync,
+                title = "Sync & backup",
+                subtitle = "Google Drive, WebDAV, or a backup file",
+                onClick = onSync
+            ),
+            MeDoorData(
+                icon = Icons.Filled.SwapHoriz,
+                title = "Migration studio",
+                subtitle = "Bring your library from Mihon and other readers",
+                onClick = onMigration
+            ),
+            MeDoorData(
+                icon = Icons.Filled.Science,
+                title = "Labs",
+                subtitle = "Experimental features — eye-tracking page turns",
+                onClick = onLabs
+            ),
+            MeDoorData(
+                icon = Icons.Filled.SystemUpdate,
+                title = "Updates & about",
+                subtitle = "Check for updates, version, links and app details",
+                onClick = onUpdatesAbout
+            ),
+            MeDoorData(
+                icon = Icons.Filled.Info,
+                title = "About & licences",
+                subtitle = "Version and open-source licences",
+                onClick = onAbout
+            )
         )
-        MeDoor(
-            icon = Icons.AutoMirrored.Filled.MenuBook,
-            title = "Words I'm learning",
-            subtitle = "Words you saved while reading, with spaced review",
-            onClick = onVocab
-        )
-        MeDoor(
-            icon = Icons.Filled.FindReplace,
-            title = "Reader terms",
-            subtitle = "Fix names and words in every book",
-            onClick = onReaderTerms
-        )
-        MeDoor(
-            icon = Icons.Filled.History,
-            title = "History",
-            subtitle = "Everything you've been reading, in time order",
-            onClick = onHistory
-        )
-        MeDoor(
-            icon = Icons.Filled.VpnKey,
-            title = "Providers & keys",
-            subtitle = "Gemini key, model choice, AI features",
-            onClick = onProviders
-        )
-        MeDoor(
-            icon = Icons.Filled.Sync,
-            title = "Sync & backup",
-            subtitle = "Google Drive, WebDAV, or a backup file",
-            onClick = onSync
-        )
-        MeDoor(
-            icon = Icons.Filled.SwapHoriz,
-            title = "Migration studio",
-            subtitle = "Bring your library from Mihon and other readers",
-            onClick = onMigration
-        )
-        MeDoor(
-            icon = Icons.Filled.Science,
-            title = "Labs",
-            subtitle = "Experimental features — eye-tracking page turns",
-            onClick = onLabs
-        )
-        MeDoor(
-            icon = Icons.Filled.SystemUpdate,
-            title = "Updates & about",
-            subtitle = "Check for updates, version, links and app details",
-            onClick = onUpdatesAbout
-        )
-        MeDoor(
-            icon = Icons.Filled.Info,
-            title = "About & licences",
-            subtitle = "Version and open-source licences",
-            onClick = onAbout
-        )
+        if (metrics.tier == UiTier.COMPACT) {
+            doors.forEach { door ->
+                MeDoorCard(door, Modifier.fillMaxWidth())
+            }
+        } else {
+            doors.chunked(2).forEach { rowDoors ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Max),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    rowDoors.forEach { door ->
+                        MeDoorCard(
+                            door,
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
+/** One Me-hub door's facts (Patch 7): the dashboard grid and
+ * the compact single column render the same ten doors from
+ * this one list — icon, label, subtitle, destination. */
+private data class MeDoorData(
+    val icon: ImageVector,
+    val title: String,
+    val subtitle: String,
+    val onClick: () -> Unit
+)
+
 /**
- * One Me-hub door (P0 polish, 2026-11-01): EVERY door is the
- * same compact row — one fixed height, the same padding, the
- * same 40dp icon tile, title and subtitle each on a single
- * line inside the row, chevron at the end. The old shape let
- * each card size itself to its subtitle, so the list landed
- * as uneven, oversized cards (the user's "asymmetric, very
- * big" note); now the hub reads as one neat uniform column.
- * The card stays the one tap target.
+ * One dashboard door card (Patch 7): a big tappable
+ * [GlassCard] — the door's icon in its badge, the plain-word
+ * label, and the subtitle given TWO lines. The old uniform
+ * row squeezed the subtitle onto ONE line, so most doors'
+ * words were cut mid-word ("naviga…", "in t…") — the defect
+ * this grid fixes: minLines = 2 also keeps paired cards'
+ * text blocks the same height, so each row reads level.
+ * The card stays the one tap target, with the same bounce
+ * press the hub's rows used.
  */
 @Composable
-private fun MeDoor(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
-) {
+private fun MeDoorCard(door: MeDoorData, modifier: Modifier = Modifier) {
+    val metrics = rememberUiMetrics()
     GlassCard(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        onClick = door.onClick,
+        modifier = modifier.heightIn(min = metrics.cardMinHeight),
         bouncePress = true,
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)
     ) {
-        Row(
-            Modifier.fillMaxWidth().height(48.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(
                 Modifier
-                    .size(40.dp)
+                    .size(42.dp)
                     .background(
                         MaterialTheme.colorScheme.surfaceContainerHigh,
                         androidx.compose.foundation.shape
@@ -292,35 +340,26 @@ private fun MeDoor(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    icon,
+                    door.icon,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(22.dp)
                 )
             }
-            Column(
-                Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Icon(
-                Icons.Filled.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
+            Text(
+                door.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                door.subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                minLines = 2,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }

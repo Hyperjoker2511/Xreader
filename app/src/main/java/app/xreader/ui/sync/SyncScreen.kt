@@ -47,6 +47,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
 import java.text.DateFormat
 import java.util.Date
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * Sync & backup (screen #25): choose a route (Drive / WebDAV), sync
@@ -123,7 +124,7 @@ fun SyncScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 16.dp)
+            .padding(start = 20.dp, end = 20.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {

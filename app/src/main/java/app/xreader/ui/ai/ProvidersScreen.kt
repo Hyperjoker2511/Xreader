@@ -43,6 +43,7 @@ import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SectionHeader
+import app.xreader.ui.theme.LocalUiMetrics
 
 /** Friendly names for the cascade (the ids stay in GeminiModels). */
 fun geminiModelLabel(model: String): String = when (model) {
@@ -72,7 +73,7 @@ fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 16.dp)
+            .padding(start = 20.dp, end = 20.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {

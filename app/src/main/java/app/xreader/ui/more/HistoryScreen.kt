@@ -62,6 +62,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * v1.1.0 (§5.13 + Q11): the History Reading Pulse — today's real
@@ -346,7 +347,7 @@ fun HistoryScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(start = 24.dp, end = 24.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
     ) {
         // v1.0.4 (D13): History is a bottom TAB — no back arrow
         // (the D13 mock's arrow is dropped, same ruling as Me).

@@ -61,6 +61,7 @@ import app.xreader.ui.common.QuickActionTile
 import app.xreader.ui.common.ScreenHeader
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.theme.primaryTextColor
+import app.xreader.ui.theme.LocalUiMetrics
 
 /**
  * Browse (v1.0.5, C3/D23 — the neat rebuild): header, the global
@@ -214,7 +215,7 @@ fun SourcesScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .padding(start = 24.dp, end = 24.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
     ) {
         // v1.0.4 (D11): the header action bounces like the mock's.
         val checkUpdatesInteraction = remember { MutableInteractionSource() }
