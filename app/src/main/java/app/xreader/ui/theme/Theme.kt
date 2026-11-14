@@ -77,6 +77,8 @@ data class GlassSettings(
         GlassStyle.SOLID -> surface
         GlassStyle.FROSTED -> surface.copy(alpha = 0.72f)
         GlassStyle.TINTED -> surface.copy(alpha = opacity)
+        // LIQUID renders as FROSTED until the liquid surface lands (Patches 2–3).
+        GlassStyle.LIQUID -> surface.copy(alpha = 0.72f)
     }
 
     /** Whether this surface should get the real backdrop blur. */

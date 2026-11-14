@@ -574,6 +574,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             appearance.colourScheme
         }
         val glassDisplayName = when (appearance.glassStyle) {
+            GlassStyle.LIQUID -> "Liquid glass"
             GlassStyle.FROSTED -> "Frosted glass"
             GlassStyle.TINTED -> "Tinted glass"
             GlassStyle.SOLID -> "Solid"
@@ -1034,6 +1035,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     Column {
                         Text(
                             when (style) {
+                                GlassStyle.LIQUID -> "Liquid glass"
                                 GlassStyle.FROSTED -> "Frosted glass"
                                 GlassStyle.TINTED -> "Tinted glass"
                                 GlassStyle.SOLID -> "Solid"
@@ -1042,6 +1044,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                         )
                         Text(
                             when (style) {
+                                GlassStyle.LIQUID -> "Liquid glass — surfaces bend the light behind them. Needs a strong device."
                                 GlassStyle.FROSTED -> "Bars and cards blur whatever scrolls behind them."
                                 GlassStyle.TINTED -> "Translucent tinted surfaces, no blur. Kind to weaker devices."
                                 GlassStyle.SOLID -> "Fully opaque surfaces. Nothing shows through."

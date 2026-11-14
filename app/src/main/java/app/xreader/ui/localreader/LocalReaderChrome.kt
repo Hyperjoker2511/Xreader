@@ -174,7 +174,8 @@ fun readerGlassSpec(
     opacity: Float = 1f,
     backdropKind: ReaderBackdropKind = ReaderBackdropKind.RASTERISED
 ): ReaderGlassSpec = when (effectiveStyle) {
-    GlassStyle.FROSTED -> when (backdropKind) {
+    // LIQUID renders as FROSTED until the liquid surface lands (Patches 2–3).
+    GlassStyle.LIQUID, GlassStyle.FROSTED -> when (backdropKind) {
         ReaderBackdropKind.RASTERISED -> ReaderGlassSpec(
             blur = hazeAvailable,
             surfaceAlpha = 0.72f,

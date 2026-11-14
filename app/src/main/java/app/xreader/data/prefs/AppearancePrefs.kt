@@ -14,12 +14,14 @@ enum class ThemeMode { FOLLOW_SYSTEM, LIGHT, DARK }
 
 /**
  * How glass surfaces render (v1.0.1 — the control now tells the truth):
- * FROSTED = real backdrop blur (Haze/RenderEffect) where the device
- * can do it, TINTED = the original solid-tint glass look, SOLID =
+ * LIQUID = the full liquid-glass treatment where the device can do
+ * it (its tier is resolved by [resolveGlassTier]), FROSTED =
+ * real backdrop blur (Haze/RenderEffect) where the device can do
+ * it, TINTED = the original solid-tint glass look, SOLID =
  * fully opaque surfaces. The user's CHOICE is stored; the EFFECTIVE
  * style is resolved per device by [AppearanceValidation.effectiveGlassStyle].
  */
-enum class GlassStyle { FROSTED, TINTED, SOLID }
+enum class GlassStyle { LIQUID, FROSTED, TINTED, SOLID }
 
 /** Selection token prefix for a make-your-own scheme: the stored
  * colour-scheme value is `custom:<id>` and the full spec lives in
@@ -306,6 +308,11 @@ object AppearanceValidation {
                 if (sdkInt >= 31 && totalRamMb > 2048) GlassStyle.FROSTED else GlassStyle.TINTED
             GlassStyle.TINTED -> GlassStyle.TINTED
             GlassStyle.SOLID -> GlassStyle.SOLID
+            // This legacy resolver returns RENDERABLE styles only, so
+            // LIQUID follows the FROSTED rule here; whether the LIQUID
+            // tier itself is earned is [resolveGlassTier]'s call.
+            GlassStyle.LIQUID ->
+                if (sdkInt >= 31 && totalRamMb > 2048) GlassStyle.FROSTED else GlassStyle.TINTED
         }
 
     /** Plain-words note when the choice can't be honoured here. */
