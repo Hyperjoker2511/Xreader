@@ -1,5 +1,7 @@
 package app.xreader.ui.sources
 import app.xreader.ui.theme.errorTextColor
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -1149,7 +1151,7 @@ fun ExtensionDetailScreen(
             }
             // v1.1.0: 88dp bottom clearance — clears the
             // floating dock AND the phone's dead bottom strip.
-            Spacer(Modifier.height(88.dp))
+            Spacer(Modifier.height(bottomContentPadding(LocalUiMetrics.current, dockVisible = false)))
         }
     }
 

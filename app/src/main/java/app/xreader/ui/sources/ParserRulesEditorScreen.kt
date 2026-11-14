@@ -33,6 +33,8 @@ import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.theme.errorTextColor
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 
 /**
  * "Edit parser rules" (v1.0.4, D14): the stored rules of a
@@ -267,7 +269,7 @@ fun ParserRulesEditorScreen(
             // v1.1.0: 88dp bottom clearance inside the scroll;
             // the save action itself lives in the sticky bar
             // below (§5.10).
-            Spacer(Modifier.height(88.dp))
+            Spacer(Modifier.height(bottomContentPadding(LocalUiMetrics.current, dockVisible = false)))
         }
         if (editable) {
             Row(

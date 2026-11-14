@@ -4,6 +4,8 @@ import app.xreader.ui.theme.aiAccentColor
 import app.xreader.ui.theme.errorTextColor
 import app.xreader.ui.theme.primaryTextColor
 import app.xreader.ui.theme.sageTextColor
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -529,11 +531,13 @@ fun BookDetailScreen(
             // jump scrolls (previously the column had no state,
             // so no programmatic scroll was possible at all).
             state = chapterListState,
-            // Design margin 20dp; bottom clearance 88dp (the
-            // design's own rule) — tweak 1: nothing important
-            // ever sits in the phone's dead bottom strip.
+            // Design margin 20dp; bottom clearance is the
+            // no-dock margin (Patch 6): the book page is
+            // dock-hidden for every origin
+            // (DockVisibilityPolicy), so the chapter list no
+            // longer reserves the old 88dp dock clearance.
             contentPadding = PaddingValues(
-                start = 20.dp, end = 20.dp, top = 4.dp, bottom = 88.dp
+                start = 20.dp, end = 20.dp, top = 4.dp, bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false)
             ),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {

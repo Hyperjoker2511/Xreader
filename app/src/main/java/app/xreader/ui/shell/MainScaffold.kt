@@ -754,6 +754,26 @@ private fun shellImmersive(navController: NavHostController): Boolean {
     return ShellChrome.isImmersiveRoutePattern(entry?.destination?.route)
 }
 
+/** Patch 6 (Dock Visibility + Space): whether the floating dock
+ * belongs on the current destination at all — [DockVisibilityPolicy]
+ * over the current destination PATTERN and the origin the back
+ * stack proves (a settings page keeps its dock only when it was
+ * reached from the Me tab). Separate from the immersive law and
+ * subordinate to it at the call site: a destination the policy
+ * would show the dock on still loses it while immersive,
+ * exactly as before. */
+@Composable
+private fun dockShown(navController: NavHostController): Boolean {
+    val backStack by navController.currentBackStack
+        .collectAsStateWithLifecycle()
+    val patterns = backStack.map { it.destination.route }
+    val current = patterns.lastOrNull()
+    return DockVisibilityPolicy.dockVisible(
+        current,
+        DockVisibilityPolicy.computeDockOrigin(patterns, current)
+    )
+}
+
 /**
  * v1.0.4 (D1/D7/D9): the shell's backdrop stage — and the BASE
  * haze source of the shell's two layered sources (zIndex 0f;
@@ -920,8 +940,15 @@ private fun PhoneShell(
         bottomBar = {
             // v1.0.1: immersive routes (reader, login) hide the bar —
             // it animates out with the motion engine, never pops.
+            // Patch 6: the dock policy hides it the same way on
+            // destinations that own their screen — a source's
+            // catalogue, a book's page, and every pushed screen
+            // except settings reached from the Me tab (the
+            // full-screen source rule). The bar's rendering is
+            // untouched; this only decides whether it is composed.
             AnimatedVisibility(
-                visible = !shellImmersive(navController),
+                visible = !shellImmersive(navController) &&
+                    dockShown(navController),
                 enter = fadeIn(fadeTween<Float>()),
                 exit = fadeOut(fadeTween<Float>())
             ) {

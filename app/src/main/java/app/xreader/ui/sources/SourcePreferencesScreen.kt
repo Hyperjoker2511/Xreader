@@ -32,6 +32,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 import app.xreader.data.extension.player.SourcePrefKind
 import app.xreader.data.extension.player.SourcePrefRow
 import app.xreader.ui.common.EmptyState
@@ -121,7 +123,7 @@ fun SourcePreferencesScreen(
                     Modifier
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
-                        .padding(bottom = 88.dp),
+                        .padding(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false)),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     state.rows.forEach { row ->

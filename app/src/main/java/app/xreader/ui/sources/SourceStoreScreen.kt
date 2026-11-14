@@ -42,6 +42,8 @@ import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.KitEmptyState
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.theme.primaryTextColor
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 
 /**
  * v1.3.2 (scope E): the Repositories view — one card per
@@ -132,7 +134,7 @@ fun SourceStoreScreen(
             Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = androidx.compose.foundation.layout
-                .PaddingValues(bottom = 88.dp)
+                .PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
         ) {
             item {
                 PrimaryPill(

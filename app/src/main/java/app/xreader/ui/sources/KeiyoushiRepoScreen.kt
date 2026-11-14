@@ -47,6 +47,8 @@ import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SearchCapsule
 import app.xreader.ui.theme.primaryTextColor
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 
 /**
  * The Keiyoushi shelf (manga programme M3; player K3;
@@ -177,7 +179,7 @@ fun KeiyoushiRepoScreen(
         LazyColumn(
             Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(bottom = 88.dp)
+            contentPadding = PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
         ) {
             item {
                 SearchCapsule(

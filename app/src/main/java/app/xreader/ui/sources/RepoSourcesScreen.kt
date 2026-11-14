@@ -45,6 +45,8 @@ import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SearchCapsule
 import app.xreader.ui.theme.primaryTextColor
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 
 /**
  * v1.3.2 (scope E): ONE repository's own screen — only its
@@ -295,7 +297,7 @@ fun RepoSourcesScreen(
         LazyColumn(
             Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(bottom = 88.dp)
+            contentPadding = PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
         ) {
             item {
                 SearchCapsule(

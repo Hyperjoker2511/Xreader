@@ -53,6 +53,8 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.data.db.LoreArt
 import app.xreader.data.db.LoreEntity
@@ -268,7 +270,7 @@ private fun LoreTab(
     LazyColumn(
         Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(20.dp),
-        contentPadding = PaddingValues(bottom = 88.dp)
+        contentPadding = PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
     ) {
         item(key = "actions") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -499,7 +501,7 @@ private fun MapTab(state: LoreUiState) {
         LazyColumn(
             Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(6.dp),
-            contentPadding = PaddingValues(bottom = 88.dp)
+            contentPadding = PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
         ) {
             items(state.relations, key = { "rel-${it.id}" }) { relation ->
                 val from = entities.firstOrNull { it.id == relation.fromEntityId }?.name ?: "?"
@@ -523,7 +525,7 @@ private fun GlossaryTab(
     LazyColumn(
         Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(20.dp),
-        contentPadding = PaddingValues(bottom = 88.dp)
+        contentPadding = PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
     ) {
         item(key = "intro") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -605,7 +607,7 @@ private fun ArtTab(
         modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(bottom = 88.dp)
+        contentPadding = PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
     ) {
         items(state.art, key = { "art-${it.id}" }) { art ->
             Column {

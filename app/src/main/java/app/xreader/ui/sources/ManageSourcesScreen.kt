@@ -28,6 +28,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.KitEmptyState
 import app.xreader.ui.common.NocturneChip
@@ -209,7 +211,7 @@ fun ManageSourcesScreen(
             LazyColumn(
                 Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 88.dp)
+                contentPadding = PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
             ) {
                 items(rows, key = { it.extension.id }) { row ->
                     GlassCard(Modifier.fillMaxWidth()) {

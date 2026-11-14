@@ -23,6 +23,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 import app.xreader.data.update.NoteLine
 import app.xreader.data.update.ReleaseNotesFormat
 import app.xreader.ui.common.GhostPill
@@ -140,6 +142,6 @@ fun WhatsNewScreen(
                 }
             }
         }
-        Spacer(Modifier.height(88.dp))
+        Spacer(Modifier.height(bottomContentPadding(LocalUiMetrics.current, dockVisible = false)))
     }
 }

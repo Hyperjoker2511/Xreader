@@ -35,6 +35,8 @@ import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.QuickActionTile
 import app.xreader.ui.theme.NocturneOverline
 import app.xreader.ui.theme.primaryTextColor
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 
 /**
  * v1.0.5 (C3/D23): "Add a source" is its OWN screen now — the
@@ -117,7 +119,7 @@ fun AddSourceScreen(
         LazyColumn(
             Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
         ) {
             // ── Door 1: a repository, form and all ──────────────
             item {

@@ -38,6 +38,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.data.db.OpdsServer
 import app.xreader.data.opds.OpdsEntry
@@ -265,7 +267,7 @@ fun OpdsCatalogScreen(
             state.feed != null -> LazyColumn(
                 Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
-                contentPadding = PaddingValues(bottom = 88.dp)
+                contentPadding = PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
             ) {
                 items(state.feed!!.entries, key = { "entry-${it.id}" }) { entry ->
                     OpdsEntryRow(

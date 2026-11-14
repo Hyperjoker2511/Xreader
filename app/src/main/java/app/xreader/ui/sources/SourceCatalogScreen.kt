@@ -28,6 +28,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.bottomContentPadding
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.KitEmptyState
@@ -344,7 +346,7 @@ fun SourceCatalogScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     contentPadding = androidx.compose.foundation.layout
-                        .PaddingValues(bottom = 88.dp)
+                        .PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
                 ) {
                     items(
                         state.books, key = { "book-${it.id}" }
