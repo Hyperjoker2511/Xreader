@@ -49,6 +49,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -100,6 +101,7 @@ import app.xreader.ui.sources.SourcesViewModel
 import app.xreader.ui.common.frostedGlass
 import app.xreader.ui.theme.DeepSpace
 import app.xreader.ui.theme.ElectricPurple
+import app.xreader.ui.theme.LiquidGlassSurface
 import app.xreader.ui.theme.LocalGlassSettings
 import app.xreader.ui.theme.LocalHazeState
 import app.xreader.ui.theme.NeonPurple
@@ -753,15 +755,22 @@ private fun shellImmersive(navController: NavHostController): Boolean {
 }
 
 /**
- * v1.0.4 (D1/D7/D9): the shell's backdrop stage — and the app's ONE
- * haze source. A full-size layer behind the content: under FROSTED
+ * v1.0.4 (D1/D7/D9): the shell's backdrop stage — and the BASE
+ * haze source of the shell's two layered sources (zIndex 0f;
+ * Patch 3 added the second). A full-size layer behind the
+ * content: under FROSTED
  * it is the user's mesh (NeonPurple glow over DeepSpace in dark
  * mode, a faint violet glow over the light surface), and every
  * glass surface — cards, nav bar, rail — is a haze EFFECT sampling
- * it. Keeping the source here, as a sibling behind the NavHost
- * instead of a modifier ON the NavHost, is the topology change
- * that lets content cards blur safely (an effect node inside the
- * source's subtree was Haze's second R01 IAE). Under TINTED/SOLID
+ * it. It stays a sibling behind the NavHost; since Patch 3 the
+ * NavHost carries the second source — the page layer at
+ * zIndex 1f — so surfaces like the dock can sample the real
+ * scrolling content, not just this mesh. Both sources are gated
+ * on glass.frosted, and their layering is the contract the
+ * shell's structural test pins (an effect node inside a
+ * source's subtree was Haze's second R01 IAE under the old
+ * single-source topology; Haze 1.5.1's zIndex-aware sources are
+ * what make the two-layer form legal). Under TINTED/SOLID
  * nothing changes visually: the base is the plain scheme
  * background and no effect nodes exist. Pure black (true black /
  * AMOLED schemes) keeps its promise — no glow, black base.
@@ -827,7 +836,7 @@ private fun MeshBackdrop(
             // node enters the composition at all (glass-free by
             // construction); the effect sites in frostedGlass
             // are gated on the same flag.
-            .let { if (haze != null && glass.frosted) it.hazeSource(haze) else it }
+            .let { if (haze != null && glass.frosted) it.hazeSource(haze, zIndex = 0f) else it }
     ) {
         // v1.0.7 Liquid background: the user's own picture fills
         // the stage (the glass above still samples it through
@@ -925,6 +934,8 @@ private fun PhoneShell(
                     selected = selectedTab(navController),
                     reduceMotion = appearance.reduceMotion,
                     onSelect = { tab -> navigateToTab(navController, tab) },
+                    appearance = appearance,
+                    container = container,
                     barStyle = libraryState.navBarStyle,
                     labelStyle = libraryState.tabLabelStyle,
                     exploreBadgeCount =
@@ -1173,10 +1184,26 @@ private fun XreaderNavHost(
     // tab-to-tab switches crossfade and never slide. The branch is
     // the engine's pure isTabSwitch over the two endpoint routes.
     val tabRoutes = remember { Tab.entries.map { it.route }.toSet() }
+    // Liquid Glass, piece 3 (Dock Glass): the destination content
+    // itself is a haze source (zIndex 1, above the MeshBackdrop
+    // base at zIndex 0), so the dock's glass samples the ACTUAL
+    // page scrolling beneath it, not only the static mesh. Gated
+    // on the same glass.frosted flag as the MeshBackdrop source:
+    // on the plain paths (TINTED/SOLID, or a LIQUID/FROSTED
+    // choice this device resolves down to tinted) no source node
+    // exists at all — glass-free by construction, as before. The
+    // gate and piece 1's resolver agree by construction:
+    // effectiveGlassStyle maps a LIQUID choice through the same
+    // frosted rule (API 31+ and > 2 GB), so the sources feed
+    // exactly when a blur tier (LIQUID or FROSTED) is live.
+    val glass = LocalGlassSettings.current
+    val haze = LocalHazeState.current
     NavHost(
         navController = navController,
         startDestination = Tab.Library.route,
-        modifier = modifier,
+        modifier = modifier.let {
+            if (haze != null && glass.frosted) it.hazeSource(haze, zIndex = 1f) else it
+        },
         enterTransition = {
             if (SpringMotionEngine.isTabSwitch(
                     initialState.destination.route,
@@ -2255,6 +2282,8 @@ private fun FloatingNavBar(
     selected: Tab,
     reduceMotion: Boolean,
     onSelect: (Tab) -> Unit,
+    appearance: AppearanceState,
+    container: AppContainer,
     barStyle: app.xreader.data.library.NavBarStyle =
         app.xreader.data.library.NavBarStyle.FLOATING_PILL,
     labelStyle: app.xreader.data.library.TabLabelStyle =
@@ -2263,7 +2292,6 @@ private fun FloatingNavBar(
      * badged numerically on the Explore tab (0 = no badge). */
     exploreBadgeCount: Int = 0
 ) {
-    val glass = LocalGlassSettings.current
     val density = LocalDensity.current
     var barWidthPx by remember { mutableIntStateOf(0) }
     val barHeightPx = with(density) { BarHeight.roundToPx() }
@@ -2288,6 +2316,23 @@ private fun FloatingNavBar(
     val pillY = NavGeometry.pillTargetYPx(barHeightPx, vInsetPx)
 
     val docked = barStyle == app.xreader.data.library.NavBarStyle.DOCKED_BAR
+    // Liquid Glass, piece 3 (Dock Glass): the bar is a piece-2
+    // LiquidGlassSurface in the tier piece 1 resolves for the
+    // user's glass choice on THIS device — LIQUID only when the
+    // API 33+ / FULL-tier gate is earned, otherwise the shipped
+    // frosted rule, then tinted. The perf tier is the app's
+    // existing mode-aware resolution (PerformancePolicy.resolve,
+    // the same call AppContainer and the readers use), so a
+    // SMOOTH performance choice never earns the shader leg.
+    val ramMb = container.totalRamMb()
+    val dockTier = app.xreader.data.prefs.resolveGlassTier(
+        choice = appearance.glassStyle,
+        sdkInt = android.os.Build.VERSION.SDK_INT,
+        totalRamMb = ramMb,
+        perfTier = app.xreader.data.prefs.PerformancePolicy.resolve(
+            appearance.performanceMode, ramMb, appearance.coverGlow
+        ).tier
+    )
     Box(
         Modifier
             .fillMaxWidth()
@@ -2306,17 +2351,15 @@ private fun FloatingNavBar(
                 }
             )
     ) {
-        Surface(
+        // The glass shape IS the pill: this outer Box stays
+        // transparent and the surface draws nothing outside its
+        // own bounds — no band or backing around the bar.
+        LiquidGlassSurface(
             shape = if (docked) RoundedCornerShape(0.dp) else RoundedCornerShape(50),
-            color = glass.glassSurface(MaterialTheme.colorScheme.surface),
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp, MaterialTheme.colorScheme.outline
-            ),
-            shadowElevation = glass.raisedElevation,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(BarHeight)
-                .frostedGlass(glass, MaterialTheme.colorScheme.surface)
+                .height(BarHeight),
+            tier = dockTier
         ) {
             Box(
                 Modifier
@@ -2508,10 +2551,24 @@ private fun NavSlot(
             app.xreader.data.library.TabLabelStyle.ICONS_ONLY -> false
         }
         if (showLabel) {
+            // Liquid Glass, piece 3 (Dock Glass): one line, always.
+            // The label steps its size down (labelSmall's 11.sp →
+            // a 9.sp floor) until it fits the slot instead of
+            // wrapping — "Downloads" wrapped to two lines on
+            // narrow phones and pushed its slot out of line.
+            val labelBase = MaterialTheme.typography.labelSmall.fontSize
+            var labelSize by remember(tab) { mutableStateOf(labelBase) }
             Text(
                 tab.label,
-                style = MaterialTheme.typography.labelSmall,
-                color = contentColor
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = labelSize),
+                color = contentColor,
+                maxLines = 1,
+                softWrap = false,
+                onTextLayout = { layout ->
+                    if (layout.didOverflowWidth && labelSize > 9.sp) {
+                        labelSize = (labelSize.value - 1f).sp
+                    }
+                }
             )
         }
     }
