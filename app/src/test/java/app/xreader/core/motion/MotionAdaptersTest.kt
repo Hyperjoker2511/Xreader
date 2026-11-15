@@ -32,7 +32,12 @@ class MotionAdaptersTest {
         assertEquals(45, SpringMotionEngine.navParallaxOffset(1080))
         assertEquals(0, SpringMotionEngine.navParallaxOffset(0))
         assertEquals(0, SpringMotionEngine.navParallaxOffset(7))
-        assertEquals(400, SpringMotionEngine.NAV_TRANSITION_MS)
+        // Superseded by SPEC-MOTION-COLOROS-2026-11-15 (Change 5):
+        // the NAV_TRANSITION_MS pin (D8's timed 400 ms curve) is
+        // retired with the token — stack travel rides the Spatial
+        // spring now; the one timed leg left is the stack fade,
+        // pinned here at STACK_FADE_MS = 200.
+        assertEquals(200, STACK_FADE_MS)
         assertEquals(24, SpringMotionEngine.NAV_PARALLAX_DIVISOR)
     }
 

@@ -50,10 +50,11 @@ import app.xreader.core.motion.SpringMotionEngine.SpringProfile
  * ColorOS behaviours encoded here, per the research:
  *  - position is ALWAYS a spring (velocity-continuous, interruptible
  *    mid-flight — ColorOS 17's Progressive Motion); tweens are used
- *    only for alpha and progress, never for travel — ONE sanctioned
- *    exception: the D8 nav-stack transitions (v1.0.4), where the
- *    user supplied Apple's timed 400 ms curve with the geometry;
- *    the token lives in the engine like the other exceptions;
+ *    only for alpha and progress, never for travel. (The one former
+ *    exception — the D8 nav-stack transitions' timed 400 ms curve —
+ *    was retired by the ColorOS motion pass, 2026-11-15: stack
+ *    travel rides the Spatial spring like everything else; only
+ *    its Patch 8 geometry survives.)
  *  - press feedback SQUASHES to 0.95 (Flexible Feedback) with a crisp
  *    haptic tick lined up with the visual, and springs back on the
  *    MicroPress profile (ζ 0.95 — no visible bounce on release);
@@ -77,15 +78,34 @@ val ProgressEasing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
 const val FADE_MS = 240
 const val PROGRESS_MS = 300
 
+/** Tab-switch fade (ColorOS motion pass, 2026-11-15): the slide
+ * is the motion (Spatial spring); the fade only softens the
+ * crossover — 120 ms, never phase-locked to the travel. */
+const val TAB_FADE_MS = 120
+
+/** Stack fade (ColorOS motion pass, 2026-11-15): 200 ms — the
+ * segmentColorSpec precedent — under the Spatial-spring travel. */
+const val STACK_FADE_MS = 200
+
+/** Shared-axis fade (ColorOS motion pass, 2026-11-15): 160 ms
+ * under the Spatial / Sheet spring travel. */
+const val AXIS_FADE_MS = 160
+
 fun <T> fadeTween() = tween<T>(durationMillis = FADE_MS, easing = FadeEasing)
 
-/** The tab-switch curve (visible-layer fix round): one tween on
- * the engine's TAB_SWITCH_MS token with the shared FadeEasing,
- * used for BOTH the slide and the fade of a tab switch (and the
- * Library side switch) so the two stay phase-locked — same
- * duration, same easing, started together. */
-fun <T> tabSwitchSpec() =
-    tween<T>(durationMillis = SpringMotionEngine.TAB_SWITCH_MS, easing = FadeEasing)
+/** The tab-switch fade curve: [TAB_FADE_MS] on the shared
+ * FadeEasing. (Replaces the fix round's tabSwitchSpec — one
+ * 320 ms tween driving the slide AND the fade phase-locked; the
+ * ColorOS pass put the slide on the Spatial spring and cut the
+ * fade to this.) */
+fun <T> tabFadeSpec() = tween<T>(durationMillis = TAB_FADE_MS, easing = FadeEasing)
+
+/** The stack fade curve: [STACK_FADE_MS] on the shared FadeEasing. */
+fun <T> stackFadeSpec() = tween<T>(durationMillis = STACK_FADE_MS, easing = FadeEasing)
+
+/** The shared-axis fade curve: [AXIS_FADE_MS] on the shared
+ * FadeEasing. */
+fun <T> axisFadeSpec() = tween<T>(durationMillis = AXIS_FADE_MS, easing = FadeEasing)
 
 /** The Library switch segments' colour ease (fix round §D.3):
  * 200 ms on the shared FadeEasing — the colour lands a beat
@@ -123,112 +143,109 @@ fun rememberMotionEnabled(userEnabled: Boolean = true): Boolean {
 fun sharedAxisXEnter(reduceMotion: Boolean): EnterTransition =
     if (reduceMotion) fadeIn(fadeTween())
     else slideInHorizontally(SpringMotionEngine.Spatial.toSpec()) { it / 6 } +
-        fadeIn(fadeTween())
+        fadeIn(axisFadeSpec())
 
 fun sharedAxisXExit(reduceMotion: Boolean): ExitTransition =
     if (reduceMotion) fadeOut(fadeTween())
     else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) { -it / 6 } +
-        fadeOut(fadeTween())
+        fadeOut(axisFadeSpec())
 
 fun sharedAxisXPopEnter(reduceMotion: Boolean): EnterTransition =
     if (reduceMotion) fadeIn(fadeTween())
     else slideInHorizontally(SpringMotionEngine.Spatial.toSpec()) { -it / 6 } +
-        fadeIn(fadeTween())
+        fadeIn(axisFadeSpec())
 
 fun sharedAxisXPopExit(reduceMotion: Boolean): ExitTransition =
     if (reduceMotion) fadeOut(fadeTween())
     else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) { it / 6 } +
-        fadeOut(fadeTween())
+        fadeOut(axisFadeSpec())
 
-// --- Nav stack (v1.0.4, D8; retuned by Patch 8, Orion piece 2):
-// --- the user's Apple-style transitions. Geometry: pushed screens
-// --- travel a SHORT distance — 1/6 of the width, the shared-axis
-// --- distance (D8's original travelled the FULL width); the
-// --- covered screen (forward) and the returning screen (back)
-// --- drift only the engine's parallax offset, which scales with
-// --- the travel (width/24 — the drift stays a quarter OF THE
-// --- TRAVEL, so the background never outruns the foreground).
-// --- The curve is the paste's timed 400 ms — iOS stack motion is
-// --- a timed curve, and the number lives in the engine
-// --- (NAV_TRANSITION_MS), never in a screen. Tab switches use
-// --- the crossfade below (D8) plus Patch 8's gentle 12.dp
-// --- directional nudge — never a full-width slide.
-
-/** The nav slide curve (IntOffset travel): the D8 timed token. */
-fun navSlideSpec() = tween<IntOffset>(
-    durationMillis = SpringMotionEngine.NAV_TRANSITION_MS,
-    easing = FadeEasing
-)
-
-/** The nav fade curve: the same 400 ms token, for alpha. */
-fun navFadeSpec() = tween<Float>(
-    durationMillis = SpringMotionEngine.NAV_TRANSITION_MS,
-    easing = FadeEasing
-)
+// --- Nav stack (v1.0.4, D8; geometry retuned by Patch 8, Orion
+// --- piece 2; curve superseded by the ColorOS motion pass,
+// --- 2026-11-15): the user's Apple-style transitions. Geometry:
+// --- pushed screens travel a SHORT distance — 1/6 of the width,
+// --- the shared-axis distance (D8's original travelled the FULL
+// --- width); the covered screen (forward) and the returning
+// --- screen (back) drift only the engine's parallax offset,
+// --- which scales with the travel (width/24 — the drift stays a
+// --- quarter OF THE TRAVEL, so the background never outruns the
+// --- foreground). The curve was the paste's timed 400 ms until
+// --- the ColorOS pass (SPEC-MOTION-COLOROS-2026-11-15 Change 5):
+// --- travel now rides the Spatial spring, the fade is the
+// --- 200 ms stackFadeSpec, and the navSlideSpec / navFadeSpec /
+// --- NAV_TRANSITION_MS tokens are retired. The geometry is NOT
+// --- changed. Tab switches use the spring travel below — never
+// --- a full-width slide.
 
 /** Pushed screen arriving: short slide in from the right — 1/6 of
  * the width (Patch 8 retune; D8's original travelled the full
  * width) + fade. */
 fun stackEnter(reduceMotion: Boolean): EnterTransition =
     if (reduceMotion) fadeIn(fadeTween())
-    else slideInHorizontally(navSlideSpec()) { it / 6 } + fadeIn(navFadeSpec())
+    else slideInHorizontally(SpringMotionEngine.Spatial.toSpec()) { it / 6 } +
+        fadeIn(stackFadeSpec())
 
 /** Screen being covered: parallax drift to the engine's offset
  * (width/24 after Patch 8) + fade. */
 fun stackExit(reduceMotion: Boolean): ExitTransition =
     if (reduceMotion) fadeOut(fadeTween())
-    else slideOutHorizontally(navSlideSpec()) {
+    else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) {
         -SpringMotionEngine.navParallaxOffset(it)
-    } + fadeOut(navFadeSpec())
+    } + fadeOut(stackFadeSpec())
 
 /** Screen being returned to: starts at the engine's parallax
  * offset (width/24 after Patch 8) + fade. */
 fun stackPopEnter(reduceMotion: Boolean): EnterTransition =
     if (reduceMotion) fadeIn(fadeTween())
-    else slideInHorizontally(navSlideSpec()) {
+    else slideInHorizontally(SpringMotionEngine.Spatial.toSpec()) {
         -SpringMotionEngine.navParallaxOffset(it)
-    } + fadeIn(navFadeSpec())
+    } + fadeIn(stackFadeSpec())
 
 /** Popped screen leaving: short slide out to the right — 1/6 of
  * the width (Patch 8) + fade. */
 fun stackPopExit(reduceMotion: Boolean): ExitTransition =
     if (reduceMotion) fadeOut(fadeTween())
-    else slideOutHorizontally(navSlideSpec()) { it / 6 } + fadeOut(navFadeSpec())
+    else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) { it / 6 } +
+        fadeOut(stackFadeSpec())
 
 /**
- * Tab-to-tab (visible-layer fix round §D): a real directional
+ * Tab-to-tab (visible-layer fix round §D; curve superseded by
+ * the ColorOS motion pass, 2026-11-15): a real directional
  * travel — the incoming tab slides a FIFTH of the container
- * width while fading, both on the one [tabSwitchSpec] tween so
- * they stay phase-locked. [direction] is the sign of the
- * tab-ordinal travel: +1 toward a LATER tab (the incoming tab
- * starts a fifth-width to the right and settles in), −1 toward
- * an EARLIER tab (mirror). Direction 0 (same-tab/unknown) or
- * [reduceMotion] yields the plain crossfade on the same token —
- * the travel is 0, the kind unchanged. (Patch 8's 12.dp nudge on
- * the 240 ms fade is retired: on the owner's phone it was
- * invisible — "nothing changed". The stack geometry above is
- * NOT touched by this retune.)
+ * width on the Spatial spring (position is physics:
+ * interruptible, velocity-carrying) while the short 120 ms
+ * [tabFadeSpec] fade softens the crossover. [direction] is the
+ * sign of the tab-ordinal travel: +1 toward a LATER tab (the
+ * incoming tab starts a fifth-width to the right and settles
+ * in), −1 toward an EARLIER tab (mirror). Direction 0
+ * (same-tab/unknown) or [reduceMotion] yields the plain
+ * crossfade on the same short fade. (History: Patch 8's 12.dp
+ * nudge on the 240 ms fade was invisible on the owner's phone;
+ * the fix round's phase-locked 320 ms tween then read as a
+ * timeline, not physics — "not good premium smooth". The stack
+ * geometry above is NOT touched by this retune.)
  */
 fun tabEnter(direction: Int = 0, reduceMotion: Boolean = false): EnterTransition =
-    if (direction == 0 || reduceMotion) fadeIn(tabSwitchSpec())
-    else slideInHorizontally(tabSwitchSpec()) { direction * it / 5 } +
-        fadeIn(tabSwitchSpec())
+    if (direction == 0 || reduceMotion) fadeIn(tabFadeSpec())
+    else slideInHorizontally(SpringMotionEngine.Spatial.toSpec()) { direction * it / 5 } +
+        fadeIn(tabFadeSpec())
 
 /** Tab-to-tab exit: the outgoing tab travels a fifth-width
- * AGAINST the travel direction while fading — toward a later
- * tab it leaves left, toward an earlier tab right. */
+ * AGAINST the travel direction on the Spatial spring while the
+ * short fade softens the crossover — toward a later tab it
+ * leaves left, toward an earlier tab right. */
 fun tabExit(direction: Int = 0, reduceMotion: Boolean = false): ExitTransition =
-    if (direction == 0 || reduceMotion) fadeOut(tabSwitchSpec())
-    else slideOutHorizontally(tabSwitchSpec()) { -direction * it / 5 } +
-        fadeOut(tabSwitchSpec())
+    if (direction == 0 || reduceMotion) fadeOut(tabFadeSpec())
+    else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) { -direction * it / 5 } +
+        fadeOut(tabFadeSpec())
 
 /**
  * The Library's Novels ↔ Manga side switch (fix round §D.3):
  * the SAME travel as a tab switch — it is one, conceptually;
  * the switch sits in the tab row's family — so it delegates to
- * the tab adapters verbatim: width / 5, TAB_SWITCH_MS,
- * phase-locked slide + fade, plain crossfade when direction is
- * 0 or motion is reduced. [direction] comes from the pure
+ * the tab adapters verbatim: width / 5 on the Spatial spring,
+ * the 120 ms tab fade, plain crossfade when direction is 0 or
+ * motion is reduced. [direction] comes from the pure
  * LibrarySplit.switchDirection.
  */
 fun sideSwitchEnter(direction: Int, reduceMotion: Boolean): EnterTransition =
@@ -243,13 +260,13 @@ fun sharedAxisYEnter(reduceMotion: Boolean): EnterTransition =
     if (reduceMotion) fadeIn(fadeTween())
     else androidx.compose.animation.slideInVertically(
         SpringMotionEngine.Sheet.toSpec()
-    ) { it / 8 } + fadeIn(fadeTween())
+    ) { it / 8 } + fadeIn(axisFadeSpec())
 
 fun sharedAxisYExit(reduceMotion: Boolean): ExitTransition =
     if (reduceMotion) fadeOut(fadeTween())
     else androidx.compose.animation.slideOutVertically(
         SpringMotionEngine.Sheet.toSpec()
-    ) { it / 8 } + fadeOut(fadeTween())
+    ) { it / 8 } + fadeOut(axisFadeSpec())
 
 /**
  * The ColorOS press (Flexible Feedback): press down → squash to
@@ -302,6 +319,15 @@ fun Modifier.pressSquish(
  * clickable's scroll cancellation, pressed-state semantics and
  * accessibility. Apply to the pressables the user's mocks mark:
  * cards, chips, nav items, primary buttons, the hero.
+ *
+ * ColorOS motion pass (2026-11-15, SPEC-MOTION-COLOROS-2026-11-15
+ * Change 3): the two legs run DIFFERENT specs, chosen by the
+ * target — the press leg runs MicroPress (k700 / ζ0.95) so the
+ * squash lands within ~100 ms (ColorOS Flexible Feedback: the
+ * control answers the instant the finger lands, even on a quick
+ * tap); the release leg keeps ApplePress and its bounce. (With
+ * one spec for both legs, a quick tap lifted before the squash
+ * had visibly started.)
  */
 fun Modifier.pressBounce(
     interactionSource: InteractionSource,
@@ -323,9 +349,15 @@ fun Modifier.pressBounce(
             }
         }
     }
+    val targetScale =
+        if (pressed && enabled) SpringMotionEngine.APPLE_PRESS_SCALE else 1f
     val scale by animateFloatAsState(
-        targetValue = if (pressed && enabled) SpringMotionEngine.APPLE_PRESS_SCALE else 1f,
-        animationSpec = SpringMotionEngine.ApplePress.toSpec(),
+        targetValue = targetScale,
+        animationSpec = if (targetScale == SpringMotionEngine.APPLE_PRESS_SCALE) {
+            SpringMotionEngine.MicroPress.toSpec()
+        } else {
+            SpringMotionEngine.ApplePress.toSpec()
+        },
         label = "pressBounce"
     )
     graphicsLayer {

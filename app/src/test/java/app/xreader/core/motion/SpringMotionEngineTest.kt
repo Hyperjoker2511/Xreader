@@ -168,15 +168,17 @@ class SpringMotionEngineTest {
 
     @Test
     fun `gooey melt settles inside the readability window`() {
-        // Visible-layer fix round (§C): the melt must be
-        // WATCHABLE — settle between 450 and 600 ms. The shipped
-        // 380/0.72 settled in ~285 ms and read as a blink on the
-        // owner's phone ("nothing changed"); the retuned
-        // 150/0.62 lands at ~527 ms by the engine's own formula.
+        // Superseded by SPEC-MOTION-COLOROS-2026-11-15 (Change 1):
+        // the melt must be WATCHABLE but brisk-premium — settle
+        // between 280 and 380 ms. The visible-layer fix round's
+        // 150/0.62 landed at ~527 ms and read slow and loose on
+        // the owner's phone ("not good premium smooth", benchmark
+        // ColorOS 17); the retuned 300/0.72 lands at ~321 ms by
+        // the engine's own formula, with a ~3.8% single overshoot.
         val settle = SpringMotionEngine.settleMillis(SpringMotionEngine.GooeyMelt)
         assertTrue(
-            "GooeyMelt settles in ${settle}ms — outside the 450–600ms window",
-            settle in 450.0..600.0
+            "GooeyMelt settles in ${settle}ms — outside the 280–380ms window",
+            settle in 280.0..380.0
         )
     }
 }

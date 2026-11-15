@@ -108,33 +108,19 @@ object SpringMotionEngine {
 
     // ── Nav stack family (v1.0.4, D8 — user-supplied; geometry
     // retuned by Patch 8) ──────────
-    // The THIRD user-directed exception, again kept out of
-    // [profiles]: the user pasted Apple's stack transitions and
-    // their geometry is the design. D8's original geometry: new
-    // screens travel the FULL width, the screen being covered (or
-    // returned to) drifts only a QUARTER of that (parallax).
-    // Patch 8 (Orion transitions) shortens the travel to 1/6 of
-    // the width and scales the drift WITH it (width / 24), so the
-    // drift stays a quarter OF THE TRAVEL — the depth cue holds
-    // and the background never outruns the foreground. iOS drives
-    // that geometry with a timed curve, not a spring, so the nav
-    // token is a duration: 400 ms, the paste's number verbatim.
-    // Tab-to-tab switches crossfade (D8) with a gentle 12.dp
-    // directional nudge (Patch 8) — the shell crossfades those;
-    // the pure decision + offset math live here so they are
-    // testable.
-
-    /** Nav stack transition duration (user-supplied, D8). */
-    const val NAV_TRANSITION_MS = 400
-
-    /** Tab-switch transition duration (visible-layer fix round):
-     * tab-to-tab switches and the Library's Novels ↔ Manga side
-     * switch ride this 320 ms token — long enough for the
-     * width / 5 travel to READ at normal tap speed (the fix
-     * round's governing complaint), short enough to never feel
-     * like lag on the app's most frequent gesture. The stack
-     * keeps its own 400 ms token above; the two never mix. */
-    const val TAB_SWITCH_MS = 320
+    // The GEOMETRY is the user's design and stays: pushed screens
+    // travel 1/6 of the width (Patch 8; D8's original travelled
+    // the full width) and covered/returning screens drift a
+    // quarter OF THE TRAVEL (width / 24, below), so the drift
+    // stays proportional and the background never outruns the
+    // foreground. The CURVE is no longer D8's timed 400 ms: the
+    // ColorOS motion pass (2026-11-15, SPEC-MOTION-COLOROS-2026-11-15
+    // Changes 2 + 5 — the owner's "all around the app" word)
+    // retired the NAV_TRANSITION_MS and TAB_SWITCH_MS duration
+    // tokens; stack and tab travel now ride the Spatial spring in
+    // MotionSpecs, with short fade tokens (STACK_FADE_MS /
+    // TAB_FADE_MS) living there. What remains in this family is
+    // the pure geometry + decision math, so it stays testable.
 
     /** The parallax divisor: covered screens drift width / this.
      * Patch 8: 24 — the drift scaled with the shortened 1/6 travel
@@ -166,18 +152,26 @@ object SpringMotionEngine {
     // out of [profiles] like the families above: the dock's
     // selection indicator MELTS between slots (the owner's React
     // Bits Gooey Nav pick), and a melt needs a visible settle.
-    // Visible-layer fix round retune: the shipped 380 / 0.72
-    // settled in ~285 ms with a ~4% overshoot — on the owner's
-    // phone it read as a blink, "nothing changed". The retuned
-    // 150 / 0.62 settles in ~527 ms (settleMillis, pinned by the
-    // 450–600 ms readability window in SpringMotionEngineTest)
-    // with a ~8.3% overshoot — a stretch you can watch that still
-    // lands exactly. It lives HERE (never as a screen-local
-    // constant); reduced motion and the MINIMAL tier skip the
-    // melt entirely, by the indicator's own gate.
+    // History: the shipped 380 / 0.72 settled in ~285 ms with a
+    // ~4% overshoot and read as a blink on the owner's phone
+    // ("nothing changed"); the visible-layer fix round slowed it
+    // to 150 / 0.62 (~527 ms settle, ~8.3% overshoot) — watchable,
+    // but it read slow and loose. ColorOS motion pass retune
+    // (2026-11-15, SPEC-MOTION-COLOROS-2026-11-15 Change 1 —
+    // answering the owner's "not good premium smooth" verdict,
+    // benchmark ColorOS 17): 300 / 0.72 settles in ~321 ms
+    // (settleMillis, pinned by the 280–380 ms window in
+    // SpringMotionEngineTest) with a ~3.8% overshoot
+    // (overshootFraction) — one soft overshoot, the second
+    // negligible (~0.15%), so no visible wobble; the brisker
+    // spring's higher peak velocity also drives the indicator's
+    // stretch geometry harder while it travels. It lives HERE
+    // (never as a screen-local constant); reduced motion and the
+    // MINIMAL tier skip the melt entirely, by the indicator's
+    // own gate.
 
-    /** Gooey dock indicator melt: stiffness 150, dampingRatio 0.62. */
-    val GooeyMelt = SpringProfile("GooeyMelt", stiffness = 150f, dampingRatio = 0.62f)
+    /** Gooey dock indicator melt: stiffness 300, dampingRatio 0.72. */
+    val GooeyMelt = SpringProfile("GooeyMelt", stiffness = 300f, dampingRatio = 0.72f)
 
     val gooeyProfiles: List<SpringProfile> = listOf(GooeyMelt)
 
