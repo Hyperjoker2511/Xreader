@@ -348,6 +348,15 @@ fun CountUpText(
 // phone's held angle as the baseline outright, so opening the
 // page can no longer lean the card while the filter converges
 // — the resting state is flat from the first frame.
+//
+// Patch 16 (combined small build — round 3): both earlier
+// rounds chased light layers (the stage glow, the sheen). The
+// layer that actually escaped the silhouette was the HAZE
+// EFFECT itself, painting its rectangular patch before the
+// chain's clip could act (see the clip-order note at the
+// card's modifier chain below). The fix is structural, not
+// another glow variation: one shape, one clip, applied
+// outside the whole card stack.
 // ─────────────────────────────────────────────────────────────────
 
 /** Device tilt (game rotation vector) as -1..1 pitch/roll, or
@@ -531,11 +540,29 @@ fun IdentityCard3D(
                     rotationY = flip + tiltY.value
                     cameraDistance = 14f * density
                 }
+                // Patch 16 (round 3 — the convicted layer): the
+                // clip must sit OUTSIDE (before) frostedGlass.
+                // Haze 1.5.1's effect node paints its blurred
+                // patch FIRST, clipped only to its own rectangular
+                // bounds, and only then draws its content — so a
+                // clip placed after the effect in the chain clips
+                // the fill/border/content but can NEVER clip the
+                // patch, which then shows through the translucent
+                // (72%) fill as a rectangle behind the rounded
+                // card. On the Android 9 / 2 GB phone FROSTED
+                // falls back to TINTED (AppearanceValidation:
+                // SDK ≥ 31 and RAM > 2048 MB required), the
+                // effect never exists, and the card was clean —
+                // the per-phone mixed shape. With the clip first,
+                // every layer of the stack (effect, fill, border,
+                // sheen, content) is painted inside the ONE
+                // silhouette on every tier. The clip stays inside
+                // the rotation layer, so it turns with the card.
+                .clip(cardShape)
                 .frostedGlass(
                     cardGlass,
                     MaterialTheme.colorScheme.surface
                 )
-                .clip(cardShape)
                 .background(
                     cardGlass.glassSurface(
                         MaterialTheme.colorScheme.surface

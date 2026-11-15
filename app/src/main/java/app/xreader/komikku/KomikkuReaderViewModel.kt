@@ -663,8 +663,20 @@ class KomikkuReaderViewModel(
             )
             return
         }
-        val target = chapters.firstOrNull { it.id == chapterId } ?: chapters.first()
+        // Patch 14 (Manga Continue): the handed chapter wins;
+        // an open handed NO chapter (the Activity passes -1) or
+        // a stale one falls back to the chapter the saved
+        // progress names BEFORE the first chapter — progress is
+        // saved on every page turn, so a plain reopen lands
+        // where the reader left off, and [savedFraction] below
+        // restores its page.
         val saved = container.database.readingProgressDao().getForBook(bookId)
+        val targetId = resolveMangaOpenTargetId(
+            chapterIds = chapters.map { it.id },
+            handedChapterId = chapterId,
+            savedChapterId = saved?.chapterId
+        )
+        val target = chapters.first { it.id == targetId }
         savedFraction = if (saved != null && saved.chapterId == target.id) {
             saved.scrollFraction
         } else {
@@ -1281,4 +1293,23 @@ class KomikkuReaderViewModel(
                 KomikkuReaderViewModel(application, bookId, chapterId, page) as T
         }
     }
+}
+
+/**
+ * Patch 14 (Manga Continue): which chapter a manga-reader open
+ * lands on. (a) The handed chapter, when it names a real chapter
+ * of this book; (b) else the saved progress's chapter, when it
+ * still exists; (c) else the first chapter. Null only for an
+ * empty chapter list (the caller handles that case first).
+ * Pure and JVM-tested (KomikkuOpenTargetTest).
+ */
+internal fun resolveMangaOpenTargetId(
+    chapterIds: List<Long>,
+    handedChapterId: Long,
+    savedChapterId: Long?
+): Long? {
+    if (chapterIds.isEmpty()) return null
+    if (handedChapterId in chapterIds) return handedChapterId
+    if (savedChapterId != null && savedChapterId in chapterIds) return savedChapterId
+    return chapterIds.first()
 }

@@ -77,6 +77,7 @@ import app.xreader.domain.reader.ReaderConfig
 import app.xreader.domain.reader.ReaderMode
 import app.xreader.domain.reader.SleepMode
 import app.xreader.domain.reader.Soundscape
+import app.xreader.ui.common.ElasticSlider
 import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.common.PrimaryPill
@@ -1173,7 +1174,10 @@ private fun SheetSlider(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Slider(value = value, onValueChange = onChange, valueRange = range)
+        // Patch 13 (Elastic Slider): every sheet slider gains
+        // the rubber-band feel through this one swap; onChange
+        // stays LIVE on every movement, exactly as before.
+        ElasticSlider(value = value, onValueChange = onChange, valueRange = range)
     }
 }
 

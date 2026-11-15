@@ -46,7 +46,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -86,6 +85,7 @@ import app.xreader.di.AppContainer
 import app.xreader.domain.reader.EyeState
 import app.xreader.domain.reader.ReaderMode
 import app.xreader.domain.reader.WpmEstimator
+import app.xreader.ui.common.ElasticSlider
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.theme.ReaderAmoled
 import app.xreader.ui.theme.ReaderPalette
@@ -1429,7 +1429,13 @@ private fun ReaderChrome(
                                     )
                                 }
                             }
-                            Slider(
+                            // Patch 13 (Elastic Slider): the
+                            // seek slider gains the rubber-band
+                            // feel; the contract is unchanged —
+                            // drag only moves the preview fraction,
+                            // the chapter jump happens ONLY in
+                            // onValueChangeFinished.
+                            ElasticSlider(
                                 value = sliderFraction,
                                 onValueChange = {
                                     sliderDragging = true

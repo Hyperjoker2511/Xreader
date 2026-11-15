@@ -47,6 +47,7 @@ import app.xreader.core.motion.pressSquish
 import app.xreader.di.AppContainer
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
+import app.xreader.ui.common.RollingNumberText
 import app.xreader.ui.common.ScreenHeader
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.common.rememberHoverEmptyState
@@ -580,7 +581,15 @@ private fun HistoryEntryRow(
                         "${(entry.fraction * 100).toInt()}% through the book",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
+                    // Patch 17 (combined small build): this line
+                    // was maxLines = 1 with NO overflow mode, so
+                    // in the text column — narrowed by the cover
+                    // and the action rail — it hard-clipped
+                    // mid-sentence ("0% through the", owner's
+                    // 2026-11-14 video). The Patch 7 house pattern
+                    // applies: give the line the lines it needs
+                    // (two), never shrink the text.
+                    maxLines = 2
                 )
                 if (entry.fraction > 0f) {
                     HistorySlimProgressBar(
@@ -779,7 +788,10 @@ private fun rememberSizedCover(file: File?, widthDp: Int, heightDp: Int): ImageR
 @Composable
 private fun PulseCell(value: String, label: String, modifier: Modifier = Modifier) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.titleMedium)
+        // Patch 15 (Counter): the pulse counts roll odometer-
+        // style when they change (instant swap under reduced
+        // motion, via RollingNumberText itself).
+        RollingNumberText(text = value, style = MaterialTheme.typography.titleMedium)
         Text(
             label,
             style = MaterialTheme.typography.bodySmall,
