@@ -1207,7 +1207,19 @@ fun ListenSheet(
     onOverlaySeek: (Double) -> Unit,
     onOverlaySkip: (next: Boolean) -> Unit,
     onRateChange: (Float) -> Unit,
-    onSleepChange: (SleepMode) -> Unit
+    onSleepChange: (SleepMode) -> Unit,
+    // Patch 12: the Voice section (this book's engine override +
+    // Edge voice pick) and the honest status line's inputs.
+    voiceEngine: app.xreader.data.prefs.VoiceEngine =
+        app.xreader.data.prefs.VoiceEngine.DEVICE,
+    voiceEngineIsOverride: Boolean = false,
+    voiceLanguage: String = "en-US",
+    voiceChoices: List<app.xreader.data.reader.EdgeVoiceTable.Voice> = emptyList(),
+    voiceId: String? = null,
+    voiceHasOverride: Boolean = false,
+    onVoiceEngineChange: (app.xreader.data.prefs.VoiceEngine) -> Unit = {},
+    onVoicePick: (String?) -> Unit = {},
+    onVoiceReset: () -> Unit = {}
 ) {
     Column(
         Modifier
@@ -1271,7 +1283,22 @@ fun ListenSheet(
             }
         }
 
-        SheetSection("Device voice") {
+        // Patch 12: the transport section's header IS the honest
+        // status line — which voice surface is actually speaking.
+        SheetSection(
+            when (ttsState.voiceStatus.surface) {
+                app.xreader.data.reader.VoiceSurface.ONLINE ->
+                    "Online voice — ${ttsState.voiceStatus.voiceName ?: "Edge"}"
+                app.xreader.data.reader.VoiceSurface.OFFLINE ->
+                    "Offline voice — ${ttsState.voiceStatus.voiceName ?: "pack"}"
+                app.xreader.data.reader.VoiceSurface.DEVICE ->
+                    if (ttsState.voiceStatus.fellBack) {
+                        "Device voice — online unreachable"
+                    } else {
+                        "Device voice"
+                    }
+            }
+        ) {
             if (!ttsState.available) {
                 Text(
                     ttsState.unavailableMessage ?: "Speech isn't available.",
@@ -1306,6 +1333,84 @@ fun ListenSheet(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+        }
+
+        // Patch 12: this book's voice — the engine override and,
+        // for the online voice, the curated voice for the
+        // chapter's language. Writes are per-book only.
+        SheetSection("Voice") {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                NocturneChip(
+                    label = "Device voice",
+                    selected = voiceEngine ==
+                        app.xreader.data.prefs.VoiceEngine.DEVICE,
+                    onClick = {
+                        onVoiceEngineChange(
+                            app.xreader.data.prefs.VoiceEngine.DEVICE
+                        )
+                    },
+                    modifier = Modifier,
+                    dotColor = null,
+
+                )
+                NocturneChip(
+                    label = "Online voice",
+                    selected = voiceEngine ==
+                        app.xreader.data.prefs.VoiceEngine.EDGE,
+                    onClick = {
+                        onVoiceEngineChange(
+                            app.xreader.data.prefs.VoiceEngine.EDGE
+                        )
+                    },
+                    modifier = Modifier,
+                    dotColor = null,
+
+                )
+            }
+            if (!voiceEngineIsOverride) {
+                Text(
+                    "Following the choice for all books (Providers & keys). " +
+                        "Picking here changes this book only.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (voiceEngine == app.xreader.data.prefs.VoiceEngine.EDGE) {
+                Text(
+                    "Chapter text is sent to Microsoft for online voices.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val defaultVoice = voiceChoices.firstOrNull()
+                voiceChoices.forEach { voice ->
+                    VoicePickRow(
+                        label = voice.displayName,
+                        note = if (voice == defaultVoice) {
+                            "Default for this language"
+                        } else {
+                            null
+                        },
+                        selected = (voiceId ?: defaultVoice?.id) == voice.id,
+                        onClick = { onVoicePick(voice.id) }
+                    )
+                }
+                if (voiceChoices.isEmpty()) {
+                    Text(
+                        "No picked voices for this chapter's language — " +
+                            "the language's own online voice reads it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (voiceHasOverride) {
+                TextButton(onClick = onVoiceReset) {
+                    Text("Use the settings for all books")
                 }
             }
         }
@@ -1418,6 +1523,61 @@ fun ListenSheet(
             }
         }
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** Patch 12: one curated-voice row in the Listen sheet's Voice
+ * section — a radio-style row (ring + filled centre when picked)
+ * with the language default marked in words. */
+@Composable
+private fun VoicePickRow(
+    label: String,
+    note: String?,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            Modifier
+                .size(20.dp)
+                .border(
+                    2.dp,
+                    if (selected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Box(
+                    Modifier
+                        .size(10.dp)
+                        .background(
+                            MaterialTheme.colorScheme.primary, CircleShape
+                        )
+                )
+            }
+        }
+        Column {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            if (note != null) {
+                Text(
+                    note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 

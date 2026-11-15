@@ -1601,6 +1601,40 @@ class AppContainer(
         )
     }
 
+    /** Patch 12: the voice-engine choice (Providers & keys).
+     * Device voice by default; the online Edge voice is opt-in. */
+    val voicePrefs: app.xreader.data.prefs.VoicePrefs =
+        app.xreader.data.prefs.VoicePrefs(appContext.settingsDataStore)
+
+    /** Patch 12: the listening cache (spec §C) — synthesized
+     * sentences under cacheDir/voice, capped + LRU-managed by the
+     * cache itself, measured and cleared from the Storage
+     * section. [cleanCache] deliberately does NOT touch it. */
+    val ttsAudioCache: app.xreader.data.reader.TtsAudioCache =
+        app.xreader.data.reader.TtsAudioCache(
+            java.io.File(appContext.cacheDir, "voice")
+        )
+
+    /** Patch 12: builds the read-aloud engine the controllers
+     * talk to — the router over the device engine and the Edge
+     * online engine. Called only from the readers' lazies, so no
+     * engine exists before first Listen use. [engineChoice] is
+     * read fresh at every sentence; [voiceIdOverride] supplies
+     * the per-book Edge voice pick (null = language default). */
+    fun readAloudEngine(
+        scope: kotlinx.coroutines.CoroutineScope,
+        engineChoice: () -> app.xreader.data.prefs.VoiceEngine,
+        voiceIdOverride: () -> String?
+    ): app.xreader.data.reader.TtsEngine =
+        app.xreader.data.reader.VoiceEngineRouter(
+            device = app.xreader.data.reader.AndroidTtsEngine(appContext, scope),
+            edge = app.xreader.data.reader.EdgeTtsEngine(
+                appContext, scope, ttsAudioCache, voiceIdOverride
+            ),
+            engineChoice = engineChoice,
+            scope = scope
+        )
+
     val rawTranslator: app.xreader.data.ai.RawTranslator by lazy {
         app.xreader.data.ai.RawTranslator(
             client = aiHub.client,

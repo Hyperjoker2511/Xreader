@@ -18,7 +18,6 @@ import app.xreader.data.engine.PdfSession
 import app.xreader.data.engine.ReadiumEpubSession
 import app.xreader.data.prefs.settingsDataStore
 import org.readium.r2.shared.publication.services.positionsByReadingOrder
-import app.xreader.data.reader.AndroidTtsEngine
 import app.xreader.data.reader.ReadAloudController
 import app.xreader.data.reader.TtsEngine
 import app.xreader.di.AppContainer
@@ -350,20 +349,41 @@ class LocalDocReaderViewModel(
     private var book: Book? = null
     private var password: String? = null
 
+    /** Patch 12: the global voice choice (Providers & keys),
+     * collected for the engine factory — the local reader
+     * follows the global choice; the per-book voice UI lives in
+     * the novel reader's Listen sheet (spec §E.5). */
+    @Volatile
+    private var globalVoiceSettings: app.xreader.data.prefs.VoiceSettings =
+        app.xreader.data.prefs.VoiceSettings()
+
+    private fun globalVoiceEngine(): app.xreader.data.prefs.VoiceEngine =
+        globalVoiceSettings.engine
+
     /**
      * v1.5.9 (F-5): the TTS engine factory seam. Production
-     * builds the platform engine; the construction-counter
-     * test substitutes a counting fake. The factory runs ONLY
-     * inside the [readAloud] lazy — never on the open path.
+     * builds the voice-engine router (Patch 12: device + Edge,
+     * the global choice); the construction-counter test
+     * substitutes a counting fake. The factory runs ONLY inside
+     * the [readAloud] lazy — never on the open path.
      */
     internal var ttsEngineFactory: () -> TtsEngine = {
-        AndroidTtsEngine(container.applicationContext, viewModelScope)
+        container.readAloudEngine(
+            scope = viewModelScope,
+            engineChoice = { globalVoiceEngine() },
+            voiceIdOverride = { null }
+        )
     }
 
     private val readAloud: ReadAloudController by lazy {
         ReadAloudController(
             engine = ttsEngineFactory(),
-            scope = viewModelScope
+            scope = viewModelScope,
+            prefetchDepth = app.xreader.data.reader.TtsPrefetchDepth.forTier(
+                app.xreader.data.prefs.PerformancePolicy.tierForRam(
+                    container.totalRamMb()
+                )
+            )
         ).also { controller ->
             controller.onChapterFinished = {
                 // v1.5.8 (H6): in PDF mode the finish advances
@@ -439,6 +459,13 @@ class LocalDocReaderViewModel(
 
     init {
         open()
+        // Patch 12: keep the global voice choice current for the
+        // engine factory's per-sentence reads.
+        viewModelScope.launch {
+            container.voicePrefs.settings.collect { settings ->
+                globalVoiceSettings = settings
+            }
+        }
         viewModelScope.launch {
             container.database.bookmarkDao().observeForBook(bookId)
                 .collect { rows -> _bookmarks.value = rows.filter { it.locatorJson != null } }

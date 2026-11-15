@@ -25,7 +25,10 @@ import kotlinx.coroutines.launch
 class ReadAloudController(
     private val engine: TtsEngine,
     private val scope: CoroutineScope,
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    /** Patch 12: how many sentences ahead to prime (by perf
+     * tier: MINIMAL 1, STANDARD 2, FULL 3). 0 = no priming. */
+    private val prefetchDepth: Int = 0
 ) {
     data class State(
         val available: Boolean = true,
@@ -37,7 +40,10 @@ class ReadAloudController(
         val sentenceIndex: Int = 0,
         val sentenceCount: Int = 0,
         val sleepMode: SleepMode = SleepMode.Off,
-        val sleepRemainingMs: Long? = null
+        val sleepRemainingMs: Long? = null,
+        /** Patch 12: which voice surface is speaking (the Listen
+         * sheet's honest status line). */
+        val voiceStatus: VoiceStatus = VoiceStatus(VoiceSurface.DEVICE)
     )
 
     private val _state = MutableStateFlow(State())
@@ -48,6 +54,13 @@ class ReadAloudController(
     private val sleepTimer = SleepTimer(clock)
     private var sleepJob: Job? = null
     private var currentUtteranceId: String? = null
+
+    /** Patch 12: pre-minted utterance ids for the primed window,
+     * aligned with the queue — [primedStartIndex] is the queue
+     * position [primedIds]' first entry belongs to (-1 when
+     * empty). Cleared whenever positions stop lining up. */
+    private val primedIds = ArrayDeque<String>()
+    private var primedStartIndex: Int = -1
 
     /** Fired when a chapter's last sentence finishes (not on stop). */
     var onChapterFinished: (() -> Unit)? = null
@@ -74,6 +87,16 @@ class ReadAloudController(
                     playing = false
                 )
             }
+
+            override fun onVoiceStatus(status: VoiceStatus) {
+                _state.value = _state.value.copy(voiceStatus = status)
+            }
+
+            override fun onInterrupted() {
+                // Playback was interrupted from outside (permanent
+                // audio-focus loss): pause through the normal path.
+                if (queue?.playing == true) pause()
+            }
         })
     }
 
@@ -87,6 +110,7 @@ class ReadAloudController(
             .let { if (it < 0) 0 else it }
         queue = TtsQueue(sentences).apply { if (sentences.isNotEmpty()) jumpTo(startIndex) }
         publish()
+        sendChapterAhead()
     }
 
     fun play() {
@@ -94,6 +118,7 @@ class ReadAloudController(
         if (q.sentences.isEmpty()) return
         q.play()
         speakCurrent()
+        primeWindow()
         publish()
     }
 
@@ -122,8 +147,12 @@ class ReadAloudController(
         val q = queue ?: return
         val wasPlaying = q.playing
         engine.stop()
+        clearPrimedIds()
         q.skipNext()
-        if (wasPlaying) speakCurrent()
+        if (wasPlaying) {
+            speakCurrent()
+            primeWindow()
+        }
         publish()
     }
 
@@ -131,8 +160,12 @@ class ReadAloudController(
         val q = queue ?: return
         val wasPlaying = q.playing
         engine.stop()
+        clearPrimedIds()
         q.skipPrevious()
-        if (wasPlaying) speakCurrent()
+        if (wasPlaying) {
+            speakCurrent()
+            primeWindow()
+        }
         publish()
     }
 
@@ -178,6 +211,7 @@ class ReadAloudController(
             return
         }
         speakCurrent()
+        primeWindow()
         publish()
     }
 
@@ -185,15 +219,87 @@ class ReadAloudController(
         val q = queue ?: return
         val text = chapterText ?: return
         val sentence = q.current ?: return
-        val id = AndroidTtsEngine.newUtteranceId()
+        val id = consumePrimedId(q.index) ?: AndroidTtsEngine.newUtteranceId()
         currentUtteranceId = id
         engine.speak(id, sentence.textIn(text.text))
+    }
+
+    /** Patch 12: the remembered id for queue position [index],
+     * if the primed window lines up with it. A mismatch clears
+     * the window — a stale id is never spoken. */
+    private fun consumePrimedId(index: Int): String? {
+        if (primedIds.isEmpty()) return null
+        if (primedStartIndex != index) {
+            clearPrimedIds()
+            return null
+        }
+        val id = primedIds.removeFirst()
+        primedStartIndex = if (primedIds.isEmpty()) -1 else index + 1
+        return id
+    }
+
+    private fun clearPrimedIds() {
+        primedIds.clear()
+        primedStartIndex = -1
+    }
+
+    /**
+     * Patch 12: after every speak, hand the engine its lookahead
+     * — the chapter-ahead fill list (all remaining sentences)
+     * and the prime window (the next [prefetchDepth] sentences
+     * with their pre-minted ids). The window is recomputed fresh
+     * at each advance; engines treat each call as "these are
+     * wanted soon", keyed by utterance id, so repeats are
+     * idempotent.
+     */
+    private fun primeWindow() {
+        sendChapterAhead()
+        if (prefetchDepth <= 0) return
+        val q = queue ?: return
+        val text = chapterText ?: return
+        if (q.sentences.isEmpty()) return
+        val firstWanted = q.index + 1
+        val lastWanted = minOf(q.index + prefetchDepth, q.sentences.lastIndex)
+        if (firstWanted > lastWanted) return
+        // Drop remembered ids that no longer line up: positions
+        // already passed, or a cursor that jumped backwards.
+        if (primedStartIndex > firstWanted) clearPrimedIds()
+        while (primedIds.isNotEmpty() && primedStartIndex < firstWanted) {
+            primedIds.removeFirst()
+            primedStartIndex++
+        }
+        if (primedIds.isEmpty()) primedStartIndex = firstWanted
+        var position = primedStartIndex + primedIds.size
+        while (position <= lastWanted) {
+            primedIds.addLast(AndroidTtsEngine.newUtteranceId())
+            position++
+        }
+        val window = (firstWanted..lastWanted).map { pos ->
+            PrimedSentence(
+                utteranceId = primedIds[pos - primedStartIndex],
+                text = q.sentences[pos].textIn(text.text)
+            )
+        }
+        engine.prime(window)
+    }
+
+    /** Patch 12: the chapter-ahead hint — every sentence from
+     * the cursor to the chapter end, in order. */
+    private fun sendChapterAhead() {
+        val q = queue ?: return
+        val text = chapterText ?: return
+        if (q.sentences.isEmpty()) return
+        val remaining = (q.index..q.sentences.lastIndex).map { i ->
+            q.sentences[i].textIn(text.text)
+        }
+        engine.cacheChapter(remaining)
     }
 
     private fun stopInternal() {
         queue?.stop()
         engine.stop()
         currentUtteranceId = null
+        clearPrimedIds()
     }
 
     private fun publish() {

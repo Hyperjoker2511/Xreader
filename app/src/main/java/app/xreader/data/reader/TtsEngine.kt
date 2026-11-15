@@ -24,6 +24,16 @@ interface TtsEngine {
         fun onError(utteranceId: String)
         /** The engine itself is unusable (no engine installed, init failed…). */
         fun onUnavailable(message: String)
+
+        /** Patch 12: which voice surface is actually speaking
+         * (an online engine that failed over must SAY so).
+         * Default no-op: single-engine setups never report. */
+        fun onVoiceStatus(status: VoiceStatus) = Unit
+
+        /** Patch 12: playback was interrupted from outside
+         * (permanent audio-focus loss). The controller pauses.
+         * Default no-op. */
+        fun onInterrupted() = Unit
     }
 
     val isReady: Boolean
@@ -33,6 +43,53 @@ interface TtsEngine {
     fun setRate(rate: Float)
     fun stop()
     fun shutdown()
+
+    /**
+     * Patch 12 lookahead hint: sentences the controller is about
+     * to speak, in order, with the SAME utterance ids it will
+     * later pass to [speak]. An engine that can prepare audio
+     * ahead of time (network synthesis, offline synthesis) starts
+     * now; an engine that cannot ignores this. Preparation is a
+     * hint, never a promise: [speak] must behave correctly for an
+     * id that was never primed, and primed audio for ids that are
+     * never spoken is simply dropped by [stop].
+     */
+    fun prime(sentences: List<PrimedSentence>) = Unit
+
+    /**
+     * Patch 12 chapter-ahead hint: the not-yet-spoken sentences
+     * of the current chapter, in order. A caching engine may fill
+     * its on-disk cache from this list while playback runs; it
+     * must stop filling when [stop] is called. Default no-op.
+     */
+    fun cacheChapter(sentences: List<String>) = Unit
+}
+
+/** A sentence handed ahead of its [TtsEngine.speak] call. */
+data class PrimedSentence(val utteranceId: String, val text: String)
+
+/** Which voice surface is speaking (Patch 12 status line). */
+enum class VoiceSurface { DEVICE, ONLINE, OFFLINE }
+
+data class VoiceStatus(
+    val surface: VoiceSurface,
+    /** Display name of the voice, e.g. "Aria", "SunHi". */
+    val voiceName: String? = null,
+    /** True when an online/offline engine was picked but the
+     * device voice is speaking because the pick failed. */
+    val fellBack: Boolean = false
+)
+
+/**
+ * Patch 12: how many sentences ahead the controller primes, by
+ * performance tier (PATCH-SPEC-EDGE-TTS §A.3). Pure.
+ */
+object TtsPrefetchDepth {
+    fun forTier(tier: app.xreader.data.prefs.PerfTier): Int = when (tier) {
+        app.xreader.data.prefs.PerfTier.MINIMAL -> 1
+        app.xreader.data.prefs.PerfTier.STANDARD -> 2
+        app.xreader.data.prefs.PerfTier.FULL -> 3
+    }
 }
 
 /**

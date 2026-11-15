@@ -147,6 +147,7 @@ fun ReaderScreen(
     val overlayState by viewModel.overlayState.collectAsStateWithLifecycle(
         initialValue = null
     )
+    val voiceUi by viewModel.voiceUi.collectAsStateWithLifecycle()
     val focus by viewModel.focus.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
     val allHighlights by viewModel.highlights.collectAsStateWithLifecycle()
@@ -1055,7 +1056,16 @@ fun ReaderScreen(
                     onOverlaySeek = { viewModel.overlaySeek(it) },
                     onOverlaySkip = { next -> viewModel.overlaySkip(next) },
                     onRateChange = { viewModel.setSpeechRate(it) },
-                    onSleepChange = { viewModel.armSleep(it) }
+                    onSleepChange = { viewModel.armSleep(it) },
+                    voiceEngine = voiceUi.engine,
+                    voiceEngineIsOverride = voiceUi.isOverride,
+                    voiceLanguage = voiceUi.language,
+                    voiceChoices = voiceUi.choices,
+                    voiceId = voiceUi.voiceId,
+                    voiceHasOverride = voiceUi.hasOverride,
+                    onVoiceEngineChange = { viewModel.setVoiceEngine(it) },
+                    onVoicePick = { viewModel.setEdgeVoice(it) },
+                    onVoiceReset = { viewModel.clearVoiceOverrides() }
                 )
                 ActiveSheet.TOC -> TocSheet(
                     chapters = state.chapters,

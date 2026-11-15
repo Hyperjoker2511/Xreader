@@ -36,12 +36,19 @@ data class BookReaderOverride(
     val mangaOrientation: app.xreader.domain.reader.MangaOrientation? = null,
     /** v1.5.0 (Part C): this series' own border-crop switch
      * (applies to whichever mode family the series reads in). */
-    val mangaCropBorders: Boolean? = null
+    val mangaCropBorders: Boolean? = null,
+    /** Patch 12: this book's own voice engine (set from the
+     * Listen sheet). Null = the global default in VoicePrefs. */
+    val voiceEngine: VoiceEngine? = null,
+    /** Patch 12: this book's own Edge voice id. Applies only when
+     * the chapter's language matches the voice's language. */
+    val edgeVoiceId: String? = null
 ) {
     val isEmpty: Boolean
         get() = paletteName == null && fontSizeSp == null && imageMode == null &&
             mangaTapLayout == null && mangaOrientation == null &&
-            mangaCropBorders == null
+            mangaCropBorders == null &&
+            voiceEngine == null && edgeVoiceId == null
 
     /** True when any MANGA override is set (the in-reader
      * sheet's "reset this series' settings" row keys on it). */
@@ -83,7 +90,11 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
                 app.xreader.domain.reader.MangaOrientation.entries
                     .firstOrNull { it.name == stored }
             },
-            mangaCropBorders = prefs[mangaCropKey(bookId)]
+            mangaCropBorders = prefs[mangaCropKey(bookId)],
+            voiceEngine = prefs[voiceEngineKey(bookId)]?.let { stored ->
+                VoiceEngine.entries.firstOrNull { it.name == stored }
+            },
+            edgeVoiceId = prefs[voiceIdKey(bookId)]
         )
     }
 
@@ -141,6 +152,22 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    /** Patch 12: the Listen sheet's voice writes — this book
+     * only, never the global default (option-scope rule). A null
+     * field clears back to following the global choice. */
+    suspend fun setVoice(
+        bookId: Long,
+        engine: VoiceEngine?,
+        voiceId: String?
+    ) {
+        store.edit { prefs ->
+            if (engine == null) prefs.remove(voiceEngineKey(bookId))
+            else prefs[voiceEngineKey(bookId)] = engine.name
+            if (voiceId == null) prefs.remove(voiceIdKey(bookId))
+            else prefs[voiceIdKey(bookId)] = voiceId
+        }
+    }
+
     /** v1.5.0 (Part C): clear ONLY the manga overrides (the
      * in-reader sheet's reset — the donor's ResetViewerFlags
      * shape); palette/text-size overrides are untouched. */
@@ -183,6 +210,8 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
             prefs.remove(mangaTapLayoutKey(bookId))
             prefs.remove(mangaOrientationKey(bookId))
             prefs.remove(mangaCropKey(bookId))
+            prefs.remove(voiceEngineKey(bookId))
+            prefs.remove(voiceIdKey(bookId))
             prefs.remove(excludedScanlatorsKey(bookId))
         }
     }
@@ -206,6 +235,12 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
         androidx.datastore.preferences.core.booleanPreferencesKey(
             "bookreader.$bookId.manga_crop"
         )
+
+    private fun voiceEngineKey(bookId: Long) =
+        stringPreferencesKey("voice_engine." + bookId)
+
+    private fun voiceIdKey(bookId: Long) =
+        stringPreferencesKey("voice_id." + bookId)
 
     private fun excludedScanlatorsKey(bookId: Long) =
         stringSetPreferencesKey("bookreader.$bookId.excluded_scanlators")

@@ -134,4 +134,141 @@ class ReadAloudControllerTest {
         assertEquals("Speech isn't ready.", state.unavailableMessage)
         assertFalse(state.playing)
     }
+
+    // -- Patch 12: priming, chapter-ahead, status, interruption --------------
+
+    /** A fake that records the Patch 12 seam calls (utterance ids
+     * included) — the pre-existing FakeTtsEngine above is untouched
+     * and its tests run against the defaulted seam exactly as
+     * before. */
+    private class PrimingFakeTtsEngine : TtsEngine {
+        var capturedListener: TtsEngine.Listener? = null
+        val spokenIds = ArrayList<String>()
+        val spoken = ArrayList<String>()
+        val primeCalls = ArrayList<List<PrimedSentence>>()
+        val cacheChapterCalls = ArrayList<List<String>>()
+        private var lastId: String = ""
+        override val isReady: Boolean = true
+        override fun setListener(listener: TtsEngine.Listener?) {
+            capturedListener = listener
+        }
+        override fun speak(utteranceId: String, text: String) {
+            lastId = utteranceId
+            spokenIds += utteranceId
+            spoken += text
+        }
+        override fun setRate(rate: Float) = Unit
+        override fun stop() = Unit
+        override fun shutdown() = Unit
+        override fun prime(sentences: List<PrimedSentence>) {
+            primeCalls += sentences
+        }
+        override fun cacheChapter(sentences: List<String>) {
+            cacheChapterCalls += sentences
+        }
+        fun done() = capturedListener?.onDone(lastId)
+    }
+
+    private fun fiveSentenceText(): ChapterText = ChapterText(
+        ChapterContent(
+            listOf(
+                ChapterBlock.Paragraph.plain(
+                    "One here. Two here. Three here. Four here. Five here."
+                )
+            )
+        )
+    )
+
+    private fun primingController(
+        engine: PrimingFakeTtsEngine
+    ): ReadAloudController =
+        ReadAloudController(engine, scope, prefetchDepth = 2)
+
+    @Test
+    fun playPrimesTheNextTwoSentencesWithTheirSpeakIds() {
+        val fake = PrimingFakeTtsEngine()
+        val c = primingController(fake)
+        c.loadChapter(fiveSentenceText())
+        c.play()
+        assertEquals(listOf("One here."), fake.spoken)
+        val window = fake.primeCalls.last()
+        assertEquals(listOf("Two here.", "Three here."), window.map { it.text })
+        // Advancing speaks sentence two with the SAME id it was
+        // primed under — that is the whole point of pre-minting.
+        val primedIdForTwo = window[0].utteranceId
+        fake.done()
+        assertEquals(primedIdForTwo, fake.spokenIds.last())
+        // And the window re-primes: sentence three keeps its id,
+        // sentence four joins it.
+        val nextWindow = fake.primeCalls.last()
+        assertEquals(listOf("Three here.", "Four here."), nextWindow.map { it.text })
+        assertEquals(window[1].utteranceId, nextWindow[0].utteranceId)
+    }
+
+    @Test
+    fun skipClearsPrimedIdsSoNoStaleIdIsSpoken() {
+        val fake = PrimingFakeTtsEngine()
+        val c = primingController(fake)
+        c.loadChapter(fiveSentenceText())
+        c.play()
+        val primedIdForTwo = fake.primeCalls.last()[0].utteranceId
+        c.skipNext()
+        assertEquals("Two here.", fake.spoken.last())
+        assertTrue(fake.spokenIds.last() != primedIdForTwo)
+    }
+
+    @Test
+    fun cacheChapterReceivesTheRemainingSentences() {
+        val fake = PrimingFakeTtsEngine()
+        val c = primingController(fake)
+        c.loadChapter(fiveSentenceText())
+        assertEquals(
+            listOf("One here.", "Two here.", "Three here.", "Four here.", "Five here."),
+            fake.cacheChapterCalls.last()
+        )
+        c.play()
+        fake.done()
+        // After advancing, the remaining list starts at sentence two.
+        assertEquals(
+            listOf("Two here.", "Three here.", "Four here.", "Five here."),
+            fake.cacheChapterCalls.last()
+        )
+    }
+
+    @Test
+    fun voiceStatusLandsInState() {
+        val fake = PrimingFakeTtsEngine()
+        val c = primingController(fake)
+        c.loadChapter(fiveSentenceText())
+        assertEquals(VoiceSurface.DEVICE, c.state.value.voiceStatus.surface)
+        fake.capturedListener?.onVoiceStatus(
+            VoiceStatus(VoiceSurface.ONLINE, voiceName = "Aria")
+        )
+        val status = c.state.value.voiceStatus
+        assertEquals(VoiceSurface.ONLINE, status.surface)
+        assertEquals("Aria", status.voiceName)
+        assertFalse(status.fellBack)
+    }
+
+    @Test
+    fun interruptionPausesPlayback() {
+        val fake = PrimingFakeTtsEngine()
+        val c = primingController(fake)
+        c.loadChapter(fiveSentenceText())
+        c.play()
+        assertTrue(c.state.value.playing)
+        fake.capturedListener?.onInterrupted()
+        assertFalse(c.state.value.playing)
+    }
+
+    @Test
+    fun zeroDepthNeverPrimesButStillOffersTheChapter() {
+        val fake = PrimingFakeTtsEngine()
+        val c = ReadAloudController(fake, scope) // depth defaults to 0
+        c.loadChapter(fiveSentenceText())
+        c.play()
+        fake.done()
+        assertTrue(fake.primeCalls.isEmpty())
+        assertTrue(fake.cacheChapterCalls.isNotEmpty())
+    }
 }

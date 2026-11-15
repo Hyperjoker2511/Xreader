@@ -38,6 +38,7 @@ import app.xreader.data.ai.hub.AiProviders
 import app.xreader.data.prefs.AiFeature
 import app.xreader.data.prefs.EnginePick
 import app.xreader.data.prefs.ImageEngine
+import app.xreader.data.prefs.VoiceEngine
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.NocturneChip
@@ -108,6 +109,8 @@ fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
             EngineCard(state, viewModel)
 
             ImageEngineCard(state, viewModel)
+
+            VoiceEngineCard(state, viewModel)
 
             state.providers.forEach { card ->
                 when (card.def.protocol) {
@@ -443,6 +446,52 @@ private fun ImageEngineCard(state: ProvidersUiState, viewModel: ProvidersViewMod
                     Text("Remove key")
                 }
             }
+        }
+    }
+}
+
+/** Patch 12: the read-aloud voice engine — the device voice
+ * (default, nothing leaves the phone) or Microsoft's Edge online
+ * voices (free, no key, chapter text is sent to Microsoft to be
+ * read). A book can override this for itself in its Listen
+ * sheet; voices are picked there per book. If the online voice
+ * can't be reached, the device voice reads instead and the
+ * Listen sheet says so. */
+@Composable
+private fun VoiceEngineCard(state: ProvidersUiState, viewModel: ProvidersViewModel) {
+    val engine = state.voiceSettings.engine
+    GlassCard {
+        SectionHeader(title = "Voice engine")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Which voice reads chapters aloud. The device voice stays on " +
+                "this phone. The online voice sounds better and is free, " +
+                "but sends chapter text to Microsoft to read it.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+        ModelRow(
+            label = "Device voice — on this phone (default)",
+            selected = engine == VoiceEngine.DEVICE,
+            onClick = { viewModel.setVoiceEngine(VoiceEngine.DEVICE) }
+        )
+        ModelRow(
+            label = "Online voice — Microsoft Edge voices, free, no key",
+            selected = engine == VoiceEngine.EDGE,
+            onClick = { viewModel.setVoiceEngine(VoiceEngine.EDGE) }
+        )
+        if (engine == VoiceEngine.EDGE) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Chapter text is sent to Microsoft for online voices. " +
+                    "If the online voice can't be reached, the device " +
+                    "voice reads instead and the Listen sheet says so. " +
+                    "Voices themselves are picked per book in the " +
+                    "reader's Listen sheet.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

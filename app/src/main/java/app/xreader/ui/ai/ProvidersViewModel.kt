@@ -17,6 +17,8 @@ import app.xreader.data.prefs.AiFeature
 import app.xreader.data.prefs.AiSettings
 import app.xreader.data.prefs.EnginePick
 import app.xreader.data.prefs.ImageEngine
+import app.xreader.data.prefs.VoiceEngine
+import app.xreader.data.prefs.VoiceSettings
 import app.xreader.di.AppContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -65,7 +67,9 @@ data class ProvidersUiState(
     /** Patch 10: whether the image engines' secrets are in the
      * vault (names only — the secrets themselves never surface). */
     val cloudflareTokenSaved: Boolean = false,
-    val pollinationsKeySaved: Boolean = false
+    val pollinationsKeySaved: Boolean = false,
+    /** Patch 12: the read-aloud voice engine choice. */
+    val voiceSettings: VoiceSettings = VoiceSettings()
 ) {
     val geminiConfigured: Boolean
         get() = providers.firstOrNull { it.def.id == AiProviders.GEMINI_ID }
@@ -106,8 +110,9 @@ class ProvidersViewModel(private val container: AppContainer) : ViewModel() {
         container.keyVault.presentKeys,
         container.aiPrefs.settings,
         container.aiProviderPrefs.data,
+        container.voicePrefs.settings,
         local
-    ) { presentKeys, settings, providerData, localState ->
+    ) { presentKeys, settings, providerData, voiceSettings, localState ->
         val defs = AiProviders.allDefs(providerData.customs)
         ProvidersUiState(
             settings = settings,
@@ -133,7 +138,8 @@ class ProvidersViewModel(private val container: AppContainer) : ViewModel() {
             statusIsError = localState.statusIsError,
             add = localState.add,
             cloudflareTokenSaved = KeyVault.CLOUDFLARE_TOKEN in presentKeys,
-            pollinationsKeySaved = KeyVault.POLLINATIONS_KEY in presentKeys
+            pollinationsKeySaved = KeyVault.POLLINATIONS_KEY in presentKeys,
+            voiceSettings = voiceSettings
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProvidersUiState())
 
@@ -376,6 +382,25 @@ class ProvidersViewModel(private val container: AppContainer) : ViewModel() {
 
     fun setFeature(feature: AiFeature, enabled: Boolean) {
         viewModelScope.launch { container.aiPrefs.setFeatureEnabled(feature, enabled) }
+    }
+
+    // -- The voice engine (Patch 12) -------------------------------------------
+
+    fun setVoiceEngine(engine: VoiceEngine) {
+        viewModelScope.launch {
+            container.voicePrefs.setEngine(engine)
+            say(
+                when (engine) {
+                    VoiceEngine.DEVICE ->
+                        "Voice engine set to the device voice — nothing " +
+                            "leaves this phone."
+                    VoiceEngine.EDGE ->
+                        "Voice engine set to the online voice. If it " +
+                            "can't be reached, the device voice reads " +
+                            "instead and the Listen sheet says so."
+                }
+            )
+        }
     }
 
     // -- The image engine (Patch 10) -------------------------------------------

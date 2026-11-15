@@ -154,6 +154,24 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
     val cacheClearNote =
         kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
 
+    /** Patch 12: the listening cache's size (spec §C.4) — it
+     * lives in cacheDir, outside the filesDir the StorageMeter
+     * walks, so it is measured directly through the cache
+     * object. Null while measuring. */
+    val voiceCacheBytes =
+        kotlinx.coroutines.flow.MutableStateFlow<Long?>(null)
+
+    /** Patch 12: the listening cache's ONLY eraser besides its
+     * own LRU — the generic Clear caches never touches it
+     * (AppContainer.cleanCache leaves it alone by design). */
+    fun clearVoiceCache() {
+        viewModelScope.launch(container.ioDispatcher) {
+            runCatching { container.ttsAudioCache.clear() }
+            cacheClearNote.value = "Listening cache cleared."
+            refreshStorage()
+        }
+    }
+
     /** v1.5.6 (§3.5 R3): Clear Legacy Data's result line. The data
      * op is MANUAL ONLY — this tap is its only caller. */
     val legacyClearNote =
@@ -180,6 +198,12 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
 
     fun refreshStorage() {
         viewModelScope.launch(container.ioDispatcher) {
+            // Patch 12: the listening cache is measured on the
+            // same pass (independently — a meter failure must not
+            // hide it).
+            voiceCacheBytes.value = runCatching {
+                container.ttsAudioCache.sizeBytes()
+            }.getOrNull()
             storage.value = runCatching {
                 val meter = app.xreader.data.files.StorageMeter
                     .measure(container.bookStorage.filesDir)
@@ -1981,7 +2005,17 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     "Total",
                     app.xreader.data.files.StorageMeter.formatBytes(sizes.totalBytes)
                 )
+                // Patch 12 (§C.4): the listening cache lives in
+                // cacheDir, outside the meter's filesDir walk —
+                // its own row, measured through the cache object.
+                val voiceBytes by viewModel.voiceCacheBytes
+                    .collectAsStateWithLifecycle()
+                StorageRow(
+                    "Listening cache",
+                    app.xreader.data.files.StorageMeter.formatBytes(voiceBytes ?: 0L)
+                )
                 var confirmClear by remember { mutableStateOf(false) }
+                var confirmVoiceClear by remember { mutableStateOf(false) }
                 TextButton(onClick = { confirmClear = true }) {
                     Text("Clear caches")
                 }
@@ -1998,6 +2032,42 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                         clearNote!!,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                // Patch 12 (§C.4): the listening cache's own
+                // clear — separate words, separate confirmation;
+                // Clear caches above never touches it.
+                TextButton(onClick = { confirmVoiceClear = true }) {
+                    Text("Clear listening cache")
+                }
+                Text(
+                    "Removes sentences the online voice fetched ahead. " +
+                        "Books, downloads and your places stay.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (confirmVoiceClear) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { confirmVoiceClear = false },
+                        title = { Text("Clear listening cache?") },
+                        text = {
+                            Text(
+                                "Sentences the online voice fetched ahead " +
+                                    "will be removed. Books, downloads and " +
+                                    "your places stay."
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                confirmVoiceClear = false
+                                viewModel.clearVoiceCache()
+                            }) { Text("Clear listening cache") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { confirmVoiceClear = false }) {
+                                Text("Cancel")
+                            }
+                        }
                     )
                 }
                 // v1.5.6 (§3.5 R3): Clear Legacy Data — manual

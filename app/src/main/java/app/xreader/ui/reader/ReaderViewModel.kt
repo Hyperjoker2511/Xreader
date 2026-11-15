@@ -9,7 +9,8 @@ import app.xreader.data.db.Bookmark
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.Highlight
 import app.xreader.data.db.ReadingProgress
-import app.xreader.data.reader.AndroidTtsEngine
+import app.xreader.data.prefs.VoiceEngine
+import app.xreader.data.reader.EdgeVoiceTable
 import app.xreader.data.reader.MlKitEyeTracker
 import app.xreader.data.reader.OverlayPlayer
 import app.xreader.data.reader.ReadAloudController
@@ -39,6 +40,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -218,6 +220,103 @@ class ReaderViewModel(
     private var bookOverride: app.xreader.data.prefs.BookReaderOverride =
         app.xreader.data.prefs.BookReaderOverride()
 
+    /** Patch 12: the global voice choice (Providers & keys),
+     * collected at init; this book's layer is [bookOverride].
+     * Read fresh by the engine router at every sentence. */
+    @Volatile
+    private var globalVoiceSettings: app.xreader.data.prefs.VoiceSettings =
+        app.xreader.data.prefs.VoiceSettings()
+
+    /** Patch 12: the effective performance tier, kept current by
+     * the appearance collector; starts at the RAM tier (the
+     * prefetch depth's source, spec §A.3). */
+    @Volatile
+    private var performanceTier: app.xreader.data.prefs.PerfTier =
+        app.xreader.data.prefs.PerformancePolicy.tierForRam(container.totalRamMb())
+
+    /** Patch 12: what the Listen sheet's Voice section renders —
+     * the effective engine (this book's override over the global
+     * choice), the chapter's detected language, its curated
+     * voices and the effective pick. */
+    data class ListenVoiceUiState(
+        val engine: VoiceEngine = VoiceEngine.DEVICE,
+        val isOverride: Boolean = false,
+        val language: String = "en-US",
+        val choices: List<EdgeVoiceTable.Voice> = emptyList(),
+        val voiceId: String? = null,
+        val hasOverride: Boolean = false
+    )
+
+    private val _voiceUi = MutableStateFlow(ListenVoiceUiState())
+    val voiceUi: StateFlow<ListenVoiceUiState> = _voiceUi
+
+    private var voiceLanguageChapterId: Long? = null
+    private var voiceLanguage: String = "en-US"
+
+    private fun effectiveVoiceEngine(): VoiceEngine =
+        bookOverride.voiceEngine ?: globalVoiceSettings.engine
+
+    private fun effectiveEdgeVoiceId(): String? = bookOverride.edgeVoiceId
+
+    private fun publishVoiceState() {
+        val chapterId = _state.value.chapter?.id
+        if (chapterId != voiceLanguageChapterId) {
+            voiceLanguageChapterId = chapterId
+            voiceLanguage = detectVoiceLanguage(chapterId)
+        }
+        val override = bookOverride
+        _voiceUi.value = ListenVoiceUiState(
+            engine = override.voiceEngine ?: globalVoiceSettings.engine,
+            isOverride = override.voiceEngine != null,
+            language = voiceLanguage,
+            choices = EdgeVoiceTable.voicesFor(voiceLanguage),
+            voiceId = override.edgeVoiceId?.takeIf { it.startsWith(voiceLanguage) },
+            hasOverride = override.voiceEngine != null || override.edgeVoiceId != null
+        )
+    }
+
+    /** The chapter's language from its ORIGINAL text (the same
+     * caches read-aloud speaks from), sampled at the first
+     * substantial sentence. */
+    private fun detectVoiceLanguage(chapterId: Long?): String {
+        val original = chapterId?.let { chapterCache[it] ?: streamTexts[it] }
+            ?: _state.value.chapterText
+            ?: return "en-US"
+        val sample = app.xreader.domain.reader.SentenceSplitter.split(original.text)
+            .firstOrNull { it.end - it.start >= 12 }
+            ?.textIn(original.text)
+            ?: original.text.take(200)
+        return EdgeVoiceTable.languageFor(sample, java.util.Locale.getDefault())
+    }
+
+    /** Patch 12: the Listen sheet's voice writes — THIS book
+     * only (option-scope rule); the global choice in Providers &
+     * keys is never touched from inside a reader. The override
+     * collector republishes the sheet state. */
+    fun setVoiceEngine(engine: VoiceEngine) {
+        viewModelScope.launch {
+            container.bookReaderPrefs.setVoice(
+                bookId, engine, bookOverride.edgeVoiceId
+            )
+        }
+    }
+
+    fun setEdgeVoice(voiceId: String?) {
+        viewModelScope.launch {
+            container.bookReaderPrefs.setVoice(
+                bookId, bookOverride.voiceEngine, voiceId
+            )
+        }
+    }
+
+    /** "Use the settings for all books": both of this book's
+     * voice overrides go. */
+    fun clearVoiceOverrides() {
+        viewModelScope.launch {
+            container.bookReaderPrefs.setVoice(bookId, null, null)
+        }
+    }
+
     private fun publishConfig() {
         _config.value = globalConfig.copy(
             paletteName = bookOverride.paletteName ?: globalConfig.paletteName,
@@ -318,8 +417,19 @@ class ReaderViewModel(
     // -- Read-aloud (lazy: the TTS engine initialises on first use) ---------
     private val readAloudLazy = lazy {
         ReadAloudController(
-            engine = AndroidTtsEngine(container.applicationContext, viewModelScope),
-            scope = viewModelScope
+            // Patch 12: the router over the device + Edge engines;
+            // the choice and the per-book voice pick are read
+            // fresh at every sentence, so Listen-sheet switches
+            // land at sentence boundaries.
+            engine = container.readAloudEngine(
+                scope = viewModelScope,
+                engineChoice = { effectiveVoiceEngine() },
+                voiceIdOverride = { effectiveEdgeVoiceId() }
+            ),
+            scope = viewModelScope,
+            prefetchDepth = app.xreader.data.reader.TtsPrefetchDepth.forTier(
+                performanceTier
+            )
         ).also { controller ->
             controller.onChapterFinished = {
                 if (_state.value.hasNext) {
@@ -469,6 +579,12 @@ class ReaderViewModel(
         viewModelScope.launch {
             container.appearancePrefs.state.collectLatest { appearance ->
                 reduceMotion = appearance.reduceMotion
+                // Patch 12: keep the effective tier current for
+                // the read-aloud prefetch depth (§A.3).
+                performanceTier = app.xreader.data.prefs.PerformancePolicy.resolve(
+                    appearance.performanceMode, container.totalRamMb(),
+                    appearance.coverGlow
+                ).tier
                 _state.value = _state.value.copy(
                     pageTurnTier = computeTier(_config.value)
                 )
@@ -495,7 +611,24 @@ class ReaderViewModel(
                 _state.value = _state.value.copy(hasBookOverride = !override.isEmpty)
                 publishConfig()
                 publishImageMode()
+                publishVoiceState()
             }
+        }
+        // Patch 12: the global voice choice (Providers & keys)
+        // layers under this book's override for the Listen sheet
+        // and the engine providers.
+        viewModelScope.launch {
+            container.voicePrefs.settings.collectLatest { settings ->
+                globalVoiceSettings = settings
+                publishVoiceState()
+            }
+        }
+        // Patch 12: the Listen sheet's language follows the
+        // chapter — republished only when the chapter changes
+        // (publishVoiceState recomputes the language then).
+        viewModelScope.launch {
+            _state.map { it.chapter?.id }.distinctUntilChanged()
+                .collectLatest { publishVoiceState() }
         }
         // Manga programme (slice M2): the low-RAM decode flag
         // resolves once from the same performance policy the
