@@ -93,6 +93,8 @@ class FakeLoreArtDao : LoreArtDao {
 
     override fun observeForBook(bookId: Long): Flow<List<LoreArt>> =
         art.map { list -> list.filter { it.bookId == bookId } }
+
+    override fun observeAllArt(): Flow<List<LoreArt>> = art
 }
 
 class FakeAiSummaryDao : AiSummaryDao {
