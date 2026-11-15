@@ -57,7 +57,8 @@ import kotlin.math.pow
  * [mainBlobX] is the leading blob's centre; [mainBlobRadius] is its
  * vertical radius ([radius] verbatim — the horizontal extent is the
  * slot's, applied by the renderer); [mainBlobSquashY] is the blob's
- * vertical squash (1 at rest, 0.86 mid-travel — the liquid squeeze).
+ * vertical squash (1 at rest, 0.70 mid-travel — the liquid squeeze,
+ * deepened by the visible-layer fix round).
  * [trailX]/[trailRadius] are the shrinking trailing circle.
  * [neckWidth] is the bridge thickness at the midpoint; it is 0 and
  * [neckVisible] false at both ends and whenever from == to.
@@ -72,17 +73,25 @@ data class GooeyBridge(
     val neckVisible: Boolean
 )
 
+// Visible-layer fix round (§C): the melt's geometry constants
+// are raised to the owner's visibility bar — the shipped values
+// (neck 1.05 under a 1.1 cap, squash 0.14) deformed so little
+// that the melt read as a plain slide. Neck peak 1.45 under a
+// 1.6 cap, squash depth 0.30, trail 0.90: the stretch is
+// unmistakable, the endpoints are untouched (every constant
+// here is multiplied by an envelope that is 0 at both ends).
+
 /** The neck may never exceed radius × this (contract cap). */
-private const val NECK_CAP = 1.1f
+private const val NECK_CAP = 1.6f
 
 /** The neck's peak, as a multiple of radius: under the cap, with headroom. */
-private const val NECK_PEAK = 1.05f
+private const val NECK_PEAK = 1.45f
 
 /** How much smaller the trailing circle starts than the blob. */
-private const val TRAIL_SCALE = 0.85f
+private const val TRAIL_SCALE = 0.90f
 
 /** The blob's vertical squash at mid-travel (1 − this at the peak). */
-private const val SQUASH_DEPTH = 0.14f
+private const val SQUASH_DEPTH = 0.30f
 
 private fun easeInOutCubic(p: Float): Float =
     if (p < 0.5f) {

@@ -73,7 +73,9 @@ import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.common.ProgressPillBar
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.common.StatusPill
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.effectiveBottomPadding
 import app.xreader.ui.theme.ReaderPalettes
 import app.xreader.ui.theme.maxContrast
 import kotlinx.coroutines.flow.SharingStarted
@@ -2228,7 +2230,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         }
         // v1.1.0: bottom clearance — 72dp here + the column's 16dp
         // vertical padding = the standard 88dp (dock + dead strip).
-        Spacer(Modifier.height(72.dp))
+        Spacer(
+            Modifier.height(
+                effectiveBottomPadding(72.dp, LocalDockClearance.current)
+            )
+        )
     }
 }
 

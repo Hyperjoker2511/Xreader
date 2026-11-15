@@ -105,4 +105,18 @@ object LibrarySplit {
         } else {
             kinds.any { it == side }
         }
+
+    /**
+     * The travel direction of a Novels ↔ Manga switch, for the
+     * Library's animated side change (visible-layer fix round
+     * §D.3): TEXT → MANGA is +1 — Manga sits on the RIGHT of the
+     * switch, so its content enters from the right; MANGA → TEXT
+     * is −1; a same-side "switch" does not travel (0). Pure —
+     * pinned by LibrarySplitTest.
+     */
+    fun switchDirection(from: MediaKind, to: MediaKind): Int = when {
+        from == to -> 0
+        to == MediaKind.MANGA -> 1
+        else -> -1
+    }
 }

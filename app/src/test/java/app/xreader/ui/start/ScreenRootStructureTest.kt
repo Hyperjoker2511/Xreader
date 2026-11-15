@@ -21,7 +21,10 @@ import org.junit.Test
  *     so what this gate pins is the layering contract itself:
  *     MeshBackdrop is the base source at zIndex 0f, the NavHost
  *     carries the page source at zIndex 1f, and both stay gated
- *     on glass.frosted. Whether the layering runs clean on
+ *     on glass.blurLive (the resolved tier's blur liveness —
+ *     the visible-layer fix round migrated the gates off the
+ *     FROSTED style check, under which a LIQUID choice composed
+ *     no source at all). Whether the layering runs clean on
  *     hardware is settled by device proof; this static gate pins
  *     the contract, not the runtime;
  *  3. Recovery and Onboarding root in a themed Surface.
@@ -100,18 +103,18 @@ class ScreenRootStructureTest {
                 "found: $pageCall",
             pageCall.contains("zIndex = 1f")
         )
-        // Both call sites stay gated on glass.frosted: the gate text
-        // sits immediately before each call (`if (haze != null &&
-        // glass.frosted) it.hazeSource(...)`).
+        // Both call sites stay gated on glass.blurLive: the gate
+        // text sits immediately before each call (`if (haze !=
+        // null && glass.blurLive) it.hazeSource(...)`).
         val baseGate = scaffold.substring((baseAt - 60).coerceAtLeast(0), baseAt)
         assertTrue(
-            "the MeshBackdrop source must stay gated on glass.frosted",
-            baseGate.contains("glass.frosted")
+            "the MeshBackdrop source must stay gated on glass.blurLive",
+            baseGate.contains("glass.blurLive")
         )
         val pageGate = scaffold.substring((pageAt - 60).coerceAtLeast(0), pageAt)
         assertTrue(
-            "the NavHost source must stay gated on glass.frosted",
-            pageGate.contains("glass.frosted")
+            "the NavHost source must stay gated on glass.blurLive",
+            pageGate.contains("glass.blurLive")
         )
     }
 

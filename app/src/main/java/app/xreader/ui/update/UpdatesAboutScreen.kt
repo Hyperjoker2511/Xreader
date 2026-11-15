@@ -41,8 +41,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.bottomContentPadding
+import app.xreader.ui.theme.effectiveBottomPadding
 import app.xreader.data.update.AppUpdateRepository
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.SectionHeader
@@ -182,7 +184,14 @@ fun UpdatesAboutScreen(
             onClick = { openUrl(AppUpdateRepository.PRIVACY_URL) },
             trailing = { Chevron() }
         )
-        Spacer(Modifier.height(bottomContentPadding(LocalUiMetrics.current, dockVisible = false)))
+        Spacer(
+            Modifier.height(
+                effectiveBottomPadding(
+                    bottomContentPadding(LocalUiMetrics.current, dockVisible = false),
+                    LocalDockClearance.current
+                )
+            )
+        )
     }
 }
 

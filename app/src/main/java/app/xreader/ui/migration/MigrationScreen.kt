@@ -37,7 +37,9 @@ import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.theme.NocturneOverline
 import app.xreader.ui.theme.primaryTextColor
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.effectiveBottomPadding
 
 /**
  * Migration Studio (screen #19, PLAN §8). Komga / Kavita /
@@ -302,7 +304,11 @@ fun MigrationScreen(
                     )
                 }
             }
-            Spacer(Modifier.height(88.dp))
+            Spacer(
+                Modifier.height(
+                    effectiveBottomPadding(88.dp, LocalDockClearance.current)
+                )
+            )
         }
     }
 }

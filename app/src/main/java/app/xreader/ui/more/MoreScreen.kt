@@ -41,7 +41,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.ScreenHeader
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.UiTier
+import app.xreader.ui.theme.effectiveBottomPadding
 import app.xreader.ui.theme.rememberUiMetrics
 
 /**
@@ -107,12 +109,17 @@ fun MoreScreen(
             // the fold — v1.0.1's half-cut bottom card is gone.
             // v1.1.0: bottom padding totals 88dp (dock + the
             // phone's dead bottom strip clearance).
+            // Visible-layer fix round (§A): the dock overlays
+            // now, so the terminal padding repays the published
+            // clearance when it exceeds the standing 72.dp.
             .verticalScroll(androidx.compose.foundation.rememberScrollState())
             .padding(
                 start = 24.dp, end = 24.dp,
                 top = metrics.topGap, bottom = 16.dp
             )
-            .padding(bottom = 72.dp),
+            .padding(
+                bottom = effectiveBottomPadding(72.dp, LocalDockClearance.current)
+            ),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         ScreenHeader(title = "Me", eyebrow = "Xreader")

@@ -61,7 +61,9 @@ import app.xreader.ui.common.QuickActionTile
 import app.xreader.ui.common.ScreenHeader
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.theme.primaryTextColor
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.effectiveBottomPadding
 
 /**
  * Browse (v1.0.5, C3/D23 — the neat rebuild): header, the global
@@ -301,7 +303,9 @@ fun SourcesScreen(
         LazyColumn(
             Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(bottom = 88.dp)
+            contentPadding = PaddingValues(
+                bottom = effectiveBottomPadding(88.dp, LocalDockClearance.current)
+            )
         ) {
             // v1.5.2 fix (FIX-10, §8.5): the one-time plain-words
             // update summary — real counts, shown once, dismissible.

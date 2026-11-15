@@ -28,7 +28,45 @@ class GlassEffectPlanTest {
         val plan = glassEffectPlan(GlassTier.LIQUID)
         assertTrue(plan.usesBackdropBlur)
         assertTrue(plan.usesRefraction)
-        assertEquals(0.55f, plan.fillAlpha!!, 0.0f)
+        // Visible-layer fix round (§B): the LIQUID cell is raised
+        // (fill 0.62, rim 0.65, sheen 0.22) so the tier is
+        // tellable from FROSTED at a glance on black — the
+        // shipped 0.55/0.45/0.14 cell read as the old frosted
+        // pill on the owner's phone.
+        assertEquals(0.62f, plan.fillAlpha!!, 0.0f)
+        assertEquals(0.65f, plan.rimAlpha, 0.0f)
+        assertEquals(0.22f, plan.sheenAlpha, 0.0f)
+    }
+
+    @Test
+    fun `rim width is 3 dp on liquid and 2 dp elsewhere`() {
+        assertEquals(3f, glassEffectPlan(GlassTier.LIQUID).rimWidthDp, 0.0f)
+        assertEquals(2f, glassEffectPlan(GlassTier.FROSTED).rimWidthDp, 0.0f)
+        assertEquals(2f, glassEffectPlan(GlassTier.TINTED).rimWidthDp, 0.0f)
+        assertEquals(2f, glassEffectPlan(GlassTier.SOLID).rimWidthDp, 0.0f)
+    }
+
+    @Test
+    fun `glass settings carry the resolved tier and blur liveness`() {
+        // The theme's construction (fix round §B): a LIQUID
+        // choice on a device that earns the tier (API 33+, FULL
+        // performance tier) yields tier LIQUID and a live blur
+        // gate; on a device that resolves down to TINTED the
+        // gate is dead — no Haze node may be composed.
+        val liquidTier = app.xreader.data.prefs.resolveGlassTier(
+            app.xreader.data.prefs.GlassStyle.LIQUID, 36, 6144,
+            app.xreader.data.prefs.PerfTier.FULL
+        )
+        val liquid = GlassSettings(tier = liquidTier)
+        assertEquals(GlassTier.LIQUID, liquid.tier)
+        assertTrue(liquid.blurLive)
+        val tintedTier = app.xreader.data.prefs.resolveGlassTier(
+            app.xreader.data.prefs.GlassStyle.LIQUID, 28, 1024,
+            app.xreader.data.prefs.PerfTier.MINIMAL
+        )
+        val tinted = GlassSettings(tier = tintedTier)
+        assertEquals(GlassTier.TINTED, tinted.tier)
+        assertTrue(!tinted.blurLive)
     }
 
     @Test

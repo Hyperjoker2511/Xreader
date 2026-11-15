@@ -19,11 +19,15 @@ class DockVisibilityPolicyTest {
 
     private val settingsRoutes = listOf(
         "customise", "appearance", "profile", "providers", "sync",
-        "migration", "more", "updates", "labs", "about",
+        "migration", "more", "labs", "about",
         // Patch 11 (owner-directed): "terms" leaves this set —
         // its Me door was removed and the terms pages are
         // reader-flow destinations now; they are pinned as
         // dock-hidden below instead.
+        // Visible-layer fix round (owner-directed): "updates"
+        // leaves this set the same way — it is a Library child
+        // page now (chapter news, wired from the Library filter
+        // sheet), pinned as dock-hidden below.
         "vocab", "appUpdates", "whatsNew",
         // Patch 10: the Generated art gallery is a Me destination
         // like the others (same literal-extension precedent as
@@ -132,7 +136,10 @@ class DockVisibilityPolicyTest {
             "ai/{bookId}/{chapterIndex}",
             // Patch 11: the terms pages ride the reader flow —
             // no dock from any origin.
-            "terms", "bookTerms/{bookId}"
+            "terms", "bookTerms/{bookId}",
+            // Fix round: the updates page is a Library child —
+            // no dock from any origin, like the book page.
+            "updates"
         )
         for (route in hidden) {
             for (origin in DockOrigin.entries) {

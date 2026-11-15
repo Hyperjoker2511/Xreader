@@ -31,8 +31,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.bottomContentPadding
+import app.xreader.ui.theme.effectiveBottomPadding
 import app.xreader.data.db.VocabWord
 import app.xreader.di.AppContainer
 import app.xreader.ui.common.GhostPill
@@ -219,7 +221,12 @@ fun VocabScreen(
         LazyColumn(
             Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(20.dp),
-            contentPadding = PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
+            contentPadding = PaddingValues(
+                bottom = effectiveBottomPadding(
+                    bottomContentPadding(LocalUiMetrics.current, dockVisible = false),
+                    LocalDockClearance.current
+                )
+            )
         ) {
             item(key = "dictionary") {
                 GlassCard(Modifier.fillMaxWidth()) {

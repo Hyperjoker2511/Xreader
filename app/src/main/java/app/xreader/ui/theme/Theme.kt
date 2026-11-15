@@ -22,6 +22,9 @@ import app.xreader.data.prefs.AppearanceState
 import app.xreader.data.prefs.AppearanceValidation
 import app.xreader.data.prefs.CUSTOM_SCHEME_PREFIX
 import app.xreader.data.prefs.GlassStyle
+import app.xreader.data.prefs.GlassTier
+import app.xreader.data.prefs.PerformancePolicy
+import app.xreader.data.prefs.resolveGlassTier
 import dev.chrisbanes.haze.HazeState
 
 /**
@@ -49,7 +52,15 @@ data class GlassSettings(
     val style: GlassStyle = GlassStyle.TINTED,
     /** The style actually rendered on this device (FROSTED may have
      * fallen back to TINTED — see AppearanceValidation). */
-    val effectiveStyle: GlassStyle = GlassStyle.TINTED
+    val effectiveStyle: GlassStyle = GlassStyle.TINTED,
+    /** The resolved glass TIER for this device (visible-layer fix
+     * round, spec §B): the single resolver's verdict
+     * ([resolveGlassTier] over the choice, SDK, RAM and the
+     * performance tier), computed once here in the theme so every
+     * surface — dock, cards, sheets — reads the SAME tier. The
+     * dock has resolved its own since Patch 1; this generalises
+     * that resolution to the whole app. */
+    val tier: GlassTier = GlassTier.TINTED
 ) {
     /** Design card radius ~24 dp (DESIGN.md), scaled by the user's slider. */
     val cardRadius: Dp get() = (24f * radiusScale).dp
@@ -77,12 +88,28 @@ data class GlassSettings(
         GlassStyle.SOLID -> surface
         GlassStyle.FROSTED -> surface.copy(alpha = 0.72f)
         GlassStyle.TINTED -> surface.copy(alpha = opacity)
-        // LIQUID renders as FROSTED until the liquid surface lands (Patches 2–3).
-        GlassStyle.LIQUID -> surface.copy(alpha = 0.72f)
+        // Visible-layer fix round (§B): a LIQUID choice that earns
+        // the LIQUID tier takes the liquid plan's lighter fill
+        // (0.62 — the rim and sheen carry the surface); a LIQUID
+        // choice resolved down to the FROSTED tier keeps the
+        // frosted 0.72 the contrast gate pinned.
+        GlassStyle.LIQUID -> surface.copy(
+            alpha = if (tier == GlassTier.LIQUID) 0.62f else 0.72f
+        )
     }
 
-    /** Whether this surface should get the real backdrop blur. */
+    /** Whether the FROSTED *style* is the effective one. Style
+     * branches (GlassCard's frosted fill/border treatment) key on
+     * the resolved TIER now; blur gates use [blurLive]. */
     val frosted: Boolean get() = effectiveStyle == GlassStyle.FROSTED
+
+    /** A backdrop-blur tier is live: LIQUID or FROSTED. Every
+     * blur gate in the tree reads this (the fix round migrated
+     * them off the style check, under which a LIQUID choice —
+     * whose effectiveStyle never equalled FROSTED — composed no
+     * Haze source and no effect at all). */
+    val blurLive: Boolean
+        get() = tier == GlassTier.LIQUID || tier == GlassTier.FROSTED
 }
 
 /** The shared Haze state: ONE state for the whole shell. Since
@@ -91,6 +118,16 @@ data class GlassSettings(
  * the effects sampling it; before that the NavHost content itself
  * was the source, which structurally forbade card effects (R01). */
 val LocalHazeState = compositionLocalOf<HazeState?> { null }
+
+/** The window-bottom zone the overlay dock occupies on the
+ * current destination (visible-layer fix round, spec §A.2):
+ * 0.dp when the dock is hidden, immersive, or the shell is the
+ * rail shell (which never provides it). Scroll ends repay it
+ * through effectiveBottomPadding so content never rests behind
+ * the bar. Provided by the phone shell, which derives it from
+ * the SAME visibility expression that composes the bar, so the
+ * bar and the clearance can never disagree. */
+val LocalDockClearance = compositionLocalOf { 0.dp }
 
 /** The active app colour scheme (v1.0.1), for accent-as-text helpers. */
 val LocalAppScheme = compositionLocalOf { EmberScheme }
@@ -189,12 +226,27 @@ fun XreaderTheme(
     val effective = AppearanceValidation.effectiveGlassStyle(
         appearance.glassStyle, Build.VERSION.SDK_INT, totalRamMb
     )
+    // Visible-layer fix round (§B): the glass TIER, resolved
+    // exactly as the dock resolves it — the performance tier
+    // from the same inputs, then the single tier resolver — so
+    // the theme and the dock can never disagree about which
+    // tier this device is on.
+    val perfTier = PerformancePolicy.resolve(
+        appearance.performanceMode, totalRamMb, appearance.coverGlow
+    ).tier
+    val glassTier = resolveGlassTier(
+        choice = appearance.glassStyle,
+        sdkInt = Build.VERSION.SDK_INT,
+        totalRamMb = totalRamMb,
+        perfTier = perfTier
+    )
     val glass = GlassSettings(
         opacity = appearance.glassOpacity,
         radiusScale = appearance.glassRadiusScale,
         elevationScale = appearance.glassElevationScale,
         style = appearance.glassStyle,
-        effectiveStyle = effective
+        effectiveStyle = effective,
+        tier = glassTier
     )
     // v1.0.2 (R04): "Wallpaper" resolves to the platform dynamic
     // schemes on API 31+, contrast-sanitized by our own gate; on

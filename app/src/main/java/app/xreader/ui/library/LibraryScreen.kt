@@ -16,11 +16,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.effectiveBottomPadding
 import app.xreader.ui.theme.errorTextColor
 import app.xreader.ui.theme.sageTextColor
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,6 +50,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlaylistRemove
 import androidx.compose.material.icons.filled.Refresh
@@ -53,6 +59,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -70,6 +77,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.animateProgressAsState
 import app.xreader.core.motion.itemEnter
+import app.xreader.core.motion.sideSwitchEnter
+import app.xreader.core.motion.sideSwitchExit
 import app.xreader.core.motion.itemExit
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.core.motion.pressBounce
@@ -113,6 +122,9 @@ fun LibraryScreen(
     onProfile: () -> Unit = {},
     /** v1.0.2 (R27): paste-a-list import. */
     onOpenAddList: () -> Unit = {},
+    /** Visible-layer fix round (§E): the filter sheet's
+     * "New chapters" row — opens the updates page. */
+    onOpenUpdates: () -> Unit = {},
     coverGlow: Boolean = false
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -586,17 +598,110 @@ fun LibraryScreen(
         // Customise → Downloads, with the Wi-Fi-only switch beside
         // it. No trace is left here.
 
+        // Visible-layer fix round (§D.3): the CONTENT REGION
+        // glides between the Novels and Manga sides — slide +
+        // fade at the tab switch's own numbers (width/5,
+        // TAB_SWITCH_MS), direction from the pure
+        // LibrarySplit.switchDirection. The header, the switch,
+        // the add row and the chip rail above stay fixed: the
+        // control you tapped must not move. Each side keeps its
+        // own scroll position (two list states), so flipping
+        // back returns you to where you were on that side.
+        val novelsListState = rememberLazyListState()
+        val mangaListState = rememberLazyListState()
+        AnimatedContent(
+            targetState = state.librarySide,
+            modifier = Modifier.weight(1f),
+            transitionSpec = {
+                val dir = app.xreader.data.library.LibrarySplit
+                    .switchDirection(initialState, targetState)
+                sideSwitchEnter(dir, reduceMotion).togetherWith(
+                    sideSwitchExit(dir, reduceMotion)
+                ).using(SizeTransform(clip = true))
+            },
+            label = "librarySide"
+        ) { side ->
+            // The lambda's side — NOT state.librarySide: during
+            // the flight both sides exist at once, and each must
+            // render its OWN books. The derivations below mirror
+            // the outer ones (which stay for the chip rail and
+            // the switch labels), keyed on this side.
+            val sideBooks = remember(state.books, state.bookKinds, side) {
+                app.xreader.data.library.LibrarySplit.onSide(
+                    state.books, side
+                ) { shelf ->
+                    app.xreader.data.library.LibrarySplit
+                        .kindOf(shelf.book.id, state.bookKinds)
+                }
+            }
+            val sideFacts = remember(
+                sideBooks, state.metas, state.favourites,
+                state.bookTags, state.downloadCounts
+            ) { state.shelfFactsFor(sideBooks, nowMillis) }
+            val memberFilter = remember(
+                state.selectedShelf, sideFacts,
+                state.userShelves, state.memberships
+            ) {
+                app.xreader.data.library.ShelfLogic.membersFor(
+                    state.selectedShelf, sideFacts,
+                    state.userShelves, state.memberships, nowMillis
+                )
+            }
+            val visibleBooks = remember(
+                sideBooks, state.metas, query, effectiveSort,
+                statusFilter, memberFilter
+            ) {
+                val inShelf = if (memberFilter == null) {
+                    sideBooks
+                } else {
+                    sideBooks.filter { it.book.id in memberFilter }
+                }
+                val rows = inShelf.map { shelf ->
+                    app.xreader.data.library.LibraryListLogic.Row(
+                        bookId = shelf.book.id,
+                        title = shelf.book.title,
+                        author = shelf.book.author,
+                        totalChapters = shelf.book.totalChapters,
+                        addedAt = shelf.book.addedAt,
+                        lastOpenedAt = shelf.book.lastOpenedAt,
+                        hasProgress = shelf.fraction > 0f,
+                        finished = shelf.book.finished,
+                        status = state.metas[shelf.book.id]?.status
+                            ?: app.xreader.data.library.ReadingStatus.NONE
+                    )
+                }
+                val ordered = app.xreader.data.library.LibraryListLogic.apply(
+                    rows,
+                    state.libraryPrefs.copy(
+                        searchQuery = query, sort = effectiveSort,
+                        statusFilter = statusFilter
+                    )
+                )
+                val byId = inShelf.associateBy { it.book.id }
+                ordered.mapNotNull { byId[it.bookId] }
+            }
         // v1.0.2 (R20): pull to refresh — silent; the results are
         // read on the Updates page and the +N badges.
         androidx.compose.material3.pulltorefresh.PullToRefreshBox(
             isRefreshing = state.pullRefreshing,
             onRefresh = { viewModel.pullRefresh() },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.fillMaxSize()
         ) {
         LazyColumn(
-            Modifier.fillMaxSize(),
+            state = if (side ==
+                app.xreader.data.extension.MediaKind.MANGA
+            ) {
+                mangaListState
+            } else {
+                novelsListState
+            },
+            modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(bottom = 88.dp)
+            contentPadding = PaddingValues(
+                bottom = effectiveBottomPadding(
+                    88.dp, LocalDockClearance.current
+                )
+            )
         ) {
             // v1.5.3 (§5.3, CONFIRMED; finding #9): the Continue
             // hero belongs to the whole library — it renders ONLY
@@ -726,7 +831,7 @@ fun LibraryScreen(
                 // come from, in plain words.
                 item(key = "side-empty") {
                     Text(
-                        if (state.librarySide ==
+                        if (side ==
                             app.xreader.data.extension.MediaKind.MANGA
                         ) {
                             "No manga here yet. Manga lives in " +
@@ -894,6 +999,7 @@ fun LibraryScreen(
                     )
                 }
             }
+        }
         }
         }
 
@@ -1137,6 +1243,32 @@ fun LibraryScreen(
                         onClick = {
                             viewModel.checkForUpdates()
                             filterSheetOpen = false
+                        }
+                    )
+                    // Visible-layer fix round (§E): the updates
+                    // PAGE gets its door — until now the route had
+                    // no navigate call site anywhere (the audit's
+                    // one fully-dead feature). The caption is the
+                    // live count from the same metas the Updates
+                    // page itself reads; the row is always
+                    // present, even at zero — a door that vanishes
+                    // when empty teaches nothing.
+                    val newChapterCounts = state.metas.values
+                        .mapNotNull {
+                            it.newChapterCount.takeIf { n -> n > 0 }
+                        }
+                    GlassSheetActionRow(
+                        icon = Icons.Filled.NewReleases,
+                        label = "New chapters",
+                        caption = if (newChapterCounts.isNotEmpty()) {
+                            "${newChapterCounts.sum()} new across " +
+                                "${newChapterCounts.size} book(s)"
+                        } else {
+                            "Nothing new right now"
+                        },
+                        onClick = {
+                            filterSheetOpen = false
+                            onOpenUpdates()
                         }
                     )
                     TextButton(

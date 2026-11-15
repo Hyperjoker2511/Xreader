@@ -47,7 +47,9 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
 import java.text.DateFormat
 import java.util.Date
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.effectiveBottomPadding
 
 /**
  * Sync & backup (screen #25): choose a route (Drive / WebDAV), sync
@@ -502,7 +504,11 @@ fun SyncScreen(
                     }
                 }
             }
-            Spacer(Modifier.height(88.dp))
+            Spacer(
+                Modifier.height(
+                    effectiveBottomPadding(88.dp, LocalDockClearance.current)
+                )
+            )
         }
     }
     pendingRestore?.let { entry ->

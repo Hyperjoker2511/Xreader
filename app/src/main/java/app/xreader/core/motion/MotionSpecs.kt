@@ -79,6 +79,21 @@ const val PROGRESS_MS = 300
 
 fun <T> fadeTween() = tween<T>(durationMillis = FADE_MS, easing = FadeEasing)
 
+/** The tab-switch curve (visible-layer fix round): one tween on
+ * the engine's TAB_SWITCH_MS token with the shared FadeEasing,
+ * used for BOTH the slide and the fade of a tab switch (and the
+ * Library side switch) so the two stay phase-locked — same
+ * duration, same easing, started together. */
+fun <T> tabSwitchSpec() =
+    tween<T>(durationMillis = SpringMotionEngine.TAB_SWITCH_MS, easing = FadeEasing)
+
+/** The Library switch segments' colour ease (fix round §D.3):
+ * 200 ms on the shared FadeEasing — the colour lands a beat
+ * before the content glide finishes, so the control you tapped
+ * answers first. */
+fun segmentColorSpec() =
+    tween<androidx.compose.ui.graphics.Color>(durationMillis = 200, easing = FadeEasing)
+
 fun <T> progressTween() = tween<T>(durationMillis = PROGRESS_MS, easing = ProgressEasing)
 
 /**
@@ -181,29 +196,47 @@ fun stackPopExit(reduceMotion: Boolean): ExitTransition =
     else slideOutHorizontally(navSlideSpec()) { it / 6 } + fadeOut(navFadeSpec())
 
 /**
- * Tab-to-tab: the D8 calm crossfade, plus Patch 8's gentle
- * directional nudge. [direction] is the sign of the tab-ordinal
- * travel: +1 toward a LATER tab (the incoming tab starts [slidePx]
- * to the right and settles in), −1 toward an EARLIER tab (mirror),
- * 0 for same-tab/unknown — the plain crossfade. [slidePx] is the
- * nudge distance in px (the shell resolves 12.dp and passes 0
- * under reduced motion, which also yields the plain crossfade).
- * The nudge rides the crossfade's own curve ([fadeTween]) so the
- * fade and the slide stay phase-locked; the defaults keep the
- * original crossfade for any caller that passes nothing.
+ * Tab-to-tab (visible-layer fix round §D): a real directional
+ * travel — the incoming tab slides a FIFTH of the container
+ * width while fading, both on the one [tabSwitchSpec] tween so
+ * they stay phase-locked. [direction] is the sign of the
+ * tab-ordinal travel: +1 toward a LATER tab (the incoming tab
+ * starts a fifth-width to the right and settles in), −1 toward
+ * an EARLIER tab (mirror). Direction 0 (same-tab/unknown) or
+ * [reduceMotion] yields the plain crossfade on the same token —
+ * the travel is 0, the kind unchanged. (Patch 8's 12.dp nudge on
+ * the 240 ms fade is retired: on the owner's phone it was
+ * invisible — "nothing changed". The stack geometry above is
+ * NOT touched by this retune.)
  */
-fun tabEnter(direction: Int = 0, slidePx: Int = 0): EnterTransition =
-    if (direction == 0 || slidePx == 0) fadeIn(fadeTween())
-    else slideInHorizontally(fadeTween()) { direction * slidePx } +
-        fadeIn(fadeTween())
+fun tabEnter(direction: Int = 0, reduceMotion: Boolean = false): EnterTransition =
+    if (direction == 0 || reduceMotion) fadeIn(tabSwitchSpec())
+    else slideInHorizontally(tabSwitchSpec()) { direction * it / 5 } +
+        fadeIn(tabSwitchSpec())
 
-/** Tab-to-tab exit: the D8 crossfade; the outgoing tab drifts
- * [slidePx] AGAINST the travel direction (Patch 8) — toward a
- * later tab it drifts left, toward an earlier tab right. */
-fun tabExit(direction: Int = 0, slidePx: Int = 0): ExitTransition =
-    if (direction == 0 || slidePx == 0) fadeOut(fadeTween())
-    else slideOutHorizontally(fadeTween()) { -direction * slidePx } +
-        fadeOut(fadeTween())
+/** Tab-to-tab exit: the outgoing tab travels a fifth-width
+ * AGAINST the travel direction while fading — toward a later
+ * tab it leaves left, toward an earlier tab right. */
+fun tabExit(direction: Int = 0, reduceMotion: Boolean = false): ExitTransition =
+    if (direction == 0 || reduceMotion) fadeOut(tabSwitchSpec())
+    else slideOutHorizontally(tabSwitchSpec()) { -direction * it / 5 } +
+        fadeOut(tabSwitchSpec())
+
+/**
+ * The Library's Novels ↔ Manga side switch (fix round §D.3):
+ * the SAME travel as a tab switch — it is one, conceptually;
+ * the switch sits in the tab row's family — so it delegates to
+ * the tab adapters verbatim: width / 5, TAB_SWITCH_MS,
+ * phase-locked slide + fade, plain crossfade when direction is
+ * 0 or motion is reduced. [direction] comes from the pure
+ * LibrarySplit.switchDirection.
+ */
+fun sideSwitchEnter(direction: Int, reduceMotion: Boolean): EnterTransition =
+    tabEnter(direction, reduceMotion)
+
+/** Side-switch exit: see [sideSwitchEnter]. */
+fun sideSwitchExit(direction: Int, reduceMotion: Boolean): ExitTransition =
+    tabExit(direction, reduceMotion)
 
 /** Shared Axis Y for sheets: rises on the Sheet (heavy) spring. */
 fun sharedAxisYEnter(reduceMotion: Boolean): EnterTransition =

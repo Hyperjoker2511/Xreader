@@ -45,7 +45,9 @@ import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SectionHeader
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.effectiveBottomPadding
 
 /** Friendly names for the cascade (the ids stay in GeminiModels). */
 fun geminiModelLabel(model: String): String = when (model) {
@@ -154,7 +156,11 @@ fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
                     }
                 }
             }
-            Spacer(Modifier.height(88.dp))
+            Spacer(
+                Modifier.height(
+                    effectiveBottomPadding(88.dp, LocalDockClearance.current)
+                )
+            )
         }
     }
 }

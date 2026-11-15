@@ -165,4 +165,18 @@ class SpringMotionEngineTest {
             SpringMotionEngine.tierFor(0L, animationsOn = true)
         )
     }
+
+    @Test
+    fun `gooey melt settles inside the readability window`() {
+        // Visible-layer fix round (§C): the melt must be
+        // WATCHABLE — settle between 450 and 600 ms. The shipped
+        // 380/0.72 settled in ~285 ms and read as a blink on the
+        // owner's phone ("nothing changed"); the retuned
+        // 150/0.62 lands at ~527 ms by the engine's own formula.
+        val settle = SpringMotionEngine.settleMillis(SpringMotionEngine.GooeyMelt)
+        assertTrue(
+            "GooeyMelt settles in ${settle}ms — outside the 450–600ms window",
+            settle in 450.0..600.0
+        )
+    }
 }

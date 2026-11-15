@@ -63,7 +63,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.effectiveBottomPadding
 
 /**
  * v1.1.0 (§5.13 + Q11): the History Reading Pulse — today's real
@@ -377,7 +379,9 @@ fun HistoryScreen(
             LazyColumn(
                 Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(bottom = 88.dp)
+                contentPadding = PaddingValues(
+                    bottom = effectiveBottomPadding(88.dp, LocalDockClearance.current)
+                )
             ) {
                 // ── Reading Pulse (Q11): real aggregates only —
                 // see ReadingPulse's doc for the exact sources.

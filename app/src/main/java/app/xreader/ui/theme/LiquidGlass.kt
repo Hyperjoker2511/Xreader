@@ -80,7 +80,10 @@ data class GlassEffectPlan(
     /** Soft top-sheen strength; 0 = no sheen. */
     val sheenAlpha: Float,
     /** The glass fill's alpha, or null = the user's opacity token decides (TINTED). */
-    val fillAlpha: Float?
+    val fillAlpha: Float?,
+    /** The rim stroke's full width in dp; the surface's clip
+     * removes the outer half, so the visible rim is half this. */
+    val rimWidthDp: Float
 )
 
 /**
@@ -90,33 +93,43 @@ data class GlassEffectPlan(
  * tier must not drift from the behaviour the contrast gate pinned.
  */
 fun glassEffectPlan(tier: GlassTier): GlassEffectPlan = when (tier) {
+    // Visible-layer fix round (§B): the LIQUID cell is RAISED —
+    // rim 0.65 / sheen 0.22 / fill 0.62 / rim stroke 3.dp — so
+    // the tier is tellable from FROSTED at a glance on black.
+    // The audit found the shipped cell (0.45/0.14/0.55) read as
+    // the old frosted pill; these values are the owner's
+    // "beautiful" bar made numeric, pinned by GlassEffectPlanTest.
     GlassTier.LIQUID -> GlassEffectPlan(
         usesBackdropBlur = true,
         usesRefraction = true,
-        rimAlpha = 0.45f,
-        sheenAlpha = 0.14f,
-        fillAlpha = 0.55f
+        rimAlpha = 0.65f,
+        sheenAlpha = 0.22f,
+        fillAlpha = 0.62f,
+        rimWidthDp = 3f
     )
     GlassTier.FROSTED -> GlassEffectPlan(
         usesBackdropBlur = true,
         usesRefraction = false,
         rimAlpha = 0.30f,
         sheenAlpha = 0.08f,
-        fillAlpha = 0.72f
+        fillAlpha = 0.72f,
+        rimWidthDp = 2f
     )
     GlassTier.TINTED -> GlassEffectPlan(
         usesBackdropBlur = false,
         usesRefraction = false,
         rimAlpha = 0.18f,
         sheenAlpha = 0.05f,
-        fillAlpha = null // the user's opacity token decides — never a constant
+        fillAlpha = null, // the user's opacity token decides — never a constant
+        rimWidthDp = 2f
     )
     GlassTier.SOLID -> GlassEffectPlan(
         usesBackdropBlur = false,
         usesRefraction = false,
         rimAlpha = 0.12f,
         sheenAlpha = 0.0f,
-        fillAlpha = 1.0f
+        fillAlpha = 1.0f,
+        rimWidthDp = 2f
     )
 }
 
@@ -261,11 +274,12 @@ fun LiquidGlassSurface(
 
         // ── Sheen + specular rim ──────────────────────────────────
         // One cached draw: the soft top sheen (a shape-filled
-        // gradient fading out by mid-height) and the 1.dp rim — a
+        // gradient fading out by mid-height) and the rim — a
         // gradient stroke following the shape outline, brightest at
-        // the top. The stroke is drawn 2.dp wide centred on the
-        // outline; the container's clip removes the outer half,
-        // leaving a true 1.dp inside the bounds.
+        // the top. The stroke is drawn plan.rimWidthDp wide centred
+        // on the outline; the container's clip removes the outer
+        // half, leaving half the width inside the bounds (1.dp on
+        // the plain plans, 1.5.dp on LIQUID — fix round §B).
         Box(
             Modifier
                 .fillMaxSize()
@@ -290,7 +304,7 @@ fun LiquidGlassSurface(
                         drawOutline(
                             outline,
                             brush = rimBrush,
-                            style = Stroke(width = 2.dp.toPx())
+                            style = Stroke(width = plan.rimWidthDp.dp.toPx())
                         )
                     }
                 }

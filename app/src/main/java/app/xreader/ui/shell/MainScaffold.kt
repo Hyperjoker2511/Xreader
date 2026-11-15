@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -35,6 +38,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -47,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -102,10 +107,12 @@ import app.xreader.ui.common.frostedGlass
 import app.xreader.ui.theme.DeepSpace
 import app.xreader.ui.theme.ElectricPurple
 import app.xreader.ui.theme.LiquidGlassSurface
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalGlassSettings
 import app.xreader.ui.theme.LocalHazeState
 import app.xreader.ui.theme.NeonPurple
 import app.xreader.ui.theme.VibrantCyan
+import app.xreader.ui.theme.dockOverlayClearance
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -857,7 +864,9 @@ private fun dockShown(navController: NavHostController): Boolean {
  * NavHost carries the second source — the page layer at
  * zIndex 1f — so surfaces like the dock can sample the real
  * scrolling content, not just this mesh. Both sources are gated
- * on glass.frosted, and their layering is the contract the
+ * on glass.blurLive (the resolved tier's blur liveness — the
+ * visible-layer fix round migrated the gates off the FROSTED
+ * style check), and their layering is the contract the
  * shell's structural test pins (an effect node inside a
  * source's subtree was Haze's second R01 IAE under the old
  * single-source topology; Haze 1.5.1's zIndex-aware sources are
@@ -877,7 +886,7 @@ private fun MeshBackdrop(
     val scheme = MaterialTheme.colorScheme
     val dark = scheme.background.luminance() < 0.5f
     val pureBlack = dark && scheme.background == Color.Black
-    val base = if (dark && glass.frosted && !pureBlack) {
+    val base = if (dark && glass.blurLive && !pureBlack) {
         DeepSpace
     } else {
         scheme.background
@@ -891,7 +900,7 @@ private fun MeshBackdrop(
                 // tertiary and also appear under tinted/solid
                 // glass (weaker). With bloom off this block is the
                 // original v1.0.4 mesh, byte for byte in effect.
-                if ((glass.frosted || bloom) && !pureBlack) {
+                if ((glass.blurLive || bloom) && !pureBlack) {
                     val glow = when {
                         bloom && dark -> scheme.primary.copy(alpha = 0.40f)
                         dark -> NeonPurple.copy(alpha = 0.40f)
@@ -920,14 +929,15 @@ private fun MeshBackdrop(
                     )
                 }
             }
-            // FIX-23: the haze source is applied ONLY when the
-            // FROSTED style is actually in effect. On both plain
-            // paths — the automatic below-API-31 resolution and
-            // the user's safe-appearance (TINTED) mode — no Haze
+            // FIX-23: the haze source is applied ONLY when a
+            // blur tier is actually live. On both plain paths —
+            // the automatic below-API-31 resolution and the
+            // user's safe-appearance (TINTED) mode — no Haze
             // node enters the composition at all (glass-free by
             // construction); the effect sites in frostedGlass
-            // are gated on the same flag.
-            .let { if (haze != null && glass.frosted) it.hazeSource(haze, zIndex = 0f) else it }
+            // are gated on the same flag. (Fix round: the flag
+            // is glass.blurLive — LIQUID or FROSTED tier.)
+            .let { if (haze != null && glass.blurLive) it.hazeSource(haze, zIndex = 0f) else it }
     ) {
         // v1.0.7 Liquid background: the user's own picture fills
         // the stage (the glass above still samples it through
@@ -1006,22 +1016,112 @@ private fun PhoneShell(
     appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel,
     packViewModel: app.xreader.ui.sources.ProviderPackViewModel
 ) {
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = {
-            // v1.0.1: immersive routes (reader, login) hide the bar —
-            // it animates out with the motion engine, never pops.
-            // Patch 6: the dock policy hides it the same way on
-            // destinations that own their screen — a source's
-            // catalogue, a book's page, and every pushed screen
-            // except settings reached from the Me tab (the
-            // full-screen source rule). The bar's rendering is
-            // untouched; this only decides whether it is composed.
+    // Visible-layer fix round (§A): the Scaffold's bottomBar
+    // slot is GONE, and with it the Scaffold's snackbar host.
+    // The dock is an overlay in the content Box below, so the
+    // page runs the full height of the window and the bar's
+    // glass samples the actual scrolling content through the
+    // shell's two haze sources — the geometry Patch 3's comment
+    // always claimed, which the slot made impossible: the page
+    // drew nothing in the slot's strip, and the Scaffold painted
+    // the strip with its opaque container colour — the black
+    // band the owner rejected ("see the nav bar around it
+    // blackness same as before"). The bar's own modifiers are
+    // untouched — same navigationBarsPadding, same 16/10/24.dp
+    // pads — so its position on screen is pixel-identical; only
+    // its parent changed. The Scaffold stays for its insets and
+    // structure; it just no longer reserves a slot.
+    Scaffold { padding ->
+        // v1.0.4 (D1): the mesh backdrop fills the whole scaffold;
+        // the NavHost sits above it, full-height now (below).
+        // v1.0.7: the backdrop also carries bloom + the liquid
+        // background; grain floats over the content (never over
+        // immersive routes, never on the MINIMAL tier / SMOOTH).
+        val backdropFile = appearance.backgroundImage?.let { name ->
+            File(container.bookStorage.filesDir, "backgrounds/$name")
+        }
+        val grainOn = appearance.grain && !shellImmersive(navController) &&
+            appearance.performanceMode !=
+                app.xreader.data.prefs.PerformanceMode.SMOOTH &&
+            app.xreader.data.prefs.PerformancePolicy.tierForRam(
+                container.totalRamMb()
+            ) != app.xreader.data.prefs.PerfTier.MINIMAL
+        // The dock's visibility — the same expression the slot
+        // evaluated (v1.0.1: immersive routes hide the bar;
+        // Patch 6: the dock policy hides it on destinations that
+        // own their screen) — drives BOTH the overlay bar below
+        // and the clearance the scroll ends repay, so the bar
+        // and the clearance can never disagree.
+        val dockVisible = !shellImmersive(navController) &&
+            dockShown(navController)
+        val density = LocalDensity.current
+        val navInset = with(density) {
+            WindowInsets.navigationBars.getBottom(density).toDp()
+        }
+        val clearance = if (dockVisible) {
+            dockOverlayClearance(
+                docked = libraryState.navBarStyle ==
+                    app.xreader.data.library.NavBarStyle.DOCKED_BAR
+            ) + navInset + 12.dp
+        } else {
+            0.dp
+        }
+        Box(Modifier.fillMaxSize()) {
+            MeshBackdrop(
+                Modifier.fillMaxSize(),
+                bloom = appearance.bloom,
+                backgroundFile = backdropFile
+            )
+            // The NavHost keeps the Scaffold's top/start/end
+            // padding byte-identical and loses ONLY the bottom:
+            // the page now runs under the overlay dock, and the
+            // scroll ends repay the dock's zone through
+            // LocalDockClearance (effectiveBottomPadding).
+            CompositionLocalProvider(LocalDockClearance provides clearance) {
+                XreaderNavHost(
+                    navController, container,
+                    Modifier.fillMaxSize().padding(
+                        PaddingValues(
+                            start = padding.calculateStartPadding(
+                                LocalLayoutDirection.current
+                            ),
+                            end = padding.calculateEndPadding(
+                                LocalLayoutDirection.current
+                            ),
+                            top = padding.calculateTopPadding(),
+                            bottom = 0.dp
+                        )
+                    ),
+                    appearance.reduceMotion, onPhaseNote,
+                    libraryViewModel, downloadsViewModel, opdsViewModel,
+                    sourcesViewModel, linkAddViewModel, onAddBook, onExport,
+                    appUpdateViewModel = appUpdateViewModel,
+                    packViewModel = packViewModel
+                )
+            }
+            if (grainOn) {
+                GrainOverlay(appearance.grainIntensity, Modifier.fillMaxSize())
+            }
+            // §A.4: the snackbar rides the overlay stack — above
+            // the page, below the dock — resting on the bar's
+            // top edge via the same clearance, so it can never
+            // slide under the bar the way the Scaffold's host
+            // sat behind the old slot.
+            SnackbarHost(
+                snackbar,
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = clearance)
+            )
+            // The dock overlay: composed after the grain so the
+            // bar floats over everything. The wrapper wraps only
+            // the bar's own bounds (no fillMaxSize), so touches
+            // outside the bar fall through to the page beneath.
             AnimatedVisibility(
-                visible = !shellImmersive(navController) &&
-                    dockShown(navController),
+                visible = dockVisible,
                 enter = fadeIn(fadeTween<Float>()),
-                exit = fadeOut(fadeTween<Float>())
+                exit = fadeOut(fadeTween<Float>()),
+                modifier = Modifier.align(Alignment.BottomCenter)
             ) {
                 // v1.5.39 (item 4): the Explore tab carries
                 // the pending manga-source update count as a
@@ -1039,40 +1139,6 @@ private fun PhoneShell(
                     exploreBadgeCount =
                         sourcesState.keiyoushiPendingUpdateCount
                 )
-            }
-        }
-    ) { padding ->
-        // v1.0.4 (D1): the mesh backdrop fills the whole scaffold
-        // (behind the bottom bar too, so the nav's blur has the
-        // stage to sample); the NavHost sits above it, padded.
-        // v1.0.7: the backdrop also carries bloom + the liquid
-        // background; grain floats over the content (never over
-        // immersive routes, never on the MINIMAL tier / SMOOTH).
-        val backdropFile = appearance.backgroundImage?.let { name ->
-            File(container.bookStorage.filesDir, "backgrounds/$name")
-        }
-        val grainOn = appearance.grain && !shellImmersive(navController) &&
-            appearance.performanceMode !=
-                app.xreader.data.prefs.PerformanceMode.SMOOTH &&
-            app.xreader.data.prefs.PerformancePolicy.tierForRam(
-                container.totalRamMb()
-            ) != app.xreader.data.prefs.PerfTier.MINIMAL
-        Box(Modifier.fillMaxSize()) {
-            MeshBackdrop(
-                Modifier.fillMaxSize(),
-                bloom = appearance.bloom,
-                backgroundFile = backdropFile
-            )
-            XreaderNavHost(
-                navController, container, Modifier.fillMaxSize().padding(padding),
-                appearance.reduceMotion, onPhaseNote,
-                libraryViewModel, downloadsViewModel, opdsViewModel,
-                sourcesViewModel, linkAddViewModel, onAddBook, onExport,
-                appUpdateViewModel = appUpdateViewModel,
-                packViewModel = packViewModel
-            )
-            if (grainOn) {
-                GrainOverlay(appearance.grainIntensity, Modifier.fillMaxSize())
             }
         }
     }
@@ -1299,35 +1365,38 @@ private fun XreaderNavHost(
     // v1.0.4 (D8) + Patch 8 (Orion transitions retune): PUSHED
     // routes use the user's Apple stack geometry, shortened by
     // Patch 8 — slide in over 1/6 of the width, parallax drift
-    // scaled to match (width/24, in the engine); tab-to-tab
-    // switches keep the D8 crossfade and gain a gentle 12.dp
-    // directional nudge. The branch is the engine's pure
+    // scaled to match (width/24, in the engine). Tab-to-tab
+    // switches: the visible-layer fix round (§D) replaced Patch
+    // 8's 12.dp nudge on the 240 ms crossfade — invisible on the
+    // owner's phone — with a real directional travel (width/5
+    // on the 320 ms TAB_SWITCH_MS token, slide + fade
+    // phase-locked; the adapters take the reduce-motion fact
+    // and yield the plain crossfade under it). The stack
+    // geometry is NOT touched. The branch is the engine's pure
     // isTabSwitch over the two endpoint routes.
     val tabRoutes = remember { Tab.entries.map { it.route }.toSet() }
-    // Patch 8: the tab nudge distance in px (12.dp), resolved here
-    // where density lives; reduced motion zeroes it, and the tab
-    // switches stay the plain D8 crossfade.
-    val tabSlidePx = if (reduceMotion) 0
-        else with(LocalDensity.current) { 12.dp.toPx() }.roundToInt()
     // Liquid Glass, piece 3 (Dock Glass): the destination content
     // itself is a haze source (zIndex 1, above the MeshBackdrop
     // base at zIndex 0), so the dock's glass samples the ACTUAL
-    // page scrolling beneath it, not only the static mesh. Gated
-    // on the same glass.frosted flag as the MeshBackdrop source:
-    // on the plain paths (TINTED/SOLID, or a LIQUID/FROSTED
-    // choice this device resolves down to tinted) no source node
-    // exists at all — glass-free by construction, as before. The
-    // gate and piece 1's resolver agree by construction:
-    // effectiveGlassStyle maps a LIQUID choice through the same
-    // frosted rule (API 31+ and > 2 GB), so the sources feed
-    // exactly when a blur tier (LIQUID or FROSTED) is live.
+    // page scrolling beneath it, not only the static mesh. Since
+    // the fix round (§A) the dock overlays the page, so the
+    // claim is geometrically true: the page draws under the bar
+    // and this source carries it. Gated on the same
+    // glass.blurLive flag as the MeshBackdrop source (the fix
+    // round migrated both gates off the FROSTED style check):
+    // on the plain paths (TINTED/SOLID, or a blur choice this
+    // device resolves down to tinted) no source node exists at
+    // all — glass-free by construction, as before. The gate and
+    // the tier resolver agree by construction: the theme
+    // resolves the tier through the same resolveGlassTier the
+    // dock uses, and blurLive is exactly "a blur tier is live".
     val glass = LocalGlassSettings.current
     val haze = LocalHazeState.current
     NavHost(
         navController = navController,
         startDestination = Tab.Library.route,
         modifier = modifier.let {
-            if (haze != null && glass.frosted) it.hazeSource(haze, zIndex = 1f) else it
+            if (haze != null && glass.blurLive) it.hazeSource(haze, zIndex = 1f) else it
         },
         enterTransition = {
             if (SpringMotionEngine.isTabSwitch(
@@ -1338,7 +1407,7 @@ private fun XreaderNavHost(
                 tabTravelDirection(
                     initialState.destination.route, targetState.destination.route
                 ),
-                tabSlidePx
+                reduceMotion
             ) else stackEnter(reduceMotion)
         },
         exitTransition = {
@@ -1350,7 +1419,7 @@ private fun XreaderNavHost(
                 tabTravelDirection(
                     initialState.destination.route, targetState.destination.route
                 ),
-                tabSlidePx
+                reduceMotion
             ) else stackExit(reduceMotion)
         },
         popEnterTransition = {
@@ -1362,7 +1431,7 @@ private fun XreaderNavHost(
                 tabTravelDirection(
                     initialState.destination.route, targetState.destination.route
                 ),
-                tabSlidePx
+                reduceMotion
             ) else stackPopEnter(reduceMotion)
         },
         popExitTransition = {
@@ -1374,7 +1443,7 @@ private fun XreaderNavHost(
                 tabTravelDirection(
                     initialState.destination.route, targetState.destination.route
                 ),
-                tabSlidePx
+                reduceMotion
             ) else stackPopExit(reduceMotion)
         }
     ) {
@@ -1396,6 +1465,11 @@ private fun XreaderNavHost(
                 },
                 onProfile = { navController.navigate("profile") },
                 onOpenAddList = { navController.navigate("addList") },
+                // Visible-layer fix round (§E): the Library filter
+                // sheet's "New chapters" row opens the updates
+                // page — a plain navigate like the add-list door
+                // (NOT navigateContent: no reader-routing needed).
+                onOpenUpdates = { navController.navigate("updates") },
                 coverGlow = appearance.coverGlow &&
                     appearance.bookColours !=
                     app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_ONLY
@@ -2472,9 +2546,14 @@ private suspend fun openReaderViaResolver(
 }
 
 /**
- * The floating frosted bottom bar. Height is a CONSTANT (64 dp): the
- * Scaffold bottomBar slot permits full-screen height, so nothing in
- * here may size from the slot's constraints — the v1.1.1 lesson.
+ * The floating frosted bottom bar. Height is a CONSTANT (64 dp):
+ * the bar's parent — once the Scaffold's bottomBar slot, since
+ * the visible-layer fix round an overlay in the shell's content
+ * Box — permits full-screen height, so nothing in here may size
+ * from the parent's constraints — the v1.1.1 lesson. Its own
+ * modifiers (navigationBarsPadding + the 16/10/24.dp pads) are
+ * what place it on screen; the fix round changed only the
+ * parent, never these.
  */
 @Composable
 private fun FloatingNavBar(

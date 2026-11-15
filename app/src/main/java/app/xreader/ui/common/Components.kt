@@ -9,6 +9,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -40,7 +42,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.xreader.core.motion.pressBounce
 import app.xreader.core.motion.pressSquish
+import app.xreader.data.prefs.GlassTier
 import app.xreader.ui.theme.GlassSettings
+import app.xreader.ui.theme.LiquidGlassSurface
 import app.xreader.ui.theme.LiquidGlassBorderBright
 import app.xreader.ui.theme.LiquidGlassFillDark
 import app.xreader.ui.theme.LocalGlassSettings
@@ -72,7 +76,11 @@ import dev.chrisbanes.haze.hazeEffect
 @Composable
 fun Modifier.frostedGlass(glass: GlassSettings, tint: Color): Modifier {
     val haze = LocalHazeState.current
-    if (!glass.frosted || haze == null) return this
+    // Visible-layer fix round (§B): the gate is the TIER's blur
+    // liveness, not the FROSTED style — under a LIQUID choice the
+    // effective style never equalled FROSTED, so this gate (and
+    // every gate like it) silently composed no effect at all.
+    if (!glass.blurLive || haze == null) return this
     val background = MaterialTheme.colorScheme.background
     return this.hazeEffect(haze) {
         backgroundColor = background
@@ -111,13 +119,60 @@ fun GlassCard(
     val glass = LocalGlassSettings.current
     val scheme = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(glass.cardRadius)
+    // Hoisted out of the click branch (the branch it lived in
+    // could flip when the tier changes under the same call site,
+    // and a conditional remember corrupts the slot table): one
+    // interaction source per card, used by whichever click path
+    // renders.
+    val interaction = remember { MutableInteractionSource() }
+    if (glass.tier == GlassTier.LIQUID) {
+        // Visible-layer fix round (§B): under the LIQUID tier the
+        // card is built on the shared LiquidGlassSurface — real
+        // backdrop blur + the raised rim/sheen/fill plan — instead
+        // of the Material Surface below. Every GlassCard consumer
+        // (Me dashboard doors, book rows, sheet action rows, sync
+        // and migration cards) inherits the tier from this one
+        // branch. The click path keeps the Surface path's exact
+        // behaviour: the same interaction source, the same press
+        // treatment (bounce or squish), the platform indication.
+        // The shadow drops: on a black canvas the rim carries the
+        // separation the shadow never visibly did.
+        val liquidModifier = if (onClick == null) {
+            modifier
+        } else {
+            modifier
+                .then(
+                    if (bouncePress) Modifier.pressBounce(interaction)
+                    else Modifier.pressSquish(interaction)
+                )
+                .clickable(
+                    interactionSource = interaction,
+                    indication = LocalIndication.current,
+                    onClick = onClick
+                )
+        }
+        LiquidGlassSurface(
+            shape = shape,
+            modifier = liquidModifier,
+            tier = GlassTier.LIQUID
+        ) {
+            Column(Modifier.padding(contentPadding)) { content() }
+        }
+        return
+    }
     val dark = scheme.background.luminance() < 0.5f
-    val surfaceColor = if (glass.frosted) {
+    // The frosted fill/border treatment keys on the resolved
+    // FROSTED TIER (fix round §B): a LIQUID choice on a device
+    // that resolves to the FROSTED tier renders this treatment
+    // byte-identically to a FROSTED choice — same fill, same
+    // border, same blur gate below.
+    val frostedTier = glass.tier == GlassTier.FROSTED
+    val surfaceColor = if (frostedTier) {
         if (dark) LiquidGlassFillDark else scheme.surface.copy(alpha = 0.35f)
     } else {
         glass.glassSurface(scheme.surface)
     }
-    val border = if (glass.frosted && dark) {
+    val border = if (frostedTier && dark) {
         BorderStroke(
             1.dp,
             Brush.verticalGradient(
@@ -139,7 +194,6 @@ fun GlassCard(
             Column(Modifier.padding(contentPadding)) { content() }
         }
     } else {
-        val interaction = remember { MutableInteractionSource() }
         Surface(
             onClick = onClick,
             modifier = effectModifier.then(

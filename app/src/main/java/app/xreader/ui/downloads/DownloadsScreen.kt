@@ -64,7 +64,9 @@ import app.xreader.ui.theme.EmberAmber
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import java.io.File
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.effectiveBottomPadding
 
 /** The finished list's sort choices — all over real book fields. */
 private enum class FinishedSort(val label: String) {
@@ -274,7 +276,9 @@ fun DownloadsScreen(
         LazyColumn(
             Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(bottom = 88.dp)
+            contentPadding = PaddingValues(
+                bottom = effectiveBottomPadding(88.dp, LocalDockClearance.current)
+            )
         ) {
             // ── Failures (§5.12.4): kept visible on BOTH tabs —
             // a failed chapter is never just a number inside a

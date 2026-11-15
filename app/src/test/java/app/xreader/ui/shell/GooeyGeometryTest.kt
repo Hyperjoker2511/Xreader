@@ -51,11 +51,14 @@ class GooeyGeometryTest {
     }
 
     @Test
-    fun `neck peaks at mid travel at 1_05 radius under the cap`() {
+    fun `neck peaks at mid travel at 1_45 radius under the cap`() {
+        // Visible-layer fix round (§C): the neck peak/cap were
+        // raised (1.05/1.1 → 1.45/1.6) so the melt's stretch is
+        // unmistakable at normal speed.
         val peak = gooeyBridge(near, far, 0.5f, radius)
         assertTrue(peak.neckVisible)
-        assertClose(radius * 1.05f, peak.neckWidth, 0.0001f)
-        assertTrue(peak.neckWidth <= radius * 1.1f)
+        assertClose(radius * 1.45f, peak.neckWidth, 0.0001f)
+        assertTrue(peak.neckWidth <= radius * 1.6f)
     }
 
     @Test
@@ -65,7 +68,7 @@ class GooeyGeometryTest {
         for (i in 0..1000) {
             val p = i / 1000f
             val width = gooeyBridge(near, far, p, radius).neckWidth
-            assertTrue("neck above cap at p=$p", width <= radius * 1.1f)
+            assertTrue("neck above cap at p=$p", width <= radius * 1.6f)
             if (width > peakWidth) {
                 peakWidth = width
                 peakAt = p
@@ -115,15 +118,17 @@ class GooeyGeometryTest {
         // The trail rides the p² curve (0.25 of the way at p = 0.5)
         // while the blob has already eased to the midpoint.
         assertClose(near + (far - near) * 0.25f, mid.trailX)
-        assertClose(radius * 0.85f * 0.5f, mid.trailRadius)
+        assertClose(radius * 0.90f * 0.5f, mid.trailRadius)
         assertTrue(mid.trailX < mid.mainBlobX)
         assertTrue(mid.trailRadius < mid.mainBlobRadius)
     }
 
     @Test
-    fun `main blob squashes to 0_86 at mid travel and is round at the ends`() {
+    fun `main blob squashes to 0_70 at mid travel and is round at the ends`() {
+        // Fix round (§C): squash depth 0.14 → 0.30, so mid-travel
+        // squash is 1 − 0.30 = 0.70.
         assertEquals(1f, gooeyBridge(near, far, 0f, radius).mainBlobSquashY)
-        assertClose(0.86f, gooeyBridge(near, far, 0.5f, radius).mainBlobSquashY, 0.0001f)
+        assertClose(0.70f, gooeyBridge(near, far, 0.5f, radius).mainBlobSquashY, 0.0001f)
         assertEquals(1f, gooeyBridge(near, far, 1f, radius).mainBlobSquashY)
     }
 

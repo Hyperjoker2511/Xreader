@@ -135,6 +135,29 @@ fun uiMetricsFor(widthDp: Int): UiMetrics = uiMetricsFor(uiTierFor(widthDp))
 fun bottomContentPadding(metrics: UiMetrics, dockVisible: Boolean): Dp =
     (if (dockVisible) metrics.dockHeight + 24.dp else 16.dp) + metrics.topGap
 
+/**
+ * The bottom zone the OVERLAY dock occupies when it floats
+ * over a destination (visible-layer fix round, spec §A.2):
+ * floating — the bar (64.dp) + its 10.dp top pad + 24.dp
+ * bottom pad (the 10.dp bottom pad + the 14.dp chrome lift);
+ * docked — the flush bar alone. The window's own navigation
+ * inset is NOT in here: the shell adds it (it varies per
+ * device — 0 under gesture nav, ~48.dp under 3-button), plus
+ * a 12.dp breath, when it publishes [LocalDockClearance].
+ */
+fun dockOverlayClearance(docked: Boolean): Dp = if (docked) 64.dp else 98.dp
+
+/**
+ * What a scroll end must pad: its standing padding, or the
+ * dock clearance when the dock overlays it — whichever is
+ * larger. Existing wins whenever it is larger, so no surface
+ * ever loses padding it has today; where the dock does not
+ * overlay (clearance 0.dp — dock hidden, immersive, or the
+ * rail shell) the result is byte-identical to the standing
+ * padding. The single repayment rule for the overlay dock.
+ */
+fun effectiveBottomPadding(existing: Dp, clearance: Dp): Dp = maxOf(existing, clearance)
+
 /** The active metrics row. The default (no provider above) is
  * the REGULAR row for a 400 dp width — the middle of the road,
  * never an extreme. */

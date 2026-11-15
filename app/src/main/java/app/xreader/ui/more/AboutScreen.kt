@@ -28,7 +28,9 @@ import app.xreader.BuildConfig
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.SectionHeader
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.effectiveBottomPadding
 
 /** About & licences (PLAN §3): what this build is, and the open-source
  * licences of everything bundled in it. */
@@ -350,7 +352,11 @@ fun AboutScreen(
                 }
             }
         }
-        Spacer(Modifier.height(88.dp))
+        Spacer(
+            Modifier.height(
+                effectiveBottomPadding(88.dp, LocalDockClearance.current)
+            )
+        )
     }
 }
 

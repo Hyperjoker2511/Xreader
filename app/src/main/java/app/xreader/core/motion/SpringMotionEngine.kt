@@ -127,6 +127,15 @@ object SpringMotionEngine {
     /** Nav stack transition duration (user-supplied, D8). */
     const val NAV_TRANSITION_MS = 400
 
+    /** Tab-switch transition duration (visible-layer fix round):
+     * tab-to-tab switches and the Library's Novels ↔ Manga side
+     * switch ride this 320 ms token — long enough for the
+     * width / 5 travel to READ at normal tap speed (the fix
+     * round's governing complaint), short enough to never feel
+     * like lag on the app's most frequent gesture. The stack
+     * keeps its own 400 ms token above; the two never mix. */
+    const val TAB_SWITCH_MS = 320
+
     /** The parallax divisor: covered screens drift width / this.
      * Patch 8: 24 — the drift scaled with the shortened 1/6 travel
      * (D8's 4 was against the old full-width travel). */
@@ -156,17 +165,19 @@ object SpringMotionEngine {
     // The FOURTH sanctioned exception to the subtle default, kept
     // out of [profiles] like the families above: the dock's
     // selection indicator MELTS between slots (the owner's React
-    // Bits Gooey Nav pick), and a melt needs a visible settle —
-    // ζ 0.72 gives a ~4% overshoot in the travel progress, which
-    // the gooey geometry turns into a barely-there blob overshoot
-    // before the pill lands exactly. The stiffness is the Spatial
-    // family's 380, so the melt travels at the dock's usual pace.
-    // It lives HERE (never as a screen-local constant); reduced
-    // motion and the MINIMAL tier skip the melt entirely, by the
-    // indicator's own gate.
+    // Bits Gooey Nav pick), and a melt needs a visible settle.
+    // Visible-layer fix round retune: the shipped 380 / 0.72
+    // settled in ~285 ms with a ~4% overshoot — on the owner's
+    // phone it read as a blink, "nothing changed". The retuned
+    // 150 / 0.62 settles in ~527 ms (settleMillis, pinned by the
+    // 450–600 ms readability window in SpringMotionEngineTest)
+    // with a ~8.3% overshoot — a stretch you can watch that still
+    // lands exactly. It lives HERE (never as a screen-local
+    // constant); reduced motion and the MINIMAL tier skip the
+    // melt entirely, by the indicator's own gate.
 
-    /** Gooey dock indicator melt: stiffness 380, dampingRatio 0.72. */
-    val GooeyMelt = SpringProfile("GooeyMelt", stiffness = 380f, dampingRatio = 0.72f)
+    /** Gooey dock indicator melt: stiffness 150, dampingRatio 0.62. */
+    val GooeyMelt = SpringProfile("GooeyMelt", stiffness = 150f, dampingRatio = 0.62f)
 
     val gooeyProfiles: List<SpringProfile> = listOf(GooeyMelt)
 

@@ -84,7 +84,9 @@ import java.util.Date
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
+import app.xreader.ui.theme.effectiveBottomPadding
 
 /**
  * Profile & progress (Stitch "Xreader Profile", PLAN §8): identity
@@ -553,7 +555,11 @@ fun ProfileScreen(
                 }
                 // v1.1.0: 88dp bottom clearance (dock + the
                 // phone's dead bottom strip).
-                Spacer(Modifier.height(88.dp))
+                Spacer(
+                    Modifier.height(
+                        effectiveBottomPadding(88.dp, LocalDockClearance.current)
+                    )
+                )
             }
         }
 

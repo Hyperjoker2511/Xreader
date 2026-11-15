@@ -1,5 +1,6 @@
 package app.xreader.ui.common
 
+import androidx.compose.animation.core.animateColorAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,11 +10,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.xreader.core.motion.segmentColorSpec
 import app.xreader.data.extension.MediaKind
 
 /**
@@ -66,16 +69,28 @@ private fun MediaKindSegment(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val containerColor = if (selected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    }
-    val contentColor = if (selected) {
-        MaterialTheme.colorScheme.onPrimary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    // Visible-layer fix round (§D.3): the segment colours EASE
+    // (200 ms, the shared FadeEasing via segmentColorSpec)
+    // instead of snapping, so the switch visibly answers the tap
+    // while the content glides beneath it.
+    val containerColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        animationSpec = segmentColorSpec(),
+        label = "segmentContainer"
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        animationSpec = segmentColorSpec(),
+        label = "segmentContent"
+    )
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(20.dp),

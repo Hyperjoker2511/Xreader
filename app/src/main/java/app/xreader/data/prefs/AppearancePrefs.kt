@@ -308,19 +308,36 @@ object AppearanceValidation {
                 if (sdkInt >= 31 && totalRamMb > 2048) GlassStyle.FROSTED else GlassStyle.TINTED
             GlassStyle.TINTED -> GlassStyle.TINTED
             GlassStyle.SOLID -> GlassStyle.SOLID
-            // This legacy resolver returns RENDERABLE styles only, so
-            // LIQUID follows the FROSTED rule here; whether the LIQUID
-            // tier itself is earned is [resolveGlassTier]'s call.
+            // Visible-layer fix round (§B): LIQUID is renderable in
+            // its own right now (the LiquidGlassSurface + the tier
+            // on GlassSettings), so it resolves to LIQUID wherever
+            // blur is possible at all; below the blur bar it falls
+            // to TINTED like FROSTED does. Whether the LIQUID
+            // *tier* itself is earned (vs the FROSTED tier under a
+            // LIQUID choice) stays [resolveGlassTier]'s call.
             GlassStyle.LIQUID ->
-                if (sdkInt >= 31 && totalRamMb > 2048) GlassStyle.FROSTED else GlassStyle.TINTED
+                if (sdkInt >= 31 && totalRamMb > 2048) GlassStyle.LIQUID else GlassStyle.TINTED
         }
 
     /** Plain-words note when the choice can't be honoured here. */
-    fun glassFallbackNote(choice: GlassStyle, sdkInt: Int, totalRamMb: Long): String? =
-        if (choice == GlassStyle.FROSTED &&
-            effectiveGlassStyle(choice, sdkInt, totalRamMb) != GlassStyle.FROSTED
-        ) "Frosted glass needs a stronger device — using tinted glass here."
-        else null
+    fun glassFallbackNote(choice: GlassStyle, sdkInt: Int, totalRamMb: Long): String? = when {
+        choice == GlassStyle.FROSTED &&
+            effectiveGlassStyle(choice, sdkInt, totalRamMb) != GlassStyle.FROSTED ->
+            "Frosted glass needs a stronger device — using tinted glass here."
+        // The LIQUID wordings (fix round §B): the tier word names
+        // what the device actually renders. Below the blur bar the
+        // style itself falls to TINTED; on API 31/32 the liquid
+        // shader leg (API 33+) is impossible, so the tier is
+        // FROSTED at best — decidable from these inputs alone.
+        choice == GlassStyle.LIQUID &&
+            effectiveGlassStyle(choice, sdkInt, totalRamMb) == GlassStyle.TINTED ->
+            "Liquid glass needs a stronger device — using tinted glass here."
+        choice == GlassStyle.LIQUID &&
+            effectiveGlassStyle(choice, sdkInt, totalRamMb) == GlassStyle.LIQUID &&
+            sdkInt < 33 ->
+            "Liquid glass needs a stronger device — using frosted glass here."
+        else -> null
+    }
 
     /** Sanitises a whole state read from storage. */
     fun validate(state: AppearanceState): AppearanceState = state.copy(

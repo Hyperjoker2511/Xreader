@@ -15,6 +15,28 @@ import org.junit.Test
 class UiMetricsTest {
 
     @Test
+    fun `dock overlay clearance is the bar zone without the inset`() {
+        // Visible-layer fix round (§A): floating — the bar
+        // (64.dp) + its 10.dp top pad + 24.dp bottom pad; docked
+        // — the flush bar alone. The window's navigation inset
+        // is the shell's to add, never baked in here.
+        assertEquals(98.dp, dockOverlayClearance(docked = false))
+        assertEquals(64.dp, dockOverlayClearance(docked = true))
+    }
+
+    @Test
+    fun `effective bottom padding keeps the larger side`() {
+        // The overlay clearance wins when it is larger…
+        assertEquals(110.dp, effectiveBottomPadding(88.dp, 110.dp))
+        // …the standing padding wins when IT is larger (no
+        // surface ever loses padding it has today)…
+        assertEquals(120.dp, effectiveBottomPadding(120.dp, 110.dp))
+        // …and a zero clearance (dock hidden / rail shell) is a
+        // byte-identical no-op.
+        assertEquals(88.dp, effectiveBottomPadding(88.dp, 0.dp))
+    }
+
+    @Test
     fun `tier boundaries are exact`() {
         assertEquals(UiTier.COMPACT, uiTierFor(399))
         assertEquals(UiTier.REGULAR, uiTierFor(400))

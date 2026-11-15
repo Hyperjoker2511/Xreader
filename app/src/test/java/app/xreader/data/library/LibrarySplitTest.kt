@@ -101,6 +101,26 @@ class LibrarySplitTest {
     }
 
     @Test
+    fun `switch direction follows the switch layout`() {
+        // Visible-layer fix round (§D.3): Manga sits on the
+        // RIGHT of the switch, so Novels → Manga travels +1
+        // (content enters from the right), Manga → Novels −1,
+        // and a same-side "switch" does not travel.
+        assertEquals(
+            1, LibrarySplit.switchDirection(MediaKind.TEXT, MediaKind.MANGA)
+        )
+        assertEquals(
+            -1, LibrarySplit.switchDirection(MediaKind.MANGA, MediaKind.TEXT)
+        )
+        assertEquals(
+            0, LibrarySplit.switchDirection(MediaKind.TEXT, MediaKind.TEXT)
+        )
+        assertEquals(
+            0, LibrarySplit.switchDirection(MediaKind.MANGA, MediaKind.MANGA)
+        )
+    }
+
+    @Test
     fun `a kindless extension is novels side only`() {
         // JS/Dex packages carry no declarative kinds — prose by
         // construction, so Novels only, never Manga.

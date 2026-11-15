@@ -61,10 +61,15 @@ object DockVisibilityPolicy {
      * "terms" out of this set: the Me door is gone and the
      * terms pages (with "bookTerms/{bookId}") are reader-flow
      * destinations now, so they hide the dock from every
-     * origin like the reader and its AI page do. */
+     * origin like the reader and its AI page do. The
+     * visible-layer fix round took "updates" out the same way:
+     * it is a Library CHILD page now (chapter news, wired from
+     * the Library filter sheet's "New chapters" row), so it
+     * hides the dock from every origin like the book page —
+     * its selectedTab already maps to Library. */
     private val ME_ONLY_ROUTES = setOf(
         "customise", "appearance", "profile", "providers", "sync",
-        "migration", "more", "updates", "labs", "about",
+        "migration", "more", "labs", "about",
         "vocab", "appUpdates", "whatsNew", "generatedArt"
     )
 

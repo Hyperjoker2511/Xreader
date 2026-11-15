@@ -40,8 +40,10 @@ import app.xreader.data.db.LoreArt
 import app.xreader.komikku.presentation.savePageToDevice
 import app.xreader.ui.common.KitEmptyState
 import app.xreader.ui.common.PrimaryPill
+import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.bottomContentPadding
+import app.xreader.ui.theme.effectiveBottomPadding
 import coil.compose.AsyncImage
 import java.io.File
 
@@ -111,8 +113,11 @@ fun GeneratedArtScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(
-                    bottom = bottomContentPadding(
-                        LocalUiMetrics.current, dockVisible = false
+                    bottom = effectiveBottomPadding(
+                        bottomContentPadding(
+                            LocalUiMetrics.current, dockVisible = false
+                        ),
+                        LocalDockClearance.current
                     )
                 )
             ) {
@@ -204,6 +209,10 @@ private fun ArtFullView(
                 Text("Delete picture")
             }
         }
-        Spacer(Modifier.height(88.dp))
+        Spacer(
+            Modifier.height(
+                effectiveBottomPadding(88.dp, LocalDockClearance.current)
+            )
+        )
     }
 }
