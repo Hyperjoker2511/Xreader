@@ -104,6 +104,12 @@ class KeyVault(
         /** v1.0.3: a user-added provider's key, by its provider id. */
         fun providerKey(providerId: String) = "provider_key_$providerId"
 
+        /** Patch 10: the Illustrate picture engines' secrets (the
+         * Cloudflare account id is a plain setting in AiPrefs;
+         * only the token is a secret). */
+        const val CLOUDFLARE_TOKEN = "cloudflare_api_token"
+        const val POLLINATIONS_KEY = "pollinations_api_key"
+
         const val WEBDAV_PASSWORD = "webdav_password"
         fun opdsPassword(serverId: Long) = "opds_password_$serverId"
         fun sessionCookies(extensionId: String) = "session_cookies_$extensionId"

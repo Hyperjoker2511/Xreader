@@ -16,6 +16,7 @@ import app.xreader.data.ai.hub.ProviderUrls
 import app.xreader.data.prefs.AiFeature
 import app.xreader.data.prefs.AiSettings
 import app.xreader.data.prefs.EnginePick
+import app.xreader.data.prefs.ImageEngine
 import app.xreader.di.AppContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -60,7 +61,11 @@ data class ProvidersUiState(
     val testingOllama: Boolean = false,
     val statusMessage: String? = null,
     val statusIsError: Boolean = false,
-    val add: AddProviderUiState = AddProviderUiState()
+    val add: AddProviderUiState = AddProviderUiState(),
+    /** Patch 10: whether the image engines' secrets are in the
+     * vault (names only — the secrets themselves never surface). */
+    val cloudflareTokenSaved: Boolean = false,
+    val pollinationsKeySaved: Boolean = false
 ) {
     val geminiConfigured: Boolean
         get() = providers.firstOrNull { it.def.id == AiProviders.GEMINI_ID }
@@ -126,7 +131,9 @@ class ProvidersViewModel(private val container: AppContainer) : ViewModel() {
             testingOllama = localState.testingOllama,
             statusMessage = localState.statusMessage,
             statusIsError = localState.statusIsError,
-            add = localState.add
+            add = localState.add,
+            cloudflareTokenSaved = KeyVault.CLOUDFLARE_TOKEN in presentKeys,
+            pollinationsKeySaved = KeyVault.POLLINATIONS_KEY in presentKeys
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProvidersUiState())
 
@@ -369,6 +376,75 @@ class ProvidersViewModel(private val container: AppContainer) : ViewModel() {
 
     fun setFeature(feature: AiFeature, enabled: Boolean) {
         viewModelScope.launch { container.aiPrefs.setFeatureEnabled(feature, enabled) }
+    }
+
+    // -- The image engine (Patch 10) -------------------------------------------
+
+    fun setImageEngine(engine: ImageEngine) {
+        viewModelScope.launch {
+            container.aiPrefs.setImageEngine(engine)
+            say(
+                when (engine) {
+                    ImageEngine.HORDE ->
+                        "Image engine set to AI Horde — free, no key."
+                    ImageEngine.CLOUDFLARE ->
+                        "Image engine set to Cloudflare FLUX. If it can't " +
+                            "paint, AI Horde paints instead."
+                    ImageEngine.POLLINATIONS ->
+                        "Image engine set to Pollinations FLUX. If it can't " +
+                            "paint, AI Horde paints instead."
+                }
+            )
+        }
+    }
+
+    fun saveCloudflareAccountId(accountId: String) {
+        viewModelScope.launch {
+            container.aiPrefs.setCloudflareAccountId(accountId)
+            say("Cloudflare account ID saved.")
+        }
+    }
+
+    /** The token is saved straight to the vault — unlike the text
+     * providers there is no separate "test" call for the image
+     * engines: the first painting proves it, and a wrong token
+     * simply falls back to Horde with a note (nothing breaks). */
+    fun saveCloudflareToken(enteredToken: String) {
+        val token = enteredToken.trim()
+        if (token.isBlank()) {
+            say("Paste your Cloudflare API token first.", isError = true)
+            return
+        }
+        viewModelScope.launch {
+            container.keyVault.put(KeyVault.CLOUDFLARE_TOKEN, token)
+            say("Cloudflare token saved in the encrypted vault.")
+        }
+    }
+
+    fun removeCloudflareToken() {
+        viewModelScope.launch {
+            container.keyVault.remove(KeyVault.CLOUDFLARE_TOKEN)
+            say("Cloudflare token removed. Illustrate uses AI Horde until a new one is saved.")
+        }
+    }
+
+    fun savePollinationsKey(enteredKey: String) {
+        val key = enteredKey.trim()
+        if (key.isBlank()) {
+            say("Paste your Pollinations key first.", isError = true)
+            return
+        }
+        viewModelScope.launch {
+            container.keyVault.put(KeyVault.POLLINATIONS_KEY, key)
+            say("Pollinations key saved in the encrypted vault.")
+        }
+    }
+
+    fun removePollinationsKey() {
+        viewModelScope.launch {
+            container.keyVault.remove(KeyVault.POLLINATIONS_KEY)
+            say("Pollinations key removed. Illustrate uses AI Horde until a new one is saved.")
+        }
     }
 
     // -- Add a provider by site ---------------------------------------------------------

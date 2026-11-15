@@ -20,7 +20,11 @@ class DockVisibilityPolicyTest {
     private val settingsRoutes = listOf(
         "customise", "appearance", "profile", "providers", "sync",
         "migration", "more", "updates", "labs", "about", "terms",
-        "vocab", "appUpdates", "whatsNew"
+        "vocab", "appUpdates", "whatsNew",
+        // Patch 10: the Generated art gallery is a Me destination
+        // like the others (same literal-extension precedent as
+        // Patch 6's vocab/appUpdates/whatsNew additions).
+        "generatedArt"
     )
 
     @Test

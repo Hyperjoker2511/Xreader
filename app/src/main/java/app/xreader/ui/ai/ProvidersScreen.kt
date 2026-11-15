@@ -37,6 +37,7 @@ import app.xreader.data.ai.hub.AiProtocol
 import app.xreader.data.ai.hub.AiProviders
 import app.xreader.data.prefs.AiFeature
 import app.xreader.data.prefs.EnginePick
+import app.xreader.data.prefs.ImageEngine
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.NocturneChip
@@ -105,6 +106,8 @@ fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
             }
 
             EngineCard(state, viewModel)
+
+            ImageEngineCard(state, viewModel)
 
             state.providers.forEach { card ->
                 when (card.def.protocol) {
@@ -296,6 +299,154 @@ private fun modelLabel(model: String, card: ProviderCardState): String =
         model
     }
 
+/** Patch 10: the Illustrate picture engine — Horde (free, keyless,
+ * the default), or one of the two bring-your-own-key FLUX engines.
+ * The key fields appear ONLY under the engine they belong to, and
+ * the secrets go straight to the encrypted vault (the Cloudflare
+ * account id is an identifier, so it is a plain setting). A picked
+ * engine that can't paint falls back to Horde with a note on the
+ * picture's screen — nothing here can break Illustrate. */
+@Composable
+private fun ImageEngineCard(state: ProvidersUiState, viewModel: ProvidersViewModel) {
+    val engine = state.settings.imageEngine
+    var accountInput by remember(state.settings.cloudflareAccountId) {
+        mutableStateOf(state.settings.cloudflareAccountId)
+    }
+    var tokenInput by remember { mutableStateOf("") }
+    var pollinationsInput by remember { mutableStateOf("") }
+    GlassCard {
+        SectionHeader(title = "Image engine")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Which service paints Illustrate pictures. AI Horde is free and " +
+                "needs no key. If the engine you pick can't paint — or its " +
+                "free allowance runs out — AI Horde paints instead, and " +
+                "the picture's screen tells you it did.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+        ModelRow(
+            label = "AI Horde — free, no key (default)",
+            selected = engine == ImageEngine.HORDE,
+            onClick = { viewModel.setImageEngine(ImageEngine.HORDE) }
+        )
+        ModelRow(
+            label = "Cloudflare FLUX — free daily allowance",
+            selected = engine == ImageEngine.CLOUDFLARE,
+            onClick = { viewModel.setImageEngine(ImageEngine.CLOUDFLARE) }
+        )
+        ModelRow(
+            label = "Pollinations FLUX — free with a key",
+            selected = engine == ImageEngine.POLLINATIONS,
+            onClick = { viewModel.setImageEngine(ImageEngine.POLLINATIONS) }
+        )
+        if (engine == ImageEngine.CLOUDFLARE) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "FLUX on your own Cloudflare account: the free Workers AI " +
+                    "allowance paints a few hundred pictures a day. Your " +
+                    "account ID is on the dash.cloudflare.com dashboard; " +
+                    "the token needs Workers AI permission. Both stay on " +
+                    "this phone — the token in the encrypted vault.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = accountInput,
+                onValueChange = { accountInput = it },
+                label = { Text("Cloudflare account ID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            PrimaryPill(
+                text = "Save account ID",
+                onClick = { viewModel.saveCloudflareAccountId(accountInput) },
+                enabled = accountInput.isNotBlank() &&
+                    accountInput.trim() != state.settings.cloudflareAccountId,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(12.dp))
+            if (!state.cloudflareTokenSaved) {
+                OutlinedTextField(
+                    value = tokenInput,
+                    onValueChange = { tokenInput = it },
+                    label = { Text("Cloudflare API token") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(10.dp))
+                PrimaryPill(
+                    text = "Save token",
+                    onClick = {
+                        viewModel.saveCloudflareToken(tokenInput)
+                        tokenInput = ""
+                    },
+                    enabled = tokenInput.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                Text(
+                    "Your token is saved in the encrypted vault. To change " +
+                        "it, remove it and add the new one.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { viewModel.removeCloudflareToken() }) {
+                    Text("Remove token")
+                }
+            }
+        }
+        if (engine == ImageEngine.POLLINATIONS) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "FLUX with your free Pollinations key — get one at " +
+                    "enter.pollinations.ai. A key is required: without " +
+                    "one the service quietly swaps in a different model, " +
+                    "so Xreader never calls it keyless.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            if (!state.pollinationsKeySaved) {
+                OutlinedTextField(
+                    value = pollinationsInput,
+                    onValueChange = { pollinationsInput = it },
+                    label = { Text("Pollinations key") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(10.dp))
+                PrimaryPill(
+                    text = "Save key",
+                    onClick = {
+                        viewModel.savePollinationsKey(pollinationsInput)
+                        pollinationsInput = ""
+                    },
+                    enabled = pollinationsInput.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                Text(
+                    "Your key is saved in the encrypted vault. To change " +
+                        "it, remove it and add the new one.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { viewModel.removePollinationsKey() }) {
+                    Text("Remove key")
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun GeminiCard(
     state: ProvidersUiState,
@@ -310,8 +461,10 @@ private fun GeminiCard(
         Text(
             "One free Gemini key powers the AI extras: chapter summaries, " +
                 "Catch me up, LoreKeeper (characters & terms), Lore Chat, RAW " +
-                "translation, concept art, tag suggestions, and the smart " +
-                "source detector. Get a free key at aistudio.google.com — it " +
+                "translation, tag suggestions, and the smart " +
+                "source detector. (Pictures are the Image engine's job, " +
+                "above — a free Gemini key has no picture allowance.) " +
+                "Get a free key at aistudio.google.com — it " +
                 "stays encrypted on this phone and is never synced or backed up.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant

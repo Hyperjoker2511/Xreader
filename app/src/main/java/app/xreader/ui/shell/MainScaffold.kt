@@ -1727,6 +1727,10 @@ private fun XreaderNavHost(
             // dismissed.
             val healNote by container.sourcePrefs.healNote
                 .collectAsStateWithLifecycle(initialValue = null)
+            // Patch 10: the Generated art door's LIVE count — the
+            // same observeAllArt feed the gallery itself reads.
+            val allArt by container.database.loreArtDao().observeAllArt()
+                .collectAsStateWithLifecycle(initialValue = emptyList())
             MoreScreen(
                 onAppearance = { navController.navigate("appearance") },
                 onLabs = { navController.navigate("labs") },
@@ -1754,7 +1758,9 @@ private fun XreaderNavHost(
                 healNote = healNote,
                 onDismissHealNote = {
                     meScope.launch { container.sourcePrefs.setHealNote(null) }
-                }
+                },
+                onGeneratedArt = { navController.navigate("generatedArt") },
+                artCount = allArt.size
             )
         }
         composable("more") {
@@ -1851,6 +1857,19 @@ private fun XreaderNavHost(
                 )
             app.xreader.ui.ai.ProvidersScreen(
                 viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable("generatedArt") {
+            // Patch 10: the Generated art gallery (every book's
+            // pictures, newest first) — a Me destination.
+            val viewModel = androidx.lifecycle.viewmodel.compose
+                .viewModel<app.xreader.ui.ai.GeneratedArtViewModel>(
+                    factory = app.xreader.ui.ai.GeneratedArtViewModel.factory(container)
+                )
+            app.xreader.ui.ai.GeneratedArtScreen(
+                viewModel = viewModel,
+                artFile = { path -> container.bookStorage.resolve(path) },
                 onBack = { navController.popBackStack() }
             )
         }
@@ -2230,7 +2249,7 @@ private fun selectedTab(navController: NavHostController): Tab {
         route == "appearance" || route == "about" || route == "labs" ||
             route == "providers" || route == "sync" || route == "profile" ||
             route == "migration" || route == "customise" || route == "more" ||
-            route == "terms" -> Tab.Me
+            route == "terms" || route == "generatedArt" -> Tab.Me
         route?.startsWith("book/") == true || route?.startsWith("reader/") == true ||
             route?.startsWith("ai/") == true ||
             route?.startsWith("lore/") == true || route == "updates" ||

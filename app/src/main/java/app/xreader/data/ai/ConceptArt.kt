@@ -17,13 +17,15 @@ import java.io.File
  * generated from LoreKeeper descriptions (or a quoted passage) and
  * saved into the book's lore-art folder + a [LoreArt] row.
  *
- * Honest failure is a designed outcome here (assumption A5): free
- * Gemini keys may not include any image model. When every candidate
- * refuses, the feature says so in plain words with the model's own
- * message in the Details line — it never blocks anything else.
+ * Patch 10: the painting itself is the [ImageEngineRouter]'s — AI
+ * Horde by default (free, keyless; a free Gemini key's image quota
+ * is zero, so the old Gemini image route could never succeed),
+ * with the owner's picked engine tried first and Horde as the
+ * quiet fallback. The engines answer in plain words only, and a
+ * failure here never blocks anything else.
  */
 class ConceptArt(
-    private val client: AiClient,
+    private val imageRouter: ImageEngineRouter,
     private val artDao: LoreArtDao,
     private val storage: BookStorage,
     private val transcoder: ImageTranscoder,
@@ -90,10 +92,10 @@ class ConceptArt(
                 AppError.NeutralVerdict("Concept art is turned off — switch it on in Providers & keys.")
             )
         }
-        val image = when (val result = client.generateImage(prompt)) {
-            // The client's error is already in the app's vocabulary
-            // (bad key → AuthFailed; model refusal → ProviderDown with
-            // Google's own words in the Details line).
+        val image = when (val result = imageRouter.generate(prompt)) {
+            // The router's error is already plain words (the
+            // picture service busy / not answering) — it reaches
+            // the screen exactly as the engines phrased it.
             is AppResult.Err -> return result
             is AppResult.Ok -> result.value
         }

@@ -306,6 +306,11 @@ interface LoreArtDao {
     @Delete suspend fun delete(art: LoreArt)
     @Query("SELECT * FROM lore_art WHERE bookId = :bookId ORDER BY createdAt DESC")
     fun observeForBook(bookId: Long): Flow<List<LoreArt>>
+    /** Patch 10 (gallery addendum): every picture from every
+     * book, newest first — the Generated art gallery's feed and
+     * the Me door's live count both read this one query. */
+    @Query("SELECT * FROM lore_art ORDER BY createdAt DESC, id DESC")
+    fun observeAllArt(): Flow<List<LoreArt>>
 }
 
 @Dao

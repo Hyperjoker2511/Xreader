@@ -462,12 +462,21 @@ class AiSheetViewModel(
             when (
                 val result = container.conceptArt.generateForPassage(book, chapter, passage)
             ) {
-                is AppResult.Ok -> _state.value = _state.value.copy(
-                    illustrating = false,
-                    illustrateMessage = "Saved — see it in the book's Lore & Art."
-                )
-                is AppResult.Err -> _state.value = _state.value.copy(
-                    illustrating = false,
+                is AppResult.Ok -> {
+                    // Patch 10: the engine-fallback note rides
+                    // under the saved line here too — a fallback
+                    // is never silent on either Illustrate surface.
+                    val note = app.xreader.data.ai.ImageFallbackNotes.take()
+                    _state.value = _state.value.copy(
+                        illustrating = false,
+                        illustrateMessage = "Saved — see it in the book's Lore & Art." +
+                            (note?.let { "\n$it" } ?: "")
+                    )
+                }
+                is AppResult.Err -> {
+                    app.xreader.data.ai.ImageFallbackNotes.take()
+                    _state.value = _state.value.copy(
+                        illustrating = false,
                     // v1.0.6.2 (F9): a verdict (feature off) is
                     // its own calm sentence; a real failure names
                     // what failed under the plain lead-in.
@@ -480,7 +489,8 @@ class AiSheetViewModel(
                         "Couldn't paint this moment.\n" +
                             plainWords(result.error)
                     }
-                )
+                    )
+                }
             }
         }
     }

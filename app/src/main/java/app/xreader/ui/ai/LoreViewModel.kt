@@ -226,9 +226,19 @@ class LoreViewModel(
             when (val result = container.conceptArt.generateForEntity(book, entity)) {
                 is AppResult.Ok -> {
                     local.value = local.value.copy(artBusyFor = null)
-                    setMessage("Art saved — see the Art tab.")
+                    // Patch 10: when the picked engine couldn't
+                    // paint and the free engine did, the router's
+                    // plain-word note rides under the saved line —
+                    // the fallback is never silent.
+                    val note = app.xreader.data.ai.ImageFallbackNotes.take()
+                    setMessage(
+                        "Art saved — see the Art tab." +
+                            (note?.let { "\n$it" } ?: "")
+                    )
                 }
                 is AppResult.Err -> {
+                    // A stale note never attaches to a failure.
+                    app.xreader.data.ai.ImageFallbackNotes.take()
                     local.value = local.value.copy(artBusyFor = null)
                     setMessage(
                         "Concept art couldn't be made this time.\n" +
@@ -242,8 +252,9 @@ class LoreViewModel(
 
     fun deleteArt(art: LoreArt) {
         viewModelScope.launch {
-            container.database.loreArtDao().delete(art)
-            runCatching { container.bookStorage.resolve(art.imagePath).delete() }
+            // Patch 10: the one shared delete path (the gallery
+            // deletes through the same store).
+            container.loreArtStore.delete(art)
         }
     }
 

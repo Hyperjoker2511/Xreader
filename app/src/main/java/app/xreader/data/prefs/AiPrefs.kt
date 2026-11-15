@@ -41,6 +41,21 @@ sealed interface EnginePick {
     data class Specific(val providerId: String, val model: String) : EnginePick
 }
 
+/**
+ * Which service paints Illustrate pictures (Patch 10, the owner's
+ * decision 2026-11-14: "Horde for just normal… you can change it on
+ * setting which is generating image"). [HORDE] is the normal
+ * engine — free, keyless, works out of the box. The other two are
+ * bring-your-own-key upgrades; when the picked one fails or its
+ * free allowance runs out, painting falls back to Horde (with a
+ * plain-word note) so Illustrate never just dies.
+ */
+enum class ImageEngine(val label: String) {
+    HORDE("AI Horde"),
+    CLOUDFLARE("Cloudflare FLUX"),
+    POLLINATIONS("Pollinations FLUX")
+}
+
 data class AiSettings(
     /** [GeminiModels.AUTO] or one of [GeminiModels.CASCADE]. */
     val modelChoice: String = GeminiModels.AUTO,
@@ -50,7 +65,14 @@ data class AiSettings(
     /** v1.0.3: Ollama (a model server on the user's own computer —
      * no key; the address + model name are plain settings). */
     val ollamaBaseUrl: String = DEFAULT_OLLAMA_URL,
-    val ollamaModel: String = ""
+    val ollamaModel: String = "",
+    /** Patch 10: the Illustrate picture engine (see [ImageEngine]).
+     * The engines' secrets live in the KeyVault, never here. */
+    val imageEngine: ImageEngine = ImageEngine.HORDE,
+    /** Patch 10: the Cloudflare account id — an identifier, not a
+     * secret (the API token is the secret, and it is in the
+     * KeyVault). Plain setting, like the Ollama address. */
+    val cloudflareAccountId: String = ""
 ) {
     fun enabled(feature: AiFeature): Boolean = features[feature] ?: true
 
@@ -77,7 +99,11 @@ class AiPrefs(private val store: DataStore<Preferences>) {
             ),
             ollamaBaseUrl = prefs[KEY_OLLAMA_URL]
                 ?.takeIf { it.isNotBlank() } ?: AiSettings.DEFAULT_OLLAMA_URL,
-            ollamaModel = prefs[KEY_OLLAMA_MODEL] ?: ""
+            ollamaModel = prefs[KEY_OLLAMA_MODEL] ?: "",
+            imageEngine = prefs[KEY_IMAGE_ENGINE]?.let { stored ->
+                ImageEngine.entries.firstOrNull { it.name == stored }
+            } ?: ImageEngine.HORDE,
+            cloudflareAccountId = prefs[KEY_CLOUDFLARE_ACCOUNT] ?: ""
         )
     }
 
@@ -123,6 +149,17 @@ class AiPrefs(private val store: DataStore<Preferences>) {
         store.edit { it[featureKey(feature)] = enabled }
     }
 
+    /** Patch 10: the Illustrate picture engine choice. */
+    suspend fun setImageEngine(engine: ImageEngine) {
+        store.edit { it[KEY_IMAGE_ENGINE] = engine.name }
+    }
+
+    /** Patch 10: the Cloudflare account id (the token stays in
+     * the KeyVault). */
+    suspend fun setCloudflareAccountId(accountId: String) {
+        store.edit { it[KEY_CLOUDFLARE_ACCOUNT] = accountId.trim() }
+    }
+
     private fun featureKey(feature: AiFeature) =
         booleanPreferencesKey("ai.feature.${feature.name.lowercase()}")
 
@@ -132,6 +169,8 @@ class AiPrefs(private val store: DataStore<Preferences>) {
         val KEY_ENGINE_MODEL = stringPreferencesKey("ai.engine_model")
         val KEY_OLLAMA_URL = stringPreferencesKey("ai.ollama_url")
         val KEY_OLLAMA_MODEL = stringPreferencesKey("ai.ollama_model")
+        val KEY_IMAGE_ENGINE = stringPreferencesKey("ai.image_engine")
+        val KEY_CLOUDFLARE_ACCOUNT = stringPreferencesKey("ai.cloudflare_account")
 
         fun decodePick(provider: String?, model: String?): EnginePick {
             val id = provider?.takeIf { it.isNotBlank() }

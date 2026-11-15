@@ -61,7 +61,7 @@ object DockVisibilityPolicy {
     private val ME_ONLY_ROUTES = setOf(
         "customise", "appearance", "profile", "providers", "sync",
         "migration", "more", "updates", "labs", "about", "terms",
-        "vocab", "appUpdates", "whatsNew"
+        "vocab", "appUpdates", "whatsNew", "generatedArt"
     )
 
     /**

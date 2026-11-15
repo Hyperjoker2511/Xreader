@@ -1562,13 +1562,42 @@ class AppContainer(
         )
     }
 
+    /** Patch 10: the Illustrate engine route — Horde (keyless)
+     * by default, the owner's picked keyed engine first when one
+     * is chosen, Horde as the fallback. The keyed engines' secrets
+     * are read from the vault at paint time, never stored here. */
+    val imageEngineRouter: app.xreader.data.ai.ImageEngineRouter by lazy {
+        app.xreader.data.ai.ImageEngineRouter(
+            horde = app.xreader.data.ai.HordeImageClient(transport = httpTransport),
+            cloudflare = app.xreader.data.ai.CloudflareImageClient(
+                transport = httpTransport,
+                accountIdProvider = { aiPrefs.settings.first().cloudflareAccountId },
+                tokenProvider = { keyVault.get(app.xreader.core.security.KeyVault.CLOUDFLARE_TOKEN) }
+            ),
+            pollinations = app.xreader.data.ai.PollinationsImageClient(
+                transport = httpTransport,
+                keyProvider = { keyVault.get(app.xreader.core.security.KeyVault.POLLINATIONS_KEY) }
+            ),
+            settingsProvider = aiSettingsProvider
+        )
+    }
+
     val conceptArt: app.xreader.data.ai.ConceptArt by lazy {
         app.xreader.data.ai.ConceptArt(
-            client = aiHub.client,
+            imageRouter = imageEngineRouter,
             artDao = database.loreArtDao(),
             storage = bookStorage,
             transcoder = app.xreader.data.ai.AndroidImageTranscoder,
             settingsProvider = aiSettingsProvider
+        )
+    }
+
+    /** Patch 10: the single generated-art delete path, shared by
+     * the Lore page and the Generated art gallery. */
+    val loreArtStore: app.xreader.data.ai.LoreArtStore by lazy {
+        app.xreader.data.ai.LoreArtStore(
+            artDao = database.loreArtDao(),
+            storage = bookStorage
         )
     }
 

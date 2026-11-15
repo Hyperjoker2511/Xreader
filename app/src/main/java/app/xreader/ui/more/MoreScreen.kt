@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.FindReplace
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Science
@@ -85,7 +86,12 @@ fun MoreScreen(
     /** v1.0.5 (E1): the heal sweep's one calm report line, shown
      * once after it fixed something, then dismissed for good. */
     healNote: String? = null,
-    onDismissHealNote: () -> Unit = {}
+    onDismissHealNote: () -> Unit = {},
+    /** Patch 10: the Generated art gallery door, carrying the
+     * LIVE count of painted pictures (fed from the lore-art
+     * table at the Me call site). */
+    onGeneratedArt: () -> Unit = {},
+    artCount: Int = 0
 ) {
     // §7: the Appearance door is gone from this list. The callback
     // is retained for call-site compatibility only (referenced so
@@ -240,6 +246,12 @@ fun MoreScreen(
                 title = "Providers & keys",
                 subtitle = "Gemini key, model choice, AI features",
                 onClick = onProviders
+            ),
+            MeDoorData(
+                icon = Icons.Filled.Image,
+                title = "Generated art",
+                subtitle = if (artCount == 1) "1 image" else "$artCount images",
+                onClick = onGeneratedArt
             ),
             MeDoorData(
                 icon = Icons.Filled.Sync,
