@@ -1191,8 +1191,10 @@ class PdfSession private constructor(
      * memory tier, budgeted by [tier] (48/48/20 MB) — checked
      * before disk, filled on every render/decode, and a bitmap
      * is returned from it BEFORE any disk encode exists.
-     * v1.5.11 (step 4, D3): an EVICTED bitmap is offered to
-     * [PdfBitmapPool] for reuse instead of waiting for GC —
+     * v1.5.11 (step 4, D3): an EVICTED bitmap is retired via
+     * [retireEvictedBitmap] (offered to [PdfBitmapPool] for
+     * reuse on STANDARD/FULL; recycled for real on MINIMAL)
+     * instead of waiting for GC —
      * unless its page is one the pager currently shows or is
      * turning to (a live cell may still draw it; pooling a
      * bitmap out from under a live cell would corrupt the
@@ -1213,7 +1215,7 @@ class PdfSession private constructor(
                 if (!evicted) return
                 val page = key.removePrefix("p").substringBefore('-').toIntOrNull()
                 if (page == null || !isLivePage(page)) {
-                    PdfBitmapPool.recycle(oldValue)
+                    retireEvictedBitmap(oldValue)
                 }
             }
         }
@@ -1224,11 +1226,13 @@ class PdfSession private constructor(
      * 48 MB cache a single zoom could evict two prefetched
      * reading pages, so zooming out and turning landed on
      * placeholders. Refines now live under their own small cap
-     * ([REFINE_CACHE_CAP_BYTES]) and can never evict the
-     * reading window; their evictions feed the bitmap pool on
-     * the same live-page guard as the base tier. */
+     * ([refineCapBytesFor] — [REFINE_CACHE_CAP_BYTES] on
+     * STANDARD/FULL, half of it on MINIMAL) and can never evict
+     * the reading window; their evictions are retired on the
+     * same live-page guard as the base tier (see
+     * [retireEvictedBitmap]). */
     private val refineCache =
-        object : LruCache<String, Bitmap>(REFINE_CACHE_CAP_BYTES.toInt()) {
+        object : LruCache<String, Bitmap>(refineCapBytesFor(tier).toInt()) {
             override fun sizeOf(key: String, value: Bitmap): Int =
                 value.byteCount.coerceAtLeast(1)
 
@@ -1241,10 +1245,27 @@ class PdfSession private constructor(
                 if (!evicted) return
                 val page = key.removePrefix("p").substringBefore('-').toIntOrNull()
                 if (page == null || !isLivePage(page)) {
-                    PdfBitmapPool.recycle(oldValue)
+                    retireEvictedBitmap(oldValue)
                 }
             }
         }
+
+    /** 2 GB perf pass (F2): where an evicted, non-live bitmap
+     * goes. STANDARD/FULL offer it to the global [PdfBitmapPool]
+     * for reuse, exactly as before. A MINIMAL session instead
+     * recycles it FOR REAL: the pool is a flat 24 MB ledger that
+     * ignores the tier, so pooling a small phone's evictions
+     * would silently re-add up to 24 MB against its 20 MB base
+     * budget. (The pool is only fed from sessions and one PDF
+     * session is live at a time, so gating the offer here gates
+     * the pool's growth on the small phone.) */
+    private fun retireEvictedBitmap(bitmap: Bitmap) {
+        if (tier == PerfTier.MINIMAL) {
+            runCatching { bitmap.recycle() }
+        } else {
+            PdfBitmapPool.recycle(bitmap)
+        }
+    }
 
     /**
      * v1.5.11 (step 4 guard): is [page] close enough to the
@@ -2316,6 +2337,21 @@ class PdfSession private constructor(
          * evict the reading window. 16 MB holds one maximum
          * refine or several reading-resolution clips. */
         const val REFINE_CACHE_CAP_BYTES = 16L * 1024 * 1024
+
+        /** 2 GB perf pass (F2): the MINIMAL tier's refine
+         * budget — half the flat cap, so the small phone's
+         * secondary ledger (8 MB) stays in proportion to its
+         * 20 MB base budget instead of rivalling it. */
+        const val REFINE_CACHE_MINIMAL_BYTES = 8L * 1024 * 1024
+
+        /** 2 GB perf pass (F2): the refine cache budget for
+         * [tier] — MINIMAL 8 MB, STANDARD/FULL unchanged at
+         * [REFINE_CACHE_CAP_BYTES]. Pure, like
+         * [memoryCapBytesFor]. */
+        fun refineCapBytesFor(tier: PerfTier): Long = when (tier) {
+            PerfTier.MINIMAL -> REFINE_CACHE_MINIMAL_BYTES
+            PerfTier.STANDARD, PerfTier.FULL -> REFINE_CACHE_CAP_BYTES
+        }
 
         /**
          * v1.5.11 (step 2, D2): the EFFECTIVE prefetch window

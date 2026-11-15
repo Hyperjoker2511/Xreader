@@ -45,7 +45,11 @@ class XreaderApp : Application(), ImageLoaderFactory {
         // is built once per process, so cap changes apply from
         // the next launch). An unreadable setting falls back to
         // the historical 128 MB bound rather than guessing.
-        val capMb = runCatching {
+        // 2 GB perf pass: the cap is pre-read into the container
+        // during init (off-thread); the blocking read below now
+        // runs ONLY when the factory fires before that pre-read
+        // landed — the first-cover path normally never blocks.
+        val capMb = container.imageLoaderAutoCleanCapMb ?: runCatching {
             runBlocking {
                 container.downloadPrefs.settings.first().autoCleanCapMb
             }

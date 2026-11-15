@@ -78,6 +78,57 @@ object PdfFitGeometry {
     }
 }
 
+// ── 2 GB perf pass (F2): the paged base slot's pixel cap ─────────
+
+/** The MINIMAL tier's paged base-slot ceiling: ~2.5 MP instead
+ * of the 4 MP refine ceiling. At reading width a 4 MP slot can
+ * cost ~16 MB against MINIMAL's 20 MB base budget, collapsing
+ * the budgeted prefetch window to ~1 resident page; a 2.5 MP
+ * slot keeps ≥2 resident pages. STANDARD/FULL keep the refine
+ * ceiling exactly. */
+const val PDF_BASE_SLOT_MINIMAL_MAX_PIXELS = 2_500_000
+
+/** The pixel ceiling for the paged base slot on [tier]:
+ * [refineMaxPixels] everywhere except MINIMAL, which takes
+ * [PDF_BASE_SLOT_MINIMAL_MAX_PIXELS]. Pure. */
+fun pdfBaseSlotMaxPixelsFor(
+    tier: app.xreader.data.prefs.PerfTier,
+    refineMaxPixels: Int
+): Int = when (tier) {
+    app.xreader.data.prefs.PerfTier.MINIMAL ->
+        minOf(refineMaxPixels, PDF_BASE_SLOT_MINIMAL_MAX_PIXELS)
+    app.xreader.data.prefs.PerfTier.STANDARD,
+    app.xreader.data.prefs.PerfTier.FULL -> refineMaxPixels
+}
+
+/**
+ * The width the paged cell's BASE SLOT renders at: the fit
+ * width [displayWidthPx] supersampled by [supersample],
+ * pixel-capped so the slot's area never exceeds the tier's
+ * ceiling ([pdfBaseSlotMaxPixelsFor]) for a page of
+ * [pageWidthPt]×[pageHeightPt] points — and never below the
+ * fit width itself. Pure; `PdfDocumentReader.pdfCellSlotWidthPx`
+ * is the production caller.
+ */
+fun pdfBaseSlotWidthPx(
+    displayWidthPx: Int,
+    pageWidthPt: Int,
+    pageHeightPt: Int,
+    tier: app.xreader.data.prefs.PerfTier,
+    refineMaxPixels: Int,
+    supersample: Int
+): Int {
+    val display = displayWidthPx.coerceAtLeast(1)
+    val pw = pageWidthPt.coerceAtLeast(1).toFloat()
+    val ph = pageHeightPt.coerceAtLeast(1).toFloat()
+    val byPixels = kotlin.math.sqrt(
+        pdfBaseSlotMaxPixelsFor(tier, refineMaxPixels).toDouble() * pw / ph
+    ).toInt()
+    return (display * supersample.coerceAtLeast(1))
+        .coerceAtMost(byPixels)
+        .coerceAtLeast(display)
+}
+
 // ── v1.5.9 (B-3): the fit matrix ─────────────────────────────────
 
 /** A page rect in viewport pixels — where FIT_PAGE actually

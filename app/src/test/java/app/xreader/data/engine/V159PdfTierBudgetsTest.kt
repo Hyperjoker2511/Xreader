@@ -44,6 +44,18 @@ class V159PdfTierBudgetsTest {
         assertEquals(96L * 1024 * 1024, PdfSession.CACHE_CAP_BYTES)
     }
 
+    /** 2 GB perf pass (F2): the refine ledger is under the tier
+     * too — MINIMAL 8 MB, STANDARD/FULL byte-identical to the
+     * pre-pass flat 16 MB cap. */
+    @Test
+    fun `refine budgets follow the tier`() {
+        assertEquals(16L * 1024 * 1024, PdfSession.refineCapBytesFor(PerfTier.FULL))
+        assertEquals(16L * 1024 * 1024, PdfSession.refineCapBytesFor(PerfTier.STANDARD))
+        assertEquals(8L * 1024 * 1024, PdfSession.refineCapBytesFor(PerfTier.MINIMAL))
+        assertEquals(16L * 1024 * 1024, PdfSession.REFINE_CACHE_CAP_BYTES)
+        assertEquals(8L * 1024 * 1024, PdfSession.REFINE_CACHE_MINIMAL_BYTES)
+    }
+
     @Test
     fun `a MINIMAL session exposes the MINIMAL window, a FULL session the full one`() {
         val minimalProvider = V159PdfSessionFixtures.CountingProvider()

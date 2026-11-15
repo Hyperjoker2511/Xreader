@@ -13,9 +13,12 @@ import app.xreader.di.AppContainer
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
@@ -406,6 +409,56 @@ data class LinkedCopy(
     val sourceName: String
 )
 
+/** 2 GB perf pass (F1): the book page's same-work scan result —
+ * duplicate works elsewhere in the Library plus the copies
+ * already merged into this book. */
+internal data class BookDuplicates(
+    val duplicates: List<Book> = emptyList(),
+    val mergedCopies: List<Book> = emptyList()
+)
+
+/**
+ * 2 GB perf pass (F1): the duplicates scan as its own pipeline.
+ * It depends ONLY on the opened book (identity + title/author)
+ * and the books table — never on the chapter list or reading
+ * progress. Before the pass, the scan lived in the book page's
+ * outer state combine, so EVERY emission of any input (a
+ * chapter download-state flip, a progress write, a tag change)
+ * re-filtered every book in the Library through
+ * [app.xreader.data.extension.WorkMatcher.sameWork]. The book
+ * flow is pinned with [distinctUntilChanged]: chapter-driven
+ * re-emissions of the same book row do not re-run the scan.
+ * The scan itself is injectable so a test can count its runs.
+ */
+internal class BookDuplicatesPipeline(
+    private val bookId: Long,
+    private val scan: (Book?, List<Book>, Long) -> BookDuplicates =
+        { book, allBooks, id ->
+            if (book == null) {
+                BookDuplicates()
+            } else {
+                BookDuplicates(
+                    duplicates = allBooks.filter { other ->
+                        other.id != id && other.mergedIntoId == null &&
+                            app.xreader.data.extension.WorkMatcher.sameWork(
+                                book.title, book.author,
+                                other.title, other.author
+                            )
+                    },
+                    mergedCopies = allBooks.filter { it.mergedIntoId == id }
+                )
+            }
+        }
+) {
+    fun flow(
+        bookFlow: Flow<Book?>,
+        allBooksFlow: Flow<List<Book>>
+    ): Flow<BookDuplicates> = combine(
+        bookFlow.distinctUntilChanged(),
+        allBooksFlow
+    ) { book, allBooks -> scan(book, allBooks, bookId) }
+}
+
 /**
  * Book Detail (Stitch design, PLAN §4): cover header, Start reading /
  * Download actions, synopsis, and the chapter list with per-chapter
@@ -450,13 +503,31 @@ class BookDetailViewModel(
 
     private val baseDetailState: StateFlow<BookDetailUiState> = combine(
         container.database.bookDao().observeById(bookId),
-        container.database.chapterDao().observeForBook(bookId),
+        // 2 GB perf pass (F1): the chapter list is pinned with
+        // distinctUntilChanged and the expected-next label is
+        // computed HERE, in the same map — the label depends
+        // only on the chapter list, so it recomputes only when
+        // the list itself actually changes, never on a
+        // progress/story/meta emission re-running the combine.
+        container.database.chapterDao().observeForBook(bookId)
+            .distinctUntilChanged()
+            .map { chapters ->
+                chapters to app.xreader.data.library.UpdateRhythm.estimate(
+                    chapters.map { it.updatedAt }, System.currentTimeMillis()
+                )?.let { estimate ->
+                    app.xreader.data.library.UpdateRhythm.label(
+                        estimate, System.currentTimeMillis()
+                    )
+                }
+            },
         container.database.readingProgressDao().observeForBook(bookId),
         storyLocal
             .onStart { pageCollected.value = true }
             .onCompletion { pageCollected.value = false },
         container.bookMetaPrefs.all
-    ) { book, chapters, progress, story, metas ->
+    ) { book, chaptersAndLabel, progress, story, metas ->
+        val chapters = chaptersAndLabel.first
+        val expectedNextLabel = chaptersAndLabel.second
         // v1.3.1 (V120-CHECK 55): progress keys on chapter
         // IDENTITY. A stored pointer whose chapterId no longer
         // resolves in the current list (the list changed shape
@@ -544,15 +615,25 @@ class BookDetailViewModel(
             tagSuggestBusy = story.tagSuggestBusy,
             tagSuggestNote = story.tagSuggestNote,
             stubChapterIds = story.stubChapterIds,
-            expectedNextLabel = app.xreader.data.library.UpdateRhythm.estimate(
-                chapters.map { it.updatedAt }, System.currentTimeMillis()
-            )?.let { estimate ->
-                app.xreader.data.library.UpdateRhythm.label(
-                    estimate, System.currentTimeMillis()
-                )
-            }
+            // 2 GB perf pass (F1): computed with the chapter
+            // list upstream (see the combine's second flow) —
+            // pinned to actual chapter-list changes.
+            expectedNextLabel = expectedNextLabel
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BookDetailUiState())
+
+    /** 2 GB perf pass (F1): the duplicates scan, split out of
+     * the chapter-driven combines into its own pipeline — it
+     * re-runs only when this book or the books table changes
+     * (see [BookDuplicatesPipeline]). */
+    private val duplicatesState: StateFlow<BookDuplicates> =
+        BookDuplicatesPipeline(bookId).flow(
+            baseDetailState.map { it.book },
+            container.database.bookDao().observeAllBooks()
+        ).stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            BookDuplicates()
+        )
 
     /** v1.5.8 (E3): the per-book scanlator exclusion set — one
      * of the two named read paths for BookReaderPrefs'
@@ -579,14 +660,17 @@ class BookDetailViewModel(
         baseDetailState,
         container.bookMetaPrefs.favourites,
         container.database.tagDao().observeForBook(bookId),
-        container.database.bookDao().observeAllBooks(),
+        // 2 GB perf pass (F1): the duplicates scan arrives
+        // precomputed from its own pipeline (book + books table
+        // only) — this combine no longer touches the books table.
+        duplicatesState,
         container.appearancePrefs.state,
         container.bookReaderPrefs.excludedScanlators(bookId)
     ) { values ->
         val base = values[0] as BookDetailUiState
         val favourites = values[1] as Set<Long>
         val tagRows = values[2] as List<app.xreader.data.db.BookTag>
-        val allBooks = values[3] as List<Book>
+        val duplicates = values[3] as BookDuplicates
         val appearance = values[4] as app.xreader.data.prefs.AppearanceState
         val excludedScanlators = values[5] as Set<String>
         val book = base.book
@@ -617,21 +701,11 @@ class BookDetailViewModel(
             tags = tagRows.filter { !it.suppressed },
             backdropEnabled = true,
             backdropBlurred = policy.blurredBackdropAllowed,
-            duplicates = if (book == null) {
-                emptyList()
-            } else {
-                allBooks.filter { other ->
-                    other.id != bookId && other.mergedIntoId == null &&
-                        app.xreader.data.extension.WorkMatcher.sameWork(
-                            book.title, book.author, other.title, other.author
-                        )
-                }
-            },
-            mergedCopies = if (book == null) {
-                emptyList()
-            } else {
-                allBooks.filter { it.mergedIntoId == bookId }
-            }
+            // 2 GB perf pass (F1): from the split pipeline —
+            // identical results, computed only when the book or
+            // the books table changes.
+            duplicates = duplicates.duplicates,
+            mergedCopies = duplicates.mergedCopies
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BookDetailUiState())
 

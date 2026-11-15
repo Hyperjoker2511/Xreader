@@ -318,6 +318,28 @@ fun MainScaffold(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // 2 GB perf pass (F3): the cold-start chain's tier split.
+    // On MINIMAL, the chain's deferrable legs (update-pass
+    // deferred phase, ratings backfill, source dedupe, widget
+    // update) move OUT of the sequential chain below into the
+    // post-first-frame deferred effect further down, so they
+    // stop competing with first paint and first scroll on a
+    // 2 GB phone. Essentials stay in the chain on every tier,
+    // and STANDARD/FULL run the chain exactly as before. The
+    // deferred runDeferred leg builds its summary line from
+    // phase 0's result, which stays in the chain — the result
+    // is handed over through this signal (completed on every
+    // tier, awaited only on MINIMAL).
+    val coldStartMinimal = remember(container) {
+        app.xreader.data.prefs.PerformancePolicy.tierForRam(
+            container.totalRamMb()
+        ) == app.xreader.data.prefs.PerfTier.MINIMAL
+    }
+    val coldStartPhase0 = remember {
+        kotlinx.coroutines.CompletableDeferred<
+            app.xreader.data.extension.UpdatePass152.Phase0Result?>()
+    }
+
     // Phase 6: opening the app settles EXP (idempotent) and honours
     // a home-screen widget tap that asked for a specific book.
     androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -345,6 +367,10 @@ fun MainScaffold(
             // fossil-name repair, per-provider journal.
             val phase0 = runCatching { container.updatePass152.runPhase0() }
                 .getOrNull()
+            // 2 GB perf pass (F3): hand phase 0's result to the
+            // deferred effect (MINIMAL's moved runDeferred leg
+            // builds its summary from it). No-op cost elsewhere.
+            coldStartPhase0.complete(phase0)
             // v1.5.2 fix (FIX-2, §1): process-start evaluation —
             // RUNNING records return to READY and may be claimed
             // again; terminal traces prune after 7 days.
@@ -353,19 +379,24 @@ fun MainScaffold(
             // post-interactive, per-provider, journaled: link-added
             // re-derivation, cover backfill, rating index leg. On
             // completion Explore shows the one-time summary once.
-            runCatching {
-                val deferred = container.updatePass152.runDeferred()
-                if (deferred.completed && !deferred.skippedOffline) {
-                    container.updatePassSummary.value = deferred.summaryLine(
-                        refreshedTotal = deferred.rederived +
-                            (phase0?.refreshed ?: 0),
-                        renamedTotal = phase0?.renamed ?: 0
-                    )
+            // 2 GB perf pass (F3): on MINIMAL this leg runs in the
+            // post-first-frame deferred effect instead (same code,
+            // same summary) — see coldStartMinimal above.
+            if (!coldStartMinimal) {
+                runCatching {
+                    val deferred = container.updatePass152.runDeferred()
+                    if (deferred.completed && !deferred.skippedOffline) {
+                        container.updatePassSummary.value = deferred.summaryLine(
+                            refreshedTotal = deferred.rederived +
+                                (phase0?.refreshed ?: 0),
+                            renamedTotal = phase0?.renamed ?: 0
+                        )
+                    }
                 }
-            }
-            // v1.5.2 (§8.4): rating backfill for pre-stamp records.
-            runCatching {
-                container.keiyoushiPlayerManager.backfillRatings()
+                // v1.5.2 (§8.4): rating backfill for pre-stamp records.
+                runCatching {
+                    container.keiyoushiPlayerManager.backfillRatings()
+                }
             }
             // v1.3.5 (Cycle 1): the provider-pack channel's
             // throttled automatic check — at most once a day,
@@ -387,15 +418,21 @@ fun MainScaffold(
             // — the built-in survives, older duplicates are
             // removed and their books rebound (SourceDedupe).
             // Removals are audit-logged, never silent.
-            runCatching { container.sourceDedupe.runOnce() }
-                .getOrNull()?.forEach { removed ->
-                    android.util.Log.i("XreaderDedupe", removed.logLine())
-                }
+            // 2 GB perf pass (F3): on MINIMAL the dedupe and the
+            // widget update run in the deferred effect instead.
+            if (!coldStartMinimal) {
+                runCatching { container.sourceDedupe.runOnce() }
+                    .getOrNull()?.forEach { removed ->
+                        android.util.Log.i("XreaderDedupe", removed.logLine())
+                    }
+            }
             runCatching { container.expService.settle() }
             // Phase 6: keep the home-screen widget honest.
-            runCatching {
-                app.xreader.widget.XreaderWidget()
-                    .updateAll(context)
+            if (!coldStartMinimal) {
+                runCatching {
+                    app.xreader.widget.XreaderWidget()
+                        .updateAll(context)
+                }
             }
             // v1.5.34 (item 1d): the per-version sweeps (heal,
             // stored-book repair, source migration) no longer
@@ -419,6 +456,40 @@ fun MainScaffold(
     androidx.compose.runtime.LaunchedEffect(Unit) {
         androidx.compose.runtime.withFrameNanos { }
         kotlinx.coroutines.delay(2_500)
+        // 2 GB perf pass (F3): on MINIMAL, the cold-start chain's
+        // deferrable legs run HERE — after first frame, in their
+        // chain order, with no logic changed inside any leg. The
+        // phase-0 signal await guarantees runDeferred's summary
+        // is built from the chain's phase-0 result exactly as
+        // when the leg lived in the chain.
+        if (coldStartMinimal) {
+            val phase0 = coldStartPhase0.await()
+            runCatching {
+                val deferred = container.updatePass152.runDeferred()
+                if (deferred.completed && !deferred.skippedOffline) {
+                    container.updatePassSummary.value = deferred.summaryLine(
+                        refreshedTotal = deferred.rederived +
+                            (phase0?.refreshed ?: 0),
+                        renamedTotal = phase0?.renamed ?: 0
+                    )
+                }
+            }
+            // v1.5.2 (§8.4): rating backfill for pre-stamp records.
+            runCatching {
+                container.keiyoushiPlayerManager.backfillRatings()
+            }
+            // v1.3.1 (item 52): source dedupe — removals are
+            // audit-logged, never silent.
+            runCatching { container.sourceDedupe.runOnce() }
+                .getOrNull()?.forEach { removed ->
+                    android.util.Log.i("XreaderDedupe", removed.logLine())
+                }
+            // Phase 6: keep the home-screen widget honest.
+            runCatching {
+                app.xreader.widget.XreaderWidget()
+                    .updateAll(context)
+            }
+        }
         // v1.0.5 (E1): the heal-my-library sweep — once per
         // app version, link sources are re-driven with the
         // honest engine and the failures repaired quietly in

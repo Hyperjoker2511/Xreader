@@ -754,6 +754,18 @@ class AppContainer(
 
     val downloadPrefs: DownloadPrefs = DownloadPrefs(appContext)
 
+    /** 2 GB perf pass: the image loader's auto-clean cap (MB),
+     * pre-read off the main thread during init (see the last
+     * init block) so [app.xreader.XreaderApp.newImageLoader]
+     * never has to block on a DataStore read on the first-cover
+     * path. Null until the pre-read lands — the loader factory
+     * keeps its old blocking read as the fallback for exactly
+     * that window. Written once per process from an IO launch;
+     * @Volatile for the cross-thread hand-off. */
+    @Volatile
+    var imageLoaderAutoCleanCapMb: Int? = null
+        internal set
+
     val networkGate: NetworkGate = AndroidNetworkGate(appContext)
 
     val downloadController: DownloadController = DownloadController(
@@ -2264,6 +2276,21 @@ class AppContainer(
                 runCatching { keiyoushiPlayerManager.setPlayerEnabled(enabled) }
                     .onFailure { recordContainedFailure("player-enabled", it) }
             }
+        }
+        // 2 GB perf pass: pre-read the image loader's
+        // auto-clean cap HERE, off the main thread, so the
+        // first image load never pays a blocking DataStore
+        // read (XreaderApp.newImageLoader used to runBlocking
+        // it from composition's first-cover paint). This launch
+        // lives in the LAST init block for the same reason as
+        // the player-enabled wire above: downloadPrefs and
+        // appScope are both fully built by now. A failed read
+        // leaves the field null and the loader factory keeps
+        // its old fallback — behaviour is unchanged either way.
+        appScope.launch(ioDispatcher) {
+            runCatching {
+                downloadPrefs.settings.first().autoCleanCapMb
+            }.getOrNull()?.let { imageLoaderAutoCleanCapMb = it }
         }
     }
 

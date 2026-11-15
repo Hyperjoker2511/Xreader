@@ -1,6 +1,7 @@
 package app.xreader.ui.localreader
 
 import app.xreader.data.engine.PdfPageFilter
+import app.xreader.data.prefs.PerfTier
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -83,6 +84,75 @@ class V158PdfDisplayMathTest {
         assertEquals(227, PdfSpreadMath.unitCount(227, spread = false))
         assertEquals(listOf(9), PdfSpreadMath.pagesForUnit(9, 227, false))
         assertEquals(9, PdfSpreadMath.unitForPage(9, spread = false))
+    }
+
+    // ── 2 GB perf pass (F2): the paged base slot's pixel cap ──
+
+    @Test
+    fun `base slot pixel ceiling follows the tier`() {
+        assertEquals(
+            2_500_000, pdfBaseSlotMaxPixelsFor(PerfTier.MINIMAL, 4_000_000)
+        )
+        assertEquals(
+            4_000_000, pdfBaseSlotMaxPixelsFor(PerfTier.STANDARD, 4_000_000)
+        )
+        assertEquals(
+            4_000_000, pdfBaseSlotMaxPixelsFor(PerfTier.FULL, 4_000_000)
+        )
+        // A smaller refine ceiling still governs MINIMAL.
+        assertEquals(
+            2_000_000, pdfBaseSlotMaxPixelsFor(PerfTier.MINIMAL, 2_000_000)
+        )
+    }
+
+    @Test
+    fun `base slot width is the pre-pass width off MINIMAL and the capped width on it`() {
+        // The 612×792 page at a 1080 fit width, 2× supersample,
+        // 4 MP refine ceiling — the pre-pass width was 1758.
+        assertEquals(
+            1758,
+            pdfBaseSlotWidthPx(1080, pageW, pageH, PerfTier.FULL, 4_000_000, 2)
+        )
+        assertEquals(
+            1758,
+            pdfBaseSlotWidthPx(1080, pageW, pageH, PerfTier.STANDARD, 4_000_000, 2)
+        )
+        assertEquals(
+            1389,
+            pdfBaseSlotWidthPx(1080, pageW, pageH, PerfTier.MINIMAL, 4_000_000, 2)
+        )
+    }
+
+    @Test
+    fun `minimal slot keeps at least two resident pages in the minimal budget`() {
+        fun slotBytes(width: Int): Long {
+            val height = (width.toFloat() * pageH / pageW).toInt()
+            return width.toLong() * height * 4
+        }
+        val minimalBytes = slotBytes(
+            pdfBaseSlotWidthPx(1080, pageW, pageH, PerfTier.MINIMAL, 4_000_000, 2)
+        )
+        assertTrue(
+            "two MINIMAL slots fit the 20 MB base budget",
+            2 * minimalBytes <= 20L * 1024 * 1024
+        )
+        val fullBytes = slotBytes(
+            pdfBaseSlotWidthPx(1080, pageW, pageH, PerfTier.FULL, 4_000_000, 2)
+        )
+        assertTrue(
+            "two pre-pass slots did not fit the 20 MB base budget",
+            2 * fullBytes > 20L * 1024 * 1024
+        )
+    }
+
+    @Test
+    fun `base slot never drops below the fit width`() {
+        // An extreme aspect makes the pixel cap alone land far
+        // under the fit width — the fit width is the floor.
+        assertEquals(
+            2000,
+            pdfBaseSlotWidthPx(2000, 100, 2000, PerfTier.MINIMAL, 4_000_000, 2)
+        )
     }
 }
 

@@ -18,6 +18,7 @@ import app.xreader.data.prefs.AppearanceState
 import app.xreader.data.prefs.GlassStyle
 import app.xreader.data.prefs.ThemeMode
 import androidx.compose.ui.Modifier
+import app.xreader.core.motion.SpringMotionEngine
 import app.xreader.core.motion.rememberMotionEnabled
 import app.xreader.di.AppContainer
 import app.xreader.ui.shell.LaunchIntro
@@ -164,6 +165,15 @@ class MainActivity : FragmentActivity() {
             val motionEnabled = rememberMotionEnabled(
                 userEnabled = !appearance.reduceMotion
             )
+            // 2 GB perf pass (F6): the intro also honours the
+            // MOTION tier — on a Minimal-tier device (≤2 GB RAM)
+            // the spring intro is skipped entirely (system
+            // splash only), per the motion engine's own
+            // "Minimal = crossfades only" doctrine. Other tiers
+            // pass motionEnabled through unchanged.
+            val launchMotionTier = remember(container, motionEnabled) {
+                SpringMotionEngine.tierFor(container.totalRamMb(), motionEnabled)
+            }
             var libraryReady by remember { mutableStateOf(false) }
             // R01 boot sequence: compose the first frame WITHOUT a
             // haze state, then enable glass once a frame has drawn —
@@ -229,7 +239,8 @@ class MainActivity : FragmentActivity() {
                         // capped at 1,000 ms by its controller.
                         LaunchIntro(
                             libraryReady = libraryReady,
-                            animationsEnabled = motionEnabled
+                            animationsEnabled = motionEnabled &&
+                                launchMotionTier != SpringMotionEngine.MotionTier.Minimal
                         )
                     }
                 }

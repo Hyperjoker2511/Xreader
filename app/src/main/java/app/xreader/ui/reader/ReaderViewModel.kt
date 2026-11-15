@@ -429,6 +429,10 @@ class ReaderViewModel(
             scope = viewModelScope,
             prefetchDepth = app.xreader.data.reader.TtsPrefetchDepth.forTier(
                 performanceTier
+            ),
+            // 2 GB perf pass (F5): no chapter-ahead fill on MINIMAL.
+            chapterAhead = app.xreader.data.reader.TtsChapterAhead.forTier(
+                performanceTier
             )
         ).also { controller ->
             controller.onChapterFinished = {

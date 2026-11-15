@@ -376,14 +376,16 @@ class LocalDocReaderViewModel(
     }
 
     private val readAloud: ReadAloudController by lazy {
+        // 2 GB perf pass (F5): the tier is read once here and
+        // feeds both the prime depth and the chapter-ahead gate.
+        val tier = app.xreader.data.prefs.PerformancePolicy.tierForRam(
+            container.totalRamMb()
+        )
         ReadAloudController(
             engine = ttsEngineFactory(),
             scope = viewModelScope,
-            prefetchDepth = app.xreader.data.reader.TtsPrefetchDepth.forTier(
-                app.xreader.data.prefs.PerformancePolicy.tierForRam(
-                    container.totalRamMb()
-                )
-            )
+            prefetchDepth = app.xreader.data.reader.TtsPrefetchDepth.forTier(tier),
+            chapterAhead = app.xreader.data.reader.TtsChapterAhead.forTier(tier)
         ).also { controller ->
             controller.onChapterFinished = {
                 // v1.5.8 (H6): in PDF mode the finish advances

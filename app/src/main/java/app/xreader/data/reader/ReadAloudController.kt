@@ -28,7 +28,17 @@ class ReadAloudController(
     private val clock: () -> Long = System::currentTimeMillis,
     /** Patch 12: how many sentences ahead to prime (by perf
      * tier: MINIMAL 1, STANDARD 2, FULL 3). 0 = no priming. */
-    private val prefetchDepth: Int = 0
+    private val prefetchDepth: Int = 0,
+    /** 2 GB perf pass (F5): whether the chapter-ahead fill
+     * hint ([sendChapterAhead]) is sent at all. False on the
+     * MINIMAL tier — the fill walks the whole rest of the
+     * chapter on the engine's worker (network synthesis +
+     * disk writes with the Edge engine), competing with
+     * reading on a 2 GB phone for a benefit that tier
+     * elsewhere trades away. The depth-1 prime is unaffected.
+     * Default true: every pre-pass construction keeps the
+     * fill. */
+    private val chapterAhead: Boolean = true
 ) {
     data class State(
         val available: Boolean = true,
@@ -284,8 +294,10 @@ class ReadAloudController(
     }
 
     /** Patch 12: the chapter-ahead hint — every sentence from
-     * the cursor to the chapter end, in order. */
+     * the cursor to the chapter end, in order. 2 GB perf pass
+     * (F5): a no-op when [chapterAhead] is off (MINIMAL). */
     private fun sendChapterAhead() {
+        if (!chapterAhead) return
         val q = queue ?: return
         val text = chapterText ?: return
         if (q.sentences.isEmpty()) return

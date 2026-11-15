@@ -271,4 +271,37 @@ class ReadAloudControllerTest {
         assertTrue(fake.primeCalls.isEmpty())
         assertTrue(fake.cacheChapterCalls.isNotEmpty())
     }
+
+    // -- 2 GB perf pass (F5): the chapter-ahead gate -------------------------
+
+    @Test
+    fun chapterAheadOffNeverOffersTheChapterButStillPrimes() {
+        val fake = PrimingFakeTtsEngine()
+        val c = ReadAloudController(
+            fake, scope, prefetchDepth = 1, chapterAhead = false
+        )
+        c.loadChapter(fiveSentenceText())
+        c.play()
+        fake.done()
+        // The fill hint is never sent — not at load, not at
+        // play, not at advance — while the depth-1 prime runs.
+        assertTrue(fake.cacheChapterCalls.isEmpty())
+        assertTrue(fake.primeCalls.isNotEmpty())
+        assertEquals(listOf("One here.", "Two here."), fake.spoken)
+    }
+
+    @Test
+    fun chapterAheadOnOffersTheChapter() {
+        val fake = PrimingFakeTtsEngine()
+        val c = ReadAloudController(
+            fake, scope, prefetchDepth = 1, chapterAhead = true
+        )
+        c.loadChapter(fiveSentenceText())
+        assertTrue(fake.cacheChapterCalls.isNotEmpty())
+        c.play()
+        assertEquals(
+            listOf("One here.", "Two here.", "Three here.", "Four here.", "Five here."),
+            fake.cacheChapterCalls.last()
+        )
+    }
 }

@@ -93,6 +93,16 @@ object TtsPrefetchDepth {
 }
 
 /**
+ * 2 GB perf pass (F5): whether the controller sends the
+ * chapter-ahead fill hint, by performance tier — every tier
+ * except MINIMAL. Pure, like [TtsPrefetchDepth].
+ */
+object TtsChapterAhead {
+    fun forTier(tier: app.xreader.data.prefs.PerfTier): Boolean =
+        tier != app.xreader.data.prefs.PerfTier.MINIMAL
+}
+
+/**
  * Android's on-device TTS (Samsung/Google engines on the M31 — PLAN
  * A8). Sentence-at-a-time utterances with an [UtteranceProgressListener];
  * if an engine goes silent for a whole estimated sentence duration

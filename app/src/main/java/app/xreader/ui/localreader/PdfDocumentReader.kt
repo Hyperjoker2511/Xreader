@@ -1192,7 +1192,8 @@ private fun pdfCellRenderWidthPx(
  * the zoom layer (one texture, transformed during gestures —
  * the Komikku mirror, build-logs/V1528-ZOOM-MAP.md §3.3),
  * pixel-capped at the session's refine budget so a slot never
- * costs more than a refine render. Shared by the cell and the
+ * costs more than a refine render (2 GB perf pass: ~2.5 MP on
+ * the MINIMAL tier — see [pdfBaseSlotWidthPx]). Shared by the cell and the
  * paged body's prefetch, exactly like [pdfCellRenderWidthPx],
  * so a prefetched page lands under the key the cell asks for.
  * On a size-table miss the fit-width fallback is returned
@@ -1208,14 +1209,19 @@ private fun pdfCellSlotWidthPx(
         session, page, viewportWidthPx, viewportHeightPx, fitMode
     )
     val points = session.pagePointsSizePeek(page) ?: return displayWidth
-    val pw = points.first.coerceAtLeast(1).toFloat()
-    val ph = points.second.coerceAtLeast(1).toFloat()
-    val byPixels = kotlin.math.sqrt(
-        PdfSession.REFINE_MAX_PIXELS.toDouble() * pw / ph
-    ).toInt()
-    return (displayWidth * PDF_ZOOM_SUPERSAMPLE)
-        .coerceAtMost(byPixels)
-        .coerceAtLeast(displayWidth)
+    // 2 GB perf pass (F2): the pixel cap is tier-aware — on
+    // MINIMAL the slot is capped at ~2.5 MP (see
+    // pdfBaseSlotWidthPx) so the budgeted prefetch window
+    // keeps ≥2 resident pages; STANDARD/FULL compute exactly
+    // the pre-pass numbers.
+    return pdfBaseSlotWidthPx(
+        displayWidthPx = displayWidth,
+        pageWidthPt = points.first,
+        pageHeightPt = points.second,
+        tier = session.tier,
+        refineMaxPixels = PdfSession.REFINE_MAX_PIXELS,
+        supersample = PDF_ZOOM_SUPERSAMPLE
+    )
 }
 
 /**
