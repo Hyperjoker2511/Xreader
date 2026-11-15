@@ -125,6 +125,9 @@ fun ReaderScreen(
     onBack: () -> Unit,
     /** v1.0.1: the settings sheet's Customise jump. */
     onOpenCustomise: () -> Unit = {},
+    /** Patch 11: the settings sheet's "Terms for this book"
+     * door — the per-book terms page, pushed from here. */
+    onOpenBookTerms: () -> Unit = {},
     /** v1.0.6.2 (F9b): Ask AI is a full page, not a sheet. */
     onOpenAiPage: () -> Unit = {},
     /** v1.3.2 (A2): the one-time check / sign-in hand-off for
@@ -252,6 +255,65 @@ fun ReaderScreen(
         }
     }
     var notice by remember { mutableStateOf<String?>(null) }
+    // Patch 11: the selection menu's dialog states. A menu tap
+    // only ever OPENS one of these (or runs a read-only lookup);
+    // the Replace dialog writes nothing until its own Save.
+    var replaceText by remember { mutableStateOf<String?>(null) }
+    var dictionaryResult by remember {
+        mutableStateOf<Pair<String, String?>?>(null)
+    }
+    var selectionTranslation by remember {
+        mutableStateOf<Pair<String, String?>?>(null)
+    }
+
+    // Patch 11: the selection menu's screen-level actions,
+    // each with the text the menu fetched at tap time.
+    val handleSelectionAction: (ReaderSelectionAction, String) -> Unit =
+        { action, text ->
+            when (action) {
+                ReaderSelectionAction.REPLACE -> replaceText = text
+                ReaderSelectionAction.TRANSLATE -> {
+                    selectionTranslation = text to null
+                    scope.launch {
+                        val result = translateSelectionText(container, text)
+                        val open = selectionTranslation
+                        if (open != null && open.first == text) {
+                            selectionTranslation = text to result
+                        }
+                    }
+                }
+                ReaderSelectionAction.DICTIONARY -> {
+                    scope.launch {
+                        // The EPUB Dictionary action's exact
+                        // path: first word of the selection,
+                        // the shared offline DictionaryLookup.
+                        val word = text.trim()
+                            .split(Regex("\\s+"))
+                            .firstOrNull().orEmpty()
+                        val definition = if (word.isBlank()) {
+                            null
+                        } else {
+                            app.xreader.ui.library.DictionaryLookup
+                                .lookup(context.filesDir, word)
+                        }
+                        dictionaryResult = word to definition
+                    }
+                }
+                ReaderSelectionAction.SAVE_WORD -> {
+                    viewModel.saveWord(text)
+                    if (text.trim()
+                            .trim('.', ',', '"', '\'', '’', '‘')
+                            .length >= 2
+                    ) {
+                        notice = "Saved to Words I'm learning"
+                    }
+                }
+                ReaderSelectionAction.ASK_AI -> {
+                    aiViewModel.askAboutPassage(text)
+                    onOpenAiPage()
+                }
+            }
+        }
     var editingNoteFor by remember { mutableStateOf<Highlight?>(null) }
     var pendingNoteHighlight by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var noteText by remember { mutableStateOf("") }
@@ -675,6 +737,7 @@ fun ReaderScreen(
                     },
                     onCenterTap = { chromeVisible = !chromeVisible },
                     onChromeWanted = { wanted -> chromeVisible = wanted },
+                    onSelectionAction = handleSelectionAction,
                     onDownloadChapter = { index ->
                         viewModel.downloadStreamChapter(index)
                     },
@@ -747,6 +810,7 @@ fun ReaderScreen(
                         },
                         onCenterTap = { chromeVisible = !chromeVisible },
                         onChromeWanted = { wanted -> chromeVisible = wanted },
+                        onSelectionAction = handleSelectionAction,
                         topInset = readerTopInset,
                         bottomInset = readerBottomInset
                     )
@@ -956,7 +1020,10 @@ fun ReaderScreen(
                     onClearBookOverride = { viewModel.clearBookOverride() },
                     onSaveWord = { word -> viewModel.saveWord(word) },
                     bookTerms = state.bookTerms,
-                    onBookTermsChange = { pairs -> viewModel.setBookTerms(pairs) },
+                    onOpenBookTerms = {
+                        activeSheet = null
+                        onOpenBookTerms()
+                    },
                     previewFontFamily = fontFamily,
                     // v1.5.0 (Part C): the manga section rides
                     // the same sheet for image chapters.
@@ -1125,6 +1192,42 @@ fun ReaderScreen(
                     }
                 ) { Text("Cancel") }
             }
+        )
+    }
+
+    // -- Patch 11: selection menu dialogs --------------------------------
+    // Replace: opens the pair the selection belongs to (or a
+    // new one); writes ONLY on the dialog's Save / Remove —
+    // dismissing changes nothing.
+    replaceText?.let { text ->
+        ReplaceTermDialog(
+            target = app.xreader.domain.reader.resolveReplaceTarget(
+                text, state.bookTerms
+            ),
+            bookPairs = state.bookTerms,
+            onDismiss = { replaceText = null },
+            onSave = { pairs ->
+                viewModel.setBookTerms(pairs)
+                replaceText = null
+            },
+            onRemove = { pairs ->
+                viewModel.setBookTerms(pairs)
+                replaceText = null
+            }
+        )
+    }
+    dictionaryResult?.let { (word, definition) ->
+        DictionaryResultDialog(
+            word = word,
+            definition = definition,
+            onDismiss = { dictionaryResult = null }
+        )
+    }
+    selectionTranslation?.let { (original, translated) ->
+        SelectionTranslateDialog(
+            original = original,
+            translated = translated,
+            onDismiss = { selectionTranslation = null }
         )
     }
 }

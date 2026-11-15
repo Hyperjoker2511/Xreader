@@ -78,6 +78,10 @@ fun ScrollReader(
      * river pauses at chapter ends instead of flowing on. */
     autoContinue: Boolean = true,
     onParagraphAction: (blockIndex: Int, action: ParagraphAction) -> Unit,
+    /** Patch 11: the selection menu's screen-level actions
+     * (Replace / Translate / Dictionary / Save word / Ask AI),
+     * each with the selected text fetched at tap time. */
+    onSelectionAction: (ReaderSelectionAction, String) -> Unit = { _, _ -> },
     onCenterTap: () -> Unit,
     /** Scroll direction drives chrome auto-show/hide in scroll mode
      * (taps land on text and are consumed by selection/long-press). */
@@ -198,6 +202,7 @@ fun ScrollReader(
                 }
             }
     ) {
+        ReaderSelectionMenuHost(onAction = onSelectionAction) {
         SelectionContainer {
             LazyColumn(
                 state = listState,
@@ -241,6 +246,7 @@ fun ScrollReader(
                 }
             }
         }
+        } // ReaderSelectionMenuHost
         if (config.readingLine) {
             ReadingLineOverlay(palette = palette)
         }

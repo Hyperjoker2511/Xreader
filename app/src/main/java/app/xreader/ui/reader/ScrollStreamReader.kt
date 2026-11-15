@@ -68,6 +68,9 @@ fun ScrollStreamReader(
     externalTurns: SharedFlow<Int>,
     assetFile: (String) -> File,
     onStreamPosition: (chapterIndex: Int, charOffset: Int, chapterFraction: Float) -> Unit,
+    /** Patch 11: the selection menu's screen-level actions,
+     * as in ScrollReader. */
+    onSelectionAction: (ReaderSelectionAction, String) -> Unit = { _, _ -> },
     onCenterTap: () -> Unit,
     onChromeWanted: (Boolean) -> Unit,
     onDownloadChapter: (chapterIndex: Int) -> Unit,
@@ -194,6 +197,7 @@ fun ScrollStreamReader(
                 }
             }
     ) {
+        ReaderSelectionMenuHost(onAction = onSelectionAction) {
         SelectionContainer {
             LazyColumn(
                 state = listState,
@@ -334,6 +338,7 @@ fun ScrollStreamReader(
                 }
             }
         }
+        } // ReaderSelectionMenuHost
         if (config.readingLine) {
             ReadingLineOverlay(palette = palette)
         }

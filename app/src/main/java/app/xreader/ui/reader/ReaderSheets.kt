@@ -70,7 +70,6 @@ import app.xreader.data.reader.ReadAloudController
 import app.xreader.domain.reader.EyeState
 import app.xreader.domain.reader.PageTurnOverride
 import app.xreader.domain.reader.TermPair
-import app.xreader.ui.more.TermsEditor
 import app.xreader.domain.reader.PageTurnTier
 import app.xreader.domain.reader.ReaderAlignment
 import app.xreader.domain.reader.ReaderFontChoice
@@ -116,12 +115,14 @@ fun ReaderSettingsSheet(
     /** v1.0.2 (sweep): save a word from this chapter to
      * "Words I'm learning". */
     onSaveWord: (String) -> Unit = {},
-    /** P0 (Reader Terms): this book's own term pairs and their
-     * editor — the per-book half of Reader Terms (the global
-     * list lives in Settings). Display-only: the book's own
-     * text is never changed. */
+    /** P0 (Reader Terms): this book's own term pairs — the
+     * index row shows their count. Patch 11: the pairs
+     * themselves live on their own full PAGE now (the owner's
+     * anti-clutter word); the sheet keeps only the door, and
+     * [onOpenBookTerms] opens that page. Display-only: the
+     * book's own text is never changed. */
     bookTerms: List<TermPair> = emptyList(),
-    onBookTermsChange: (List<TermPair>) -> Unit = {},
+    onOpenBookTerms: () -> Unit = {},
     /** Nocturne §5.11: the reader chrome's Theme tile opens this
      * sheet straight on the "page" sub-page. */
     initialPage: String = "index",
@@ -171,7 +172,6 @@ fun ReaderSettingsSheet(
                     when (page) {
                         "reading" -> "Reading"
                         "page" -> "Text & colours"
-                        "terms" -> "Terms for this book"
                         "manga" -> "Manga — this series"
                         else -> "Extras"
                     },
@@ -267,7 +267,7 @@ fun ReaderSettingsSheet(
                         "${bookTerms.size} saved"
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    onClick = { page = "terms" },
+                    onClick = onOpenBookTerms,
                     badge = null,
 
                 )
@@ -1039,22 +1039,6 @@ fun ReaderSettingsSheet(
                     value = config.warmLight,
                     range = 0f..0.6f,
                     onChange = { v -> onUpdate { it.copy(warmLight = v) } }
-                )
-            }
-
-            "terms" -> {
-                Text(
-                    "Names or words in THIS book that you want " +
-                        "shown differently. They apply to this " +
-                        "book only — for every book, use " +
-                        "Settings → Reader terms. The book's own " +
-                        "text is never changed.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                TermsEditor(
-                    pairs = bookTerms,
-                    onChange = onBookTermsChange
                 )
             }
 

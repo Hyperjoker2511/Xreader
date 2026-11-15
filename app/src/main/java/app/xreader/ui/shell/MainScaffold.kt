@@ -1743,7 +1743,6 @@ private fun XreaderNavHost(
                 onCustomise = { navController.navigate("customise") },
                 onVocab = { navController.navigate("vocab") },
                 onUpdatesAbout = { navController.navigate("appUpdates") },
-                onReaderTerms = { navController.navigate("terms") },
                 meName = meState.profile?.displayName ?: "",
                 meLevel = meState.profile?.level ?: 1,
                 meTitle = meState.title,
@@ -2047,6 +2046,11 @@ private fun XreaderNavHost(
             )
         }
         composable("terms") {
+            // Patch 11: the global terms list's page — its Me
+            // door is gone; the only way in is the reader flow
+            // (reader → Terms for this book → Terms for all
+            // books). The screen and its ViewModel are the
+            // pre-Patch-11 ones, unchanged.
             val viewModel = androidx.lifecycle.viewmodel.compose
                 .viewModel<app.xreader.ui.more.TermsViewModel>(
                     factory = app.xreader.ui.more.TermsViewModel
@@ -2055,6 +2059,30 @@ private fun XreaderNavHost(
             app.xreader.ui.more.TermsScreen(
                 viewModel = viewModel,
                 onBack = { navController.popBackStack() }
+            )
+        }
+        composable(
+            "bookTerms/{bookId}",
+            arguments = listOf(
+                androidx.navigation.navArgument("bookId") {
+                    type = androidx.navigation.NavType.LongType
+                }
+            )
+        ) { entry ->
+            // Patch 11: one book's terms page, pushed from the
+            // reader (its settings sheet's door) — back returns
+            // to the reader, like the Ask AI page beside it.
+            val bookId = entry.arguments?.getLong("bookId") ?: 0L
+            val viewModel = androidx.lifecycle.viewmodel.compose
+                .viewModel<app.xreader.ui.reader.BookTermsViewModel>(
+                    key = "bookTerms-$bookId",
+                    factory = app.xreader.ui.reader.BookTermsViewModel
+                        .factory(container, bookId)
+                )
+            app.xreader.ui.reader.BookTermsScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() },
+                onOpenGlobalTerms = { navController.navigate("terms") }
             )
         }
         composable(
@@ -2082,6 +2110,9 @@ private fun XreaderNavHost(
                 bookId = bookId,
                 onBack = { navController.popBackStack() },
                 onOpenCustomise = { navController.navigate("customise") },
+                onOpenBookTerms = {
+                    navController.navigate("bookTerms/$bookId")
+                },
                 onOpenAiPage = {
                     navController.navigate("ai/$bookId/$chapterIndex")
                 },
@@ -2249,9 +2280,13 @@ private fun selectedTab(navController: NavHostController): Tab {
         route == "appearance" || route == "about" || route == "labs" ||
             route == "providers" || route == "sync" || route == "profile" ||
             route == "migration" || route == "customise" || route == "more" ||
-            route == "terms" || route == "generatedArt" -> Tab.Me
+            route == "generatedArt" -> Tab.Me
         route?.startsWith("book/") == true || route?.startsWith("reader/") == true ||
             route?.startsWith("ai/") == true ||
+            // Patch 11: the terms pages are reader-flow
+            // destinations now (the Me door is gone) — they
+            // classify with the reader and its AI page.
+            route == "terms" || route?.startsWith("bookTerms/") == true ||
             route?.startsWith("lore/") == true || route == "updates" ||
             route?.startsWith("tag/") == true || route == "vocab" -> Tab.Library
         route?.startsWith("opds/") == true || route == "opdsServers" ||

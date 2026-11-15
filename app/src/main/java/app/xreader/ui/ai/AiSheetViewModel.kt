@@ -262,6 +262,22 @@ class AiSheetViewModel(
 
     // -- Chat ----------------------------------------------------------------------
 
+    /**
+     * Patch 11: Ask AI about a passage the reader selected in
+     * the novel reader (the selection menu's Ask AI item). Ask
+     * AI is chapter-scoped today — its context is the bound
+     * chapter — so the passage rides as the question's quoted
+     * subject: the chat asks for an explanation of exactly
+     * that passage, in the chapter's context, through the
+     * ordinary [sendChat] path (same history, same context
+     * build, same page the user lands on).
+     */
+    fun askAboutPassage(passage: String) {
+        val trimmed = passage.trim()
+        if (trimmed.isBlank()) return
+        sendChat("Explain this passage: \"$trimmed\"")
+    }
+
     fun sendChat(question: String) {
         val trimmed = question.trim()
         if (trimmed.isBlank() || _state.value.chatBusy) return

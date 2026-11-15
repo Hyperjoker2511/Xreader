@@ -48,10 +48,13 @@ import kotlinx.coroutines.launch
 import app.xreader.ui.theme.LocalUiMetrics
 
 /**
- * Reader Terms (P0): the global list's home in Settings — the
- * Me hub's "Reader terms" door lands here. The same [TermsEditor]
- * is reused inside the reader's settings sheet for one book's
- * own list ("Terms for this book").
+ * Reader Terms (P0): the global list's page. Patch 11 moved
+ * its home into the reader: the Me hub's "Reader terms" door
+ * is gone, and the only way in is the reader flow (reader →
+ * Terms for this book → Terms for all books). The screen and
+ * its ViewModel are otherwise the pre-Patch-11 ones. The same
+ * [TermsEditor] serves the per-book page ("Terms for this
+ * book", ui/reader/BookTermsScreen.kt).
  *
  * Terms change only what the reader SHOWS. A book's own text is
  * never changed, and deleting every term brings the original
@@ -90,7 +93,7 @@ fun TermsScreen(
             .padding(start = 20.dp, end = 20.dp, top = LocalUiMetrics.current.topGap, bottom = 16.dp)
             .padding(bottom = 72.dp)
     ) {
-        ScreenHeader(title = "Reader terms", eyebrow = "Settings")
+        ScreenHeader(title = "Reader terms", eyebrow = "Every book")
         TextButton(onClick = onBack) { Text("← Back") }
         Text(
             "Fix a name or word once, and it's shown your way in " +

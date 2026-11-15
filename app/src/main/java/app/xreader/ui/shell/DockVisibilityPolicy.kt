@@ -57,10 +57,14 @@ object DockVisibilityPolicy {
     )
 
     /** Settings destinations that keep the dock when — and only
-     * when — they were reached from the Me tab. */
+     * when — they were reached from the Me tab. Patch 11 took
+     * "terms" out of this set: the Me door is gone and the
+     * terms pages (with "bookTerms/{bookId}") are reader-flow
+     * destinations now, so they hide the dock from every
+     * origin like the reader and its AI page do. */
     private val ME_ONLY_ROUTES = setOf(
         "customise", "appearance", "profile", "providers", "sync",
-        "migration", "more", "updates", "labs", "about", "terms",
+        "migration", "more", "updates", "labs", "about",
         "vocab", "appUpdates", "whatsNew", "generatedArt"
     )
 

@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.filled.FindReplace
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
@@ -69,8 +68,6 @@ fun MoreScreen(
     onHistory: () -> Unit = {},
     onCustomise: () -> Unit = {},
     onVocab: () -> Unit = {},
-    /** P0 (Reader Terms): the global terms list's door. */
-    onReaderTerms: () -> Unit = {},
     /** v1.3.5: the "Updates & about" section (check, switch,
      * links, app details) — its own door, nothing scattered. */
     onUpdatesAbout: () -> Unit = {},
@@ -228,12 +225,6 @@ fun MoreScreen(
                 title = "Words I'm learning",
                 subtitle = "Words you saved while reading, with spaced review",
                 onClick = onVocab
-            ),
-            MeDoorData(
-                icon = Icons.Filled.FindReplace,
-                title = "Reader terms",
-                subtitle = "Fix names and words in every book",
-                onClick = onReaderTerms
             ),
             MeDoorData(
                 icon = Icons.Filled.History,
