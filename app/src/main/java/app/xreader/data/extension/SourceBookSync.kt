@@ -513,16 +513,48 @@ class SourceBookSync(
      * truncated-tail disease: the page states 1,663, the
      * store holds 950, the seed shows no growth — only a
      * full walk can rebuild that list).
+     *
+     * Patch 9 (big-book refresh diagnosis): EVERY null
+     * below records its [DeltaBailReason] to
+     * [DiagnosticLog] via [deltaBail], with the facts that
+     * decided it — no bail is anonymous any more, so the
+     * first refresh of a book whose delta never engages
+     * names its own trigger in Copy details.
      */
+    private fun deltaBail(
+        book: Book,
+        reason: DeltaBailReason,
+        detail: String
+    ): AppResult<Book>? {
+        DiagnosticLog.record(
+            "sync",
+            "delta-bail book=${book.id} reason=${reason.name}",
+            detail
+        )
+        return null
+    }
+
     private suspend fun tryHeadDeltaRefresh(
         book: Book,
         resolved: SourceHandle,
         ref: SourceBook
     ): AppResult<Book>? {
         val stored = chapterDao.forBook(book.id)
-        if (stored.isEmpty()) return null
-        val epoch = definitionEpochFor(book.extensionId ?: return null)
-        if (epoch != null && book.syncedEpoch != epoch) return null
+        if (stored.isEmpty()) {
+            return deltaBail(
+                book, DeltaBailReason.NO_STORED_CHAPTERS, "stored=0"
+            )
+        }
+        val extensionId = book.extensionId ?: return deltaBail(
+            book, DeltaBailReason.NO_EXTENSION_ID, "extensionId=null"
+        )
+        val epoch = definitionEpochFor(extensionId)
+        if (epoch != null && book.syncedEpoch != epoch) {
+            return deltaBail(
+                book, DeltaBailReason.EPOCH_STALE,
+                "syncedEpoch=${book.syncedEpoch} currentEpoch=$epoch"
+            )
+        }
         val snapshot = when (
             val result = service.guarded(resolved) { source ->
                 when (source) {
@@ -532,16 +564,33 @@ class SourceBookSync(
                 }
             }
         ) {
-            is AppResult.Ok -> result.value
-            is AppResult.Err -> null
-        } ?: return null
+            is AppResult.Ok -> result.value ?: return deltaBail(
+                book, DeltaBailReason.NO_USABLE_SEED,
+                "stored=${stored.size}"
+            )
+            is AppResult.Err -> return deltaBail(
+                book, DeltaBailReason.SNAPSHOT_FETCH_FAILED,
+                "stored=${stored.size}"
+            )
+        }
         val newestStoredId = stored.maxByOrNull { it.index }?.let {
             ChapterIdentity.canonicalKey(it.remoteId ?: "")
-        } ?: return null
+        } ?: return deltaBail(
+            book, DeltaBailReason.NO_STORED_HEAD,
+            "stored=${stored.size}"
+        )
         val seedIds = snapshot.seed.mapTo(HashSet()) {
             ChapterIdentity.canonicalKey(it.id)
         }
-        if (newestStoredId !in seedIds) return null
+        val seedAssessment = DeltaSeedClassifier.assess(stored, seedIds)
+        if (newestStoredId !in seedIds) {
+            return deltaBail(
+                book, DeltaBailReason.HEAD_NOT_IN_SEED,
+                "stored=${stored.size} seed=${snapshot.seed.size} " +
+                    "overlap=${seedAssessment.overlap} " +
+                    "class=${seedAssessment.seedClass.name}"
+            )
+        }
         // v1.5.39 (item 1): the details merge lands first (it
         // may fetch a cover — network never runs inside the
         // lock); the plan+apply section then runs under the
@@ -554,31 +603,62 @@ class SourceBookSync(
         val settled = applyDetails(book, snapshot.details)
         return bookPlanMutex(book.id).withLock {
             val fresh = chapterDao.forBook(book.id)
-            if (fresh.isEmpty()) return@withLock null
+            if (fresh.isEmpty()) {
+                return@withLock deltaBail(
+                    book, DeltaBailReason.STORED_EMPTIED_ON_RECHECK,
+                    "stored=0"
+                )
+            }
             val freshNewestId = fresh.maxByOrNull { it.index }?.let {
                 ChapterIdentity.canonicalKey(it.remoteId ?: "")
-            } ?: return@withLock null
-            if (freshNewestId !in seedIds) return@withLock null
+            } ?: return@withLock deltaBail(
+                book, DeltaBailReason.NO_STORED_HEAD_ON_RECHECK,
+                "stored=${fresh.size}"
+            )
+            if (freshNewestId !in seedIds) {
+                val movedAssessment =
+                    DeltaSeedClassifier.assess(fresh, seedIds)
+                return@withLock deltaBail(
+                    book, DeltaBailReason.HEAD_MOVED_ON_RECHECK,
+                    "stored=${fresh.size} seed=${snapshot.seed.size} " +
+                        "overlap=${movedAssessment.overlap} " +
+                        "class=${movedAssessment.seedClass.name}"
+                )
+            }
             val plan = withContext(Dispatchers.Default) {
                 noDropPlan(fresh, snapshot.seed)
             }
             val exact = snapshot.statedTotal
             if (plan.inserts.isEmpty()) {
                 if (exact != null && exact != fresh.size) {
-                    return@withLock null
+                    return@withLock deltaBail(
+                        book, DeltaBailReason.STATED_TOTAL_MISMATCH,
+                        "stated=$exact stored=${fresh.size} " +
+                            "seed=${snapshot.seed.size} class=SEED_OK"
+                    )
                 }
                 val capacity = snapshot.statedCapacity
                 if (capacity != null && fresh.size > capacity) {
-                    return@withLock null
+                    return@withLock deltaBail(
+                        book, DeltaBailReason.STATED_CAPACITY_EXCEEDED,
+                        "stored=${fresh.size} capacity=$capacity " +
+                            "stated=$exact seed=${snapshot.seed.size}"
+                    )
                 }
                 DiagnosticLog.record(
                     "sync",
-                    "delta-unchanged book=${book.id} stored=${fresh.size}"
+                    "delta-unchanged book=${book.id} stored=${fresh.size} " +
+                        "seedClass=SEED_OK"
                 )
                 return@withLock AppResult.Ok(settled)
             }
             if (exact != null && exact != fresh.size + plan.inserts.size) {
-                return@withLock null
+                return@withLock deltaBail(
+                    book, DeltaBailReason.UNACCOUNTED_GROWTH,
+                    "stated=$exact stored=${fresh.size} " +
+                        "inserts=${plan.inserts.size} " +
+                        "seed=${snapshot.seed.size}"
+                )
             }
             val grown = settled.copy(
                 totalChapters = fresh.size + plan.inserts.size
@@ -588,7 +668,7 @@ class SourceBookSync(
             DiagnosticLog.record(
                 "sync",
                 "delta-grown book=${book.id} +${plan.inserts.size}" +
-                    " -> ${fresh.size + plan.inserts.size}"
+                    " -> ${fresh.size + plan.inserts.size} seedClass=SEED_OK"
             )
             AppResult.Ok(grown)
         }
