@@ -285,36 +285,45 @@ class GlassEffectPlanTest {
     fun `glassSurface alphas mirror the plan fills`() {
         // Theme.kt consistency (blueprint): the surfaces that
         // still consume glassSurface agree with the plan fills.
+        // Tolerance 0.004f: a Color stores alpha in 255 steps, so
+        // the exact plan values are unrepresentable (0.62 lands on
+        // 158/255 ≈ 0.6196) — the original 0.0f delta could never
+        // pass for ANY correct code (CI 43734085152: 1 of 2,819
+        // tests, this one). One step (1/255) is the tightest
+        // tolerance a Color can honour and stays ~15x tighter
+        // than the smallest gap between pinned fills (0.06), so
+        // the pin still catches any real drift. Owner-approved
+        // repair, 2026-11-15.
         val surface = Color(0xFF161822)
         assertEquals(
             0.62f,
             GlassSettings(style = GlassStyle.LIQUID, tier = GlassTier.LIQUID)
-                .glassSurface(surface).alpha, 0.0f
+                .glassSurface(surface).alpha, 0.004f
         )
         assertEquals(
             0.62f,
             GlassSettings(style = GlassStyle.LIQUID, tier = GlassTier.FROSTED)
-                .glassSurface(surface).alpha, 0.0f
+                .glassSurface(surface).alpha, 0.004f
         )
         assertEquals(
             0.68f,
             GlassSettings(style = GlassStyle.LIQUID, tier = GlassTier.TINTED)
-                .glassSurface(surface).alpha, 0.0f
+                .glassSurface(surface).alpha, 0.004f
         )
         assertEquals(
             0.72f,
             GlassSettings(style = GlassStyle.FROSTED, tier = GlassTier.FROSTED)
-                .glassSurface(surface).alpha, 0.0f
+                .glassSurface(surface).alpha, 0.004f
         )
         assertEquals(
             0.78f,
             GlassSettings(style = GlassStyle.FROSTED, tier = GlassTier.TINTED)
-                .glassSurface(surface).alpha, 0.0f
+                .glassSurface(surface).alpha, 0.004f
         )
         assertEquals(
             1.0f,
             GlassSettings(style = GlassStyle.SOLID, tier = GlassTier.SOLID)
-                .glassSurface(surface).alpha, 0.0f
+                .glassSurface(surface).alpha, 0.004f
         )
     }
 }
