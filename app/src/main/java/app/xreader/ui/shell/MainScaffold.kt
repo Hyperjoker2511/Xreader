@@ -2634,13 +2634,35 @@ private fun FloatingNavBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(BarHeight),
-            tier = dockTier
+            tier = dockTier,
+            // Glass blueprint: identity follows the user's CHOICE
+            // (capability follows dockTier, as resolved above);
+            // on the LIQUID tier the dock's fill is 0.48, not the
+            // card plan's 0.62 — the covers scrolling under the
+            // bar must visibly show through (the owner's dock
+            // complaint), and the scrim below keeps icons readable
+            // at that lighter fill. The dock keeps sampling the
+            // backdrop (sampleBackdrop default): it floats over
+            // real scrolling content, where blur is real.
+            style = appearance.glassStyle,
+            fillAlphaOverride = if (dockTier == app.xreader.data.prefs.GlassTier.LIQUID) 0.48f else null
         ) {
             Box(
                 Modifier
                     .fillMaxSize()
                     .onSizeChanged { barWidthPx = it.width }
             ) {
+                if (dockTier == app.xreader.data.prefs.GlassTier.LIQUID) {
+                    // Scrim behind the icons (blueprint, LIQUID
+                    // tier only): black 0.18 filling the pill,
+                    // inside the surface's clip — no shape of its
+                    // own, no band outside the pill.
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.18f))
+                    )
+                }
                 if (pillWidth > 0 && pillHeight > 0) {
                     // Liquid Glass, piece 4 (Gooey Nav): the
                     // selection indicator melts between slots

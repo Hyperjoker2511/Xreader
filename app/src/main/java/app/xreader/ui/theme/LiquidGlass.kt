@@ -1,8 +1,11 @@
 package app.xreader.ui.theme
 
+import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.RenderEffect as AndroidRenderEffect
 import android.graphics.RuntimeShader
 import android.os.Build
+import android.os.PowerManager
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -13,15 +16,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RenderEffect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import app.xreader.data.prefs.GlassStyle
 import app.xreader.data.prefs.GlassTier
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -83,47 +90,79 @@ data class GlassEffectPlan(
     val fillAlpha: Float?,
     /** The rim stroke's full width in dp; the surface's clip
      * removes the outer half, so the visible rim is half this. */
-    val rimWidthDp: Float
+    val rimWidthDp: Float,
+    // ── Glass blueprint (2026-11-15): identity fields. Defaults
+    // are all "absent", so a plan that sets none of them renders
+    // exactly as the pre-blueprint plans did — SOLID's cell in
+    // particular is byte-identical to the shipped one.
+    /** Theme-primary gradient over the base fill, top stop
+     * (0 = no chroma). The chroma COLOUR is always the scheme's
+     * primary at composition — never a hardcoded hue. */
+    val chromaTopAlpha: Float = 0f,
+    /** Theme-primary gradient over the base fill, bottom stop. */
+    val chromaBottomAlpha: Float = 0f,
+    /** White haze baked into the top of the fill, fading to 0 by
+     * 45% of the height (FROSTED's identity — visible even with
+     * blur off). 0 = none. */
+    val hazeTopAlpha: Float = 0f,
+    /** A second rim stroke drawn UNDER the main rim (0 = none). */
+    val supportRimAlpha: Float = 0f,
+    /** True = the support rim is primary-coloured; false = white. */
+    val supportRimChroma: Boolean = false,
+    /** The support rim stroke's full width in dp. */
+    val supportRimWidthDp: Float = 0f,
+    /** True = the sheen is a linear gradient from the TOP-LEFT
+     * corner (one consistent light direction); false = the legacy
+     * vertical sheen. */
+    val diagonalSheen: Boolean = false,
+    /** True = the main rim is primary-coloured (TINTED's pure
+     * chroma identity) instead of the white specular gradient. */
+    val rimChroma: Boolean = false,
+    /** The chroma rim's bottom-stop alpha (rimChroma plans only). */
+    val rimBottomAlpha: Float = 0f,
+    /** True = this plan is the identity's STATIC variant: the
+     * identity rendered without blur/refraction (down-resolved
+     * tier, or power-save). Static variants are the only plans
+     * eligible for the grain dither layer. */
+    val staticVariant: Boolean = false
 )
 
 /**
- * The tier→effect plan. Pure and total over [GlassTier]; pinned
- * cell-by-cell by GlassEffectPlanTest. FROSTED's fill (0.72) is
- * today's shipped [GlassSettings.glassSurface] alpha — the frosted
- * tier must not drift from the behaviour the contrast gate pinned.
+ * The tier→effect plan (legacy entry point). Pure and total over
+ * [GlassTier]; pinned cell-by-cell by GlassEffectPlanTest. Since
+ * the glass blueprint this is a delegate: a bare tier resolves
+ * the identity OF THE SAME NAME against that tier, which is
+ * exactly what the pre-blueprint tier-keyed plans meant.
+ * FROSTED's fill (0.72) is today's shipped
+ * [GlassSettings.glassSurface] alpha — the frosted identity must
+ * not drift from the behaviour the contrast gate pinned.
  */
-fun glassEffectPlan(tier: GlassTier): GlassEffectPlan = when (tier) {
-    // Visible-layer fix round (§B): the LIQUID cell is RAISED —
-    // rim 0.65 / sheen 0.22 / fill 0.62 / rim stroke 3.dp — so
-    // the tier is tellable from FROSTED at a glance on black.
-    // The audit found the shipped cell (0.45/0.14/0.55) read as
-    // the old frosted pill; these values are the owner's
-    // "beautiful" bar made numeric, pinned by GlassEffectPlanTest.
-    GlassTier.LIQUID -> GlassEffectPlan(
-        usesBackdropBlur = true,
-        usesRefraction = true,
-        rimAlpha = 0.65f,
-        sheenAlpha = 0.22f,
-        fillAlpha = 0.62f,
-        rimWidthDp = 3f
-    )
-    GlassTier.FROSTED -> GlassEffectPlan(
-        usesBackdropBlur = true,
-        usesRefraction = false,
-        rimAlpha = 0.30f,
-        sheenAlpha = 0.08f,
-        fillAlpha = 0.72f,
-        rimWidthDp = 2f
-    )
-    GlassTier.TINTED -> GlassEffectPlan(
-        usesBackdropBlur = false,
-        usesRefraction = false,
-        rimAlpha = 0.18f,
-        sheenAlpha = 0.05f,
-        fillAlpha = null, // the user's opacity token decides — never a constant
-        rimWidthDp = 2f
-    )
-    GlassTier.SOLID -> GlassEffectPlan(
+fun glassEffectPlan(tier: GlassTier): GlassEffectPlan =
+    glassEffectPlanFor(GlassStyle.valueOf(tier.name), tier)
+
+/**
+ * The glass blueprint resolver: IDENTITY follows the chosen
+ * [style]; CAPABILITY (backdrop blur, refraction) follows the
+ * resolved [tier]. A LIQUID choice on a device that resolves to
+ * the FROSTED tier renders the Liquid identity with frosted
+ * capability (blur, no shader, the live 0.62 fill); on the
+ * TINTED tier it renders the Liquid identity STATICALLY (raised
+ * 0.68 fill, no blur, no shader). A FROSTED choice on the TINTED
+ * tier renders the Frosted identity statically (0.78 fill). The
+ * styles never erase each other again.
+ *
+ * [forceStatic] is the power-save leg: the surface passes it
+ * when the device is in power-save mode, and every identity
+ * degrades to its static variant (SOLID and TINTED are static
+ * by construction and return their ordinary cells).
+ */
+fun glassEffectPlanFor(
+    style: GlassStyle,
+    tier: GlassTier,
+    forceStatic: Boolean = false
+): GlassEffectPlan = when (style) {
+    // SOLID: the shipped cell, exactly — no blueprint field set.
+    GlassStyle.SOLID -> GlassEffectPlan(
         usesBackdropBlur = false,
         usesRefraction = false,
         rimAlpha = 0.12f,
@@ -131,6 +170,75 @@ fun glassEffectPlan(tier: GlassTier): GlassEffectPlan = when (tier) {
         fillAlpha = 1.0f,
         rimWidthDp = 2f
     )
+    // TINTED: pure chroma (Kimi) — the fill IS a theme-primary
+    // gradient (0.20 → 0.10, multiplied by the user's opacity
+    // token at composition) over an opaque background base; the
+    // hue is the surface. Rim is primary too (0.55 top, 0.25
+    // bottom). No blur, no shader, ever — static by construction.
+    GlassStyle.TINTED -> GlassEffectPlan(
+        usesBackdropBlur = false,
+        usesRefraction = false,
+        rimAlpha = 0.55f,
+        sheenAlpha = 0.05f,
+        fillAlpha = null, // the user's opacity token decides — never a constant
+        rimWidthDp = 3f,
+        chromaTopAlpha = 0.20f,
+        chromaBottomAlpha = 0.10f,
+        rimChroma = true,
+        rimBottomAlpha = 0.25f,
+        staticVariant = true
+    )
+    // FROSTED: white haze + bright rim. Base fill 0.72 live (the
+    // contrast-pinned value — do not drift), 0.78 static. Rim
+    // 0.40 on the shared 3.dp stroke (1.5.dp visible, the same
+    // geometry as LIQUID), white support rim 0.10 underneath,
+    // diagonal sheen from the top-left.
+    GlassStyle.FROSTED -> {
+        val live = !forceStatic &&
+            (tier == GlassTier.FROSTED || tier == GlassTier.LIQUID)
+        GlassEffectPlan(
+            usesBackdropBlur = live,
+            usesRefraction = false,
+            rimAlpha = 0.40f,
+            sheenAlpha = 0.08f,
+            fillAlpha = if (live) 0.72f else 0.78f,
+            rimWidthDp = 3f,
+            hazeTopAlpha = 0.08f,
+            supportRimAlpha = 0.10f,
+            supportRimChroma = false,
+            supportRimWidthDp = 5f,
+            diagonalSheen = true,
+            staticVariant = !live
+        )
+    }
+    // LIQUID: chroma core + layered rim. Live (LIQUID tier):
+    // blur + refraction, fill 0.62. FROSTED tier: the same
+    // identity with frosted capability — blur, no shader, fill
+    // stays 0.62. Below that (or power-save): the static
+    // variant — fill 0.68, no blur, no shader. Main rim white
+    // 0.65 on the 3.dp stroke; support rim primary 0.30 on a
+    // 5.dp stroke drawn first, so ~1.dp of violet peeks inside
+    // the white rim's inner edge. Sheen 0.22, diagonal.
+    GlassStyle.LIQUID -> {
+        val liveTier = !forceStatic && tier == GlassTier.LIQUID
+        val blurTier = !forceStatic &&
+            (tier == GlassTier.LIQUID || tier == GlassTier.FROSTED)
+        GlassEffectPlan(
+            usesBackdropBlur = blurTier,
+            usesRefraction = liveTier,
+            rimAlpha = 0.65f,
+            sheenAlpha = 0.22f,
+            fillAlpha = if (blurTier) 0.62f else 0.68f,
+            rimWidthDp = 3f,
+            chromaTopAlpha = 0.15f,
+            chromaBottomAlpha = 0.04f,
+            supportRimAlpha = 0.30f,
+            supportRimChroma = true,
+            supportRimWidthDp = 5f,
+            diagonalSheen = true,
+            staticVariant = !blurTier
+        )
+    }
 }
 
 /**
@@ -166,6 +274,13 @@ half4 main(float2 coord) {
     half4 c = content.eval(coord + offset);
     c.r = content.eval(coord + offset + dir * chroma).r;
     c.b = content.eval(coord + offset - dir * chroma).b;
+    // Glass blueprint: a 1.08x saturation step in the bent band
+    // (mix each channel's colour AWAY from its luminance by
+    // -0.08) — the sampled colours read richer at the rim
+    // instead of greying out. Interior samples (band <= 0)
+    // return above, untouched.
+    float lum = dot(c.rgb, half3(0.2126, 0.7152, 0.0722));
+    c.rgb = mix(half3(lum), c.rgb, 1.08);
     return c;
 }
 """
@@ -200,27 +315,85 @@ private fun createLiquidRefraction(): LiquidRefraction? = runCatching {
  * Layer order, back to front: the dedicated backdrop layer (haze
  * blur [+ the refraction post-process on LIQUID/API 33+], or the
  * plain fill when no blur applies / no haze source exists in this
- * part of the tree), then the sheen + specular rim, then content.
+ * part of the tree), then the identity overlay (chroma, haze,
+ * dither, sheen, rims), then content.
+ *
+ * Glass blueprint (2026-11-15): [style] is the user's chosen
+ * identity and [tier] the device's capability — see
+ * [glassEffectPlanFor]. [sampleBackdrop] = false composes NO
+ * hazeEffect node at all (cards over the static canvas: blur
+ * there is a paid no-op). [fillAlphaOverride] replaces the
+ * plan's fill alpha for this one surface (the dock's LIQUID
+ * 0.48). Power-save mode forces the static variant.
  */
 @Composable
 fun LiquidGlassSurface(
     shape: Shape,
     modifier: Modifier = Modifier,
     tier: GlassTier,
+    style: GlassStyle? = null,
+    sampleBackdrop: Boolean = true,
+    fillAlphaOverride: Float? = null,
     content: @Composable () -> Unit
 ) {
-    val plan = glassEffectPlan(tier)
     val glass = LocalGlassSettings.current
     val haze = LocalHazeState.current
     val scheme = MaterialTheme.colorScheme
+    // Glass blueprint: identity follows the chosen STYLE,
+    // capability follows the resolved TIER. A null style (legacy
+    // call sites) means the identity OF THE TIER'S OWN NAME —
+    // exactly the pre-blueprint behaviour.
+    val identityStyle = style ?: GlassStyle.valueOf(tier.name)
+    // Power-save gating: read once per composition of the
+    // surface (no flow, no prefs); in power-save mode blur and
+    // refraction are treated as off and the identity renders
+    // its static variant.
+    val context = LocalContext.current
+    val powerSave = remember(context) {
+        runCatching {
+            (context.getSystemService(Context.POWER_SERVICE) as? PowerManager)
+                ?.isPowerSaveMode == true
+        }.getOrDefault(false)
+    }
+    val plan = glassEffectPlanFor(identityStyle, tier, forceStatic = powerSave)
 
-    // TINTED's fill is the user's opacity token; every other tier
-    // takes the plan's pinned alpha. This is also the null-haze
+    // TINTED's fill is the user's opacity token; every other plan
+    // takes its pinned alpha; a caller's override (the dock's
+    // LIQUID 0.48) wins over both. This is also the null-haze
     // fallback alpha — a LIQUID/FROSTED surface with no haze source
     // above it renders exactly this fill, at exactly this alpha.
-    val fillAlpha = plan.fillAlpha ?: glass.opacity
+    val fillAlpha = fillAlphaOverride ?: plan.fillAlpha ?: glass.opacity
     val fillColor = scheme.surface.copy(alpha = fillAlpha)
-    val blurActive = plan.usesBackdropBlur && haze != null
+    // Blur-off-over-black: when the caller says the backdrop is
+    // not worth sampling (cards over the shell's static canvas),
+    // NO hazeEffect node is composed at all, whatever the plan
+    // says — blurring a uniform field is a paid no-op.
+    val blurActive = plan.usesBackdropBlur && sampleBackdrop && haze != null
+
+    // The grain dither tile (glass blueprint, conditional): only
+    // static-variant plans draw it, and only when the user's
+    // film-grain setting exists and is ON (GlassSettings.grainOn,
+    // from AppearanceState.grain). One pre-baked 128x128 tile,
+    // seeded, generated once and remembered — the same fixed-seed
+    // construction as the shell's GrainOverlay.
+    val ditherTile = remember(plan.staticVariant, glass.grainOn) {
+        if (plan.staticVariant && glass.grainOn) {
+            val size = 128
+            val bitmap = Bitmap.createBitmap(
+                size, size, Bitmap.Config.ARGB_8888
+            )
+            val pixels = IntArray(size * size)
+            val random = kotlin.random.Random(20261115)
+            for (i in pixels.indices) {
+                val v = random.nextInt(256)
+                pixels[i] = android.graphics.Color.rgb(v, v, v)
+            }
+            bitmap.setPixels(pixels, 0, size, 0, 0, size, size)
+            bitmap.asImageBitmap()
+        } else {
+            null
+        }
+    }
 
     // The refraction pair exists only for the LIQUID plan on
     // API 33+; creation failure leaves it null and the surface
@@ -265,41 +438,132 @@ fun LiquidGlassSurface(
                 fallbackTint = HazeTint(fillColor)
             }
         } else {
-            // No blur on this plan (TINTED/SOLID), or no haze source
-            // in this part of the tree: the plain fill at the plan's
-            // alpha (or the user's token for TINTED).
-            backdrop = backdrop.background(fillColor)
+            // No blur on this plan (TINTED/SOLID), a static variant,
+            // backdrop sampling off (cards), or no haze source in
+            // this part of the tree: the plain fill. TINTED's base
+            // is the OPAQUE scheme background — its identity is the
+            // primary chroma gradient drawn over it in the overlay
+            // layer below (deterministic on black; no neutral
+            // surface colour in the fill at all). Every other
+            // identity takes the plan's fill at its pinned alpha
+            // (or the user's token / the caller's override).
+            backdrop = if (identityStyle == GlassStyle.TINTED) {
+                backdrop.background(scheme.background)
+            } else {
+                backdrop.background(fillColor)
+            }
         }
         Box(backdrop)
 
-        // ── Sheen + specular rim ──────────────────────────────────
-        // One cached draw: the soft top sheen (a shape-filled
-        // gradient fading out by mid-height) and the rim — a
-        // gradient stroke following the shape outline, brightest at
-        // the top. The stroke is drawn plan.rimWidthDp wide centred
+        // ── Identity overlay: chroma, haze, dither, sheen, rims ──
+        // One cached draw, back to front: the chroma gradient
+        // (the identity's hue, over the base fill), FROSTED's
+        // baked-in white haze, the grain dither (static variants,
+        // grain setting on only), the sheen, the SUPPORT rim
+        // (drawn first, wider, so its colour peeks inside the
+        // main rim's inner edge), and the main rim — a gradient
+        // stroke following the shape outline, brightest at the
+        // top. Rim strokes are drawn plan.rimWidthDp wide centred
         // on the outline; the container's clip removes the outer
-        // half, leaving half the width inside the bounds (1.dp on
-        // the plain plans, 1.5.dp on LIQUID — fix round §B).
+        // half, leaving half the width inside the bounds (1.5.dp
+        // on the blueprint's 3.dp strokes — ChatGPT's correction:
+        // a rim that reads ~1.5.dp looks optical, not painted).
+        // A plan with every identity field at its default (SOLID)
+        // draws exactly the pre-blueprint rim and nothing else.
         Box(
             Modifier
                 .fillMaxSize()
                 .drawWithCache {
                     val outline = shape.createOutline(size, layoutDirection, this)
-                    val rimBrush = Brush.verticalGradient(
-                        listOf(
-                            Color.White.copy(alpha = plan.rimAlpha),
-                            Color.White.copy(alpha = plan.rimAlpha * 0.28f),
-                            Color.White.copy(alpha = plan.rimAlpha * 0.5f)
+                    val primary = scheme.primary
+                    // TINTED's chroma stops are multiplied by the
+                    // user's opacity token (the slider keeps its
+                    // meaning); every other identity's chroma is
+                    // a fixed part of its fill construction.
+                    val chromaScale =
+                        if (identityStyle == GlassStyle.TINTED) glass.opacity else 1f
+                    val chromaBrush = if (plan.chromaTopAlpha > 0.0f) {
+                        Brush.verticalGradient(
+                            listOf(
+                                primary.copy(alpha = plan.chromaTopAlpha * chromaScale),
+                                primary.copy(alpha = plan.chromaBottomAlpha * chromaScale)
+                            )
                         )
-                    )
-                    val sheenBrush = Brush.verticalGradient(
-                        0.0f to Color.White.copy(alpha = plan.sheenAlpha),
-                        0.45f to Color.White.copy(alpha = 0.0f)
-                    )
+                    } else {
+                        null
+                    }
+                    val hazeBrush = if (plan.hazeTopAlpha > 0.0f) {
+                        Brush.verticalGradient(
+                            0.0f to Color.White.copy(alpha = plan.hazeTopAlpha),
+                            0.45f to Color.White.copy(alpha = 0.0f)
+                        )
+                    } else {
+                        null
+                    }
+                    val rimBrush = if (plan.rimChroma) {
+                        Brush.verticalGradient(
+                            listOf(
+                                primary.copy(alpha = plan.rimAlpha),
+                                primary.copy(alpha = plan.rimBottomAlpha)
+                            )
+                        )
+                    } else {
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.White.copy(alpha = plan.rimAlpha),
+                                Color.White.copy(alpha = plan.rimAlpha * 0.28f),
+                                Color.White.copy(alpha = plan.rimAlpha * 0.5f)
+                            )
+                        )
+                    }
+                    val sheenBrush = if (plan.diagonalSheen) {
+                        // One consistent light direction: the
+                        // top-left corner (DeepSeek #2 adopt).
+                        Brush.linearGradient(
+                            0.0f to Color.White.copy(alpha = plan.sheenAlpha),
+                            0.45f to Color.White.copy(alpha = 0.0f),
+                            start = Offset.Zero,
+                            end = Offset(size.width, size.height)
+                        )
+                    } else {
+                        Brush.verticalGradient(
+                            0.0f to Color.White.copy(alpha = plan.sheenAlpha),
+                            0.45f to Color.White.copy(alpha = 0.0f)
+                        )
+                    }
                     onDrawWithContent {
                         drawContent()
+                        if (chromaBrush != null) {
+                            drawOutline(outline, brush = chromaBrush)
+                        }
+                        if (hazeBrush != null) {
+                            drawOutline(outline, brush = hazeBrush)
+                        }
+                        if (ditherTile != null) {
+                            var x = 0f
+                            while (x < size.width) {
+                                var y = 0f
+                                while (y < size.height) {
+                                    drawImage(
+                                        ditherTile,
+                                        topLeft = Offset(x, y),
+                                        alpha = 0.03f
+                                    )
+                                    y += 128f
+                                }
+                                x += 128f
+                            }
+                        }
                         if (plan.sheenAlpha > 0.0f) {
                             drawOutline(outline, brush = sheenBrush)
+                        }
+                        if (plan.supportRimAlpha > 0.0f) {
+                            drawOutline(
+                                outline,
+                                color = if (plan.supportRimChroma) primary else Color.White,
+                                alpha = plan.supportRimAlpha,
+                                style = Stroke(width = plan.supportRimWidthDp.dp.toPx())
+                            )
                         }
                         drawOutline(
                             outline,

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.xreader.core.motion.pressBounce
 import app.xreader.core.motion.pressSquish
+import app.xreader.data.prefs.GlassStyle
 import app.xreader.data.prefs.GlassTier
 import app.xreader.ui.theme.GlassSettings
 import app.xreader.ui.theme.LiquidGlassSurface
@@ -74,8 +75,19 @@ import dev.chrisbanes.haze.hazeEffect
  * no longer exists anywhere in the shell.
  */
 @Composable
-fun Modifier.frostedGlass(glass: GlassSettings, tint: Color): Modifier {
+fun Modifier.frostedGlass(
+    glass: GlassSettings,
+    tint: Color,
+    sampleBackdrop: Boolean = true
+): Modifier {
     val haze = LocalHazeState.current
+    // Glass blueprint: a caller that knows its backdrop is not
+    // worth sampling (GlassCard — cards sit over the shell's
+    // static canvas) passes sampleBackdrop = false and NO
+    // hazeEffect node is composed at all; blurring a uniform
+    // field is a paid no-op. Every other call site keeps the
+    // default and its exact current behaviour.
+    if (!sampleBackdrop) return this
     // Visible-layer fix round (§B): the gate is the TIER's blur
     // liveness, not the FROSTED style — under a LIQUID choice the
     // effective style never equalled FROSTED, so this gate (and
@@ -107,6 +119,13 @@ fun Modifier.frostedGlass(glass: GlassSettings, tint: Color): Modifier {
  * pairs the contrast gate pins. [bouncePress] swaps the clickable
  * variant's MicroPress squish for the Apple bounce (D5) — the hero
  * and other showcase cards opt in.
+ *
+ * Glass blueprint (2026-11-15): the v1.0.4 paragraph above is
+ * history. Glass identities (LIQUID/FROSTED/TINTED choices) now
+ * render on LiquidGlassSurface with sampleBackdrop = false —
+ * cards no longer sample the backdrop at all; identity is
+ * carried by each style's own fill, chroma, haze and rims. The
+ * Material path below serves SOLID, byte-identical.
  */
 @Composable
 fun GlassCard(
@@ -125,19 +144,30 @@ fun GlassCard(
     // interaction source per card, used by whichever click path
     // renders.
     val interaction = remember { MutableInteractionSource() }
-    if (glass.tier == GlassTier.LIQUID) {
-        // Visible-layer fix round (§B): under the LIQUID tier the
-        // card is built on the shared LiquidGlassSurface — real
-        // backdrop blur + the raised rim/sheen/fill plan — instead
-        // of the Material Surface below. Every GlassCard consumer
-        // (Me dashboard doors, book rows, sheet action rows, sync
-        // and migration cards) inherits the tier from this one
-        // branch. The click path keeps the Surface path's exact
-        // behaviour: the same interaction source, the same press
-        // treatment (bounce or squish), the platform indication.
-        // The shadow drops: on a black canvas the rim carries the
+    if (glass.style != GlassStyle.SOLID) {
+        // Glass blueprint (2026-11-15): EVERY glass identity —
+        // LIQUID, FROSTED, TINTED — renders on the shared
+        // LiquidGlassSurface, keyed style + tier: identity
+        // follows the user's CHOICE, capability follows the
+        // resolved TIER, so a down-resolved choice renders its
+        // own identity statically instead of borrowing another
+        // style's (the pre-blueprint LIQUID branch below this
+        // comment's history keyed on the LIQUID tier alone, and
+        // the FROSTED/TINTED choices fell through to the Material
+        // path, where the three styles read as one). Cards pass
+        // sampleBackdrop = false: they sit over the shell's
+        // static canvas, so no hazeEffect node is composed for
+        // them at all — blur there is a paid no-op; the dock,
+        // floating over real scrolling covers, keeps sampling.
+        // Every GlassCard consumer (Me dashboard doors, book
+        // rows, sheet action rows, sync and migration cards)
+        // inherits the identity from this one branch. The click
+        // path keeps the Surface path's exact behaviour: the
+        // same interaction source, the same press treatment
+        // (bounce or squish), the platform indication. The
+        // shadow drops: on a black canvas the rim carries the
         // separation the shadow never visibly did.
-        val liquidModifier = if (onClick == null) {
+        val glassModifier = if (onClick == null) {
             modifier
         } else {
             modifier
@@ -153,19 +183,26 @@ fun GlassCard(
         }
         LiquidGlassSurface(
             shape = shape,
-            modifier = liquidModifier,
-            tier = GlassTier.LIQUID
+            modifier = glassModifier,
+            tier = glass.tier,
+            style = glass.style,
+            sampleBackdrop = false
         ) {
             Column(Modifier.padding(contentPadding)) { content() }
         }
         return
     }
     val dark = scheme.background.luminance() < 0.5f
-    // The frosted fill/border treatment keys on the resolved
-    // FROSTED TIER (fix round §B): a LIQUID choice on a device
-    // that resolves to the FROSTED tier renders this treatment
-    // byte-identically to a FROSTED choice — same fill, same
-    // border, same blur gate below.
+    // Glass blueprint: this Material path now serves SOLID only
+    // (every glass identity renders on LiquidGlassSurface
+    // above), and for SOLID the tier is SOLID, so the frosted
+    // treatment below never engages — it is retained verbatim
+    // so the SOLID path's code and output stay byte-identical
+    // to the shipped card. (Pre-blueprint, the frosted
+    // fill/border treatment keyed on the resolved FROSTED TIER:
+    // a LIQUID choice on a device that resolved to the FROSTED
+    // tier rendered this treatment byte-identically to a
+    // FROSTED choice — same fill, same border, same blur gate.)
     val frostedTier = glass.tier == GlassTier.FROSTED
     val surfaceColor = if (frostedTier) {
         if (dark) LiquidGlassFillDark else scheme.surface.copy(alpha = 0.35f)
@@ -182,7 +219,10 @@ fun GlassCard(
     } else {
         BorderStroke(1.dp, scheme.outline)
     }
-    val effectModifier = modifier.frostedGlass(glass, scheme.surface)
+    // GlassCard passes sampleBackdrop = false (blueprint): for
+    // SOLID the modifier is a no-op either way (the tier never
+    // has a live blur), so this changes nothing rendered.
+    val effectModifier = modifier.frostedGlass(glass, scheme.surface, sampleBackdrop = false)
     if (onClick == null) {
         Surface(
             modifier = effectModifier,

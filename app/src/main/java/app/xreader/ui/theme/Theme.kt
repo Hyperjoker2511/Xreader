@@ -60,7 +60,13 @@ data class GlassSettings(
      * surface — dock, cards, sheets — reads the SAME tier. The
      * dock has resolved its own since Patch 1; this generalises
      * that resolution to the whole app. */
-    val tier: GlassTier = GlassTier.TINTED
+    val tier: GlassTier = GlassTier.TINTED,
+    /** The user's film-grain setting (AppearanceState.grain),
+     * carried here so glass surfaces can read it from the same
+     * local as every other glass value: static-variant glass
+     * plans draw the blueprint's dither layer only while this
+     * is on. Default off — the setting's own default. */
+    val grainOn: Boolean = false
 ) {
     /** Design card radius ~24 dp (DESIGN.md), scaled by the user's slider. */
     val cardRadius: Dp get() = (24f * radiusScale).dp
@@ -84,17 +90,34 @@ data class GlassSettings(
      * FROSTED renders mostly translucent because the blur behind it
      * carries the surface — text still sits on the tint, whose pairs
      * are pinned by the contrast tests at this exact alpha. */
-    fun glassSurface(surface: Color): Color = when (effectiveStyle) {
+    fun glassSurface(surface: Color): Color = when (style) {
         GlassStyle.SOLID -> surface
-        GlassStyle.FROSTED -> surface.copy(alpha = 0.72f)
         GlassStyle.TINTED -> surface.copy(alpha = opacity)
-        // Visible-layer fix round (§B): a LIQUID choice that earns
-        // the LIQUID tier takes the liquid plan's lighter fill
-        // (0.62 — the rim and sheen carry the surface); a LIQUID
-        // choice resolved down to the FROSTED tier keeps the
-        // frosted 0.72 the contrast gate pinned.
+        // Glass blueprint (2026-11-15): the alphas mirror the
+        // style+tier plan fills in glassEffectPlanFor, so the
+        // surfaces that still consume glassSurface (rail, reader
+        // chrome, the Me card) agree with the plan-rendered ones.
+        // FROSTED: 0.72 live (the contrast-pinned value — do not
+        // drift); its static variant (tier resolved below
+        // FROSTED) takes the raised 0.78.
+        GlassStyle.FROSTED -> surface.copy(
+            alpha = if (tier == GlassTier.TINTED || tier == GlassTier.SOLID) {
+                0.78f
+            } else {
+                0.72f
+            }
+        )
+        // LIQUID: the identity's fill follows the identity, not
+        // the tier it landed on — 0.62 wherever the identity
+        // renders with backdrop blur (LIQUID or FROSTED tier);
+        // the static variant (TINTED tier) takes the raised 0.68.
+        // (Pre-blueprint, a down-resolved LIQUID choice borrowed
+        // FROSTED's 0.72 — the identity-erasure this build ends.)
         GlassStyle.LIQUID -> surface.copy(
-            alpha = if (tier == GlassTier.LIQUID) 0.62f else 0.72f
+            alpha = when (tier) {
+                GlassTier.LIQUID, GlassTier.FROSTED -> 0.62f
+                else -> 0.68f
+            }
         )
     }
 
@@ -246,7 +269,8 @@ fun XreaderTheme(
         elevationScale = appearance.glassElevationScale,
         style = appearance.glassStyle,
         effectiveStyle = effective,
-        tier = glassTier
+        tier = glassTier,
+        grainOn = appearance.grain
     )
     // v1.0.2 (R04): "Wallpaper" resolves to the platform dynamic
     // schemes on API 31+, contrast-sanitized by our own gate; on
