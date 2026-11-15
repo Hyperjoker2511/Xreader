@@ -30,6 +30,17 @@ import kotlinx.coroutines.sync.withPermit
  * counted per source and left as source-health state (R10/R13) —
  * the refresher reports numbers, never a prose summary, and the
  * pull gesture shows nothing at all (Q2 addendum: silent).
+ *
+ * v1.6.0 (library-refresh scope fix): the sweep covers LIBRARY
+ * books only. Before, it walked every EXTENSION row in the
+ * database — preview/history rows included (every book ever
+ * opened has a row) — so the sweep's length was set by total
+ * rows × source slowness, not by the Library, and the spinner
+ * outstayed the two-book Library it nominally served. Non-library
+ * rows are no longer baselined by the sweep; the v1.5.4
+ * phantom-new protection that baselining bought now lives in
+ * [refreshOneCapped]'s first-sight rule, paid at a book's first
+ * completed sweep after it joins the Library.
  */
 class LibraryRefresher(
     private val bookDao: BookDao,
@@ -56,9 +67,15 @@ class LibraryRefresher(
     )
 
     suspend fun refreshAll(): Outcome {
+        // v1.6.0 (scope fix): Library members only — the
+        // inLibrary condition is the whole of Part 1. Preview /
+        // history rows (inLibrary = false) are not the Library's
+        // business; they refresh when their own book page opens.
         val books = bookDao.allBooks()
             .filter {
-                it.sourceType == SourceType.EXTENSION && it.mergedIntoId == null
+                it.sourceType == SourceType.EXTENSION &&
+                    it.mergedIntoId == null &&
+                    it.inLibrary
             }
         val autoDownload = runCatching {
             libraryPrefs.state.first().autoDownloadTracked
@@ -197,9 +214,20 @@ class LibraryRefresher(
         } else {
             book.totalChapters
         }
-        if (before.lastSeenChapterCount == 0) {
-            bookMetaPrefs.set(book.id, before.copy(lastSeenChapterCount = seen))
-        }
+        // v1.6.0 (scope fix, Part 2): the first-sight signal,
+        // captured BEFORE any write — this book has never been
+        // baselined. The baseline is deliberately NOT seeded
+        // from the stored total here anymore (the pre-v1.6.0
+        // code persisted `seen` at this point): a stored total
+        // can be a partial progressive chunk (finding #2), and
+        // a baseline seeded from it would let a later sweep
+        // badge the unseen remainder. A first-sight book's
+        // baseline is written only when its refresh COMPLETES,
+        // at the post-refresh total — see the first-sight
+        // branch below. A failed or timed-out first refresh
+        // leaves the book unbaselined, so its next completed
+        // sweep is still its first-sight sweep.
+        val firstSight = before.lastSeenChapterCount == 0
         // v1.5.1 (item 2, Library wedge exhibit 2026-11-02
         // 17:47): a per-book refresh used to run UNBOUNDED —
         // one book whose source never answered (an extension
@@ -232,26 +260,40 @@ class LibraryRefresher(
         if (result is AppResult.Ok) {
             val fresh = bookDao.getById(book.id)
             val total = fresh?.totalChapters ?: book.totalChapters
-            if (!book.inLibrary) {
-                // v1.5.4 (item 19, finding #2): the badge
-                // arithmetic below is for LIBRARY books only.
-                // This walk also visits preview/history rows
-                // (every book ever opened has a row), and a
-                // non-library row baselined on its stored —
-                // possibly partial, progressive-chunk — total
-                // booked the whole remainder of a fat serial as
-                // "new chapters" in one pass. A refreshed
-                // non-library row instead leaves with its
+            if (firstSight || !book.inLibrary) {
+                // v1.5.4 (item 19, finding #2), generalised by
+                // the v1.6.0 scope fix (Part 2): the badge
+                // arithmetic below is for BASELINED books only.
+                // v1.5.4's shape: this walk also visited
+                // preview/history rows (every book ever opened
+                // has a row), and a non-library row baselined
+                // on its stored — possibly partial,
+                // progressive-chunk — total booked the whole
+                // remainder of a fat serial as "new chapters"
+                // in one pass; such a row instead left with
+                // its baseline AT the post-refresh total and
+                // no stored new count. The scope fix narrows
+                // the sweep to Library books, so rows are no
+                // longer baselined before they join — and the
+                // same stored-total trap waits for a Library
+                // book whose stored total is a partial chunk
+                // (a newly-joined book baselined on 40 stored
+                // chapters of a 900-chapter serial would badge
+                // 860 phantom "new" on its first sweep). The
+                // protection therefore keys on FIRST SIGHT —
+                // never baselined, whatever the row's Library
+                // state: the refresh syncs the book, but books
+                // NOTHING as new; the book leaves with its
                 // baseline AT the post-refresh total and no
                 // stored new count, so no phantom "new" exists
-                // now or can surface if the book joins the
-                // library later. (BookMeta.newChapters itself
-                // is unchanged and still refuses a true first
-                // sight; the phantom entered through the
-                // stored-total baseline above, which a library
-                // book keeps — its remainder genuinely is
-                // unseen — and a non-library row no longer
-                // converts into a badge.)
+                // now or can surface later. (BookMeta.newChapters
+                // itself is unchanged and still refuses a true
+                // first sight; the phantom entered through the
+                // stored-total baseline, which no code path may
+                // now convert into a badge.) The !inLibrary
+                // disjunct is unreachable from the narrowed
+                // sweep and stays as the v1.5.4 guard for any
+                // direct caller of this seam.
                 val meta = bookMetaPrefs.get(book.id)
                 bookMetaPrefs.set(
                     book.id,

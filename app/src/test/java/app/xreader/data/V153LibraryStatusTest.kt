@@ -448,10 +448,12 @@ class V153LibraryRefreshBoundsTest {
                 1, outcome.failures
             )
             assertEquals(
-                "the healthy book reported its new chapters",
-                1, outcome.booksWithNew
+                "the healthy book is first-sight (never " +
+                    "baselined), so its first sweep books " +
+                    "nothing as new (v1.6.0 first-sight rule)",
+                0, outcome.booksWithNew
             )
-            assertEquals(2, outcome.totalNew)
+            assertEquals(0, outcome.totalNew)
             assertTrue(
                 "the book queued behind the hung one still refreshed",
                 refreshed.contains(2L)

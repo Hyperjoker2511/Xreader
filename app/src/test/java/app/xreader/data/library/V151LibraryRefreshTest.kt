@@ -11,6 +11,7 @@ import app.xreader.data.db.Book
 import app.xreader.data.db.SourceType
 import app.xreader.data.download.DownloadController
 import app.xreader.data.files.BookStorage
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +44,20 @@ import org.junit.rules.TemporaryFolder
  * this test's v1.5.1 "count that book as a failure" pin. The
  * wedge assertions themselves (the sweep terminates; every
  * other book refreshes) are unchanged.
+ *
+ * v1.6.0 (library-refresh scope fix): the BADGE counting
+ * changed again, by the same supersession logic. This
+ * fixture's books are all first-sight (never baselined), and
+ * a first-sight book's first completed sweep is now
+ * badge-silent — the first-sight rule writes its baseline at
+ * the post-refresh total and books nothing as new, because
+ * its stored total may be a partial progressive chunk
+ * (finding #2's shape). The healthy books below still
+ * refresh and grow; on this first sweep they report
+ * booksWithNew = 0 / totalNew = 0. Baselined growth counting
+ * is pinned by the scope-fix tests at the bottom of this
+ * file (the second-sweep test) — and the wedge assertions
+ * above are unchanged again.
  */
 class V151LibraryRefreshTest {
 
@@ -61,15 +76,42 @@ class V151LibraryRefreshTest {
         }
     }
 
-    private fun book(id: Long, ext: Long, chapters: Int) = Book(
+    private fun book(
+        id: Long,
+        ext: Long,
+        chapters: Int,
+        inLibrary: Boolean = true
+    ) = Book(
         id = id,
         title = "Book $id",
         sourceType = SourceType.EXTENSION,
         extensionId = ext,
         remoteId = "remote-$id",
         totalChapters = chapters,
+        inLibrary = inLibrary,
         addedAt = 0,
         updatedAt = 0
+    )
+
+    private fun buildRefresher(
+        dao: FakeBookDao,
+        metaPrefs: BookMetaPrefs,
+        perBookTimeoutMs: Long =
+            LibraryRefresher.REFRESH_PER_BOOK_TIMEOUT_MS,
+        refreshBook: suspend (Book) -> AppResult<Book>
+    ) = LibraryRefresher(
+        bookDao = dao,
+        bookMetaPrefs = metaPrefs,
+        refreshBook = refreshBook,
+        libraryPrefs = LibraryPrefs(FakeDataStore()),
+        downloadController = DownloadController(
+            queueDao = FakeDownloadQueueDao(),
+            chapterDao = FakeChapterDao(),
+            bookDao = dao,
+            storage = BookStorage(tmp.newFolder()),
+            enqueuer = { }
+        ),
+        perBookTimeoutMs = perBookTimeoutMs
     )
 
     @Test
@@ -122,13 +164,109 @@ class V151LibraryRefreshTest {
                 1, outcome.skipped
             )
             assertEquals(
-                "both healthy books reported their new chapters",
-                2, outcome.booksWithNew
+                "first-sight books book nothing as new on " +
+                    "their first sweep (v1.6.0 first-sight rule)",
+                0, outcome.booksWithNew
             )
-            assertEquals(4, outcome.totalNew)
+            assertEquals(0, outcome.totalNew)
             assertTrue(
                 "the book queued behind the hung one still refreshed",
                 refreshed.containsAll(listOf(2L, 3L))
             )
+        }
+
+    // ---------------------------------------------------------------
+    // v1.6.0 (library-refresh scope fix): the sweep's scope and
+    // the first-sight rule that replaced the wide sweep's
+    // baseline-keeping.
+    // ---------------------------------------------------------------
+
+    @Test
+    fun `the sweep refreshes library books only`() = runBlocking {
+        val dao = FakeBookDao()
+        // Two sources; each holds one Library book and one
+        // preview/history row (inLibrary = false — every book
+        // ever opened has such a row).
+        dao.books.value = listOf(
+            book(1, 7, 10, inLibrary = true),
+            book(2, 7, 20, inLibrary = false),
+            book(3, 9, 30, inLibrary = true),
+            book(4, 9, 40, inLibrary = false)
+        )
+        val invoked = CopyOnWriteArrayList<Long>()
+        val refresher = buildRefresher(dao, BookMetaPrefs(FakeDataStore())) { book ->
+            invoked += book.id
+            AppResult.Ok(book)
+        }
+        val outcome = refresher.refreshAll()
+        assertEquals(
+            "the refresh seam ran once per Library book, " +
+                "never for a non-Library row",
+            setOf(1L, 3L), invoked.toSet()
+        )
+        assertEquals(
+            "booksChecked counts Library books only",
+            2, outcome.booksChecked
+        )
+        assertEquals(0, outcome.failures)
+        assertEquals(0, outcome.skipped)
+    }
+
+    @Test
+    fun `a first-sight library book baselines silently at the post-refresh total`() =
+        runBlocking {
+            val dao = FakeBookDao()
+            // The phantom shape (finding #2): a Library book
+            // stored at a PARTIAL total of 40 (a progressive
+            // chunk); the source's full list is 900. The book
+            // has never been baselined.
+            dao.books.value = listOf(book(1, 7, 40, inLibrary = true))
+            val metaPrefs = BookMetaPrefs(FakeDataStore())
+            val refresher = buildRefresher(dao, metaPrefs) { book ->
+                val grown = book.copy(totalChapters = 900)
+                dao.update(grown)
+                AppResult.Ok(grown)
+            }
+            val outcome = refresher.refreshAll()
+            val meta = metaPrefs.get(1)
+            assertEquals(
+                "the baseline lands at the post-refresh total",
+                900, meta.lastSeenChapterCount
+            )
+            assertEquals(
+                "nothing books as new — no 860-chapter phantom",
+                0, meta.newChapterCount
+            )
+            assertEquals(1, outcome.booksChecked)
+            assertEquals(0, outcome.booksWithNew)
+            assertEquals(0, outcome.totalNew)
+            assertEquals(0, outcome.failures)
+        }
+
+    @Test
+    fun `a baselined book badges exactly the growth on the next sweep`() =
+        runBlocking {
+            val dao = FakeBookDao()
+            dao.books.value = listOf(book(1, 7, 40, inLibrary = true))
+            val metaPrefs = BookMetaPrefs(FakeDataStore())
+            var refreshedTotal = 900
+            val refresher = buildRefresher(dao, metaPrefs) { book ->
+                val grown = book.copy(totalChapters = refreshedTotal)
+                dao.update(grown)
+                AppResult.Ok(grown)
+            }
+            // First sweep: first sight — the book syncs to
+            // 900 and baselines silently there.
+            refresher.refreshAll()
+            assertEquals(900, metaPrefs.get(1).lastSeenChapterCount)
+            assertEquals(0, metaPrefs.get(1).newChapterCount)
+            // The source gains two chapters; the second sweep
+            // — the book now baselined — counts exactly those.
+            refreshedTotal = 902
+            val outcome = refresher.refreshAll()
+            assertEquals(2, metaPrefs.get(1).newChapterCount)
+            assertEquals(1, outcome.booksWithNew)
+            assertEquals(2, outcome.totalNew)
+            assertEquals(0, outcome.failures)
         }
 }

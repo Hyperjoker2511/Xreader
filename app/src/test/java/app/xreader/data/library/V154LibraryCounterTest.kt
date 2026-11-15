@@ -33,12 +33,20 @@ import org.junit.rules.TemporaryFolder
  * (pre-fix) sum over this fixture is the photographed 12,121;
  * the shelf-scoped sum is the small true number per side.
  *
- * (b) Refresher level: a non-library book stored with a
- * PARTIAL chapter total (a progressive chunk) refreshed to a
- * fat full total must accrue NO badge and leave with its
- * baseline at the post-refresh total; a library book through
- * the same shape accrues exactly the delta. (Pre-fix, the
- * non-library half of (b) fails: the badge was written.)
+ * (b) Refresher level: a book stored with a PARTIAL chapter
+ * total (a progressive chunk) refreshed to a fat full total
+ * must accrue NO badge. v1.5.4's shape: the sweep visited a
+ * non-library row and a library row through this shape — the
+ * non-library row was rebaselined silently (pre-fix it
+ * badged), and the library book accrued exactly the delta
+ * over its stored partial total. v1.6.0 (library-refresh
+ * scope fix) supersedes the second half: the sweep no
+ * longer visits non-library rows at all, and a LIBRARY book
+ * in this shape is a first-sight book — it too leaves
+ * baselined at the post-refresh total with no badge, because
+ * its stored total is the same untrustworthy chunk (the
+ * delta-accruing case is now the BASELINED book's next
+ * sweep, pinned in V151LibraryRefreshTest).
  */
 class V154LibraryCounterTest {
 
@@ -127,22 +135,25 @@ class V154LibraryCounterTest {
     )
 
     @Test
-    fun `non-library refresh accrues no badge and rebaselines - library accrues the delta`() =
+    fun `non-library rows are not swept - first-sight library book accrues no badge`() =
         runBlocking {
             val dao = FakeBookDao()
             // Both books stored at a PARTIAL total of 40 (a
             // progressive chunk); the source's full list is
             // 2,400. Book 1 was only browsed (not in the
-            // library); book 2 is a library book.
+            // library); book 2 is a library book. Neither has
+            // ever been baselined.
             dao.books.value = listOf(
                 book(1, 40, inLibrary = false),
                 book(2, 40, inLibrary = true)
             )
             val metaPrefs = BookMetaPrefs(FakeDataStore())
+            val invoked = mutableListOf<Long>()
             val refresher = LibraryRefresher(
                 bookDao = dao,
                 bookMetaPrefs = metaPrefs,
                 refreshBook = { book ->
+                    invoked += book.id
                     val grown = book.copy(totalChapters = 2_400)
                     dao.update(grown)
                     AppResult.Ok(grown)
@@ -158,21 +169,32 @@ class V154LibraryCounterTest {
             )
             val outcome = refresher.refreshAll()
 
-            // The non-library row: NO badge, and the baseline
-            // moved to the post-refresh total — nothing phantom
-            // exists now or can surface if it joins the library.
+            // The sweep never touched the non-library row: it
+            // was not refreshed and its meta is exactly as it
+            // was. No badge exists — and none can surface if
+            // the book joins the library later, because its
+            // first sweep then is a first-sight sweep (below).
+            assertEquals(listOf(2L), invoked)
             val browsed = metaPrefs.get(1)
             assertEquals(0, browsed.newChapterCount)
-            assertEquals(2_400, browsed.lastSeenChapterCount)
+            assertEquals(0, browsed.lastSeenChapterCount)
 
-            // The library book through the same shape accrues
-            // exactly the delta over its stored partial total.
+            // The library book through the same shape is a
+            // first-sight book: it syncs to the full total
+            // but books NOTHING as new, and its baseline lands
+            // at the post-refresh total. (v1.5.4 pinned 2,360
+            // new here; the v1.6.0 scope fix convicts that as
+            // the same phantom — the stored 40 was a chunk,
+            // not a sighting.)
             val shelved = metaPrefs.get(2)
-            assertEquals(2_360, shelved.newChapterCount)
+            assertEquals(0, shelved.newChapterCount)
+            assertEquals(2_400, shelved.lastSeenChapterCount)
 
-            // And the sweep's totals count only the real badge.
-            assertEquals(1, outcome.booksWithNew)
-            assertEquals(2_360, outcome.totalNew)
+            // The sweep's totals cover the one Library book,
+            // with no badge booked.
+            assertEquals(1, outcome.booksChecked)
+            assertEquals(0, outcome.booksWithNew)
+            assertEquals(0, outcome.totalNew)
             assertEquals(0, outcome.failures)
         }
 }
