@@ -152,4 +152,82 @@ class UiMetricsTest {
             )
         }
     }
+
+    // ── App size scaling (v1.6.2) ────────────────────────────
+    // scaledMetrics is the pure function the provider applies
+    // to the tier row. The raw rows above stay pinned as they
+    // are — scaling is a separate, separately-pinned layer.
+
+    @Test
+    fun `app size 1_00 is an exact identity on every tier`() {
+        UiTier.entries.forEach { tier ->
+            assertEquals(uiMetricsFor(tier), scaledMetrics(uiMetricsFor(tier), 1.0f))
+        }
+    }
+
+    @Test
+    fun `app size 0_70 shrinks every scaled field of the regular row`() {
+        val m = scaledMetrics(uiMetricsFor(480), 0.70f)
+        assertEquals(UiTier.REGULAR, m.tier)
+        assertEquals(11.dp, m.screenPadding)   // 16 × 0.70 = 11.2 → 11
+        assertEquals(13.dp, m.cardPadding)     // 18 × 0.70 = 12.6 → 13
+        assertEquals(73.dp, m.cardMinHeight)   // 104 × 0.70 = 72.8 → 73
+        assertEquals(45.dp, m.dockHeight)      // 64 × 0.70 = 44.8 → 45
+        assertEquals(16.8f, m.titleSize.value, 0.01f)
+        assertEquals(10.5f, m.bodySize.value, 0.01f)
+        assertEquals(28.dp, m.iconBadge)       // 40 × 0.70 = 28
+        assertEquals(14.dp, m.sectionGap)      // 20 × 0.70 = 14
+        assertEquals(4.dp, m.topGap)           // 6 × 0.70 = 4.2 → 4
+        // NOT scaled: the count and the one radius.
+        assertEquals(4, m.gridColumns)
+        assertEquals(24.dp, m.coverCorner)
+    }
+
+    @Test
+    fun `app size 1_30 grows every scaled field of the regular row`() {
+        val m = scaledMetrics(uiMetricsFor(480), 1.30f)
+        assertEquals(UiTier.REGULAR, m.tier)
+        assertEquals(21.dp, m.screenPadding)   // 16 × 1.30 = 20.8 → 21
+        assertEquals(23.dp, m.cardPadding)     // 18 × 1.30 = 23.4 → 23
+        assertEquals(135.dp, m.cardMinHeight)  // 104 × 1.30 = 135.2 → 135
+        assertEquals(83.dp, m.dockHeight)      // 64 × 1.30 = 83.2 → 83
+        assertEquals(31.2f, m.titleSize.value, 0.01f)
+        assertEquals(19.5f, m.bodySize.value, 0.01f)
+        assertEquals(52.dp, m.iconBadge)       // 40 × 1.30 = 52
+        assertEquals(26.dp, m.sectionGap)      // 20 × 1.30 = 26
+        assertEquals(8.dp, m.topGap)           // 6 × 1.30 = 7.8 → 8
+        assertEquals(4, m.gridColumns)
+        assertEquals(24.dp, m.coverCorner)
+    }
+
+    @Test
+    fun `app size small preset scales the compact row`() {
+        // The 2 GB phone shape: COMPACT base at Small (0.85).
+        val m = scaledMetrics(uiMetricsFor(360), 0.85f)
+        assertEquals(UiTier.COMPACT, m.tier)
+        assertEquals(10.dp, m.screenPadding)   // 12 × 0.85 = 10.2 → 10
+        assertEquals(12.dp, m.cardPadding)     // 14 × 0.85 = 11.9 → 12
+        assertEquals(82.dp, m.cardMinHeight)   // 96 × 0.85 = 81.6 → 82
+        assertEquals(48.dp, m.dockHeight)      // 56 × 0.85 = 47.6 → 48
+        assertEquals(17.85f, m.titleSize.value, 0.01f)
+        assertEquals(11.9f, m.bodySize.value, 0.01f)
+        assertEquals(31.dp, m.iconBadge)       // 36 × 0.85 = 30.6 → 31
+        assertEquals(14.dp, m.sectionGap)      // 16 × 0.85 = 13.6 → 14
+        assertEquals(3.dp, m.topGap)           // 4 × 0.85 = 3.4 → 3
+        assertEquals(3, m.gridColumns)
+        assertEquals(24.dp, m.coverCorner)
+    }
+
+    @Test
+    fun `grid columns and corner survive every factor on every tier`() {
+        listOf(0.70f, 0.85f, 1.0f, 1.15f, 1.30f).forEach { factor ->
+            UiTier.entries.forEach { tier ->
+                val base = uiMetricsFor(tier)
+                val scaled = scaledMetrics(base, factor)
+                assertEquals(base.gridColumns, scaled.gridColumns)
+                assertEquals(24.dp, scaled.coverCorner)
+                assertEquals(base.tier, scaled.tier)
+            }
+        }
+    }
 }

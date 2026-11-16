@@ -42,9 +42,9 @@ import androidx.compose.ui.unit.dp
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.ScreenHeader
 import app.xreader.ui.theme.LocalDockClearance
+import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.UiTier
 import app.xreader.ui.theme.effectiveBottomPadding
-import app.xreader.ui.theme.rememberUiMetrics
 
 /**
  * Me hub (PLAN §3; v1.1.0 §5.15 Nocturne pass): identity mini-card,
@@ -99,8 +99,12 @@ fun MoreScreen(
     onAppearance
     // Patch 7: the dashboard's tier read — COMPACT lays the door
     // cards in a single column, and the root top gap is the
-    // tier's standard topGap (Part C).
-    val metrics = rememberUiMetrics()
+    // tier's standard topGap (Part C). v1.6.2: read through
+    // LocalUiMetrics (the theme's provided row) rather than
+    // the raw tier function, so the user's App size scales
+    // this screen like every other — the tier itself rides
+    // along untouched in the scaled row.
+    val metrics = LocalUiMetrics.current
     Column(
         Modifier
             .fillMaxSize()
@@ -331,7 +335,10 @@ private data class MeDoorData(
  */
 @Composable
 private fun MeDoorCard(door: MeDoorData, modifier: Modifier = Modifier) {
-    val metrics = rememberUiMetrics()
+    // v1.6.2: the provided (App-size-scaled) row, like the
+    // dashboard root above — the door's min height is one of
+    // the sizes the App size exists to scale.
+    val metrics = LocalUiMetrics.current
     GlassCard(
         onClick = door.onClick,
         modifier = modifier.heightIn(min = metrics.cardMinHeight),

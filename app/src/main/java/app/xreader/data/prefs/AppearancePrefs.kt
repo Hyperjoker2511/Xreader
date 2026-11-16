@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlin.math.roundToInt
 
 enum class ThemeMode { FOLLOW_SYSTEM, LIGHT, DARK }
 
@@ -114,9 +115,16 @@ data class AppearanceState(
     val coverGlow: Boolean = false,
     /** Performance choice (v1.0.2, R06). Default AUTOMATIC. */
     val performanceMode: PerformanceMode = PerformanceMode.AUTOMATIC,
-    /** App text size (v1.0.2, R07): 80–130% in 5% steps. Reader text
-     * size is a separate setting and is not touched by this. */
-    val appTextSizePercent: Int = 100,
+    /** App size (v1.6.2): ONE decimal for the whole screen,
+     * 0.70–1.30 in 0.05 steps, default 1.00. It scales the
+     * layout metrics AND the font scale together — the v1.0.2
+     * text-size % it replaces scaled the words alone, which is
+     * why shrinking it left every card, door and button the
+     * same size (the owner's 2 GB phone proof). Seeded once
+     * from a stored text-size % on read — see
+     * [AppearanceValidation.resolveAppSize]. Reader text size
+     * is a separate setting and is not touched by this. */
+    val appSize: Float = AppearanceValidation.DEFAULT_APP_SIZE,
     /** "Move card with phone" (v1.0.2, R29): device-motion tilt for
      * the Me identity card. Default off; registered only while Me
      * is visible. */
@@ -188,12 +196,70 @@ object AppearanceValidation {
         runCatching { PerformanceMode.valueOf(raw ?: "") }
             .getOrDefault(PerformanceMode.AUTOMATIC)
 
-    /** App text size bounds (R07): 80–130%, snapped to 5% steps. */
+    /** App text size bounds (R07): 80–130%, snapped to 5% steps.
+     * v1.6.2: the % itself is retired (the App size below
+     * replaces it) — this clamp survives as the validator for
+     * the LEGACY stored value the one-time migration reads, so
+     * a % written by an old build is judged by the same rule
+     * its own read used. */
     val APP_TEXT_SIZE_RANGE = 80..130
 
     fun clampAppTextSize(value: Int): Int {
         val snapped = (value / 5) * 5 + if (value % 5 >= 3) 5 else 0
         return snapped.coerceIn(APP_TEXT_SIZE_RANGE.first, APP_TEXT_SIZE_RANGE.last)
+    }
+
+    /** App size bounds (v1.6.2): one decimal for the whole
+     * screen — layout and words together. The floor runs a
+     * full tenth below the old text size's 80% floor (the
+     * owner's word: "80% can't do it below"). */
+    val APP_SIZE_RANGE = 0.70f..1.30f
+    const val DEFAULT_APP_SIZE = 1.0f
+    const val APP_SIZE_STEP = 0.05f
+
+    /** The three chip values: Small · Normal · Large. */
+    const val APP_SIZE_SMALL = 0.85f
+    const val APP_SIZE_NORMAL = 1.0f
+    const val APP_SIZE_LARGE = 1.15f
+
+    fun clampAppSize(value: Float): Float =
+        if (value.isNaN()) DEFAULT_APP_SIZE
+        else value.coerceIn(APP_SIZE_RANGE.start, APP_SIZE_RANGE.endInclusive)
+
+    /** Snap to the slider's 0.05 steps (clamped first), so a
+     * stored value always sits exactly on a chip value or a
+     * step. Steps are counted in twentieths and divided back —
+     * the division is correctly rounded, so a snapped preset
+     * is bit-identical to its constant (0.85f, 1.0f, 1.15f). */
+    fun snapAppSize(value: Float): Float {
+        val steps = (clampAppSize(value) * 20f).roundToInt()
+        return clampAppSize(steps / 20f)
+    }
+
+    /**
+     * The one-time App size migration (v1.6.2), resolved on
+     * read: a stored App size always wins. With none stored, a
+     * stored legacy text-size % seeds the App size — 100% →
+     * 1.00, 80% → 0.80, 130% → 1.30 — the % validated by the
+     * same clamp its own read used, the result held to the App
+     * size range. Nothing stored at all starts at 1.00. The
+     * legacy key is never written again; the first App size
+     * write ends the migration for good.
+     */
+    fun resolveAppSize(storedAppSize: Float?, legacyTextPercent: Int?): Float =
+        when {
+            storedAppSize != null -> clampAppSize(storedAppSize)
+            legacyTextPercent != null ->
+                clampAppSize(clampAppTextSize(legacyTextPercent) / 100f)
+            else -> DEFAULT_APP_SIZE
+        }
+
+    /** The slider's plain decimal ("0.85", "1.00", "1.30"),
+     * built from the snapped hundredths so no locale can turn
+     * the point into a comma. */
+    fun formatAppSize(value: Float): String {
+        val cents = (snapAppSize(value) * 100).roundToInt()
+        return "${cents / 100}.${(cents % 100).toString().padStart(2, '0')}"
     }
 
     /** The colour scheme names the picker offers (kept in sync with
@@ -344,7 +410,8 @@ object AppearanceValidation {
         glassOpacity = clampGlassOpacity(state.glassOpacity),
         glassRadiusScale = clampRadiusScale(state.glassRadiusScale),
         glassElevationScale = clampElevationScale(state.glassElevationScale),
-        grainIntensity = clampGrainIntensity(state.grainIntensity)
+        grainIntensity = clampGrainIntensity(state.grainIntensity),
+        appSize = clampAppSize(state.appSize)
     )
 }
 
@@ -447,8 +514,13 @@ class AppearancePrefs(
                 bookColours = AppearanceValidation.parseBookColours(prefs[KEY_BOOK_COLOURS]),
                 coverGlow = prefs[KEY_COVER_GLOW] ?: false,
                 performanceMode = AppearanceValidation.parsePerformanceMode(prefs[KEY_PERF_MODE]),
-                appTextSizePercent = AppearanceValidation.clampAppTextSize(
-                    prefs[KEY_TEXT_SIZE] ?: 100
+                // v1.6.2: App size — a stored App size wins;
+                // a stored legacy text-size % seeds it once
+                // (the migration lives in resolveAppSize); the
+                // legacy key is left unread once the App size
+                // exists and is never written again.
+                appSize = AppearanceValidation.resolveAppSize(
+                    prefs[KEY_APP_SIZE], prefs[KEY_TEXT_SIZE]
                 ),
                 meCardMotionTilt = prefs[KEY_ME_MOTION_TILT] ?: false,
                 bloom = prefs[KEY_BLOOM] ?: false,
@@ -517,8 +589,11 @@ class AppearancePrefs(
     suspend fun setPerformanceMode(mode: PerformanceMode) =
         store.edit { it[KEY_PERF_MODE] = mode.name }
 
-    suspend fun setAppTextSizePercent(value: Int) =
-        store.edit { it[KEY_TEXT_SIZE] = AppearanceValidation.clampAppTextSize(value) }
+    /** v1.6.2: the App size writer — snapped to the slider's
+     * 0.05 steps and held to the range at the door, so the
+     * stored value always matches a chip or a step exactly. */
+    suspend fun setAppSize(value: Float) =
+        store.edit { it[KEY_APP_SIZE] = AppearanceValidation.snapAppSize(value) }
 
     suspend fun setMeCardMotionTilt(value: Boolean) =
         store.edit { it[KEY_ME_MOTION_TILT] = value }
@@ -562,6 +637,7 @@ class AppearancePrefs(
             prefs.remove(KEY_COVER_GLOW)
             prefs.remove(KEY_PERF_MODE)
             prefs.remove(KEY_TEXT_SIZE)
+            prefs.remove(KEY_APP_SIZE)
             prefs.remove(KEY_ME_MOTION_TILT)
             prefs.remove(KEY_BLOOM)
             prefs.remove(KEY_GRAIN)
@@ -589,6 +665,7 @@ class AppearancePrefs(
         val KEY_COVER_GLOW = booleanPreferencesKey("appearance.cover_glow")
         val KEY_PERF_MODE = stringPreferencesKey("appearance.performance_mode")
         val KEY_TEXT_SIZE = intPreferencesKey("appearance.app_text_size")
+        val KEY_APP_SIZE = floatPreferencesKey("appearance.app_size")
         val KEY_ME_MOTION_TILT = booleanPreferencesKey("appearance.me_motion_tilt")
         val KEY_BLOOM = booleanPreferencesKey("appearance.bloom")
         val KEY_GRAIN = booleanPreferencesKey("appearance.grain")

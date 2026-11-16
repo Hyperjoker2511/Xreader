@@ -9,6 +9,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 
 /**
  * Adaptive metrics (next-update Patch 5, sizing piece 1): the
@@ -23,6 +24,13 @@ import androidx.compose.ui.unit.sp
  * system never touches Density.fontScale or accessibility
  * scaling; the two text sizes below are plain sp values, which
  * the platform scales for the user exactly like any other text.
+ *
+ * v1.6.2 (App size): the tier row is now only the BASE. The
+ * provider scales it by the user's one App size number (see
+ * [scaledMetrics]) and the theme scales the fontScale by the
+ * same number — the manual control the owner asked for
+ * ("customizable sizes… no need to automatically adopt")
+ * replaces the tier as the size the user actually sees.
  *
  * This piece lays the pipe: the table, the CompositionLocal, and
  * the provider the theme installs at the root. Screens adopt the
@@ -125,6 +133,42 @@ fun uiMetricsFor(tier: UiTier): UiMetrics = when (tier) {
 fun uiMetricsFor(widthDp: Int): UiMetrics = uiMetricsFor(uiTierFor(widthDp))
 
 /**
+ * App size (v1.6.2): the owner's ONE size number applied to a
+ * tier row. The tier now only picks the BASE row from the
+ * phone's width (guardrails); what the user sees is this
+ * scaling — "customizable sizes small normal… there's no
+ * need to automatically adopt" (owner, 2026-11-16). The
+ * factor arrives already clamped to 0.70–1.30 by
+ * AppearanceValidation; the theme's fontScale is scaled by
+ * the same number, so layout and words stay in proportion.
+ *
+ * Scaled: every Dp size (rounded to whole dp) and the two
+ * sp sizes. NOT scaled: gridColumns (a count, not a size —
+ * the Library's Auto default and the Cover size control own
+ * counts) and coverCorner (the one-radius rule, 24.dp on
+ * every tier at every factor). The tier itself is carried
+ * through untouched: width-triggered layout variants keep
+ * reading the phone's real tier. Factor 1.00 is an exact
+ * identity — every row value is whole dp / exact sp, so the
+ * scaled row is bit-identical to the base row.
+ */
+fun scaledMetrics(base: UiMetrics, factor: Float): UiMetrics {
+    fun scaleDp(value: Dp): Dp = (value.value * factor).roundToInt().dp
+    fun scaleSp(value: TextUnit): TextUnit = (value.value * factor).sp
+    return base.copy(
+        screenPadding = scaleDp(base.screenPadding),
+        cardPadding = scaleDp(base.cardPadding),
+        cardMinHeight = scaleDp(base.cardMinHeight),
+        dockHeight = scaleDp(base.dockHeight),
+        titleSize = scaleSp(base.titleSize),
+        bodySize = scaleSp(base.bodySize),
+        iconBadge = scaleDp(base.iconBadge),
+        sectionGap = scaleDp(base.sectionGap),
+        topGap = scaleDp(base.topGap)
+    )
+}
+
+/**
  * Bottom content padding for a screen that scrolls under the
  * floating dock: with the dock visible the content must clear
  * the dock's height plus a 24.dp breathing margin; without it a
@@ -163,6 +207,14 @@ fun effectiveBottomPadding(existing: Dp, clearance: Dp): Dp = maxOf(existing, cl
  * never an extreme. */
 val LocalUiMetrics = compositionLocalOf { uiMetricsFor(400) }
 
+/** The user's App size factor (v1.6.2) — the same number
+ * [scaledMetrics] applied to the metrics row and the theme
+ * applied to the font scale. Provided beside [LocalUiMetrics]
+ * by [ProvideUiMetrics]; the default (no provider above) is
+ * 1.00 (Normal). Consumers that resolve COUNTS from sizes —
+ * the Library's Cover size control — read the factor here. */
+val LocalAppSize = compositionLocalOf { 1.0f }
+
 /** The metrics for the CURRENT window width, read from
  * LocalConfiguration — the width source the tree already uses
  * (PdfDocumentReader, KomikkuReaderScreen). Reading it in
@@ -175,11 +227,18 @@ fun rememberUiMetrics(): UiMetrics {
 }
 
 /** Installs [LocalUiMetrics] for a subtree from the live window
- * width. XreaderTheme installs it at the app root, so any screen
- * can read LocalUiMetrics.current. */
+ * width, scaled by the user's App size (v1.6.2 — [appSize]
+ * arrives clamped from AppearancePrefs; 1.00 installs the raw
+ * tier row unchanged). XreaderTheme installs it at the app
+ * root, so any screen can read LocalUiMetrics.current. */
 @Composable
-fun ProvideUiMetrics(content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalUiMetrics provides rememberUiMetrics()) {
+fun ProvideUiMetrics(appSize: Float = 1.0f, content: @Composable () -> Unit) {
+    val base = rememberUiMetrics()
+    val metrics = remember(base, appSize) { scaledMetrics(base, appSize) }
+    CompositionLocalProvider(
+        LocalUiMetrics provides metrics,
+        LocalAppSize provides appSize
+    ) {
         content()
     }
 }

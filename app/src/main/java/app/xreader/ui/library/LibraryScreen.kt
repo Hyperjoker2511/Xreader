@@ -17,6 +17,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import app.xreader.ui.theme.LocalDockClearance
+import app.xreader.ui.theme.LocalAppSize
 import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.effectiveBottomPadding
 import app.xreader.ui.theme.errorTextColor
@@ -72,6 +73,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -238,7 +240,11 @@ fun LibraryScreen(
     // a user who never chose gets the width tier's count for the
     // phone in hand. Only the RESOLVED count changes — the
     // chunked-row mechanics below are untouched, and the bento
-    // layout keeps its own fixed 3.
+    // layout keeps its own fixed 3. v1.6.2: the NOVELS side in
+    // Auto resolves its count from the Cover size instead (see
+    // sideGridColumns inside the side lambda); this outer value
+    // still carries the explicit pick for both sides and the
+    // tier count for the Manga side.
     val uiMetrics = LocalUiMetrics.current
     val gridColumns = if (state.libraryPrefs.gridColumnsAuto) {
         uiMetrics.gridColumns
@@ -680,6 +686,28 @@ fun LibraryScreen(
                 val byId = inShelf.associateBy { it.book.id }
                 ordered.mapNotNull { byId[it.bookId] }
             }
+            // Cover size (v1.6.2): the NOVELS grid's column
+            // count. An explicit column pick still wins (the
+            // outer gridColumns carries it, for both sides);
+            // in Auto the Novels side resolves its count from
+            // the Cover size — the target cover width fitted
+            // to the screen, allowing for this screen's own
+            // 20 dp side padding. The Manga side keeps the
+            // standing resolution untouched.
+            val appSize = LocalAppSize.current
+            val screenWidthDp = LocalConfiguration.current.screenWidthDp
+            val sideGridColumns = if (
+                side == app.xreader.data.extension.MediaKind.TEXT &&
+                state.libraryPrefs.gridColumnsAuto
+            ) {
+                app.xreader.data.library.CoverSizeLogic.resolveColumns(
+                    availableWidthDp = screenWidthDp - 40,
+                    size = state.libraryPrefs.coverSize,
+                    appSize = appSize
+                )
+            } else {
+                gridColumns
+            }
         // v1.0.2 (R20): pull to refresh — silent; the results are
         // read on the Updates page and the +N badges.
         androidx.compose.material3.pulltorefresh.PullToRefreshBox(
@@ -939,7 +967,7 @@ fun LibraryScreen(
                 app.xreader.data.library.LibraryLayout.GRID
             ) {
                 items(
-                    visibleBooks.chunked(gridColumns),
+                    visibleBooks.chunked(sideGridColumns),
                     key = { row -> "gridrow-" + row.joinToString("-") { it.book.id.toString() } }
                 ) { rowBooks ->
                     Row(
@@ -968,7 +996,7 @@ fun LibraryScreen(
                                 modifier = Modifier.weight(1f)
                             )
                         }
-                        repeat(gridColumns - rowBooks.size) {
+                        repeat(sideGridColumns - rowBooks.size) {
                             Spacer(Modifier.weight(1f))
                         }
                     }

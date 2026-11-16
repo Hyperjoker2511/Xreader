@@ -10,7 +10,9 @@ import app.xreader.data.db.TrustState
 import app.xreader.data.extension.ExtensionPermissions.Companion.encode
 import app.xreader.data.net.HttpTransport
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -1165,7 +1167,17 @@ class RepoManager(
      *
      * Returns how many rows were installed or refreshed.
      */
-    suspend fun installBundledDefaults(): Int {
+    suspend fun installBundledDefaults(): Int =
+        withContext(Dispatchers.IO) { installBundledDefaultsOnIo() }
+
+    /** The bundled pass itself — always entered through
+     * [installBundledDefaults], which puts it on
+     * [Dispatchers.IO] (v1.6.2, spec §4): building the 39
+     * bundled configs and installing them used to run on the
+     * caller's thread — the shell's Main scope — and stalled
+     * the first frame for ~6 s on a 2 GB phone. The pass's
+     * contract is unchanged; only its thread moved. */
+    private suspend fun installBundledDefaultsOnIo(): Int {
         val configs = BundledDefaults.configs()
         if (configs.isEmpty()) return 0
         val repo = bundledRepo()

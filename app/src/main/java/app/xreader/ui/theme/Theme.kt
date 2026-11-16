@@ -304,14 +304,19 @@ fun XreaderTheme(
         if (darkTheme && appearance.trueBlack) it.withTrueBlack() else it
     }
     val hazeState = remember { HazeState() }
-    // v1.0.2 (R07): app text size scales the density's fontScale —
-    // app chrome only in effect, because reader text has its own
-    // size setting and its own rendering path.
+    // v1.6.2 (App size): the ONE size number scales the
+    // density's fontScale. The layout metrics scale by the
+    // same number in ProvideUiMetrics below, so words and
+    // layout stay in proportion — the v1.0.2 text-size %
+    // scaled the words alone and left every card, door and
+    // button behind (the defect the owner's 2 GB phone proof
+    // convicted). Reader text keeps its own size setting and
+    // its own rendering path, untouched as before.
     val baseDensity = androidx.compose.ui.platform.LocalDensity.current
-    val scaledDensity = remember(baseDensity, appearance.appTextSizePercent) {
+    val scaledDensity = remember(baseDensity, appearance.appSize) {
         androidx.compose.ui.unit.Density(
             density = baseDensity.density,
-            fontScale = baseDensity.fontScale * appearance.appTextSizePercent / 100f
+            fontScale = baseDensity.fontScale * appearance.appSize
         )
     }
     // R01 boot sequence: while [hazeReady] is false the tree composes
@@ -324,10 +329,12 @@ fun XreaderTheme(
         LocalHazeState provides if (hazeReady) hazeState else null,
         androidx.compose.ui.platform.LocalDensity provides scaledDensity
     ) {
-        // Adaptive metrics (Patch 5): LocalUiMetrics installed at
-        // the root from the live window width, beside the other
-        // theme-level locals, so any screen can read its tier row.
-        ProvideUiMetrics {
+        // Adaptive metrics (Patch 5) + App size (v1.6.2):
+        // LocalUiMetrics installed at the root from the live
+        // window width, scaled by the user's App size, beside
+        // the other theme-level locals, so any screen can read
+        // its scaled tier row.
+        ProvideUiMetrics(appearance.appSize) {
             MaterialTheme(
                 colorScheme = colors,
                 typography = XreaderTypography,

@@ -2,6 +2,7 @@ package app.xreader.ui.more
 
 import kotlin.math.roundToInt
 import android.content.Context
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -51,6 +52,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.xreader.data.library.CoverSize
 import app.xreader.data.library.LibraryLayout
 import app.xreader.data.library.LibraryState
 import app.xreader.data.library.NavBarStyle
@@ -59,6 +61,7 @@ import app.xreader.data.library.TabLabelStyle
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.Color
 import app.xreader.data.prefs.AppearanceState
+import app.xreader.data.prefs.AppearanceValidation
 import app.xreader.data.prefs.CUSTOM_SCHEME_PREFIX
 import app.xreader.data.prefs.CustomSchemeSpec
 import app.xreader.data.prefs.GlassStyle
@@ -73,6 +76,7 @@ import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.common.ProgressPillBar
 import app.xreader.ui.common.SectionHeader
 import app.xreader.ui.common.StatusPill
+import app.xreader.ui.theme.LocalAppSize
 import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.effectiveBottomPadding
@@ -289,8 +293,10 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { container.appearancePrefs.setPerformanceMode(mode) }
     }
 
-    fun setAppTextSize(percent: Int) {
-        viewModelScope.launch { container.appearancePrefs.setAppTextSizePercent(percent) }
+    /** v1.6.2: the App size — one number for the whole screen
+     * (replaces the retired R07 text-size stepper). */
+    fun setAppSize(value: Float) {
+        viewModelScope.launch { container.appearancePrefs.setAppSize(value) }
     }
 
     fun setMeCardMotionTilt(value: Boolean) {
@@ -521,6 +527,11 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
 
     fun clearGridColumns() {
         viewModelScope.launch { container.libraryPrefs.clearGridColumns() }
+    }
+
+    /** v1.6.2: the Library's novel cover size. */
+    fun setCoverSize(value: app.xreader.data.library.CoverSize) {
+        viewModelScope.launch { container.libraryPrefs.setCoverSize(value) }
     }
 
     fun setShowContinueReading(value: Boolean) {
@@ -978,10 +989,67 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             }
         }
 
+        // ── App size (v1.6.2): one number for the whole screen.
+        // Right after Colour theme, near the top of the index,
+        // where a wrong value can't hide (the old text-size
+        // stepper sat buried in Accessibility & motion and only
+        // ever scaled the words). ─────────────────────────────
         CustomiseSection(
-            title = "Glass & surfaces",
+            title = "App size",
             expanded = openSection == 1,
             onToggle = { toggleSection(1) }
+        ) {
+            Text(
+                "How big everything is on this phone.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // v1.0.5 (B3): chip rows are FlowRows — wrapping
+            // rows can never crush a label on a narrow screen.
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = appearance.appSize == AppearanceValidation.APP_SIZE_SMALL,
+                    onClick = { viewModel.setAppSize(AppearanceValidation.APP_SIZE_SMALL) },
+                    label = { Text("Small") }
+                )
+                FilterChip(
+                    selected = appearance.appSize == AppearanceValidation.APP_SIZE_NORMAL,
+                    onClick = { viewModel.setAppSize(AppearanceValidation.APP_SIZE_NORMAL) },
+                    label = { Text("Normal") }
+                )
+                FilterChip(
+                    selected = appearance.appSize == AppearanceValidation.APP_SIZE_LARGE,
+                    onClick = { viewModel.setAppSize(AppearanceValidation.APP_SIZE_LARGE) },
+                    label = { Text("Large") }
+                )
+            }
+            Column {
+                Text(
+                    "Exact size — ${AppearanceValidation.formatAppSize(appearance.appSize)}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Slider(
+                    value = appearance.appSize,
+                    onValueChange = { viewModel.setAppSize(it) },
+                    valueRange = AppearanceValidation.APP_SIZE_RANGE,
+                    steps = 11
+                )
+            }
+            Text(
+                "Small on a small phone, Normal on a big one. This changes the whole " +
+                    "screen — cards, text and dock — not just the words.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        CustomiseSection(
+            title = "Glass & surfaces",
+            expanded = openSection == 2,
+            onToggle = { toggleSection(2) }
         ) {
             // v1.0.7 (AnymeX port): bloom, grain, liquid background.
             Row(
@@ -1153,8 +1221,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
 
         CustomiseSection(
             title = "Library layout",
-            expanded = openSection == 2,
-            onToggle = { toggleSection(2) }
+            expanded = openSection == 3,
+            onToggle = { toggleSection(3) }
         ) {
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1180,14 +1248,26 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 Text("Columns across", style = MaterialTheme.typography.bodyLarge)
                 // Adaptive metrics (Patch 5): the chips show what
                 // the Library actually renders. In AUTO (no stored
-                // choice) the width tier decides, so the Auto chip
-                // carries the tier's count and shows selected, and
-                // no number chip is picked — the stored placeholder
-                // is NOT presented as the user's choice. Tapping a
-                // number stores the explicit value and ends auto;
-                // tapping Auto removes the stored key and hands
-                // the count back to the tier.
-                val uiMetrics = LocalUiMetrics.current
+                // choice) the count is resolved for the phone in
+                // hand, so the Auto chip carries that count and
+                // shows selected, and no number chip is picked —
+                // the stored placeholder is NOT presented as the
+                // user's choice. Tapping a number stores the
+                // explicit value and ends auto; tapping Auto
+                // removes the stored key and hands the count back
+                // to the resolution. v1.6.2: the NOVELS grid's
+                // Auto count now resolves from the Cover size
+                // below (its target width fitted to the screen),
+                // so the chip carries the cover-resolved count —
+                // the number the novels grid renders. (The Manga
+                // grid's Auto count still resolves from the width
+                // tier row.)
+                val autoColumns = app.xreader.data.library.CoverSizeLogic.resolveColumns(
+                    availableWidthDp =
+                        LocalConfiguration.current.screenWidthDp - 40,
+                    size = library.coverSize,
+                    appSize = LocalAppSize.current
+                )
                 androidx.compose.foundation.layout.FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1195,7 +1275,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     FilterChip(
                         selected = library.gridColumnsAuto,
                         onClick = { viewModel.clearGridColumns() },
-                        label = { Text("Auto (${uiMetrics.gridColumns})") }
+                        label = { Text("Auto ($autoColumns)") }
                     )
                     listOf(2, 3, 4).forEach { columns ->
                         FilterChip(
@@ -1206,6 +1286,44 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                         )
                     }
                 }
+                // Cover size (v1.6.2, the owner's word: "Library
+                // covers also customizable sizes"). The novels
+                // grid fits as many covers across as the phone
+                // allows at the picked width; Follow app size is
+                // the default (Small app → small covers). A
+                // column number picked above wins over this.
+                Text("Novel cover size", style = MaterialTheme.typography.bodyLarge)
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = library.coverSize == CoverSize.FOLLOW_APP,
+                        onClick = { viewModel.setCoverSize(CoverSize.FOLLOW_APP) },
+                        label = { Text("Follow app size") }
+                    )
+                    FilterChip(
+                        selected = library.coverSize == CoverSize.SMALL,
+                        onClick = { viewModel.setCoverSize(CoverSize.SMALL) },
+                        label = { Text("Small") }
+                    )
+                    FilterChip(
+                        selected = library.coverSize == CoverSize.NORMAL,
+                        onClick = { viewModel.setCoverSize(CoverSize.NORMAL) },
+                        label = { Text("Normal") }
+                    )
+                    FilterChip(
+                        selected = library.coverSize == CoverSize.LARGE,
+                        onClick = { viewModel.setCoverSize(CoverSize.LARGE) },
+                        label = { Text("Large") }
+                    )
+                }
+                Text(
+                    "How wide novel covers are — the grid fits as many across as " +
+                        "the phone allows. A column number picked above wins over this.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             CustomiseSwitch(
                 label = "Continue Reading card",
@@ -1223,8 +1341,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
 
         CustomiseSection(
             title = "Navigation",
-            expanded = openSection == 3,
-            onToggle = { toggleSection(3) }
+            expanded = openSection == 4,
+            onToggle = { toggleSection(4) }
         ) {
             Text("Bottom bar style", style = MaterialTheme.typography.bodyLarge)
             androidx.compose.foundation.layout.FlowRow(
@@ -1288,8 +1406,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
 
         CustomiseSection(
             title = "Reader",
-            expanded = openSection == 4,
-            onToggle = { toggleSection(4) }
+            expanded = openSection == 5,
+            onToggle = { toggleSection(5) }
         ) {
             Text(
                 "Page themes — the preview is a real page in those colours.",
@@ -1626,8 +1744,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         // reads these Komikku preferences.
         CustomiseSection(
             title = "Manga reader",
-            expanded = openSection == 5,
-            onToggle = { toggleSection(5) }
+            expanded = openSection == 6,
+            onToggle = { toggleSection(6) }
         ) {
             app.xreader.komikku.presentation.settings
                 .KomikkuGlobalDefaultsSection(prefs = viewModel.komikkuGlobalPrefs)
@@ -1636,8 +1754,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         // ── Your themes: the full make-your-own editor (R04/R07) ──
         CustomiseSection(
             title = "Your themes",
-            expanded = openSection == 6,
-            onToggle = { toggleSection(6) }
+            expanded = openSection == 7,
+            onToggle = { toggleSection(7) }
         ) {
             Text(
                 "Themes you made yourself, from one colour. Up to three.",
@@ -1676,8 +1794,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         // ── Book colours (R05) ───────────────────────────────────
         CustomiseSection(
             title = "Book colours",
-            expanded = openSection == 7,
-            onToggle = { toggleSection(7) }
+            expanded = openSection == 8,
+            onToggle = { toggleSection(8) }
         ) {
             Text(
                 "Each book's cover can lend its colours to the book page. " +
@@ -1730,8 +1848,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         // ── Performance (R06) ────────────────────────────────────
         CustomiseSection(
             title = "Performance",
-            expanded = openSection == 8,
-            onToggle = { toggleSection(8) }
+            expanded = openSection == 9,
+            onToggle = { toggleSection(9) }
         ) {
             Text(
                 "How hard Xreader pushes effects on this device. " +
@@ -1789,8 +1907,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         // ── Sources & repairs (R11 preference) ───────────────────
         CustomiseSection(
             title = "Sources & repairs",
-            expanded = openSection == 9,
-            onToggle = { toggleSection(9) }
+            expanded = openSection == 10,
+            onToggle = { toggleSection(10) }
         ) {
             // v1.0.6 (W2.4): the one master switch for the browser
             // view — default on; off restores static-only reading.
@@ -1909,8 +2027,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         // keep their full labels and their exact prefs.
         CustomiseSection(
             title = "Downloads",
-            expanded = openSection == 10,
-            onToggle = { toggleSection(10) }
+            expanded = openSection == 11,
+            onToggle = { toggleSection(11) }
         ) {
             CustomiseSwitch(
                 label = "Auto-download new chapters for tracked books (Wi-Fi)",
@@ -1964,8 +2082,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         // ── Storage (R07/G16) ────────────────────────────────────
         CustomiseSection(
             title = "Storage",
-            expanded = openSection == 11,
-            onToggle = { toggleSection(11) }
+            expanded = openSection == 12,
+            onToggle = { toggleSection(12) }
         ) {
             val storage by viewModel.storage.collectAsStateWithLifecycle()
             val sizes = storage
@@ -2147,35 +2265,14 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             }
         }
 
-        // ── Accessibility & motion (R07/R29) ─────────────────────
+        // ── Accessibility & motion (R29; R07's App text size
+        // moved to the App size section in v1.6.2 — it scales
+        // the whole screen now, not just the words) ───────────
         CustomiseSection(
             title = "Accessibility & motion",
-            expanded = openSection == 12,
-            onToggle = { toggleSection(12) }
+            expanded = openSection == 13,
+            onToggle = { toggleSection(13) }
         ) {
-            Text("App text size", style = MaterialTheme.typography.bodyLarge)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                TextButton(
-                    onClick = { viewModel.setAppTextSize(appearance.appTextSizePercent - 5) },
-                    enabled = appearance.appTextSizePercent > 80
-                ) { Text("Smaller") }
-                Text(
-                    "${appearance.appTextSizePercent}%",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                TextButton(
-                    onClick = { viewModel.setAppTextSize(appearance.appTextSizePercent + 5) },
-                    enabled = appearance.appTextSizePercent < 130
-                ) { Text("Bigger") }
-            }
-            Text(
-                "Sizes the app's own words. The reader's text size is separate, in the reader.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
             CustomiseSwitch(
                 label = "Reduce motion",
                 description = "Calms the app's animations down to simple fades.",
@@ -2193,8 +2290,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         // ── Advanced (R07): reset lives here, behind a confirm ───
         CustomiseSection(
             title = "Advanced",
-            expanded = openSection == 13,
-            onToggle = { toggleSection(13) }
+            expanded = openSection == 14,
+            onToggle = { toggleSection(14) }
         ) {
             var confirmReset by remember { mutableStateOf(false) }
             TextButton(onClick = { confirmReset = true }) {

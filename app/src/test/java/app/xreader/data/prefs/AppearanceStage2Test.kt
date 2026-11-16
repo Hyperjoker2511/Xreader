@@ -107,7 +107,11 @@ class AppearanceStage2Test {
         assertEquals(BookColoursScope.BOOK_PAGE_ONLY, state.bookColours)
         assertEquals(PerformanceMode.AUTOMATIC, state.performanceMode)
         assertEquals(false, state.coverGlow)
-        assertEquals(100, state.appTextSizePercent)
+        // v1.6.2: the R07 text-size % is retired — the state
+        // carries the one App size decimal instead (default
+        // 1.00 = Normal). The clamp test above stays: the clamp
+        // still validates the legacy % the migration reads.
+        assertEquals(1.0f, state.appSize, 0.0f)
         assertEquals(false, state.meCardMotionTilt)
         assertTrue("Wallpaper" in AppearanceValidation.COLOUR_SCHEMES)
     }

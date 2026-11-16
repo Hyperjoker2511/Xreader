@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlin.math.roundToInt
 
 /** Library layout choices (v1.0.1 customisation; BENTO added by
  * v1.0.2 R19 — a mixed-span cover layout, optional and never the
@@ -22,6 +23,72 @@ enum class TabLabelStyle { ALWAYS, SELECTED_ONLY, ICONS_ONLY }
 
 /** Where the app opens (v1.0.1 customisation). */
 enum class StartScreen { LIBRARY, CONTINUE_READING, DOWNLOADS }
+
+/**
+ * Novel cover size (v1.6.2, the owner's word: "Library covers
+ * also customizable sizes"). FOLLOW_APP is the default: the
+ * covers follow the App size (Small app → small covers). A
+ * size picked here wins for covers only — a small UI with big
+ * covers is allowed. The grid fits as many columns across as
+ * the screen allows at the size's target cover width (see
+ * [CoverSizeLogic]); an explicit column pick in Customise
+ * still overrides the count, as it always has.
+ */
+enum class CoverSize { FOLLOW_APP, SMALL, NORMAL, LARGE }
+
+/**
+ * Pure cover-size → column resolution (v1.6.2). A preset names
+ * a TARGET cover width in dp; the column count is however
+ * many covers of that width fit the available width, held to
+ * [MIN_COLUMNS]..[MAX_COLUMNS]. At the Normal target and
+ * App size 1.00 the counts reproduce the width tiers' counts
+ * on the phones that matter (360 dp → 3, 411 dp → 4, 480 dp
+ * → 4, 600 dp → 6), so Normal changes nothing for a user who
+ * never touches the control.
+ */
+object CoverSizeLogic {
+    /** Row gap inside the Library grid (its standing 10 dp). */
+    const val GAP_DP = 10
+    const val MIN_COLUMNS = 2
+    const val MAX_COLUMNS = 6
+
+    const val SMALL_TARGET_DP = 64
+    const val NORMAL_TARGET_DP = 84
+    const val LARGE_TARGET_DP = 118
+
+    /** The target cover width for [size]; FOLLOW_APP scales
+     * the Normal target by the App size factor (itself held
+     * to the App size range, 0.70–1.30). */
+    fun targetWidthDp(size: CoverSize, appSize: Float): Int = when (size) {
+        CoverSize.SMALL -> SMALL_TARGET_DP
+        CoverSize.NORMAL -> NORMAL_TARGET_DP
+        CoverSize.LARGE -> LARGE_TARGET_DP
+        CoverSize.FOLLOW_APP ->
+            (NORMAL_TARGET_DP * appSize.coerceIn(0.70f, 1.30f))
+                .roundToInt()
+    }
+
+    /** How many [targetWidthDp]-wide covers fit
+     * [availableWidthDp] with [gapDp] between them. */
+    fun columnsForWidth(
+        availableWidthDp: Int,
+        targetWidthDp: Int,
+        gapDp: Int = GAP_DP
+    ): Int {
+        val target = targetWidthDp.coerceAtLeast(1)
+        val fits = (availableWidthDp + gapDp) / (target + gapDp)
+        return fits.coerceIn(MIN_COLUMNS, MAX_COLUMNS)
+    }
+
+    /** The Novels grid's column count under [size]. */
+    fun resolveColumns(
+        availableWidthDp: Int,
+        size: CoverSize,
+        appSize: Float
+    ): Int = columnsForWidth(
+        availableWidthDp, targetWidthDp(size, appSize)
+    )
+}
 
 /**
  * Library + navigation customisation state (v1.0.1). Defaults are
@@ -52,7 +119,12 @@ data class LibraryState(
      * chips keep editing the explicit value — the moment a chip
      * is tapped the key is stored, auto ends, and the explicit
      * choice wins on every phone. */
-    val gridColumnsAuto: Boolean = true
+    val gridColumnsAuto: Boolean = true,
+    /** Novel cover size (v1.6.2): FOLLOW_APP unless the user
+     * picked a cover size of its own. Only the Novels grid
+     * reads it, and only while [gridColumnsAuto] — an explicit
+     * column pick overrides the count it resolves to. */
+    val coverSize: CoverSize = CoverSize.FOLLOW_APP
 )
 
 enum class LibrarySort { RECENTLY_READ, TITLE, MOST_CHAPTERS, RECENTLY_ADDED }
@@ -111,6 +183,7 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
             layout = parse(prefs[KEY_LAYOUT], LibraryLayout.GRID),
             gridColumns = (prefs[KEY_COLUMNS] ?: 3).coerceIn(2, 4),
             gridColumnsAuto = prefs[KEY_COLUMNS] == null,
+            coverSize = parse(prefs[KEY_COVER_SIZE], CoverSize.FOLLOW_APP),
             showContinueReading = prefs[KEY_HERO] ?: true,
             showBadges = prefs[KEY_BADGES] ?: true,
             navBarStyle = parse(prefs[KEY_NAV_STYLE], NavBarStyle.FLOATING_PILL),
@@ -132,6 +205,8 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
     suspend fun clearGridColumns() {
         store.edit { prefs -> prefs.remove(KEY_COLUMNS) }
     }
+    suspend fun setCoverSize(value: CoverSize) =
+        store.edit { it[KEY_COVER_SIZE] = value.name }
     suspend fun setShowContinueReading(value: Boolean) = store.edit { it[KEY_HERO] = value }
     suspend fun setShowBadges(value: Boolean) = store.edit { it[KEY_BADGES] = value }
     suspend fun setNavBarStyle(value: NavBarStyle) = store.edit { it[KEY_NAV_STYLE] = value.name }
@@ -192,6 +267,7 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
         store.edit { prefs ->
             prefs.remove(KEY_LAYOUT)
             prefs.remove(KEY_COLUMNS)
+            prefs.remove(KEY_COVER_SIZE)
             prefs.remove(KEY_HERO)
             prefs.remove(KEY_BADGES)
             prefs.remove(KEY_NAV_STYLE)
@@ -207,6 +283,7 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
         val KEY_LIBRARY_SIDE = stringPreferencesKey("library.side")
         val KEY_LAYOUT = stringPreferencesKey("library.layout")
         val KEY_COLUMNS = intPreferencesKey("library.grid_columns")
+        val KEY_COVER_SIZE = stringPreferencesKey("library.cover_size")
         val KEY_HERO = booleanPreferencesKey("library.show_continue")
         val KEY_BADGES = booleanPreferencesKey("library.show_badges")
         val KEY_NAV_STYLE = stringPreferencesKey("library.nav_bar_style")
