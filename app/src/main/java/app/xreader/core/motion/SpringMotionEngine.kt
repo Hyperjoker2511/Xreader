@@ -186,9 +186,25 @@ object SpringMotionEngine {
     // the bridge band — the stretch spans a watchable share of
     // the trip (Morphe-like) instead of flashing at the ends.
     // Overshoot at ζ 0.75 is ~2.8%: one soft settle, no wobble.
+    //
+    // Travel-choreography retune (2026-11-16,
+    // SPEC-NAV-TRAVEL-WAVE-2026-11-16 §B.2): the nav engine
+    // round rebuilt this profile as the stretch engine's LEAD
+    // edge (GOOEY, and now WORM too — one lead for the whole
+    // stretch family), but the owner's v1.6.2 proof still
+    // measured the one-step stretch peaking at only ~116 px on
+    // a 94 px slot / 100 px pitch model — under the quarter-
+    // pitch margin the new silhouette witness pins. 340 / 0.65
+    // keeps the settle inside the SAME 280–380 ms window
+    // (~334 ms, no re-pin), raises the overshoot to ~6.8% (the
+    // V1 reference's back-ease landing: slight, visible, one
+    // soft settle) and, against the retuned TrailLag below,
+    // peaks the one-step width at ~136 px — a stretch you can
+    // see. The MINIMAL tier's lead is untouched
+    // (NavTravelMinimal, §B.3).
 
-    /** Gooey dock indicator melt: stiffness 240, dampingRatio 0.75. */
-    val GooeyMelt = SpringProfile("GooeyMelt", stiffness = 240f, dampingRatio = 0.75f)
+    /** Gooey dock indicator melt / stretch lead: stiffness 340, dampingRatio 0.65. */
+    val GooeyMelt = SpringProfile("GooeyMelt", stiffness = 340f, dampingRatio = 0.65f)
 
     val gooeyProfiles: List<SpringProfile> = listOf(GooeyMelt)
 
@@ -231,9 +247,21 @@ object SpringMotionEngine {
     // shortened by the MINIMAL tier's own proportion
     // (NavTravelMinimal / NavTravel ≈ 0.61): ~298 ms, so the
     // 2 GB phone's stretch still reads as a stretch.
+    //
+    // Travel-choreography retune (2026-11-16,
+    // SPEC-NAV-TRAVEL-WAVE-2026-11-16 §B.2): against the
+    // retuned lead (340 / 0.65), the trail moves to 116 / 0.80
+    // — settle ~464 ms (inside this family's pinned 420–540 ms
+    // window, and the whole travel now reads inside the spec's
+    // ~350–450 ms band once the lead has landed), stiffness
+    // ratio 116/340 ≈ 0.34, still inside the researched band
+    // above. TrailLagMinimal is NOT retuned (§B.3 freezes the
+    // MINIMAL set); its settle ratio to the new TrailLag is
+    // ≈ 0.64 against the travel family's ≈ 0.61 — inside the
+    // proportion pin's tolerance.
 
-    /** Stretched-pill trailing edge: stiffness 120, dampingRatio 0.75. */
-    val TrailLag = SpringProfile("TrailLag", stiffness = 120f, dampingRatio = 0.75f)
+    /** Stretched-pill trailing edge: stiffness 116, dampingRatio 0.80. */
+    val TrailLag = SpringProfile("TrailLag", stiffness = 116f, dampingRatio = 0.80f)
 
     /** Trailing edge, MINIMAL tier: stiffness 320, dampingRatio 0.75. */
     val TrailLagMinimal = SpringProfile("TrailLagMinimal", stiffness = 320f, dampingRatio = 0.75f)

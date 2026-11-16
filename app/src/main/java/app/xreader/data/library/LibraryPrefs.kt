@@ -52,11 +52,18 @@ enum class TabLabelStyle { ALWAYS, SELECTED_ONLY, ICONS_ONLY }
  * icon swaps up into its label). Stored values are enum
  * NAMES — the first six keep their names and order, so every
  * stored pref from the styles pass still reads identically.
+ *
+ * Travel-choreography round (2026-11-16,
+ * SPEC-NAV-TRAVEL-WAVE-2026-11-16 §C): WAVE joins, appended
+ * last so every earlier name and ordinal stands — the bar's
+ * top edge carries a travelling dip and the selected icon
+ * rides in a filled circle cradled in it (the V5 reference:
+ * edge, circle and icon are one parameter, the travel value).
  */
 enum class NavIndicatorStyle {
     GOOEY, SLIDE, BUBBLE, NOTCH, GLOW, PLAIN,
     WORM, LENS, EXPANDING, SEGMENTED, SQUIRCLE, RING,
-    DOT, TOPLINE, MINIMAL, FLASHY
+    DOT, TOPLINE, MINIMAL, FLASHY, WAVE
 }
 
 /** Where the dock indicator's colour comes from (v1.6.2):

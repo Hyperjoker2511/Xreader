@@ -1706,6 +1706,22 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     },
                     label = { Text("Plain") }
                 )
+                // WAVE (travel-choreography round,
+                // SPEC-NAV-TRAVEL-WAVE-2026-11-16 §C): the
+                // seventeenth style, appended last like its
+                // enum value — the bar's top edge dips and the
+                // selected icon rides in a circle cradled in
+                // the dip.
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.WAVE,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.WAVE
+                        )
+                    },
+                    label = { Text("Wave") }
+                )
             }
             Text("Indicator colour", style = MaterialTheme.typography.bodyLarge)
             var indicatorWheelOpen by remember { mutableStateOf(false) }
@@ -3092,6 +3108,7 @@ private fun navIndicatorStyleName(
     app.xreader.data.library.NavIndicatorStyle.MINIMAL -> "Minimal"
     app.xreader.data.library.NavIndicatorStyle.FLASHY -> "Flashy"
     app.xreader.data.library.NavIndicatorStyle.PLAIN -> "Plain"
+    app.xreader.data.library.NavIndicatorStyle.WAVE -> "Wave"
 }
 
 @Composable

@@ -20,7 +20,7 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * Preview dispatch (nav engine round, SPEC-NAV-ENGINE-2026-11-16
  * §5): the Customise miniature dock must render EVERY style —
- * all sixteen dispatch through the real IndicatorHost and the
+ * all seventeen dispatch through the real IndicatorHost and the
  * fake slots without crashing — and the two layout styles
  * show their settled states in the slots themselves:
  * EXPANDING's selected slot carries a real "Library" label

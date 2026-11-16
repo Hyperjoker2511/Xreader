@@ -23,6 +23,15 @@ import org.junit.Test
  * host's two Animatables, built on the engine's own
  * springPositionAt — so what is pinned here is the exact
  * silhouette the painters draw, not a paraphrase of it.
+ *
+ * Extended by the travel-choreography round
+ * (SPEC-NAV-TRAVEL-WAVE-2026-11-16 §B.2): the retuned FULL
+ * springs must ALSO clear the stronger witness — the peak
+ * marker width reaches at least the settled width + 25% of
+ * one slot pitch, and the lead edge visibly overshoots its
+ * target edge before settling (the researched back-ease
+ * landing). The old springs failed both (peak ≈ 116.5 /
+ * 108.5 against the 119 bar; no overshoot at ζ 0.91).
  */
 class NavStretchSilhouetteTest {
 
@@ -41,6 +50,61 @@ class NavStretchSilhouetteTest {
     fun `worm stretch escapes the settled pill on a one slot jump`() {
         assertEscape(NavIndicatorStyle.WORM, centreA, centreB)
         assertEscape(NavIndicatorStyle.WORM, centreB, centreA)
+    }
+
+    @Test
+    fun `gooey one step travel peaks wide and overshoots the landing`() {
+        assertPeakAndOvershoot(NavIndicatorStyle.GOOEY, centreA, centreB)
+        assertPeakAndOvershoot(NavIndicatorStyle.GOOEY, centreB, centreA)
+    }
+
+    @Test
+    fun `worm one step travel peaks wide and overshoots the landing`() {
+        assertPeakAndOvershoot(NavIndicatorStyle.WORM, centreA, centreB)
+        assertPeakAndOvershoot(NavIndicatorStyle.WORM, centreB, centreA)
+    }
+
+    /**
+     * The §B.2 witness over the whole run: the marker's peak
+     * width ≥ settled width + 25% of the pitch (119 on this
+     * model; the retuned springs model at ≈ 136), and the
+     * lead edge passes its target edge by ≥ 4 px at some
+     * sample before the settled end (modelled ≈ 6.8 px).
+     */
+    private fun assertPeakAndOvershoot(
+        style: NavIndicatorStyle,
+        from: Float,
+        to: Float
+    ) {
+        val pitch = 100f
+        val forward = to > from
+        val half = slotWidth / 2f
+        val leadTarget = if (forward) to + half else to - half
+        var peakWidth = 0f
+        var peakOvershoot = 0f
+        var t = 0.0
+        while (t <= 2000.0) {
+            val (left, right) = NavIndicatorLogic.stretchEdgesAt(
+                style, PerfTier.FULL, from, to, slotWidth, t
+            )
+            peakWidth = maxOf(peakWidth, right - left)
+            val overshoot = if (forward) {
+                right - leadTarget
+            } else {
+                leadTarget - left
+            }
+            peakOvershoot = maxOf(peakOvershoot, overshoot)
+            t += 5.0
+        }
+        assertTrue(
+            "$style peak width $peakWidth below the witness " +
+                "${slotWidth + 0.25f * pitch}",
+            peakWidth >= slotWidth + 0.25f * pitch
+        )
+        assertTrue(
+            "$style lead overshoot $peakOvershoot below 4",
+            peakOvershoot >= 4f
+        )
     }
 
     private fun assertEscape(

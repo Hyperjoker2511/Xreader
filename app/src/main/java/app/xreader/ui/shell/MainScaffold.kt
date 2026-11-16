@@ -54,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -68,7 +69,6 @@ import androidx.navigation.compose.rememberNavController
 import app.xreader.core.motion.fadeTween
 import app.xreader.core.motion.pressBounce
 import app.xreader.core.motion.segmentColorSpec
-import app.xreader.core.motion.flashySwapSpec
 import app.xreader.core.motion.stackEnter
 import app.xreader.core.motion.stackExit
 import app.xreader.core.motion.stackPopEnter
@@ -1390,6 +1390,14 @@ private fun XreaderNavHost(
     // and yield the plain crossfade under it). The stack
     // geometry is NOT touched. The branch is the engine's pure
     // isTabSwitch over the two endpoint routes.
+    // Travel-choreography round (2026-11-16,
+    // SPEC-NAV-TRAVEL-WAVE-2026-11-16 §A): tab-to-tab is
+    // INSTANT now — the tabEnter / tabExit adapters yield None
+    // off the reduced-motion path, so the incoming tab is
+    // simply there at the tap and the dock marker's travel is
+    // the only motion (the fade-through survives only in the
+    // Novels ↔ Manga side switch and the reduced-motion
+    // crossfade). The stack geometry is still NOT touched.
     val tabRoutes = remember { Tab.entries.map { it.route }.toSet() }
     // Liquid Glass, piece 3 (Dock Glass): the destination content
     // itself is a haze source (zIndex 1, above the MeshBackdrop
@@ -2698,6 +2706,13 @@ private fun FloatingNavBar(
         ).toInt()
     )
     val indicatorTravel = remember { Animatable(0f) }
+    // The stretch engine's edges, hoisted beside the travel
+    // (travel-choreography round, SPEC-NAV-TRAVEL-WAVE-
+    // 2026-11-16 §B.1): the host drives them, and the slots'
+    // label coverage below reads them — one travel system,
+    // never a second Animatable shadowing it.
+    val indicatorLeadEdge = remember { Animatable(0f) }
+    val indicatorTrailEdge = remember { Animatable(0f) }
     val barShape: androidx.compose.ui.graphics.Shape =
         if (effectiveIndicator ==
             app.xreader.data.library.NavIndicatorStyle.NOTCH
@@ -2705,6 +2720,21 @@ private fun FloatingNavBar(
             NotchBarShape(
                 centreX = { indicatorTravel.value },
                 slotWidthPx = { pillWidth.toFloat() },
+                docked = docked
+            )
+        } else if (effectiveIndicator ==
+            app.xreader.data.library.NavIndicatorStyle.WAVE
+        ) {
+            // WAVE (§C): the bar's shape IS the waved outline —
+            // one shape governs the fill, the glass and the
+            // clip, the notch's lesson. The dip's centre reads
+            // the same travel value the circle overlay reads.
+            WaveBarShape(
+                centreX = { indicatorTravel.value },
+                pitchPx = {
+                    NavGeometry.slotWidthPx(barWidthPx, itemCount)
+                        .toFloat()
+                },
                 docked = docked
             )
         } else if (docked) {
@@ -2787,6 +2817,8 @@ private fun FloatingNavBar(
                         topPx = pillY.toFloat(),
                         heightPx = pillHeight.toFloat(),
                         travel = indicatorTravel,
+                        leadEdge = indicatorLeadEdge,
+                        trailEdge = indicatorTrailEdge,
                         perfTier = perfTier,
                         reduceMotion = reduceMotion,
                         slotCount = itemCount,
@@ -2800,21 +2832,102 @@ private fun FloatingNavBar(
                     )
                 }
                 Row(Modifier.fillMaxSize()) {
-                    Tab.entries.forEach { tab ->
+                    Tab.entries.forEachIndexed { index, tab ->
                         // Nav engine round §2: under EXPANDING the
                         // slots trade width — the selected slot
                         // widens on the weight spring while the
-                        // bar itself keeps its size.
-                        val slotWeight = if (effectiveIndicator ==
+                        // bar itself keeps its size. The weight is
+                        // held as a State (travel-choreography
+                        // round, SPEC-NAV-TRAVEL-WAVE-2026-11-16
+                        // §B.1) so the slot's label coverage can
+                        // read the live value mid-flight.
+                        val weightState = if (effectiveIndicator ==
                             app.xreader.data.library.NavIndicatorStyle.EXPANDING
                         ) {
-                            expandingSlotWeight(
+                            expandingSlotWeightState(
                                 selected = tab == selected,
                                 perfTier = perfTier,
                                 reduceMotion = reduceMotion
                             )
                         } else {
-                            1f
+                            null
+                        }
+                        val slotWeight = weightState?.value ?: 1f
+                        // §B.1 label coverage: how much of THIS
+                        // slot the marker currently covers, as a
+                        // pure function of the ONE travel system
+                        // — the stretch edges for GOOEY / WORM,
+                        // the shared centre for every other
+                        // travelling style, EXPANDING's own
+                        // weight for EXPANDING. The lambda reads
+                        // animation values only when invoked,
+                        // and NavSlot invokes it in the layout /
+                        // draw phases, so travel frames never
+                        // recompose the slots (§B.4). PLAIN has
+                        // no travelling marker: null — its label
+                        // follows `selected` directly, as it
+                        // always has (PLAIN is also reduced
+                        // motion's rest, whose behaviour §A
+                        // leaves unchanged).
+                        val slotCoverage: (() -> Float)? = when {
+                            weightState != null -> {
+                                val ws = weightState
+                                {
+                                    ((ws.value - 1f) /
+                                        (NavIndicatorLogic
+                                            .EXPANDING_SELECTED_WEIGHT - 1f))
+                                        .coerceIn(0f, 1f)
+                                }
+                            }
+                            effectiveIndicator ==
+                                app.xreader.data.library
+                                    .NavIndicatorStyle.PLAIN -> null
+                            effectiveIndicator ==
+                                app.xreader.data.library
+                                    .NavIndicatorStyle.GOOEY ||
+                                effectiveIndicator ==
+                                app.xreader.data.library
+                                    .NavIndicatorStyle.WORM -> {
+                                {
+                                    val pitch = NavGeometry
+                                        .slotWidthPx(barWidthPx, itemCount)
+                                        .toFloat()
+                                    // The lead edge is whichever
+                                    // side faces the target, so
+                                    // the span is ordered here.
+                                    NavIndicatorLogic.slotCoverage(
+                                        markerLeftPx = minOf(
+                                            indicatorLeadEdge.value,
+                                            indicatorTrailEdge.value
+                                        ),
+                                        markerRightPx = maxOf(
+                                            indicatorLeadEdge.value,
+                                            indicatorTrailEdge.value
+                                        ),
+                                        slotLeftPx = index * pitch,
+                                        slotRightPx = (index + 1) * pitch,
+                                        restWidthPx = pillWidth.toFloat()
+                                    )
+                                }
+                            }
+                            else -> {
+                                {
+                                    val pitch = NavGeometry
+                                        .slotWidthPx(barWidthPx, itemCount)
+                                        .toFloat()
+                                    NavIndicatorLogic.slotCoverage(
+                                        markerLeftPx =
+                                            indicatorTravel.value -
+                                                pitch / 2f,
+                                        markerRightPx =
+                                            indicatorTravel.value +
+                                                pitch / 2f,
+                                        slotLeftPx = index * pitch,
+                                        slotRightPx = (index + 1) * pitch,
+                                        restWidthPx = pitch
+                                    )
+                                }
+                            }
                         }
                         NavSlot(
                             tab = tab,
@@ -2828,6 +2941,7 @@ private fun FloatingNavBar(
                             indicatorColour = indicatorColour,
                             onIndicatorColour = onIndicatorColour,
                             reduceMotion = reduceMotion,
+                            labelCoverage = slotCoverage,
                             badgeCount = if (tab == Tab.Browse) {
                                 exploreBadgeCount
                             } else {
@@ -2868,6 +2982,39 @@ private fun FloatingNavBar(
                         .fillMaxWidth()
                         .height(BarHeight + BubbleProud)
                         .offset(y = -BubbleProud)
+                )
+            }
+        }
+        // WAVE (travel-choreography round §C): the circle
+        // rides in the dip OUTSIDE the surface, whose shape
+        // clip would cut its crown — the bubble's split, with
+        // no proud offset: the overlay shares the bar's exact
+        // bounds, and the dip in the surface's own shape is
+        // carved around the same travel value, so the circle
+        // and the dip can never decouple.
+        if (effectiveIndicator ==
+            app.xreader.data.library.NavIndicatorStyle.WAVE &&
+            pillWidth > 0
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(BarHeight)
+            ) {
+                WaveIndicatorOverlay(
+                    travel = indicatorTravel,
+                    icon = selected.icon,
+                    colour = indicatorColour,
+                    onColour = onIndicatorColour,
+                    slotPitchPx = NavGeometry.slotWidthPx(
+                        barWidthPx, itemCount
+                    ).toFloat(),
+                    barWidthPx = barWidthPx.toFloat(),
+                    barHeightPx = barHeightPx.toFloat(),
+                    docked = docked,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(BarHeight)
                 )
             }
         }
@@ -2992,6 +3139,15 @@ private fun NavSlot(
     indicatorColour: Color = Color.Unspecified,
     onIndicatorColour: Color = Color.Unspecified,
     reduceMotion: Boolean = false,
+    /** Travel-choreography round (SPEC-NAV-TRAVEL-WAVE-
+     * 2026-11-16 §B.1): the marker's CURRENT coverage of this
+     * slot, 0..1 — the label's opacity (and FLASHY's swap,
+     * EXPANDING's pill) are pure functions of it, read in the
+     * layout / draw phases so travel frames never recompose
+     * the slot (§B.4). Null = no travelling marker (PLAIN —
+     * also reduced motion's rest — and the tablet rail): the
+     * label follows [selected] directly, as it always has. */
+    labelCoverage: (() -> Float)? = null,
     /** v1.5.39 (item 4): a numeric badge over the icon
      * (the Explore tab's pending source updates; 0 = none). */
     badgeCount: Int = 0
@@ -3082,40 +3238,62 @@ private fun NavSlot(
         },
         label = "navSlotLensScale"
     )
-    // FLASHY (nav engine round §2): the icon/label swap's
-    // progress — 1 when selected (the label stands in the
-    // icon's place), 0 otherwise. Under reduced motion the
-    // host degrades FLASHY to PLAIN before the slot ever sees
-    // it, so the swap only runs on the full tiers.
-    val flashyProgress by animateFloatAsState(
-        targetValue = if (selected) 1f else 0f,
-        animationSpec = if (reduceMotion) {
-            androidx.compose.animation.core.snap()
-        } else {
-            flashySwapSpec()
-        },
-        label = "navSlotFlashy"
-    )
-    // Under BUBBLE the selected icon rides IN the bubble (the
-    // overlay draws it there) — the slot's own copy hides so
-    // the two never double. A badged slot keeps its icon: the
-    // badge must stay readable where it has always lived.
+    // FLASHY (nav engine round §2; travel-choreography round,
+    // SPEC-NAV-TRAVEL-WAVE-2026-11-16 §B.1): the icon/label
+    // swap's progress IS this slot's label coverage — the
+    // label slides into the icon's place exactly as the marker
+    // comes to cover the slot and slides back as it leaves, on
+    // the marker's own clock, not an independent tween (the
+    // 260 ms flashySwapSpec is retired with this change). The
+    // value is read in the offset lambda below (layout phase),
+    // so the swap never recomposes the slot per travel frame.
+    // Without a coverage source it rests on `selected` — the
+    // dock always passes one (under reduced motion the host
+    // degrades FLASHY to PLAIN before the slot ever sees it).
+    val flashyProgress: () -> Float =
+        labelCoverage ?: { if (selected) 1f else 0f }
+    // Under BUBBLE the selected icon rides in the disc, under
+    // WAVE in the circle cradled in the dip (travel-
+    // choreography round §C) — the slot's own copy hides under
+    // both so the two never double. A badged slot keeps its
+    // icon: the badge must stay readable where it has always
+    // lived.
     val hideIcon = styled && selected &&
-        indicatorStyle ==
-        app.xreader.data.library.NavIndicatorStyle.BUBBLE &&
+        (indicatorStyle ==
+            app.xreader.data.library.NavIndicatorStyle.BUBBLE ||
+            indicatorStyle ==
+            app.xreader.data.library.NavIndicatorStyle.WAVE) &&
         badgeCount == 0
     val drawnIconTint = if (hideIcon) Color.Transparent else iconTint
     val isExpanding = styled && indicatorStyle ==
         app.xreader.data.library.NavIndicatorStyle.EXPANDING
     val isFlashy = styled && indicatorStyle ==
         app.xreader.data.library.NavIndicatorStyle.FLASHY
+    // WAVE (travel-choreography round, SPEC-NAV-TRAVEL-WAVE-
+    // 2026-11-16 §C): the slot's content rides in the bar's
+    // LOWER band. The dip and its cradled circle own the top
+    // of the bar (the circle's bottom reaches ≈ 45 dp into
+    // the 64 dp bar); a centre-arranged label would pass
+    // behind the opaque circle — wearing the circle's own
+    // colour, it would read as cut stumps. Bottom-arranged,
+    // every slot's label shares one band below the circle's
+    // reach (glyphs ≈ 44–56 dp), selected and unselected
+    // alike, and the label sits under the icon in the dipped
+    // slot exactly as the style's reference draws it.
+    val slotArrangement = if (styled && indicatorStyle ==
+        app.xreader.data.library.NavIndicatorStyle.WAVE
+    ) {
+        androidx.compose.foundation.layout.Arrangement.Bottom
+    } else {
+        androidx.compose.foundation.layout.Arrangement.Center
+    }
     Column(
         modifier
             .pressBounce(interaction, haptics = false)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+        verticalArrangement = slotArrangement
     ) {
         when {
             // EXPANDING (nav engine round §2): the selected
@@ -3123,9 +3301,30 @@ private fun NavSlot(
             // shape, wearing the on-indicator colours the logic
             // resolved. The widening itself is the row's weight,
             // animated in the dock.
-            isExpanding && selected -> Row(
+            // Travel-choreography round (SPEC-NAV-TRAVEL-WAVE-
+            // 2026-11-16 §B.1): the pill is the label's surface,
+            // so it stands while this slot's coverage — its own
+            // widened weight — says the marker is here, and
+            // fades with the coverage: the departing slot's
+            // label no longer vanishes at the tap. The gate
+            // read below is a composition read (the pill's
+            // presence is structural; EXPANDING's weight was
+            // already a composition-read animation — the one
+            // deliberate exception to §B.4's draw-phase rule);
+            // the alpha still reads the coverage in the draw
+            // phase. Without a coverage source the gate is the
+            // old `selected` test, unchanged.
+            isExpanding &&
+                (labelCoverage?.invoke()
+                    ?: if (selected) 1f else 0f) > 0.001f -> Row(
                 Modifier
                     .background(indicatorColour, RoundedCornerShape(50))
+                    .graphicsLayer {
+                        alpha = NavIndicatorLogic
+                            .labelAlphaForCoverage(
+                                labelCoverage?.invoke() ?: 1f
+                            )
+                    }
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -3158,7 +3357,7 @@ private fun NavSlot(
                         Modifier.offset {
                             IntOffset(
                                 0,
-                                (-flashyProgress * cellHeight.toPx())
+                                (-flashyProgress() * cellHeight.toPx())
                                     .roundToInt()
                             )
                         },
@@ -3194,21 +3393,51 @@ private fun NavSlot(
                 }
             }
             else -> {
-                Box(
-                    Modifier
-                        .offset { IntOffset(0, rise.roundToPx()) }
-                        .graphicsLayer {
-                            scaleX = lensScale
-                            scaleY = lensScale
-                        }
+                // Under WAVE the hidden icon leaves no space
+                // behind: the slot is bottom-arranged (above),
+                // so the label alone lands in the same bottom
+                // band as every other slot's label. (BUBBLE
+                // keeps its transparent icon and its centred
+                // group — shipped behaviour, untouched.)
+                if (!hideIcon || indicatorStyle !=
+                    app.xreader.data.library.NavIndicatorStyle.WAVE
                 ) {
-                    NavSlotIcon(tab, badgeCount, drawnIconTint)
+                    Box(
+                        Modifier
+                            .offset { IntOffset(0, rise.roundToPx()) }
+                            .graphicsLayer {
+                                scaleX = lensScale
+                                scaleY = lensScale
+                            }
+                    ) {
+                        NavSlotIcon(tab, badgeCount, drawnIconTint)
+                    }
                 }
                 // v1.0.1 tab-label choice: always / selected only / icons only.
                 // The contentDescription always carries the label either way.
+                // Travel-choreography round (SPEC-NAV-TRAVEL-WAVE-
+                // 2026-11-16 §B.1): under "selected only" WITH a
+                // coverage source the label is always composed,
+                // and its height + alpha are pure functions of
+                // the marker's live coverage of this slot — the
+                // departing label fades as the marker leaves
+                // instead of vanishing at the tap, and the
+                // arriving one reaches full only as the marker
+                // settles over it. Coverage is read in the
+                // layout phase (height) and the draw phase
+                // (alpha), so travel frames never recompose the
+                // slot (§B.4). At rest the coverage is exactly 1
+                // on the selected slot and 0 on the rest, so the
+                // settled bar is unchanged: one full label, the
+                // others truly absent (zero height, clipped).
+                val coverageDrivenLabel =
+                    labelStyle ==
+                        app.xreader.data.library.TabLabelStyle.SELECTED_ONLY &&
+                        labelCoverage != null
                 val showLabel = when (labelStyle) {
                     app.xreader.data.library.TabLabelStyle.ALWAYS -> true
-                    app.xreader.data.library.TabLabelStyle.SELECTED_ONLY -> selected
+                    app.xreader.data.library.TabLabelStyle.SELECTED_ONLY ->
+                        selected || coverageDrivenLabel
                     app.xreader.data.library.TabLabelStyle.ICONS_ONLY -> false
                 }
                 if (showLabel) {
@@ -3221,6 +3450,27 @@ private fun NavSlot(
                     var labelSize by remember(tab) { mutableStateOf(labelBase) }
                     Text(
                         tab.label,
+                        modifier = if (coverageDrivenLabel) {
+                            val cov = labelCoverage!!
+                            Modifier
+                                .layout { measurable, constraints ->
+                                    val placeable =
+                                        measurable.measure(constraints)
+                                    val coveredHeight =
+                                        (placeable.height * cov())
+                                            .roundToInt()
+                                    layout(placeable.width, coveredHeight) {
+                                        placeable.placeRelative(0, 0)
+                                    }
+                                }
+                                .clipToBounds()
+                                .graphicsLayer {
+                                    alpha = NavIndicatorLogic
+                                        .labelAlphaForCoverage(cov())
+                                }
+                        } else {
+                            Modifier
+                        },
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = labelSize
                         ),

@@ -409,17 +409,22 @@ class NavIndicatorLogicTest {
     @Test
     fun `edge profiles follow style and tier`() {
         // The lead edge: GOOEY rides the melt spring itself
-        // (its 280–380 ms pin passes unmodified), WORM rides
-        // the centre travel spring; MINIMAL shortens both to
-        // the MINIMAL travel set.
+        // (its 280–380 ms pin passes unmodified); MINIMAL
+        // shortens both to the MINIMAL travel set.
         assertEquals(
             SpringMotionEngine.GooeyMelt,
             NavIndicatorLogic.leadEdgeProfile(
                 NavIndicatorStyle.GOOEY, PerfTier.FULL
             )
         )
+        // SPEC CHANGE (SPEC-NAV-TRAVEL-WAVE-2026-11-16 §B.2):
+        // WORM's lead edge now rides GooeyMelt on the full
+        // tiers too — the old pin (NavTravel, ζ 0.91) could
+        // not produce the spec's visible overshoot landing;
+        // both stretch styles share the one retuned lead
+        // spring. The MINIMAL pins below are untouched (§B.3).
         assertEquals(
-            SpringMotionEngine.NavTravel,
+            SpringMotionEngine.GooeyMelt,
             NavIndicatorLogic.leadEdgeProfile(
                 NavIndicatorStyle.WORM, PerfTier.FULL
             )

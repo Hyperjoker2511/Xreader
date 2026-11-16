@@ -75,16 +75,24 @@ import kotlinx.coroutines.launch
  * it travels, each frame's geometry) is [NavIndicatorLogic]'s
  * pure math — this file only draws.
  *
- * Three animation objects, all owned here:
+ * Three animation objects, owned by the CALLER (the dock /
+ * the preview) and driven here — hoisted in the
+ * travel-choreography round (SPEC-NAV-TRAVEL-WAVE-2026-11-16
+ * §B.1) so the dock can read the same values for the slots'
+ * label coverage without a second travel Animatable:
  * - the shared [travel] Animatable — the centre-x (px, bar
  *   coordinates) the centre-riding styles read: SLIDE / GLOW /
  *   LENS / SEGMENTED / SQUIRCLE / RING / DOT / TOPLINE draw
  *   from it here, NOTCH's bar shape reads it in the surface,
- *   and BUBBLE's overlay reads it outside the surface (the one
- *   style that must escape the bar's clip). The host drives it
- *   on the tier's travel spring — an Animatable retarget keeps
- *   the current velocity, so a mid-flight tap re-aims the SAME
- *   moving object (the spec's interruptibility bar).
+ *   BUBBLE's overlay reads it outside the surface, and WAVE's
+ *   bar shape + circle overlay read it the same two ways (the
+ *   styles that must escape the bar's clip). MINIMAL and
+ *   FLASHY draw nothing from it here, but it is driven for
+ *   them too — their slot content follows its coverage
+ *   (§B.1). The host drives it on the tier's travel spring —
+ *   an Animatable retarget keeps the current velocity, so a
+ *   mid-flight tap re-aims the SAME moving object (the spec's
+ *   interruptibility bar).
  * - the lead / trail EDGE Animatables — the stretched pill of
  *   GOOEY (rebuilt: the shipped neck/trail melt never escaped
  *   the pill's outline on a 1-slot jump) and WORM. The edge
@@ -113,6 +121,12 @@ internal val BubbleRise = 4.dp
 /** SLIDE's disc diameter (before the pill-height cap). */
 private val SlideDiameter = 44.dp
 
+/** WAVE's circle diameter, cradled in the bar's waved top
+ * edge. Sized so the circle's bottom (centre ≈ 25 dp into
+ * the 64 dp bar, bottom ≈ 45 dp) clears the slot label's
+ * bottom band — see NavSlot's WAVE arrangement note. */
+internal val WaveCircleDiameter = 40.dp
+
 /** GLOW's halo radius. */
 private val GlowRadius = 26.dp
 
@@ -128,6 +142,10 @@ fun IndicatorHost(
     topPx: Float,
     heightPx: Float,
     travel: Animatable<Float, AnimationVector1D>,
+    /** The stretch engine's two edges (GOOEY / WORM) — owned
+     * by the caller like [travel], driven here. */
+    leadEdge: Animatable<Float, AnimationVector1D>,
+    trailEdge: Animatable<Float, AnimationVector1D>,
     perfTier: PerfTier,
     reduceMotion: Boolean,
     /** Slot layout for the SEGMENTED dividers and the
@@ -145,7 +163,12 @@ fun IndicatorHost(
     // it. The first known target SNAPS (there is nothing to
     // travel from); every later target animates on the tier's
     // spring. The run's from/to are remembered so the LENS can
-    // read its trip progress in the draw phase.
+    // read its trip progress in the draw phase. MINIMAL and
+    // FLASHY are driven too (travel-choreography round,
+    // SPEC-NAV-TRAVEL-WAVE-2026-11-16 §B.1): they draw nothing
+    // from the centre here, but their slots' label / swap
+    // coverage is computed from it in the dock — the travel
+    // must move for the coverage to move.
     var travelInit by remember { mutableStateOf(false) }
     var travelFrom by remember { mutableFloatStateOf(0f) }
     var travelTo by remember { mutableFloatStateOf(0f) }
@@ -153,9 +176,7 @@ fun IndicatorHost(
         if (effective == NavIndicatorStyle.GOOEY ||
             effective == NavIndicatorStyle.WORM ||
             effective == NavIndicatorStyle.PLAIN ||
-            effective == NavIndicatorStyle.MINIMAL ||
-            effective == NavIndicatorStyle.EXPANDING ||
-            effective == NavIndicatorStyle.FLASHY
+            effective == NavIndicatorStyle.EXPANDING
         ) {
             return@LaunchedEffect
         }
@@ -174,15 +195,13 @@ fun IndicatorHost(
         }
     }
 
-    // The stretch engine (nav engine round §1): two more
-    // Animatables, owned by the host. On a target change both
-    // animate to the target slot's edges — the edge toward the
-    // target on the style's lead spring, the far edge on
-    // TrailLag — continuing from their current values AND
-    // velocities (Animatable's contract; never a snap except
-    // the first placement, which snaps all three objects).
-    val leadEdge = remember { Animatable(0f) }
-    val trailEdge = remember { Animatable(0f) }
+    // The stretch engine (nav engine round §1): the caller's
+    // two edge Animatables. On a target change both animate
+    // to the target slot's edges — the edge toward the target
+    // on the style's lead spring, the far edge on TrailLag —
+    // continuing from their current values AND velocities
+    // (Animatable's contract; never a snap except the first
+    // placement, which snaps all three objects).
     var edgesInit by remember { mutableStateOf(false) }
     var runFromLead by remember { mutableFloatStateOf(0f) }
     var runToLead by remember { mutableFloatStateOf(0f) }
@@ -437,11 +456,17 @@ fun IndicatorHost(
 
         // BUBBLE is drawn by the overlay outside the bar's clip
         // and NOTCH by the bar's own shape — the host's only job
-        // for both is driving the shared travel (above). MINIMAL
-        // draws no shape at all (the slots wear the colour),
-        // EXPANDING lives in the row's weights and the selected
-        // slot's own pill, FLASHY inside the selected slot.
+        // for both is driving the shared travel (above). WAVE
+        // splits the same way (travel-choreography round §C):
+        // the bar's own shape carries the dip, the circle rides
+        // in the overlay outside the clip (its crown sits in the
+        // carved void, which the surface's clip would cut).
+        // MINIMAL draws no shape at all (the slots wear the
+        // colour), EXPANDING lives in the row's weights and the
+        // selected slot's own pill, FLASHY inside the selected
+        // slot.
         NavIndicatorStyle.BUBBLE, NavIndicatorStyle.NOTCH,
+        NavIndicatorStyle.WAVE,
         NavIndicatorStyle.MINIMAL, NavIndicatorStyle.EXPANDING,
         NavIndicatorStyle.FLASHY ->
             Box(modifier) {}
@@ -570,8 +595,23 @@ internal fun expandingSlotWeight(
     selected: Boolean,
     perfTier: PerfTier,
     reduceMotion: Boolean
-): Float {
-    val weight by animateFloatAsState(
+): Float = expandingSlotWeightState(selected, perfTier, reduceMotion).value
+
+/**
+ * The weight as a [androidx.compose.runtime.State] (travel-
+ * choreography round, SPEC-NAV-TRAVEL-WAVE-2026-11-16 §B.1):
+ * the dock reads the State when building the slot's label
+ * coverage, so the coverage lambda can read the LIVE weight
+ * in the layout / draw phases instead of a value frozen at
+ * composition.
+ */
+@Composable
+internal fun expandingSlotWeightState(
+    selected: Boolean,
+    perfTier: PerfTier,
+    reduceMotion: Boolean
+): androidx.compose.runtime.State<Float> =
+    animateFloatAsState(
         targetValue = if (selected) {
             NavIndicatorLogic.EXPANDING_SELECTED_WEIGHT
         } else {
@@ -584,8 +624,6 @@ internal fun expandingSlotWeight(
         },
         label = "expandingSlotWeight"
     )
-    return weight
-}
 
 /**
  * The BUBBLE, drawn OUTSIDE the bar surface: the disc rides
@@ -727,6 +765,156 @@ class NotchBarShape(
 }
 
 /**
+ * WAVE's bar shape (travel-choreography round,
+ * SPEC-NAV-TRAVEL-WAVE-2026-11-16 §C): the bar's outline with
+ * a smooth DIP in its top edge around the animated travel
+ * centre — the notch's sibling, shallower and wider. The
+ * centre is read from [centreX] INSIDE [createOutline] (a
+ * snapshot read), so the clip, the glass fill and the rim all
+ * follow the travel frame by frame; the one shape governs
+ * fill, glass and clip, exactly as the notch taught. The
+ * dip's numbers are [NavIndicatorLogic.waveDip]'s pure math;
+ * this class only walks the path. The circle that rides in
+ * the dip is NOT part of the shape — it is drawn by
+ * [WaveIndicatorOverlay], outside the surface's clip, like
+ * the bubble.
+ */
+class WaveBarShape(
+    private val centreX: () -> Float,
+    private val pitchPx: () -> Float,
+    private val docked: Boolean
+) : Shape {
+    override fun createOutline(
+        size: Size,
+        layoutDirection: LayoutDirection,
+        density: Density
+    ): Outline {
+        val dip = NavIndicatorLogic.waveDip(
+            barWidthPx = size.width,
+            barHeightPx = size.height,
+            centreXPx = centreX(),
+            pitchPx = pitchPx(),
+            docked = docked
+        )
+        val w = size.width
+        val h = size.height
+        val r = if (docked) 0f else h / 2f
+        val cx = dip.centreX
+        val hw = dip.halfWidth
+        val d = dip.depth
+        val path = Path().apply {
+            // The dip first: two cubics with horizontal
+            // tangents at the rim and at the trough's floor,
+            // so the top edge flows into and out of the dip
+            // without a kink (the notch's walk, shallower).
+            moveTo(cx - hw, 0f)
+            cubicTo(cx - hw * 0.5f, 0f, cx - hw * 0.5f, d, cx, d)
+            cubicTo(cx + hw * 0.5f, d, cx + hw * 0.5f, 0f, cx + hw, 0f)
+            if (r > 0.5f) {
+                lineTo(w - r, 0f)
+                arcTo(Rect(w - 2f * r, 0f, w, 2f * r), -90f, 90f, false)
+                lineTo(w, h - r)
+                arcTo(Rect(w - 2f * r, h - 2f * r, w, h), 0f, 90f, false)
+                lineTo(r, h)
+                arcTo(Rect(0f, h - 2f * r, 2f * r, h), 90f, 90f, false)
+                lineTo(0f, r)
+                arcTo(Rect(0f, 0f, 2f * r, 2f * r), 180f, 90f, false)
+                lineTo(cx - hw, 0f)
+            } else {
+                lineTo(w, 0f)
+                lineTo(w, h)
+                lineTo(0f, h)
+                lineTo(0f, 0f)
+                lineTo(cx - hw, 0f)
+            }
+            close()
+        }
+        return Outline.Generic(path)
+    }
+}
+
+/**
+ * WAVE's circle, drawn OUTSIDE the bar surface like the
+ * bubble: the circle's crown sits in the dip's carved void,
+ * which the surface's shape clip would cut off if it were
+ * drawn inside. The caller places this in a box sharing the
+ * bar's exact bounds, so overlay coordinates ARE bar
+ * coordinates. The circle and its carried icon ride the
+ * shared [travel] value — the circle's centre-x is the DIP's
+ * centre (read through the same [NavIndicatorLogic.waveDip]
+ * clamp the shape uses), so circle, dip and icon can never
+ * decouple (SPEC-NAV-TRAVEL-WAVE-2026-11-16 §C: one
+ * parameter). The slot's own icon hides under this style
+ * (NavSlot), as it does under BUBBLE. Nothing in here is
+ * interactive — touches pass through.
+ */
+@Composable
+fun WaveIndicatorOverlay(
+    travel: Animatable<Float, AnimationVector1D>,
+    icon: ImageVector,
+    colour: Color,
+    onColour: Color,
+    slotPitchPx: Float,
+    barWidthPx: Float,
+    barHeightPx: Float,
+    docked: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier) {
+        Canvas(Modifier.fillMaxSize()) {
+            val dip = NavIndicatorLogic.waveDip(
+                barWidthPx = barWidthPx,
+                barHeightPx = barHeightPx,
+                centreXPx = travel.value,
+                pitchPx = slotPitchPx,
+                docked = docked
+            )
+            val circle = NavIndicatorLogic.waveCircle(
+                centreXPx = dip.centreX,
+                diameterPx = WaveCircleDiameter.toPx(),
+                dipDepthPx = dip.depth
+            )
+            drawCircle(
+                color = colour,
+                radius = circle.radius,
+                center = Offset(circle.centreX, circle.centreY)
+            )
+        }
+        // The carried icon, centred on the circle — its offset
+        // reads the travel value in the layout phase, so it
+        // rides the circle without recomposing per frame (the
+        // bubble overlay's idiom).
+        Box(
+            Modifier.offset {
+                val dip = NavIndicatorLogic.waveDip(
+                    barWidthPx = barWidthPx,
+                    barHeightPx = barHeightPx,
+                    centreXPx = travel.value,
+                    pitchPx = slotPitchPx,
+                    docked = docked
+                )
+                val circle = NavIndicatorLogic.waveCircle(
+                    centreXPx = dip.centreX,
+                    diameterPx = WaveCircleDiameter.toPx(),
+                    dipDepthPx = dip.depth
+                )
+                val halfIcon = 12.dp.toPx()
+                IntOffset(
+                    (circle.centreX - halfIcon).roundToInt(),
+                    (circle.centreY - halfIcon).roundToInt()
+                )
+            }
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = onColour
+            )
+        }
+    }
+}
+
+/**
  * The live miniature dock at the top of Customise's Navigation
  * section (SPEC-NAVBAR-STYLES-2026-11-16, gap decision 2 —
  * KEPT): five fake slots over the REAL [IndicatorHost], the
@@ -738,7 +926,9 @@ class NotchBarShape(
  * indicator's motion, not the surface's material). The nav
  * engine round's styles preview too: EXPANDING widens the
  * fake slots on the same weights, FLASHY settles its selected
- * slot into the label, the lens magnifies its icon.
+ * slot into the label, the lens magnifies its icon. WAVE
+ * previews through the same host + wave shape + circle
+ * overlay as the dock (travel-choreography round §C).
  */
 @Composable
 fun NavIndicatorPreview(
@@ -765,19 +955,31 @@ fun NavIndicatorPreview(
     val pillY = NavGeometry.pillTargetYPx(barHeightPx, insetPx)
     val pitchPx = NavGeometry.slotWidthPx(widthPx, itemCount)
     val travel = remember { Animatable(0f) }
+    // The stretch edges, owned here and driven by the host —
+    // the same hoisting the dock uses (travel-choreography
+    // round §B.1).
+    val leadEdge = remember { Animatable(0f) }
+    val trailEdge = remember { Animatable(0f) }
     val effective = NavIndicatorLogic.effectiveStyle(style, perfTier, reduceMotion)
-    // Read the travel value in composition: the notch shape's
-    // centre lambda reads it too, but Modifier.clip only
-    // re-derives its outline when the shape instance changes —
-    // this read recomposes the preview per travel frame so the
-    // miniature scoop follows exactly like the dock's (whose
-    // surface re-reads the outline inside drawWithCache).
+    // Read the travel value in composition: the notch / wave
+    // shapes' centre lambdas read it too, but Modifier.clip
+    // only re-derives its outline when the shape instance
+    // changes — this read recomposes the preview per travel
+    // frame so the miniature scoop / dip follows exactly like
+    // the dock's (whose surface re-reads the outline inside
+    // drawWithCache).
     @Suppress("UNUSED_VARIABLE") val travelFrame = travel.value
     val docked = barStyle == NavBarStyle.DOCKED_BAR
     val shape: Shape = if (effective == NavIndicatorStyle.NOTCH) {
         NotchBarShape(
             centreX = { travel.value },
             slotWidthPx = { slotWidth.toFloat() },
+            docked = docked
+        )
+    } else if (effective == NavIndicatorStyle.WAVE) {
+        WaveBarShape(
+            centreX = { travel.value },
+            pitchPx = { pitchPx.toFloat() },
             docked = docked
         )
     } else if (docked) {
@@ -811,6 +1013,8 @@ fun NavIndicatorPreview(
                     topPx = pillY.toFloat(),
                     heightPx = pillHeight.toFloat(),
                     travel = travel,
+                    leadEdge = leadEdge,
+                    trailEdge = trailEdge,
                     perfTier = perfTier,
                     reduceMotion = reduceMotion,
                     slotCount = itemCount,
@@ -860,6 +1064,25 @@ fun NavIndicatorPreview(
                     .fillMaxWidth()
                     .height(barHeight + BubbleProud)
                     .offset(y = -BubbleProud)
+            )
+        }
+        if (effective == NavIndicatorStyle.WAVE && slotWidth > 0) {
+            // The wave's circle rides in an overlay sharing the
+            // bar's exact bounds (no proud offset — the circle
+            // lives inside the bar's rect, its crown in the
+            // dip's void), exactly as the dock draws it.
+            WaveIndicatorOverlay(
+                travel = travel,
+                icon = Tab.entries[selectedIndex].icon,
+                colour = colour,
+                onColour = onColour,
+                slotPitchPx = pitchPx.toFloat(),
+                barWidthPx = widthPx.toFloat(),
+                barHeightPx = barHeightPx.toFloat(),
+                docked = docked,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(barHeight)
             )
         }
     }
@@ -930,7 +1153,13 @@ private fun PreviewSlot(
         },
         label = "previewLensScale"
     )
-    val hideIcon = selected && effective == NavIndicatorStyle.BUBBLE
+    // Under BUBBLE and WAVE the selected icon rides in the
+    // style's overlay (the disc / the cradled circle) — the
+    // slot's own copy hides so the two never double.
+    val hideIcon = selected && (
+        effective == NavIndicatorStyle.BUBBLE ||
+            effective == NavIndicatorStyle.WAVE
+        )
     Box(
         modifier
             .clickable(

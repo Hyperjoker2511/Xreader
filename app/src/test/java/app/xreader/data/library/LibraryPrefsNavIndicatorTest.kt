@@ -105,10 +105,14 @@ class LibraryPrefsNavIndicatorTest {
         // their names (stored prefs read identically) and ten
         // join — the count and the new names are pinned so a
         // rename can never silently orphan a stored choice.
-        assertEquals(16, NavIndicatorStyle.entries.size)
+        // SPEC CHANGE (SPEC-NAV-TRAVEL-WAVE-2026-11-16 §C): a
+        // seventeenth style, WAVE, is appended after FLASHY —
+        // existing names and their stored order stand, so no
+        // stored choice is orphaned.
+        assertEquals(17, NavIndicatorStyle.entries.size)
         listOf(
             "WORM", "LENS", "EXPANDING", "SEGMENTED", "SQUIRCLE",
-            "RING", "DOT", "TOPLINE", "MINIMAL", "FLASHY"
+            "RING", "DOT", "TOPLINE", "MINIMAL", "FLASHY", "WAVE"
         ).forEach { name ->
             assertEquals(name, NavIndicatorStyle.valueOf(name).name)
         }

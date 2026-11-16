@@ -32,9 +32,10 @@ import org.robolectric.annotation.GraphicsMode
  *   remake, SPEC-CUSTOMISE-ORION-2026-11-16; the door tap
  *   below is the same call the accordion header tap was,
  *   and every assertion is the pre-remake one at full
- *   strength) carries the live preview, the sixteen
+ *   strength) carries the live preview, the seventeen
  *   indicator-style chips (nav engine round,
- *   SPEC-NAV-ENGINE-2026-11-16 §2 — plain names, spec order)
+ *   SPEC-NAV-ENGINE-2026-11-16 §2 — plain names, spec order;
+ *   Wave appended by SPEC-NAV-TRAVEL-WAVE-2026-11-16 §C)
  *   and the colour row.
  * - Every style chip writes its pref through the ViewModel;
  *   the colour writer flips the mode to CUSTOM; the Theme
@@ -104,7 +105,9 @@ class CustomiseNavIndicatorWiringTest {
             "Indicator style row",
             V159ComposeHarness.findByText(handle, "Indicator style")
         )
-        // All sixteen chips, plain names, in the spec's order.
+        // All seventeen chips, plain names, in the spec's
+        // order (WAVE appended by SPEC-NAV-TRAVEL-WAVE-
+        // 2026-11-16 §C — addition only).
         val chipStyles = listOf(
             "Gooey" to NavIndicatorStyle.GOOEY,
             "Worm" to NavIndicatorStyle.WORM,
@@ -121,7 +124,8 @@ class CustomiseNavIndicatorWiringTest {
             "Glow" to NavIndicatorStyle.GLOW,
             "Minimal" to NavIndicatorStyle.MINIMAL,
             "Flashy" to NavIndicatorStyle.FLASHY,
-            "Plain" to NavIndicatorStyle.PLAIN
+            "Plain" to NavIndicatorStyle.PLAIN,
+            "Wave" to NavIndicatorStyle.WAVE
         )
         chipStyles.forEach { (label, _) ->
             assertNotNull(

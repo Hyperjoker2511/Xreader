@@ -33,7 +33,10 @@ object NavIndicatorLogic {
      * style keeps its identity there — BUBBLE merely loses its
      * scrim (see [bubbleShowsScrim]), the stretch styles keep
      * their edges on shortened springs (see [leadEdgeProfile])
-     * and travel shortens (see [navTravelProfile]).
+     * and travel shortens (see [navTravelProfile]). WAVE keeps
+     * its identity on MINIMAL too (SPEC-NAV-TRAVEL-WAVE-
+     * 2026-11-16 §C: it is geometry, not blur — the tier's
+     * short travel applies, nothing else changes).
      */
     fun effectiveStyle(
         requested: NavIndicatorStyle,
@@ -124,10 +127,16 @@ object NavIndicatorLogic {
      * bar — black on dark glass for a yellow bubble. The nav
      * engine round adds the same bar-side styles (RING, DOT,
      * TOPLINE), MINIMAL (its whole point is colour alone) and
-     * FLASHY (the label IS the selected slot's face). LENS is
-     * the exception among the new styles: its label sits under
-     * the lens's fill, so it keeps the on-indicator colour.
-     * SEGMENTED wears PLAIN's colours, as its icon does.
+     * FLASHY (the label IS the selected slot's face). WAVE
+     * joins the bar-side group (travel-choreography round,
+     * SPEC-NAV-TRAVEL-WAVE-2026-11-16 §C): its label sits on
+     * the bar under the cradled circle, exactly like BUBBLE's.
+     * LENS is the exception among the new styles: its label
+     * sits under the lens's fill, so it keeps the on-indicator
+     * colour. SEGMENTED wears PLAIN's colours, as its icon
+     * does. (WAVE's ICON takes the on-indicator colour via
+     * [navIconArgb]'s else branch — it sits IN the filled
+     * circle.)
      */
     fun navLabelArgb(
         effective: NavIndicatorStyle,
@@ -137,7 +146,8 @@ object NavIndicatorLogic {
         NavIndicatorStyle.NOTCH, NavIndicatorStyle.GLOW,
         NavIndicatorStyle.BUBBLE, NavIndicatorStyle.RING,
         NavIndicatorStyle.DOT, NavIndicatorStyle.TOPLINE,
-        NavIndicatorStyle.MINIMAL, NavIndicatorStyle.FLASHY -> indicatorArgb
+        NavIndicatorStyle.MINIMAL, NavIndicatorStyle.FLASHY,
+        NavIndicatorStyle.WAVE -> indicatorArgb
         else -> onIndicatorArgb
     }
 
@@ -247,22 +257,111 @@ object NavIndicatorLogic {
         return NotchScoop(centreX = centre, halfWidth = halfWidth, depth = depth)
     }
 
+    // -- WAVE (travel-choreography round, ------------------------
+    // -- SPEC-NAV-TRAVEL-WAVE-2026-11-16 §C) ---------------------
+
+    /**
+     * WAVE: the dip the bar's top edge carries around the
+     * selected slot. [halfWidth] is a fixed share of the slot
+     * PITCH; [depth] a fixed share of the bar's height. The
+     * centre is clamped only by a small corner guard — much
+     * lighter than NOTCH's — so on any realistic bar the dip
+     * rests EXACTLY on the slot centres (the V5 reference's
+     * law: the dip, the circle and the icon are one parameter,
+     * the travel centre, and can never decouple).
+     */
+    data class WaveDip(
+        val centreX: Float,
+        val halfWidth: Float,
+        val depth: Float
+    )
+
+    /** The dip's half-width as a share of the slot pitch —
+     * the full dip is a little over one circle wide (40 dp),
+     * a snug cradle on phone pitches. */
+    const val WAVE_HALF_WIDTH_FRACTION = 0.34f
+
+    /** The dip's depth as a share of the bar height. */
+    const val WAVE_DEPTH_FRACTION = 0.22f
+
+    /** The corner guard as a share of the bar's corner
+     * radius: how far inside the stadium's corner arc the
+     * dip's centre may rest. Deliberately small — see
+     * [waveDip]. */
+    const val WAVE_CORNER_GUARD_FRACTION = 0.15f
+
+    fun waveDip(
+        barWidthPx: Float,
+        barHeightPx: Float,
+        centreXPx: Float,
+        pitchPx: Float,
+        docked: Boolean
+    ): WaveDip {
+        val halfWidth = (pitchPx * WAVE_HALF_WIDTH_FRACTION).coerceAtLeast(0f)
+        val depth = (barHeightPx * WAVE_DEPTH_FRACTION).coerceAtLeast(0f)
+        val corner = if (docked) 0f else barHeightPx / 2f
+        val inset = halfWidth + corner * WAVE_CORNER_GUARD_FRACTION
+        val centre = if (barWidthPx <= 2f * inset) {
+            barWidthPx / 2f
+        } else {
+            centreXPx.coerceIn(inset, barWidthPx - inset)
+        }
+        return WaveDip(centreX = centre, halfWidth = halfWidth, depth = depth)
+    }
+
+    /**
+     * WAVE's circle, in bar coordinates (the bar's top edge
+     * is y = 0): the circle is cradled in the dip — its centre
+     * sits [WAVE_CIRCLE_SINK_FRACTION] of a radius above the
+     * dip's floor line extended (centre = depth + radius −
+     * sink), so the dip's curve wraps the circle's lower arc
+     * while the circle's crown rises into the carved void.
+     * The circle's centre-x is the DIP's centre (the caller
+     * passes [WaveDip.centreX]) — one parameter, never two.
+     */
+    data class WaveCircle(
+        val centreX: Float,
+        val centreY: Float,
+        val radius: Float
+    )
+
+    /** How deep the circle sinks into the dip, as a share of
+     * its radius. */
+    const val WAVE_CIRCLE_SINK_FRACTION = 0.45f
+
+    fun waveCircle(
+        centreXPx: Float,
+        diameterPx: Float,
+        dipDepthPx: Float
+    ): WaveCircle {
+        val radius = (diameterPx / 2f).coerceAtLeast(0f)
+        val centreY = dipDepthPx + radius - radius * WAVE_CIRCLE_SINK_FRACTION
+        return WaveCircle(
+            centreX = centreXPx,
+            centreY = centreY,
+            radius = radius
+        )
+    }
+
     // -- The stretch engine (nav engine round, 2026-11-16) --------
 
     /**
      * The LEAD edge's spring for a stretch style (GOOEY /
      * WORM): the edge toward the target, the one that arrives
-     * first. GOOEY leads on the melt spring itself (its pinned
-     * 280–380 ms window is untouched); WORM leads on the calmer
-     * NavTravel. On MINIMAL both lead on NavTravelMinimal —
-     * shortened, still travelling (SPEC-NAV-ENGINE §3).
+     * first. On full tiers BOTH styles lead on the melt spring
+     * (travel-choreography round, SPEC-NAV-TRAVEL-WAVE-
+     * 2026-11-16 §B.2 — WORM previously led on the calmer
+     * NavTravel, whose ζ 0.91 lands with no visible overshoot;
+     * the spec orders one lively lead for the stretch family,
+     * with the back-ease settle). On MINIMAL both lead on
+     * NavTravelMinimal — shortened, still travelling
+     * (SPEC-NAV-ENGINE §3; §B.3 leaves that set untouched).
      */
     fun leadEdgeProfile(
         style: NavIndicatorStyle,
         perfTier: PerfTier
     ): SpringMotionEngine.SpringProfile = when {
         perfTier == PerfTier.MINIMAL -> SpringMotionEngine.NavTravelMinimal
-        style == NavIndicatorStyle.WORM -> SpringMotionEngine.NavTravel
         else -> SpringMotionEngine.GooeyMelt
     }
 
@@ -405,6 +504,58 @@ object NavIndicatorLogic {
             .coerceIn(0f, 1f)
         val env = kotlin.math.sin(u * (kotlin.math.PI.toFloat() / 2f))
         return 1f - WORM_THIN_DEPTH * env
+    }
+
+    // -- Label coverage (travel-choreography round, ------------
+    // -- SPEC-NAV-TRAVEL-WAVE-2026-11-16 §B.1) ------------------
+
+    /**
+     * How much of a slot the marker currently COVERS, 0..1:
+     * the overlap of the marker's span with the slot's span,
+     * normalised by the marker's REST width ([restWidthPx] —
+     * the width it has when settled in a slot). The departing
+     * slot starts at exactly 1 (the settled marker overlaps it
+     * by precisely its rest width) and falls as the marker
+     * leaves; the arriving slot reaches 1 only when the marker
+     * overlaps it by its full rest width — substantially
+     * covers it. Span edges may arrive in either order (the
+     * stretch engine's lead edge faces the target, so its two
+     * edges swap sides by direction) — both spans are ordered
+     * here before the overlap is measured. Degenerate spans
+     * (an unmeasured bar) cover nothing.
+     */
+    fun slotCoverage(
+        markerLeftPx: Float,
+        markerRightPx: Float,
+        slotLeftPx: Float,
+        slotRightPx: Float,
+        restWidthPx: Float
+    ): Float {
+        if (restWidthPx <= 0f) return 0f
+        val mLeft = minOf(markerLeftPx, markerRightPx)
+        val mRight = maxOf(markerLeftPx, markerRightPx)
+        val sLeft = minOf(slotLeftPx, slotRightPx)
+        val sRight = maxOf(slotLeftPx, slotRightPx)
+        val overlap = minOf(mRight, sRight) - maxOf(mLeft, sLeft)
+        if (overlap <= 0f) return 0f
+        return (overlap / restWidthPx).coerceIn(0f, 1f)
+    }
+
+    /**
+     * A slot label's opacity for a marker [coverage] of that
+     * slot: the smoothstep of the coverage — 0 at no coverage,
+     * 1 at full, 0.5 at half, symmetric (alpha(c) +
+     * alpha(1 − c) = 1, so the departing and arriving labels
+     * cross at equal strength mid-flight). This is the ONLY
+     * law a selection-dependent label may follow
+     * (SPEC-NAV-TRAVEL-WAVE-2026-11-16 §B.1): no label flips
+     * instantly at the tap while its marker is still
+     * travelling; at rest the selected slot's label is exactly
+     * 1 and every other exactly 0.
+     */
+    fun labelAlphaForCoverage(coverage: Float): Float {
+        val c = coverage.coerceIn(0f, 1f)
+        return c * c * (3f - 2f * c)
     }
 
     // -- LENS (fake liquid lens) -------------------------------------
