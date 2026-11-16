@@ -685,6 +685,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         LibraryLayout.GRID -> "Grid"
         LibraryLayout.COMFORTABLE_LIST -> "Comfortable list"
         LibraryLayout.COMPACT_LIST -> "Compact list"
+        LibraryLayout.BENTO -> "Bento"
     }
     val navigationStatus =
         "${navIndicatorStyleName(library.navIndicatorStyle)} · " +
