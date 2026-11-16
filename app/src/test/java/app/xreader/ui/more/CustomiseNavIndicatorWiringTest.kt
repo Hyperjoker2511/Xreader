@@ -28,8 +28,12 @@ import org.robolectric.annotation.GraphicsMode
  * CustomiseScreen over the REAL container (the V152 journey
  * shape, driven through the V159 compose harness).
  *
- * - The Navigation section carries the live preview, the
- *   sixteen indicator-style chips (nav engine round,
+ * - The Navigation page (opened by its hub door — Orion
+ *   remake, SPEC-CUSTOMISE-ORION-2026-11-16; the door tap
+ *   below is the same call the accordion header tap was,
+ *   and every assertion is the pre-remake one at full
+ *   strength) carries the live preview, the sixteen
+ *   indicator-style chips (nav engine round,
  *   SPEC-NAV-ENGINE-2026-11-16 §2 — plain names, spec order)
  *   and the colour row.
  * - Every style chip writes its pref through the ViewModel;
@@ -81,13 +85,13 @@ class CustomiseNavIndicatorWiringTest {
             }
         }
 
-        // The section is present in the index and opens.
+        // The door is present on the hub and opens its page.
         assertNotNull(
-            "Navigation section in the index",
+            "Navigation door on the hub",
             V159ComposeHarness.findByText(handle, "Navigation")
         )
         assertTrue(
-            "Navigation section opens",
+            "Navigation door opens its page",
             V159ComposeHarness.clickByLabel(handle, "Navigation")
         )
 
@@ -156,7 +160,7 @@ class CustomiseNavIndicatorWiringTest {
         )
 
         // Every chip lands its enum through the ViewModel. Each
-        // chip is scrolled into view before the tap — the section
+        // chip is scrolled into view before the tap — the page
         // is long, and a finger can only tap what is on screen.
         chipStyles.forEach { (label, style) ->
             V159ComposeHarness.scrollUntilDisplayed(handle, label)

@@ -30,8 +30,12 @@ import org.robolectric.annotation.GraphicsMode
  * CustomiseScreen over the REAL container (the V152 journey
  * shape, driven through the V159 compose harness).
  *
- * - The "App size" section is present in the Customise index,
- *   right under Colour theme.
+ * - The "App size" door is present on the Customise hub,
+ *   right under Colour theme (Orion remake,
+ *   SPEC-CUSTOMISE-ORION-2026-11-16: hub + pages — the door
+ *   tap opens the App size page; the assertions below are
+ *   the pre-remake ones at full strength, driven through
+ *   the new path).
  * - Its Small chip writes 0.85 to the appearance pref through
  *   the ViewModel, and its slider drives the same pref.
  * - "Accessibility & motion" no longer carries the retired
@@ -71,15 +75,15 @@ class CustomiseAppSizeWiringTest {
             }
         }
 
-        // The section is present in the index.
+        // The door is present on the hub.
         assertNotNull(
-            "App size section in the index",
+            "App size door on the hub",
             V159ComposeHarness.findByText(handle, "App size")
         )
 
-        // Open it: chips, slider and the plain line compose.
+        // Open its page: chips, slider and the plain line compose.
         assertTrue(
-            "App size section opens",
+            "App size door opens its page",
             V159ComposeHarness.clickByLabel(handle, "App size")
         )
         assertNotNull(
@@ -119,10 +123,16 @@ class CustomiseAppSizeWiringTest {
             ?.action?.invoke(0.70f)
         awaitAppSize(container, 0.70f)
 
+        // Back to the hub (the page's back chevron), then the
+        // Accessibility & motion door opens its page.
         // Accessibility & motion keeps Reduce motion; the
         // retired text-size stepper is nowhere on the screen.
         assertTrue(
-            "Accessibility & motion opens",
+            "back to the hub",
+            V159ComposeHarness.clickByLabel(handle, "Back to all settings")
+        )
+        assertTrue(
+            "Accessibility & motion door opens its page",
             V159ComposeHarness.clickByLabel(handle, "Accessibility & motion")
         )
         assertNotNull(

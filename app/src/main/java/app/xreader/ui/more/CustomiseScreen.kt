@@ -4,17 +4,25 @@ import kotlin.math.roundToInt
 import android.content.Context
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -27,8 +35,20 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.DirectionsRun
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.FormatSize
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,6 +58,8 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -52,6 +74,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.xreader.core.motion.stackEnter
+import app.xreader.core.motion.stackExit
+import app.xreader.core.motion.stackPopEnter
+import app.xreader.core.motion.stackPopExit
 import app.xreader.data.library.CoverSize
 import app.xreader.data.library.LibraryLayout
 import app.xreader.data.library.LibraryState
@@ -61,6 +87,9 @@ import app.xreader.data.library.TabLabelStyle
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import app.xreader.data.prefs.AppearanceState
 import app.xreader.data.prefs.AppearanceValidation
 import app.xreader.data.prefs.CUSTOM_SCHEME_PREFIX
@@ -82,6 +111,7 @@ import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.effectiveBottomPadding
 import app.xreader.ui.theme.ReaderPalettes
+import app.xreader.ui.theme.UiTier
 import app.xreader.ui.theme.maxContrast
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -607,114 +637,174 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
     ) { uri ->
         if (uri != null) viewModel.setBackgroundImage(screenContext, uri)
     }
-    // Patch 7 (Part B): the accordion's open section — the
-    // index into the section order below (0 = Colour theme).
-    // One section open at a time; the first starts open.
-    // Composition state (rememberSaveable), so a rotation
-    // keeps the reader's place in the index.
-    var openSection by rememberSaveable { mutableStateOf<Int?>(0) }
-    fun toggleSection(index: Int) {
-        openSection = if (openSection == index) null else index
+    // Orion remake (v1.6.2, SPEC-CUSTOMISE-ORION-2026-11-16):
+    // the Patch 7 accordion is gone — Customise is a HUB of
+    // doors (the Me dashboard's card language) with one PAGE
+    // per door, inside this same destination. [page] is the
+    // open page's index into the door order below, or null
+    // for the hub. Composition state (rememberSaveable), so
+    // a rotation keeps the reader's place.
+    var page by rememberSaveable { mutableStateOf<Int?>(null) }
+    // System back from a page returns to the hub first; from
+    // the hub it leaves Customise exactly as before.
+    BackHandler(enabled = page != null) { page = null }
+    val hubScroll = rememberScrollState()
+    val pageScroll = rememberScrollState()
+    // A page always opens at its top; the hub keeps its own
+    // scroll place behind it.
+    LaunchedEffect(page) {
+        if (page != null) pageScroll.scrollTo(0)
     }
-    Column(
-        Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .padding(
-                start = 24.dp, end = 24.dp,
-                top = LocalUiMetrics.current.topGap, bottom = 16.dp
-            )
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+    // v1.1.0 (§5.16): the live preview tile's names — a mini
+    // book tile + text sample drawn in the CURRENT Material
+    // roles inside a real GlassCard (on the hub, below), so
+    // it mutates with the scheme and glass controls the
+    // moment they change.
+    val schemeDisplayName = if (
+        appearance.colourScheme.startsWith(CUSTOM_SCHEME_PREFIX)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+        appearance.customSchemes.firstOrNull {
+            CUSTOM_SCHEME_PREFIX + it.id == appearance.colourScheme
+        }?.name ?: "Your theme"
+    } else {
+        appearance.colourScheme
+    }
+    val glassDisplayName = when (appearance.glassStyle) {
+        GlassStyle.LIQUID -> "Liquid glass"
+        GlassStyle.FROSTED -> "Frosted glass"
+        GlassStyle.TINTED -> "Tinted glass"
+        GlassStyle.SOLID -> "Solid"
+    }
+    val glassShortName = when (appearance.glassStyle) {
+        GlassStyle.LIQUID -> "Liquid"
+        GlassStyle.FROSTED -> "Frosted"
+        GlassStyle.TINTED -> "Tinted"
+        GlassStyle.SOLID -> "Solid"
+    }
+    val layoutStatus = when (library.layout) {
+        LibraryLayout.GRID -> "Grid"
+        LibraryLayout.COMFORTABLE_LIST -> "Comfortable list"
+        LibraryLayout.COMPACT_LIST -> "Compact list"
+    }
+    val navigationStatus =
+        "${navIndicatorStyleName(library.navIndicatorStyle)} · " +
+            when (library.navIndicatorColourMode) {
+                app.xreader.data.library.NavIndicatorColourMode.THEME -> "Theme"
+                app.xreader.data.library.NavIndicatorColourMode.CUSTOM -> "Custom"
             }
-            Text("Customise", style = MaterialTheme.typography.headlineSmall)
-        }
-        Text(
-            "How Xreader looks and feels. Everything here applies straight away.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        // v1.1.0 (§5.16): the live preview tile — a mini book tile
-        // + text sample drawn in the CURRENT Material roles inside
-        // a real GlassCard, so it mutates with the scheme and glass
-        // controls below the moment they change (the same sample
-        // line the Reader palette previews already use; the pill
-        // bar's fill is the preview's own sample fraction, not
-        // reading data).
-        val schemeDisplayName = if (
-            appearance.colourScheme.startsWith(CUSTOM_SCHEME_PREFIX)
-        ) {
-            appearance.customSchemes.firstOrNull {
-                CUSTOM_SCHEME_PREFIX + it.id == appearance.colourScheme
-            }?.name ?: "Your theme"
-        } else {
-            appearance.colourScheme
-        }
-        val glassDisplayName = when (appearance.glassStyle) {
-            GlassStyle.LIQUID -> "Liquid glass"
-            GlassStyle.FROSTED -> "Frosted glass"
-            GlassStyle.TINTED -> "Tinted glass"
-            GlassStyle.SOLID -> "Solid"
-        }
-        GlassCard(Modifier.fillMaxWidth()) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionHeader(
-                    title = "Preview",
-                    modifier = Modifier.fillMaxWidth(),
-                    eyebrow = "Live"
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
-                        Modifier
-                            .size(width = 48.dp, height = 68.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(MaterialTheme.colorScheme.primary),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.MenuBook,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimary
-                        )
-                    }
-                    Column(
-                        Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text("A sample book", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "The gate opened at dawn.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2
-                        )
-                        ProgressPillBar(
-                            fraction = 0.42f,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-                Text(
-                    "Now using: $schemeDisplayName · $glassDisplayName",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        CustomiseSection(
+    val bookColoursStatus = when (appearance.bookColours) {
+        app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_ONLY ->
+            "Book page only"
+        app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_AND_READER ->
+            "Book page + reader"
+        app.xreader.data.prefs.BookColoursScope.OFF -> "Off"
+    }
+    val performanceStatus = when (appearance.performanceMode) {
+        app.xreader.data.prefs.PerformanceMode.AUTOMATIC -> "Automatic"
+        app.xreader.data.prefs.PerformanceMode.SMOOTH -> "Smooth"
+        app.xreader.data.prefs.PerformanceMode.BEST_LOOKING -> "Best looking"
+    }
+    // The fifteen doors, in the order the sections have
+    // always stood — doors[i] opens pageContents[i]. A door's
+    // status line comes ONLY from state this body already
+    // reads (the Orion dashboard's honest-absence rule):
+    // where no live value reaches this screen — the Manga
+    // reader's Komikku defaults, Storage's sizes, Advanced's
+    // lone reset — the door carries no line.
+    val doors = listOf(
+        CustomiseDoor(
+            icon = Icons.Filled.Palette,
             title = "Colour theme",
-            expanded = openSection == 0,
-            onToggle = { toggleSection(0) }
-        ) {
+            status = "$schemeDisplayName · $glassShortName"
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.FormatSize,
+            title = "App size",
+            status = "${appSizePresetName(appearance.appSize)} · " +
+                AppearanceValidation.formatAppSize(appearance.appSize)
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.AutoAwesome,
+            title = "Glass & surfaces",
+            status = glassDisplayName
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.List,
+            title = "Library layout",
+            status = layoutStatus
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.Explore,
+            title = "Navigation",
+            status = navigationStatus
+        ),
+        CustomiseDoor(
+            icon = Icons.AutoMirrored.Filled.MenuBook,
+            title = "Reader",
+            status = reader.paletteName
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.AutoStories,
+            title = "Manga reader",
+            status = null
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.Brush,
+            title = "Your themes",
+            status = if (appearance.customSchemes.isEmpty()) {
+                "None yet"
+            } else {
+                "${appearance.customSchemes.size} saved"
+            }
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.Book,
+            title = "Book colours",
+            status = bookColoursStatus
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.FastForward,
+            title = "Performance",
+            status = performanceStatus
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.Build,
+            title = "Sources & repairs",
+            status = state.contentVisibility.label
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.Download,
+            title = "Downloads",
+            status = if (library.autoDownloadTracked) {
+                "Auto-download on"
+            } else {
+                "Auto-download off"
+            }
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.FolderOpen,
+            title = "Storage",
+            status = null
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.DirectionsRun,
+            title = "Accessibility & motion",
+            status = if (appearance.reduceMotion) {
+                "Reduce motion on"
+            } else {
+                "Reduce motion off"
+            }
+        ),
+        CustomiseDoor(
+            icon = Icons.Filled.Tune,
+            title = "Advanced",
+            status = null
+        )
+    )
+    // Each door's page body: the section's existing content,
+    // verbatim — the controls move, they are not rewritten.
+    val pageContents = listOf<@Composable () -> Unit>(
+        {
             Text(
                 "The colours the whole app wears.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1012,18 +1102,14 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     }
                 }
             }
-        }
+        },
 
         // ── App size (v1.6.2): one number for the whole screen.
         // Right after Colour theme, near the top of the index,
         // where a wrong value can't hide (the old text-size
         // stepper sat buried in Accessibility & motion and only
         // ever scaled the words). ─────────────────────────────
-        CustomiseSection(
-            title = "App size",
-            expanded = openSection == 1,
-            onToggle = { toggleSection(1) }
-        ) {
+        {
             Text(
                 "How big everything is on this phone.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1069,13 +1155,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
+        },
 
-        CustomiseSection(
-            title = "Glass & surfaces",
-            expanded = openSection == 2,
-            onToggle = { toggleSection(2) }
-        ) {
+        {
             // v1.0.7 (AnymeX port): bloom, grain, liquid background.
             Row(
                 Modifier
@@ -1242,13 +1324,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 range = app.xreader.data.prefs.AppearanceValidation.ELEVATION_SCALE_RANGE,
                 onChange = viewModel::setGlassElevationScale
             )
-        }
+        },
 
-        CustomiseSection(
-            title = "Library layout",
-            expanded = openSection == 3,
-            onToggle = { toggleSection(3) }
-        ) {
+        {
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1362,13 +1440,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 checked = library.showBadges,
                 onChange = viewModel::setShowBadges
             )
-        }
+        },
 
-        CustomiseSection(
-            title = "Navigation",
-            expanded = openSection == 4,
-            onToggle = { toggleSection(4) }
-        ) {
+        {
             Text("Bottom bar style", style = MaterialTheme.typography.bodyLarge)
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1687,13 +1761,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
+        },
 
-        CustomiseSection(
-            title = "Reader",
-            expanded = openSection == 5,
-            onToggle = { toggleSection(5) }
-        ) {
+        {
             Text(
                 "Page themes — the preview is a real page in those colours.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -2019,7 +2089,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     )
                 }
             }
-        }
+        },
 
         // ── FIX-18: the Komikku manga reader's global defaults ──
         // (option-scope tier 1: Settings = the default for ALL
@@ -2027,21 +2097,13 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         // The legacy ReaderConfig manga rows above remain for the
         // text reader's image chapters; the manga reader itself
         // reads these Komikku preferences.
-        CustomiseSection(
-            title = "Manga reader",
-            expanded = openSection == 6,
-            onToggle = { toggleSection(6) }
-        ) {
+        {
             app.xreader.komikku.presentation.settings
                 .KomikkuGlobalDefaultsSection(prefs = viewModel.komikkuGlobalPrefs)
-        }
+        },
 
         // ── Your themes: the full make-your-own editor (R04/R07) ──
-        CustomiseSection(
-            title = "Your themes",
-            expanded = openSection == 7,
-            onToggle = { toggleSection(7) }
-        ) {
+        {
             Text(
                 "Themes you made yourself, from one colour. Up to three.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -2074,14 +2136,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-        }
+        },
 
         // ── Book colours (R05) ───────────────────────────────────
-        CustomiseSection(
-            title = "Book colours",
-            expanded = openSection == 8,
-            onToggle = { toggleSection(8) }
-        ) {
+        {
             Text(
                 "Each book's cover can lend its colours to the book page. " +
                     "The reading page itself never changes colour this way.",
@@ -2128,14 +2186,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 checked = appearance.coverGlow,
                 onChange = viewModel::setCoverGlow
             )
-        }
+        },
 
         // ── Performance (R06) ────────────────────────────────────
-        CustomiseSection(
-            title = "Performance",
-            expanded = openSection == 9,
-            onToggle = { toggleSection(9) }
-        ) {
+        {
             Text(
                 "How hard Xreader pushes effects on this device. " +
                     "Automatic is right for almost everyone.",
@@ -2187,14 +2241,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
+        },
 
         // ── Sources & repairs (R11 preference) ───────────────────
-        CustomiseSection(
-            title = "Sources & repairs",
-            expanded = openSection == 10,
-            onToggle = { toggleSection(10) }
-        ) {
+        {
             // v1.0.6 (W2.4): the one master switch for the browser
             // view — default on; off restores static-only reading.
             CustomiseSwitch(
@@ -2303,18 +2353,14 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
+        },
 
         // ── Downloads (v1.0.4, D10/D13) ─────────────────────────
         // The user's ruling: ALL download switches live together in
         // Settings. The auto-download switch came from the Library,
         // the Wi-Fi-only switch from the Downloads screen; both
         // keep their full labels and their exact prefs.
-        CustomiseSection(
-            title = "Downloads",
-            expanded = openSection == 11,
-            onToggle = { toggleSection(11) }
-        ) {
+        {
             CustomiseSwitch(
                 label = "Auto-download new chapters for tracked books (Wi-Fi)",
                 description = "Books you track fetch their new chapters on their own, " +
@@ -2362,14 +2408,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     )
                 }
             }
-        }
+        },
 
         // ── Storage (R07/G16) ────────────────────────────────────
-        CustomiseSection(
-            title = "Storage",
-            expanded = openSection == 12,
-            onToggle = { toggleSection(12) }
-        ) {
+        {
             val storage by viewModel.storage.collectAsStateWithLifecycle()
             val sizes = storage
             if (sizes == null) {
@@ -2548,16 +2590,12 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     )
                 }
             }
-        }
+        },
 
         // ── Accessibility & motion (R29; R07's App text size
         // moved to the App size section in v1.6.2 — it scales
         // the whole screen now, not just the words) ───────────
-        CustomiseSection(
-            title = "Accessibility & motion",
-            expanded = openSection == 13,
-            onToggle = { toggleSection(13) }
-        ) {
+        {
             CustomiseSwitch(
                 label = "Reduce motion",
                 description = "Calms the app's animations down to simple fades.",
@@ -2570,14 +2608,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 checked = appearance.meCardMotionTilt,
                 onChange = viewModel::setMeCardMotionTilt
             )
-        }
+        },
 
         // ── Advanced (R07): reset lives here, behind a confirm ───
-        CustomiseSection(
-            title = "Advanced",
-            expanded = openSection == 14,
-            onToggle = { toggleSection(14) }
-        ) {
+        {
             var confirmReset by remember { mutableStateOf(false) }
             TextButton(onClick = { confirmReset = true }) {
                 Text("Reset customisation")
@@ -2610,13 +2644,200 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 )
             }
         }
-        // v1.1.0: bottom clearance — 72dp here + the column's 16dp
-        // vertical padding = the standard 88dp (dock + dead strip).
-        Spacer(
-            Modifier.height(
-                effectiveBottomPadding(72.dp, LocalDockClearance.current)
-            )
-        )
+    )
+
+    // Hub and pages swap on the app's stack transitions
+    // (MotionSpecs shared-axis): forward into a page, pop
+    // back to the hub. No new animation system.
+    AnimatedContent(
+        targetState = page,
+        modifier = Modifier.fillMaxSize(),
+        transitionSpec = {
+            if (targetState != null) {
+                stackEnter(appearance.reduceMotion).togetherWith(
+                    stackExit(appearance.reduceMotion)
+                )
+            } else {
+                stackPopEnter(appearance.reduceMotion).togetherWith(
+                    stackPopExit(appearance.reduceMotion)
+                )
+            }.using(SizeTransform(clip = true))
+        },
+        label = "Customise hub and pages"
+    ) { currentPage ->
+        if (currentPage == null) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .padding(
+                        start = 24.dp, end = 24.dp,
+                        top = LocalUiMetrics.current.topGap, bottom = 16.dp
+                    )
+                    .verticalScroll(hubScroll),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                    Text(
+                        "Customise",
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                }
+                Text(
+                    "How Xreader looks and feels. Everything here applies straight away.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                // The pinned live preview (v1.1.0 §5.16): a mini
+                // book tile + text sample in the CURRENT Material
+                // roles inside a real GlassCard — the same sample
+                // line the Reader palette previews already use;
+                // the pill bar's fill is the preview's own sample
+                // fraction, not reading data.
+                GlassCard(Modifier.fillMaxWidth()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SectionHeader(
+                            title = "Preview",
+                            modifier = Modifier.fillMaxWidth(),
+                            eyebrow = "Live"
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(width = 48.dp, height = 68.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(MaterialTheme.colorScheme.primary),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.MenuBook,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimary
+                                )
+                            }
+                            Column(
+                                Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "A sample book",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    "The gate opened at dawn.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2
+                                )
+                                ProgressPillBar(
+                                    fraction = 0.42f,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                        Text(
+                            "Now using: $schemeDisplayName · $glassDisplayName",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                // The doors: the Me dashboard's grid — chunked
+                // rows of door cards, one column on the COMPACT
+                // tier (Patch 7's rule, read through UiMetrics).
+                val metrics = LocalUiMetrics.current
+                if (metrics.tier == UiTier.COMPACT) {
+                    doors.forEachIndexed { index, door ->
+                        CustomiseDoorCard(
+                            door = door,
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = { page = index }
+                        )
+                    }
+                } else {
+                    doors.withIndex().chunked(2).forEach { rowDoors ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(IntrinsicSize.Max),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            rowDoors.forEach { (index, door) ->
+                                CustomiseDoorCard(
+                                    door = door,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight(),
+                                    onClick = { page = index }
+                                )
+                            }
+                        }
+                    }
+                }
+                // v1.1.0: bottom clearance — 72dp here + the
+                // column's 16dp vertical padding = the standard
+                // 88dp (dock + dead strip).
+                Spacer(
+                    Modifier.height(
+                        effectiveBottomPadding(72.dp, LocalDockClearance.current)
+                    )
+                )
+            }
+        } else {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .padding(
+                        start = 24.dp, end = 24.dp,
+                        top = LocalUiMetrics.current.topGap, bottom = 16.dp
+                    )
+                    .verticalScroll(pageScroll),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { page = null }) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back to all settings"
+                        )
+                    }
+                    Text(
+                        doors[currentPage].title,
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                }
+                // The page body: the section's own content in a
+                // plain column at the rhythm the accordion's
+                // inner column gave it (10.dp) — ONE surface, no
+                // card around the rows. key() gives each page
+                // its own remember slots (dialog and wheel
+                // state), as the fifteen separate section call
+                // sites did before.
+                key(currentPage) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        pageContents[currentPage]()
+                    }
+                }
+                // v1.1.0: bottom clearance, as on the hub.
+                Spacer(
+                    Modifier.height(
+                        effectiveBottomPadding(72.dp, LocalDockClearance.current)
+                    )
+                )
+            }
+        }
     }
 }
 
@@ -2770,47 +2991,106 @@ private fun SeedSwatchRow(
     }
 }
 
+/** One Customise door's facts (Orion remake): the hub grid
+ * and the compact single column render the same fifteen
+ * doors from this one list — icon, plain title, and the ONE
+ * live status line (null where no honest value reaches the
+ * screen body). */
+private data class CustomiseDoor(
+    val icon: ImageVector,
+    val title: String,
+    val status: String?
+)
+
+/**
+ * One hub door card (Orion remake): the Me dashboard's door
+ * language (Patch 7, MeDoorCard) — a big tappable [GlassCard],
+ * the door's icon in its 42.dp badge, the plain-word title,
+ * and the ONE live status line where the door has one. The
+ * card stays the one tap target, with the same bounce press
+ * the Me doors use.
+ */
 @Composable
-private fun CustomiseSection(
-    title: String,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    content: @Composable () -> Unit
+private fun CustomiseDoorCard(
+    door: CustomiseDoor,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
 ) {
-    // Patch 7 (Part B): every section stays, in its current
-    // order, with its controls untouched inside — what changed
-    // is the furniture: the section is now a collapsible
-    // category card in the screen's accordion. The header row
-    // (the kit SectionHeader in its existing style + a
-    // chevron) is the toggle; a CLOSED section never composes
-    // its content, so the screen's composition is the category
-    // index plus the one open section — not all fourteen
-    // sections' controls at once (the owner's "full of
-    // clutter, very big" verdict on the old all-open scroll).
-    GlassCard(Modifier.fillMaxWidth()) {
+    // The provided (App-size-scaled) metrics row, like the Me
+    // dashboard — the door's min height is one of the sizes
+    // the App size exists to scale.
+    val metrics = LocalUiMetrics.current
+    GlassCard(
+        onClick = onClick,
+        modifier = modifier.heightIn(min = metrics.cardMinHeight),
+        bouncePress = true,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)
+    ) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(
+            Box(
                 Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onToggle),
-                verticalAlignment = Alignment.CenterVertically
+                    .size(42.dp)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceContainerHigh,
+                        RoundedCornerShape(16.dp)
+                    ),
+                contentAlignment = Alignment.Center
             ) {
-                SectionHeader(title = title, modifier = Modifier.weight(1f))
                 Icon(
-                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = if (expanded) {
-                        "Close $title"
-                    } else {
-                        "Open $title"
-                    },
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    door.icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
                 )
             }
-            if (expanded) {
-                content()
+            Text(
+                door.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (door.status != null) {
+                Text(
+                    door.status,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
+}
+
+/** The App size door's preset name — the chips' own words. */
+private fun appSizePresetName(value: Float): String = when (value) {
+    AppearanceValidation.APP_SIZE_SMALL -> "Small"
+    AppearanceValidation.APP_SIZE_NORMAL -> "Normal"
+    AppearanceValidation.APP_SIZE_LARGE -> "Large"
+    else -> "Custom"
+}
+
+/** The Navigation door's style name — the chips' own words. */
+private fun navIndicatorStyleName(
+    style: app.xreader.data.library.NavIndicatorStyle
+): String = when (style) {
+    app.xreader.data.library.NavIndicatorStyle.GOOEY -> "Gooey"
+    app.xreader.data.library.NavIndicatorStyle.WORM -> "Worm"
+    app.xreader.data.library.NavIndicatorStyle.LENS -> "Liquid lens"
+    app.xreader.data.library.NavIndicatorStyle.SLIDE -> "Slide"
+    app.xreader.data.library.NavIndicatorStyle.BUBBLE -> "Bubble"
+    app.xreader.data.library.NavIndicatorStyle.NOTCH -> "Notch"
+    app.xreader.data.library.NavIndicatorStyle.EXPANDING -> "Expanding"
+    app.xreader.data.library.NavIndicatorStyle.SEGMENTED -> "Segmented"
+    app.xreader.data.library.NavIndicatorStyle.SQUIRCLE -> "Square"
+    app.xreader.data.library.NavIndicatorStyle.RING -> "Ring"
+    app.xreader.data.library.NavIndicatorStyle.DOT -> "Dot"
+    app.xreader.data.library.NavIndicatorStyle.TOPLINE -> "Top line"
+    app.xreader.data.library.NavIndicatorStyle.GLOW -> "Glow"
+    app.xreader.data.library.NavIndicatorStyle.MINIMAL -> "Minimal"
+    app.xreader.data.library.NavIndicatorStyle.FLASHY -> "Flashy"
+    app.xreader.data.library.NavIndicatorStyle.PLAIN -> "Plain"
 }
 
 @Composable
