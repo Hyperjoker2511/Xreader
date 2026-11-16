@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -20,6 +21,28 @@ enum class NavBarStyle { FLOATING_PILL, DOCKED_BAR }
 
 /** Tab label styles (v1.0.1 customisation). */
 enum class TabLabelStyle { ALWAYS, SELECTED_ONLY, ICONS_ONLY }
+
+/**
+ * Dock indicator styles (v1.6.2, nav-bar styles —
+ * SPEC-NAVBAR-STYLES-2026-11-16 Change 1; the owner's word:
+ * "All of it" after "Extra customizable"). GOOEY is the shipped
+ * melt (the default — an untouched install keeps its identity,
+ * only the travel timing improves). SLIDE is a filled circle
+ * sliding slot to slot; BUBBLE a circle riding proud of the
+ * bar's top edge, carrying the selected icon up into it; NOTCH
+ * dips the bar's own top edge into a scoop around the active
+ * icon; GLOW glides a small dot under the icon and tints the
+ * icon with a soft glow; PLAIN is no travelling indicator at
+ * all — the active slot tints instantly (the behaviour reduced
+ * motion has always produced, made a first-class choice).
+ */
+enum class NavIndicatorStyle { GOOEY, SLIDE, BUBBLE, NOTCH, GLOW, PLAIN }
+
+/** Where the dock indicator's colour comes from (v1.6.2):
+ * THEME = the colour scheme's primary (the shipped behaviour);
+ * CUSTOM = the user's own ARGB from the exact-colour wheel,
+ * stored beside this mode in the same state. */
+enum class NavIndicatorColourMode { THEME, CUSTOM }
 
 /** Where the app opens (v1.0.1 customisation). */
 enum class StartScreen { LIBRARY, CONTINUE_READING, DOWNLOADS }
@@ -90,6 +113,12 @@ object CoverSizeLogic {
     )
 }
 
+/** The indicator colour the wheel opens on (v1.6.2): the
+ * Nocturne violet primary — the colour the dock already wears
+ * under the default scheme, so a first CUSTOM pick starts
+ * from home. */
+const val DEFAULT_NAV_INDICATOR_ARGB: Long = 0xFF8B5CF6L
+
 /**
  * Library + navigation customisation state (v1.0.1). Defaults are
  * exactly the v1.0.0 behaviour — customisation is for people who go
@@ -102,6 +131,18 @@ data class LibraryState(
     val showBadges: Boolean = true,
     val navBarStyle: NavBarStyle = NavBarStyle.FLOATING_PILL,
     val tabLabelStyle: TabLabelStyle = TabLabelStyle.ALWAYS,
+    /** Dock indicator style (v1.6.2): GOOEY unless the user
+     * picked another in Customise → Navigation. */
+    val navIndicatorStyle: NavIndicatorStyle = NavIndicatorStyle.GOOEY,
+    /** Dock indicator colour source (v1.6.2): THEME unless the
+     * user picked an exact colour of their own. */
+    val navIndicatorColourMode: NavIndicatorColourMode =
+        NavIndicatorColourMode.THEME,
+    /** The user's exact indicator colour (v1.6.2), ARGB as a
+     * Long — read only while [navIndicatorColourMode] is
+     * CUSTOM. The default is the Nocturne violet primary, so
+     * the wheel opens on the colour the bar already wears. */
+    val navIndicatorColourArgb: Long = DEFAULT_NAV_INDICATOR_ARGB,
     val startScreen: StartScreen = StartScreen.LIBRARY,
     /** v1.0.1 (rec. A): tracked books auto-download new chapters.
      * Default OFF; the queue's prefetch items are Wi-Fi-only inside
@@ -188,6 +229,16 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
             showBadges = prefs[KEY_BADGES] ?: true,
             navBarStyle = parse(prefs[KEY_NAV_STYLE], NavBarStyle.FLOATING_PILL),
             tabLabelStyle = parse(prefs[KEY_TAB_LABELS], TabLabelStyle.ALWAYS),
+            navIndicatorStyle = parse(
+                prefs[KEY_NAV_INDICATOR_STYLE], NavIndicatorStyle.GOOEY
+            ),
+            navIndicatorColourMode = parse(
+                prefs[KEY_NAV_INDICATOR_COLOUR_MODE],
+                NavIndicatorColourMode.THEME
+            ),
+            navIndicatorColourArgb =
+                prefs[KEY_NAV_INDICATOR_COLOUR_ARGB]
+                    ?: DEFAULT_NAV_INDICATOR_ARGB,
             startScreen = parse(prefs[KEY_START], StartScreen.LIBRARY),
             autoDownloadTracked = prefs[KEY_AUTO_DL] ?: false
         )
@@ -212,6 +263,23 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
     suspend fun setNavBarStyle(value: NavBarStyle) = store.edit { it[KEY_NAV_STYLE] = value.name }
     suspend fun setTabLabelStyle(value: TabLabelStyle) =
         store.edit { it[KEY_TAB_LABELS] = value.name }
+    suspend fun setNavIndicatorStyle(value: NavIndicatorStyle) =
+        store.edit { it[KEY_NAV_INDICATOR_STYLE] = value.name }
+    suspend fun setNavIndicatorColourMode(value: NavIndicatorColourMode) =
+        store.edit { it[KEY_NAV_INDICATOR_COLOUR_MODE] = value.name }
+
+    /** Picking an exact colour IS choosing CUSTOM (v1.6.2):
+     * one write stores the colour and flips the mode, so the
+     * two can never disagree. The alpha byte is forced opaque —
+     * the wheel's ARGB carries one, but a translucent indicator
+     * would wash out against the page under the glass. */
+    suspend fun setNavIndicatorColour(argb: Long) =
+        store.edit { prefs ->
+            prefs[KEY_NAV_INDICATOR_COLOUR_ARGB] =
+                argb or 0xFF000000L
+            prefs[KEY_NAV_INDICATOR_COLOUR_MODE] =
+                NavIndicatorColourMode.CUSTOM.name
+        }
     suspend fun setStartScreen(value: StartScreen) = store.edit { it[KEY_START] = value.name }
     suspend fun setAutoDownloadTracked(value: Boolean) =
         store.edit { it[KEY_AUTO_DL] = value }
@@ -272,6 +340,9 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
             prefs.remove(KEY_BADGES)
             prefs.remove(KEY_NAV_STYLE)
             prefs.remove(KEY_TAB_LABELS)
+            prefs.remove(KEY_NAV_INDICATOR_STYLE)
+            prefs.remove(KEY_NAV_INDICATOR_COLOUR_MODE)
+            prefs.remove(KEY_NAV_INDICATOR_COLOUR_ARGB)
             prefs.remove(KEY_START)
         }
     }
@@ -288,6 +359,12 @@ class LibraryPrefs(private val store: DataStore<Preferences>) {
         val KEY_BADGES = booleanPreferencesKey("library.show_badges")
         val KEY_NAV_STYLE = stringPreferencesKey("library.nav_bar_style")
         val KEY_TAB_LABELS = stringPreferencesKey("library.tab_labels")
+        val KEY_NAV_INDICATOR_STYLE =
+            stringPreferencesKey("library.nav_indicator_style")
+        val KEY_NAV_INDICATOR_COLOUR_MODE =
+            stringPreferencesKey("library.nav_indicator_colour_mode")
+        val KEY_NAV_INDICATOR_COLOUR_ARGB =
+            longPreferencesKey("library.nav_indicator_colour_argb")
         val KEY_START = stringPreferencesKey("library.start_screen")
 
         inline fun <reified T : Enum<T>> parse(raw: String?, fallback: T): T =

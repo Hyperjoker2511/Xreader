@@ -64,4 +64,15 @@ class MotionAdaptersTest {
         assertEquals(SpringMotionEngine.Spatial.stiffness, spec.stiffness, 0f)
         assertEquals(SpringMotionEngine.Spatial.dampingRatio, spec.dampingRatio, 0f)
     }
+
+    @Test
+    fun `tab fades are the ghost fix pair`() {
+        // Nav-bar styles pass (2026-11-16, SPEC-NAVBAR-STYLES-
+        // 2026-11-16 Change 4): the incoming tab keeps the
+        // ColorOS pass's 120 ms fade; the OUTGOING tab drops to
+        // 80 ms so the two screens never sit at half strength
+        // together and double their headers mid-switch.
+        assertEquals(120, TAB_FADE_MS)
+        assertEquals(80, TAB_EXIT_FADE_MS)
+    }
 }

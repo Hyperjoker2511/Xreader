@@ -1,5 +1,8 @@
 package app.xreader.ui.shell
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.glance.appwidget.updateAll
 import androidx.compose.foundation.clickable
@@ -64,6 +67,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import app.xreader.core.motion.fadeTween
 import app.xreader.core.motion.pressBounce
+import app.xreader.core.motion.segmentColorSpec
 import app.xreader.core.motion.stackEnter
 import app.xreader.core.motion.stackExit
 import app.xreader.core.motion.stackPopEnter
@@ -122,6 +126,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -1138,6 +1143,11 @@ private fun PhoneShell(
                     container = container,
                     barStyle = libraryState.navBarStyle,
                     labelStyle = libraryState.tabLabelStyle,
+                    indicatorStyle = libraryState.navIndicatorStyle,
+                    indicatorColourMode =
+                        libraryState.navIndicatorColourMode,
+                    indicatorColourArgb =
+                        libraryState.navIndicatorColourArgb,
                     exploreBadgeCount =
                         sourcesState.keiyoushiPendingUpdateCount
                 )
@@ -1474,7 +1484,16 @@ private fun XreaderNavHost(
                 onOpenUpdates = { navController.navigate("updates") },
                 coverGlow = appearance.coverGlow &&
                     appearance.bookColours !=
-                    app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_ONLY
+                    app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_ONLY,
+                // Nav-bar styles (v1.6.2): the side switch rides
+                // the same indicator language as the dock — its
+                // travel shortens on the tier this device resolves.
+                indicatorPerfTier =
+                    app.xreader.data.prefs.PerformancePolicy.resolve(
+                        appearance.performanceMode,
+                        container.totalRamMb(),
+                        appearance.coverGlow
+                    ).tier
             )
         }
         composable("updates") {
@@ -1501,6 +1520,18 @@ private fun XreaderNavHost(
             // fold into it, adding and the store are pushed screens.
             val opdsServers by opdsViewModel.servers
                 .collectAsStateWithLifecycle()
+            // Nav-bar styles (v1.6.2): Explore's side switch gets
+            // the same indicator wiring as the Library's — the
+            // nav prefs and the resolved tier, collected here
+            // where the container is in scope.
+            val browseLibrary by container.libraryPrefs.state
+                .collectAsStateWithLifecycle(
+                    initialValue = app.xreader.data.library.LibraryState()
+                )
+            val browseAppearance by container.appearancePrefs.state
+                .collectAsStateWithLifecycle(
+                    initialValue = app.xreader.data.prefs.AppearanceState()
+                )
             // v1.3.2 (scope D): a "Find this title" from a book
             // page arrives as a preset on THIS entry — run it in
             // Explore's own search field, then clear it.
@@ -1553,7 +1584,24 @@ private fun XreaderNavHost(
                 onOpenBook = { bookId ->
                     navigateContent("book/$bookId")
                 },
-                coverFile = coverFile
+                coverFile = coverFile,
+                // Nav-bar styles (v1.6.2): see the collects above.
+                indicatorStyle = browseLibrary.navIndicatorStyle,
+                indicatorColour = if (
+                    browseLibrary.navIndicatorColourMode ==
+                    app.xreader.data.library.NavIndicatorColourMode.CUSTOM
+                ) {
+                    Color(browseLibrary.navIndicatorColourArgb.toInt())
+                } else {
+                    Color.Unspecified
+                },
+                indicatorPerfTier =
+                    app.xreader.data.prefs.PerformancePolicy.resolve(
+                        browseAppearance.performanceMode,
+                        container.totalRamMb(),
+                        browseAppearance.coverGlow
+                    ).tier,
+                reduceMotion = reduceMotion
             )
         }
         composable("manageSources") {
@@ -2568,6 +2616,15 @@ private fun FloatingNavBar(
         app.xreader.data.library.NavBarStyle.FLOATING_PILL,
     labelStyle: app.xreader.data.library.TabLabelStyle =
         app.xreader.data.library.TabLabelStyle.ALWAYS,
+    /** Nav-bar styles (v1.6.2): the user's indicator style and
+     * colour choice, from the same LibraryState the bar style
+     * rides. Defaults are the shipped look (GOOEY, theme). */
+    indicatorStyle: app.xreader.data.library.NavIndicatorStyle =
+        app.xreader.data.library.NavIndicatorStyle.GOOEY,
+    indicatorColourMode: app.xreader.data.library.NavIndicatorColourMode =
+        app.xreader.data.library.NavIndicatorColourMode.THEME,
+    indicatorColourArgb: Long =
+        app.xreader.data.library.DEFAULT_NAV_INDICATOR_ARGB,
     /** v1.5.39 (item 4): pending manga-source updates,
      * badged numerically on the Explore tab (0 = no badge). */
     exploreBadgeCount: Int = 0
@@ -2608,6 +2665,49 @@ private fun FloatingNavBar(
         totalRamMb = ramMb,
         perfTier = perfTier
     )
+    // Nav-bar styles (v1.6.2): the indicator's resolved form on
+    // THIS device — the requested style after the tier /
+    // reduced-motion degradation (NavIndicatorLogic), the
+    // colour after the THEME / CUSTOM resolution, and the
+    // on-indicator colour by luminance. The shared travel
+    // Animatable is the centre-x the travelling styles, the
+    // NOTCH shape and the BUBBLE overlay all read; the host
+    // inside the bar drives it.
+    val effectiveIndicator = NavIndicatorLogic.effectiveStyle(
+        indicatorStyle, perfTier, reduceMotion
+    )
+    val indicatorColour = if (
+        indicatorColourMode ==
+        app.xreader.data.library.NavIndicatorColourMode.CUSTOM
+    ) {
+        Color(indicatorColourArgb.toInt())
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+    val onIndicatorColour = Color(
+        NavIndicatorLogic.onIndicatorArgb(
+            NavIndicatorLogic.resolveIndicatorArgb(
+                indicatorColourMode,
+                indicatorColourArgb,
+                indicatorColour.toArgb().toLong() and 0xFFFFFFFFL
+            )
+        ).toInt()
+    )
+    val indicatorTravel = remember { Animatable(0f) }
+    val barShape: androidx.compose.ui.graphics.Shape =
+        if (effectiveIndicator ==
+            app.xreader.data.library.NavIndicatorStyle.NOTCH
+        ) {
+            NotchBarShape(
+                centreX = { indicatorTravel.value },
+                slotWidthPx = { pillWidth.toFloat() },
+                docked = docked
+            )
+        } else if (docked) {
+            RoundedCornerShape(0.dp)
+        } else {
+            RoundedCornerShape(50)
+        }
     Box(
         Modifier
             .fillMaxWidth()
@@ -2630,7 +2730,7 @@ private fun FloatingNavBar(
         // transparent and the surface draws nothing outside its
         // own bounds — no band or backing around the bar.
         LiquidGlassSurface(
-            shape = if (docked) RoundedCornerShape(0.dp) else RoundedCornerShape(50),
+            shape = barShape,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(BarHeight),
@@ -2664,20 +2764,25 @@ private fun FloatingNavBar(
                     )
                 }
                 if (pillWidth > 0 && pillHeight > 0) {
-                    // Liquid Glass, piece 4 (Gooey Nav): the
-                    // selection indicator melts between slots
-                    // (GooeyIndicator) — drawn first inside the
-                    // bar's content box so the slots sit above it.
-                    // The tint is the pill's own colour read
-                    // verbatim: the theme's primary at full
-                    // strength, exactly what the old Surface pill
-                    // used (no alpha is applied anywhere).
-                    GooeyIndicator(
+                    // Liquid Glass, piece 4 (Gooey Nav) → nav-bar
+                    // styles (v1.6.2): the IndicatorHost dispatches
+                    // on the user's style where the direct
+                    // GooeyIndicator call used to sit — GOOEY is
+                    // still the default and still lands on
+                    // GooeyIndicator inside the host. Drawn first
+                    // inside the bar's content box so the slots
+                    // sit above it. The tint is the resolved
+                    // indicator colour: the theme's primary under
+                    // THEME (exactly what the old pill used), the
+                    // user's exact colour under CUSTOM.
+                    IndicatorHost(
+                        style = indicatorStyle,
+                        colour = indicatorColour,
                         targetCentreX = targetX + pillWidth / 2f,
                         slotWidthPx = pillWidth.toFloat(),
                         topPx = pillY.toFloat(),
                         heightPx = pillHeight.toFloat(),
-                        colour = MaterialTheme.colorScheme.primary,
+                        travel = indicatorTravel,
                         perfTier = perfTier,
                         reduceMotion = reduceMotion,
                         modifier = Modifier.fillMaxSize()
@@ -2693,6 +2798,10 @@ private fun FloatingNavBar(
                                 .weight(1f)
                                 .fillMaxHeight(),
                             labelStyle = labelStyle,
+                            indicatorStyle = effectiveIndicator,
+                            indicatorColour = indicatorColour,
+                            onIndicatorColour = onIndicatorColour,
+                            reduceMotion = reduceMotion,
                             badgeCount = if (tab == Tab.Browse) {
                                 exploreBadgeCount
                             } else {
@@ -2701,6 +2810,39 @@ private fun FloatingNavBar(
                         )
                     }
                 }
+            }
+        }
+        // Nav-bar styles (v1.6.2): the BUBBLE rides proud of the
+        // bar's top edge — outside the surface, whose clip would
+        // cut it — in an overlay sharing the bar's exact bounds,
+        // extended BubbleProud above it. Drawn after the surface
+        // (above it); nothing in the overlay is interactive, so
+        // touches fall through to the bar and the page.
+        if (effectiveIndicator ==
+            app.xreader.data.library.NavIndicatorStyle.BUBBLE &&
+            pillWidth > 0
+        ) {
+            // The wrapper is exactly the bar's height, so the
+            // overlay's proud part costs no layout — it simply
+            // draws above the wrapper's bounds (unclipped).
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(BarHeight)
+            ) {
+                BubbleIndicatorOverlay(
+                    travel = indicatorTravel,
+                    icon = selected.icon,
+                    colour = indicatorColour,
+                    onColour = onIndicatorColour,
+                    showScrim = NavIndicatorLogic.bubbleShowsScrim(
+                        effectiveIndicator, perfTier
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(BarHeight + BubbleProud)
+                        .offset(y = -BubbleProud)
+                )
             }
         }
     }
@@ -2788,6 +2930,7 @@ private fun NavRail(
                                 .width(RailWidth)
                                 .height(RailSlotHeight),
                             labelStyle = labelStyle,
+                            reduceMotion = reduceMotion,
                             badgeCount = if (tab == Tab.Browse) {
                                 exploreBadgeCount
                             } else {
@@ -2815,14 +2958,94 @@ private fun NavSlot(
     modifier: Modifier = Modifier,
     labelStyle: app.xreader.data.library.TabLabelStyle =
         app.xreader.data.library.TabLabelStyle.ALWAYS,
+    /** Nav-bar styles (v1.6.2): the EFFECTIVE indicator style
+     * and its resolved colours, passed by the dock. Null (the
+     * tablet rail, which keeps its own pill) = the legacy
+     * behaviour: the selected slot takes onPrimary. */
+    indicatorStyle: app.xreader.data.library.NavIndicatorStyle? = null,
+    indicatorColour: Color = Color.Unspecified,
+    onIndicatorColour: Color = Color.Unspecified,
+    reduceMotion: Boolean = false,
     /** v1.5.39 (item 4): a numeric badge over the icon
      * (the Explore tab's pending source updates; 0 = none). */
     badgeCount: Int = 0
 ) {
     val interaction = remember { MutableInteractionSource() }
-    val contentColor =
-        if (selected) MaterialTheme.colorScheme.onPrimary
-        else MaterialTheme.colorScheme.onSurfaceVariant
+    // Nav-bar styles (v1.6.2): icon and label colours are
+    // COUPLED to the indicator — they ease to the style's
+    // accent as the indicator arrives (the segmentColorSpec
+    // 200 ms ease) instead of snapping at the tap. Which accent
+    // each takes is NavIndicatorLogic's pure decision (filled
+    // styles put the icon ON the indicator; NOTCH / GLOW tint
+    // it with the indicator colour; the label always sits on
+    // the bar). Under reduced motion the colours snap with
+    // everything else.
+    val styled = indicatorStyle != null
+    val inactive = MaterialTheme.colorScheme.onSurfaceVariant
+    val indicatorArgb = indicatorColour.toArgb().toLong() and 0xFFFFFFFFL
+    val onIndicatorArgb = onIndicatorColour.toArgb().toLong() and 0xFFFFFFFFL
+    val iconTarget = when {
+        !selected -> inactive
+        !styled -> MaterialTheme.colorScheme.onPrimary
+        else -> Color(
+            NavIndicatorLogic.navIconArgb(
+                indicatorStyle!!, indicatorArgb, onIndicatorArgb
+            ).toInt()
+        )
+    }
+    val labelTarget = when {
+        !selected -> inactive
+        !styled -> MaterialTheme.colorScheme.onPrimary
+        else -> Color(
+            NavIndicatorLogic.navLabelArgb(
+                indicatorStyle!!, indicatorArgb, onIndicatorArgb
+            ).toInt()
+        )
+    }
+    val colourSpec = if (reduceMotion) {
+        androidx.compose.animation.core.snap<Color>()
+    } else {
+        segmentColorSpec()
+    }
+    val iconTint by animateColorAsState(
+        targetValue = iconTarget,
+        animationSpec = colourSpec,
+        label = "navSlotIconTint"
+    )
+    val labelColour by animateColorAsState(
+        targetValue = labelTarget,
+        animationSpec = colourSpec,
+        label = "navSlotLabelColour"
+    )
+    // The rise (BUBBLE / NOTCH): the selected icon lifts
+    // toward the bubble / into the scoop as the indicator
+    // arrives, on the Spatial spring; every other style keeps
+    // the icon on the baseline.
+    val rise by animateDpAsState(
+        targetValue = when {
+            !selected || !styled -> 0.dp
+            indicatorStyle ==
+                app.xreader.data.library.NavIndicatorStyle.BUBBLE -> (-4).dp
+            indicatorStyle ==
+                app.xreader.data.library.NavIndicatorStyle.NOTCH -> (-6).dp
+            else -> 0.dp
+        },
+        animationSpec = if (reduceMotion) {
+            androidx.compose.animation.core.snap()
+        } else {
+            SpringMotionEngine.Spatial.toSpec()
+        },
+        label = "navSlotRise"
+    )
+    // Under BUBBLE the selected icon rides IN the bubble (the
+    // overlay draws it there) — the slot's own copy hides so
+    // the two never double. A badged slot keeps its icon: the
+    // badge must stay readable where it has always lived.
+    val hideIcon = styled && selected &&
+        indicatorStyle ==
+        app.xreader.data.library.NavIndicatorStyle.BUBBLE &&
+        badgeCount == 0
+    val drawnIconTint = if (hideIcon) Color.Transparent else iconTint
     Column(
         modifier
             .pressBounce(interaction, haptics = false)
@@ -2831,18 +3054,20 @@ private fun NavSlot(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
     ) {
-        if (badgeCount > 0) {
-            androidx.compose.material3.BadgedBox(
-                badge = {
-                    androidx.compose.material3.Badge {
-                        Text(badgeCount.toString())
+        Box(Modifier.offset { IntOffset(0, rise.roundToPx()) }) {
+            if (badgeCount > 0) {
+                androidx.compose.material3.BadgedBox(
+                    badge = {
+                        androidx.compose.material3.Badge {
+                            Text(badgeCount.toString())
+                        }
                     }
+                ) {
+                    Icon(tab.icon, contentDescription = tab.label, tint = drawnIconTint)
                 }
-            ) {
-                Icon(tab.icon, contentDescription = tab.label, tint = contentColor)
+            } else {
+                Icon(tab.icon, contentDescription = tab.label, tint = drawnIconTint)
             }
-        } else {
-            Icon(tab.icon, contentDescription = tab.label, tint = contentColor)
         }
         // v1.0.1 tab-label choice: always / selected only / icons only.
         // The contentDescription always carries the label either way.
@@ -2862,7 +3087,7 @@ private fun NavSlot(
             Text(
                 tab.label,
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = labelSize),
-                color = contentColor,
+                color = labelColour,
                 maxLines = 1,
                 softWrap = false,
                 onTextLayout = { layout ->

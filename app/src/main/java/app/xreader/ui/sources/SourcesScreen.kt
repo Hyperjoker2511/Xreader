@@ -103,7 +103,18 @@ fun SourcesScreen(
     opdsServers: List<OpdsServer> = emptyList(),
     onOpenOpdsServer: (OpdsServer) -> Unit = {},
     onOpenBook: (Long) -> Unit = {},
-    coverFile: (String?) -> java.io.File? = { null }
+    coverFile: (String?) -> java.io.File? = { null },
+    /** Nav-bar styles (v1.6.2): the side switch's indicator
+     * wiring, passed by the shell from the same prefs the
+     * Library's switch reads — style, resolved custom colour
+     * (Unspecified = the theme primary), tier and motion gate. */
+    indicatorStyle: app.xreader.data.library.NavIndicatorStyle =
+        app.xreader.data.library.NavIndicatorStyle.GOOEY,
+    indicatorColour: androidx.compose.ui.graphics.Color =
+        androidx.compose.ui.graphics.Color.Unspecified,
+    indicatorPerfTier: app.xreader.data.prefs.PerfTier =
+        app.xreader.data.prefs.PerfTier.FULL,
+    reduceMotion: Boolean = false
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val searchState by searchViewModel.state.collectAsStateWithLifecycle()
@@ -269,7 +280,13 @@ fun SourcesScreen(
             mangaLabel = app.xreader.data.library.LibrarySplit.switchLabel(
                 app.xreader.data.extension.MediaKind.MANGA, mangaSideCount
             ),
-            onSelect = { viewModel.setLibrarySide(it) }
+            onSelect = { viewModel.setLibrarySide(it) },
+            // Nav-bar styles (v1.6.2): the same 2-stop indicator
+            // language as the Library's switch and the dock.
+            indicatorStyle = indicatorStyle,
+            indicatorColour = indicatorColour,
+            perfTier = indicatorPerfTier,
+            reduceMotion = reduceMotion
         )
         Spacer(Modifier.height(12.dp))
         // v1.5.39 (item 4): the source-update banner — fixed

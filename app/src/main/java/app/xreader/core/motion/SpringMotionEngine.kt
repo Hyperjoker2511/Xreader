@@ -166,14 +166,53 @@ object SpringMotionEngine {
     // negligible (~0.15%), so no visible wobble; the brisker
     // spring's higher peak velocity also drives the indicator's
     // stretch geometry harder while it travels. It lives HERE
-    // (never as a screen-local constant); reduced motion and the
-    // MINIMAL tier skip the melt entirely, by the indicator's
-    // own gate.
+    // (never as a screen-local constant); reduced motion skips
+    // the melt entirely, by the indicator's own gate, and the
+    // MINIMAL tier runs the melt on the short nav-travel spring
+    // (SPEC-NAVBAR-STYLES-2026-11-16: ~180 ms, still travelling —
+    // never a teleport).
+    //
+    // Nav-bar styles retime (2026-11-16, SPEC-NAVBAR-STYLES-
+    // 2026-11-16 Change 1): v1.6.1's phone proof measured the
+    // melt HOPPING slot-to-slot despite the 321 ms settle — the
+    // bridge phase (the neck at visible thickness) flashed past
+    // inside the trip. 240 / 0.75 moves the settle to ~344 ms,
+    // the top half of the SAME 280–380 ms readability window
+    // (no re-pin: the window was written for exactly this
+    // retime), and the indicator driver additionally warps its
+    // progress through gooeyTravelProgress so the run lingers in
+    // the bridge band — the stretch spans a watchable share of
+    // the trip (Morphe-like) instead of flashing at the ends.
+    // Overshoot at ζ 0.75 is ~2.8%: one soft settle, no wobble.
 
-    /** Gooey dock indicator melt: stiffness 300, dampingRatio 0.72. */
-    val GooeyMelt = SpringProfile("GooeyMelt", stiffness = 300f, dampingRatio = 0.72f)
+    /** Gooey dock indicator melt: stiffness 240, dampingRatio 0.75. */
+    val GooeyMelt = SpringProfile("GooeyMelt", stiffness = 240f, dampingRatio = 0.75f)
 
     val gooeyProfiles: List<SpringProfile> = listOf(GooeyMelt)
+
+    // ── Nav travel family (nav-bar styles, 2026-11-16) ─────────
+    // The FIFTH sanctioned family, kept out of [profiles] like
+    // the others: the travel spring for the dock indicator's
+    // non-gooey styles (Slide / Bubble / Notch / Glow) and the
+    // Library side switch's pill — ONE persistent object that
+    // visibly TRAVELS (SPEC-NAVBAR-STYLES-2026-11-16's standard:
+    // ~300–380 ms for a neighbouring tab, longer for farther
+    // jumps — a spring's visible settle-to-the-pixel grows with
+    // distance on its own). NavTravel is the Spatial profile
+    // felt at Heavy mass (Quantum dynamic damping: the indicator
+    // is a chunky pill, not a chip): k 236 / ζ 0.91 settles in
+    // ~286 ms with no visible overshoot (~0.2%). NavTravelMinimal
+    // is the MINIMAL tier's shortened travel (~176 ms): the
+    // 2 GB phone still SLIDES, never teleports — and it doubles
+    // as the gooey melt's short spring on that tier.
+
+    /** Indicator travel, full tiers: stiffness 236, dampingRatio 0.91. */
+    val NavTravel = SpringProfile("NavTravel", stiffness = 236f, dampingRatio = 0.91f)
+
+    /** Indicator travel, MINIMAL tier: stiffness 640, dampingRatio 0.90. */
+    val NavTravelMinimal = SpringProfile("NavTravelMinimal", stiffness = 640f, dampingRatio = 0.90f)
+
+    val navTravelProfiles: List<SpringProfile> = listOf(NavTravel, NavTravelMinimal)
 
     /**
      * Quantum Animation Engine 3.0's dynamic damping, as three mass

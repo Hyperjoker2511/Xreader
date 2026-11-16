@@ -151,4 +151,61 @@ class GooeyGeometryTest {
             )
         }
     }
+
+    // -- The travel-progress warp (nav-bar styles, 2026-11-16) ------
+    // The driver feeds gooeyBridge the WARPED progress so the run
+    // lingers in the bridge band: endpoints exact, midpoint
+    // exact, strictly monotonic, ahead of linear in the first
+    // quarter and behind it in the third (the linger).
+
+    @Test
+    fun `travel warp keeps the endpoints and the midpoint exact`() {
+        assertClose(0f, gooeyTravelProgress(0f), 0.0001f)
+        assertClose(0.5f, gooeyTravelProgress(0.5f), 0.0001f)
+        assertClose(1f, gooeyTravelProgress(1f), 0.0001f)
+    }
+
+    @Test
+    fun `travel warp is strictly monotonic over 1000 steps`() {
+        var previous = gooeyTravelProgress(0f)
+        for (i in 1..1000) {
+            val p = i / 1000f
+            val warped = gooeyTravelProgress(p)
+            assertTrue("not increasing at p=$p", warped > previous)
+            previous = warped
+        }
+        assertClose(1f, previous, 0.0001f)
+    }
+
+    @Test
+    fun `travel warp runs ahead early and lingers late`() {
+        // First quarter: warped progress is AHEAD of the raw
+        // run (the launch). Third quarter: BEHIND it (the
+        // linger through the bridge band).
+        assertTrue(gooeyTravelProgress(0.25f) > 0.25f)
+        assertTrue(gooeyTravelProgress(0.75f) < 0.75f)
+        // The warp's size is the pinned constant: at p = 0.25
+        // the sine term is at its peak, A / (2π) = 0.30 / (2π).
+        assertClose(
+            0.25f + 0.30f / (2f * kotlin.math.PI.toFloat()),
+            gooeyTravelProgress(0.25f),
+            0.0001f
+        )
+    }
+
+    @Test
+    fun `warped travel stays monotonic through the bridge`() {
+        var previous = gooeyBridge(
+            near, far, gooeyTravelProgress(0f), radius
+        ).mainBlobX
+        for (i in 1..1000) {
+            val p = i / 1000f
+            val x = gooeyBridge(
+                near, far, gooeyTravelProgress(p), radius
+            ).mainBlobX
+            assertTrue("not increasing at p=$p: $previous -> $x", x > previous)
+            previous = x
+        }
+        assertEquals(far, previous)
+    }
 }

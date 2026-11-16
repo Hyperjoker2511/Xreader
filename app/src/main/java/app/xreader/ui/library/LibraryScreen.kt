@@ -127,7 +127,12 @@ fun LibraryScreen(
     /** Visible-layer fix round (§E): the filter sheet's
      * "New chapters" row — opens the updates page. */
     onOpenUpdates: () -> Unit = {},
-    coverGlow: Boolean = false
+    coverGlow: Boolean = false,
+    /** Nav-bar styles (v1.6.2): the device performance tier the
+     * shell resolved — the Novels↔Manga switch's indicator
+     * travel shortens on MINIMAL, like the dock's. */
+    indicatorPerfTier: app.xreader.data.prefs.PerfTier =
+        app.xreader.data.prefs.PerfTier.FULL
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val candidates by viewModel.candidates.collectAsStateWithLifecycle()
@@ -379,7 +384,23 @@ fun LibraryScreen(
                     app.xreader.data.extension.MediaKind.MANGA,
                     newBySide[app.xreader.data.extension.MediaKind.MANGA] ?: 0
                 ),
-                onSelect = { viewModel.setLibrarySide(it) }
+                onSelect = { viewModel.setLibrarySide(it) },
+                // Nav-bar styles (v1.6.2): the switch's pill is a
+                // 2-stop indicator in the dock's language — the
+                // user's style + colour, the tier's travel.
+                indicatorStyle = state.libraryPrefs.navIndicatorStyle,
+                indicatorColour = if (
+                    state.libraryPrefs.navIndicatorColourMode ==
+                    app.xreader.data.library.NavIndicatorColourMode.CUSTOM
+                ) {
+                    androidx.compose.ui.graphics.Color(
+                        state.libraryPrefs.navIndicatorColourArgb.toInt()
+                    )
+                } else {
+                    androidx.compose.ui.graphics.Color.Unspecified
+                },
+                perfTier = indicatorPerfTier,
+                reduceMotion = reduceMotion
             )
         }
         // v1.0.6.3 (P1): "+ Add a book" lives in its OWN full-width

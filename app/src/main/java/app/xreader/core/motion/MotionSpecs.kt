@@ -83,6 +83,15 @@ const val PROGRESS_MS = 300
  * crossover — 120 ms, never phase-locked to the travel. */
 const val TAB_FADE_MS = 120
 
+/** Tab-switch EXIT fade (nav-bar styles pass, 2026-11-16,
+ * SPEC-NAVBAR-STYLES-2026-11-16 Change 4 — the ghost fix): the
+ * outgoing tab's fade drops to 80 ms while the incoming keeps
+ * the 120 ms [TAB_FADE_MS]. At the old symmetric 120/120 both
+ * screens sat at half strength together mid-switch and the two
+ * headers doubled — the owner's "ghosting" frame in the v1.6.1
+ * proof. The slide geometry is unchanged (width/5, Spatial). */
+const val TAB_EXIT_FADE_MS = 80
+
 /** Stack fade (ColorOS motion pass, 2026-11-15): 200 ms — the
  * segmentColorSpec precedent — under the Spatial-spring travel. */
 const val STACK_FADE_MS = 200
@@ -99,6 +108,10 @@ fun <T> fadeTween() = tween<T>(durationMillis = FADE_MS, easing = FadeEasing)
  * ColorOS pass put the slide on the Spatial spring and cut the
  * fade to this.) */
 fun <T> tabFadeSpec() = tween<T>(durationMillis = TAB_FADE_MS, easing = FadeEasing)
+
+/** The tab-switch EXIT fade curve: [TAB_EXIT_FADE_MS] on the
+ * shared FadeEasing (the ghost fix — see the token). */
+fun <T> tabExitFadeSpec() = tween<T>(durationMillis = TAB_EXIT_FADE_MS, easing = FadeEasing)
 
 /** The stack fade curve: [STACK_FADE_MS] on the shared FadeEasing. */
 fun <T> stackFadeSpec() = tween<T>(durationMillis = STACK_FADE_MS, easing = FadeEasing)
@@ -231,13 +244,18 @@ fun tabEnter(direction: Int = 0, reduceMotion: Boolean = false): EnterTransition
         fadeIn(tabFadeSpec())
 
 /** Tab-to-tab exit: the outgoing tab travels a fifth-width
- * AGAINST the travel direction on the Spatial spring while the
- * short fade softens the crossover — toward a later tab it
- * leaves left, toward an earlier tab right. */
+ * AGAINST the travel direction on the Spatial spring while its
+ * fade runs the SHORTER exit curve ([tabExitFadeSpec], 80 ms —
+ * the nav-bar styles ghost fix: the outgoing screen is mostly
+ * gone before the incoming reaches full strength, so the two
+ * headers never double). Under [reduceMotion] the exit keeps
+ * the symmetric 120 ms crossfade — the accessibility path's
+ * behaviour is unchanged. */
 fun tabExit(direction: Int = 0, reduceMotion: Boolean = false): ExitTransition =
-    if (direction == 0 || reduceMotion) fadeOut(tabFadeSpec())
+    if (reduceMotion) fadeOut(tabFadeSpec())
+    else if (direction == 0) fadeOut(tabExitFadeSpec())
     else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) { -direction * it / 5 } +
-        fadeOut(tabFadeSpec())
+        fadeOut(tabExitFadeSpec())
 
 /**
  * The Library's Novels ↔ Manga side switch (fix round §D.3):
@@ -392,6 +410,15 @@ fun itemExit(reduceMotion: Boolean): ExitTransition =
  * shell.
  */
 fun gooeyMeltSpec(): SpringSpec<Float> = SpringMotionEngine.GooeyMelt.toSpec()
+
+/**
+ * The melt's SHORT spring (nav-bar styles pass, 2026-11-16): on
+ * the MINIMAL tier the melt still travels — never a teleport —
+ * but on the engine's NavTravelMinimal profile (~176 ms), so a
+ * 2 GB phone pays a fraction of the full melt's frames. The
+ * indicator picks between this and [gooeyMeltSpec] by tier.
+ */
+fun gooeyMeltShortSpec(): SpringSpec<Float> = SpringMotionEngine.NavTravelMinimal.toSpec()
 
 // --- Parallax (PLAN §2.2: Library header background at ~0.5× rate) -------
 

@@ -14,9 +14,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import app.xreader.core.motion.gooeyMeltShortSpec
 import app.xreader.core.motion.gooeyMeltSpec
 import app.xreader.data.prefs.PerfTier
+import kotlin.math.PI
 import kotlin.math.pow
+import kotlin.math.sin
 
 /**
  * Liquid Glass, piece 4 (Gooey Nav): the dock's selection indicator
@@ -43,9 +46,11 @@ import kotlin.math.pow
  *
  * Device honesty: [perfTier] and [reduceMotion] are PASSED IN by the
  * bar (which resolves them from the app's existing paths) — this
- * composable reads no device state of its own. Reduced motion or
- * the MINIMAL tier means no melt at all: the pill sits at the target
- * instantly, which is the behaviour the dock had before this piece.
+ * composable reads no device state of its own. Reduced motion means
+ * no melt at all: the pill sits at the target instantly, which is
+ * the behaviour the dock had before this piece. The MINIMAL tier
+ * (nav-bar styles pass, 2026-11-16) still melts — never a
+ * teleport — but on the short spring (~180 ms).
  */
 
 // -- Pure geometry -----------------------------------------------------
@@ -108,6 +113,29 @@ private fun easeInOutCubic(p: Float): Float =
  * catching up late — the liquid feel.
  */
 private fun gooeyEase(p: Float): Float = 0.04f * p + 0.96f * easeInOutCubic(p)
+
+/** How hard the travel-progress warp lingers mid-run (below). */
+private const val TRAVEL_WARP = 0.30f
+
+/**
+ * The travel-progress warp (nav-bar styles pass, 2026-11-16,
+ * SPEC-NAVBAR-STYLES-2026-11-16 Change 1): the spring's raw
+ * progress is reshaped before it reaches [gooeyBridge] so the
+ * run LINGERS in the bridge band — the neck at visible
+ * thickness spans a watchable share of the trip (the Morphe
+ * stretch) instead of flashing past inside a fast middle.
+ *
+ * warped(p) = p + A·sin(2πp)/(2π), A = [TRAVEL_WARP]. The
+ * endpoints are exact (0 → 0, 1 → 1, 0.5 → 0.5); the
+ * derivative 1 + A·cos(2πp) stays in [0.70, 1.30] — strictly
+ * positive, so travel stays monotonic — dipping to 0.70 at
+ * mid-run (the linger) and rising to 1.30 at the ends (the
+ * launch and the catch-up). Spring overshoot outside [0, 1]
+ * passes through harmlessly: [gooeyBridge] pins its own
+ * endpoints. Pure — pinned by GooeyGeometryTest.
+ */
+fun gooeyTravelProgress(raw: Float): Float =
+    raw + TRAVEL_WARP * sin(2f * PI.toFloat() * raw) / (2f * PI.toFloat())
 
 /**
  * The melt frame for [progress] between slot centres [fromX] and
@@ -188,13 +216,25 @@ fun GooeyIndicator(
     // ONE radius computation, shared by the animation driver (the
     // retarget maths in the effect below) and the Canvas.
     val radius = heightPx / 2f
-    val instant = reduceMotion || perfTier == PerfTier.MINIMAL
+    // Nav-bar styles pass (2026-11-16): reduced motion alone
+    // makes the melt instant now. The MINIMAL tier melts on the
+    // SHORT spring — travel shortens (~180 ms) but still
+    // travels; it never teleports. (The spec is picked INSIDE
+    // the effect: a SpringSpec is a fresh object per call, so
+    // keying the effect on it would relaunch — and cancel —
+    // the run on every recomposition.)
+    val instant = reduceMotion
 
     var fromX by remember { mutableFloatStateOf(targetCentreX) }
     var toX by remember { mutableFloatStateOf(targetCentreX) }
     val progress = remember { Animatable(1f) }
 
-    LaunchedEffect(targetCentreX, instant) {
+    LaunchedEffect(targetCentreX, instant, perfTier) {
+        val meltSpec = if (perfTier == PerfTier.MINIMAL) {
+            gooeyMeltShortSpec()
+        } else {
+            gooeyMeltSpec()
+        }
         when {
             instant -> {
                 fromX = targetCentreX
@@ -205,18 +245,25 @@ fun GooeyIndicator(
                 // Retarget from the CURRENT visual position: the
                 // blob the user is looking at right now becomes
                 // the new run's origin — never the old origin.
-                val visualX = gooeyBridge(fromX, toX, progress.value, radius).mainBlobX
+                // The visual position is read through the SAME
+                // warped progress the Canvas draws, so the
+                // re-base lands exactly on the drawn blob.
+                val visualX = gooeyBridge(
+                    fromX, toX, gooeyTravelProgress(progress.value), radius
+                ).mainBlobX
                 fromX = visualX
                 toX = targetCentreX
                 progress.snapTo(0f)
-                progress.animateTo(1f, gooeyMeltSpec())
+                progress.animateTo(1f, meltSpec)
             }
         }
     }
 
     Canvas(modifier) {
         if (radius <= 0f || slotWidthPx <= 0f || size.width <= 0f) return@Canvas
-        val bridge = gooeyBridge(fromX, toX, progress.value, radius)
+        val bridge = gooeyBridge(
+            fromX, toX, gooeyTravelProgress(progress.value), radius
+        )
         val cy = topPx + radius
         // NavGeometry's invariant, kept: even with the spring's
         // overshoot in the progress, the drawn blob never leaves

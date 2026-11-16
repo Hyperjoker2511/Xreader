@@ -60,6 +60,7 @@ import app.xreader.data.library.StartScreen
 import app.xreader.data.library.TabLabelStyle
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import app.xreader.data.prefs.AppearanceState
 import app.xreader.data.prefs.AppearanceValidation
 import app.xreader.data.prefs.CUSTOM_SCHEME_PREFIX
@@ -548,6 +549,30 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
 
     fun setTabLabelStyle(value: TabLabelStyle) {
         viewModelScope.launch { container.libraryPrefs.setTabLabelStyle(value) }
+    }
+
+    /** Nav-bar styles (v1.6.2): the dock indicator's style. */
+    fun setNavIndicatorStyle(value: app.xreader.data.library.NavIndicatorStyle) {
+        viewModelScope.launch {
+            container.libraryPrefs.setNavIndicatorStyle(value)
+        }
+    }
+
+    /** Nav-bar styles (v1.6.2): back to the theme's colour. */
+    fun setNavIndicatorColourTheme() {
+        viewModelScope.launch {
+            container.libraryPrefs.setNavIndicatorColourMode(
+                app.xreader.data.library.NavIndicatorColourMode.THEME
+            )
+        }
+    }
+
+    /** Nav-bar styles (v1.6.2): an exact colour from the wheel
+     * (the prefs write flips the mode to CUSTOM with it). */
+    fun setNavIndicatorColour(argb: Long) {
+        viewModelScope.launch {
+            container.libraryPrefs.setNavIndicatorColour(argb)
+        }
     }
 
     fun setStartScreen(value: StartScreen) {
@@ -1402,6 +1427,159 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     label = { Text("Downloads") }
                 )
             }
+            // Nav-bar styles (v1.6.2): the indicator's style
+            // and colour, with the live miniature dock at the
+            // top — the section proves itself here, before any
+            // phone-proof round. The preview resolves its tier
+            // exactly as the dock does (same PerformancePolicy
+            // call), so a MINIMAL phone previews MINIMAL travel.
+            val navContext = LocalContext.current
+            val navRamMb = remember(navContext) {
+                val manager = navContext.getSystemService(Context.ACTIVITY_SERVICE)
+                    as android.app.ActivityManager
+                val info = android.app.ActivityManager.MemoryInfo()
+                manager.getMemoryInfo(info)
+                info.totalMem / (1024L * 1024L)
+            }
+            val navPerfTier = app.xreader.data.prefs.PerformancePolicy.resolve(
+                appearance.performanceMode, navRamMb, appearance.coverGlow
+            ).tier
+            val indicatorColour = if (
+                library.navIndicatorColourMode ==
+                app.xreader.data.library.NavIndicatorColourMode.CUSTOM
+            ) {
+                Color(library.navIndicatorColourArgb.toInt())
+            } else {
+                MaterialTheme.colorScheme.primary
+            }
+            val onIndicatorColour = Color(
+                app.xreader.ui.shell.NavIndicatorLogic.onIndicatorArgb(
+                    indicatorColour.toArgb().toLong() and 0xFFFFFFFFL
+                ).toInt()
+            )
+            Text("Indicator preview", style = MaterialTheme.typography.bodyLarge)
+            app.xreader.ui.shell.NavIndicatorPreview(
+                style = library.navIndicatorStyle,
+                colour = indicatorColour,
+                onColour = onIndicatorColour,
+                barStyle = library.navBarStyle,
+                perfTier = navPerfTier,
+                reduceMotion = appearance.reduceMotion
+            )
+            Text("Indicator style", style = MaterialTheme.typography.bodyLarge)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.GOOEY,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.GOOEY
+                        )
+                    },
+                    label = { Text("Gooey") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.SLIDE,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.SLIDE
+                        )
+                    },
+                    label = { Text("Slide") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.BUBBLE,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.BUBBLE
+                        )
+                    },
+                    label = { Text("Bubble") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.NOTCH,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.NOTCH
+                        )
+                    },
+                    label = { Text("Notch") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.GLOW,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.GLOW
+                        )
+                    },
+                    label = { Text("Glow") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.PLAIN,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.PLAIN
+                        )
+                    },
+                    label = { Text("Plain") }
+                )
+            }
+            Text("Indicator colour", style = MaterialTheme.typography.bodyLarge)
+            var indicatorWheelOpen by remember { mutableStateOf(false) }
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = library.navIndicatorColourMode ==
+                        app.xreader.data.library.NavIndicatorColourMode.THEME,
+                    onClick = { viewModel.setNavIndicatorColourTheme() },
+                    label = { Text("Theme") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorColourMode ==
+                        app.xreader.data.library.NavIndicatorColourMode.CUSTOM,
+                    onClick = { indicatorWheelOpen = true },
+                    label = { Text("Custom…") },
+                    leadingIcon = {
+                        Box(
+                            Modifier
+                                .size(14.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(
+                                    Color(
+                                        library.navIndicatorColourArgb.toInt()
+                                    )
+                                )
+                        )
+                    }
+                )
+            }
+            if (indicatorWheelOpen) {
+                app.xreader.ui.common.ColourWheelPickerDialog(
+                    title = "Indicator colour",
+                    initialArgb = library.navIndicatorColourArgb,
+                    onDismiss = { indicatorWheelOpen = false },
+                    onPick = { argb ->
+                        viewModel.setNavIndicatorColour(argb)
+                        indicatorWheelOpen = false
+                    }
+                )
+            }
+            Text(
+                "The marker that travels under the tabs. With Reduce motion " +
+                    "on, every style rests as Plain.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         CustomiseSection(
