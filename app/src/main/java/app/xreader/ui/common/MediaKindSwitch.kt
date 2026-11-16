@@ -19,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,9 +41,11 @@ import app.xreader.core.motion.segmentColorSpec
 import app.xreader.data.extension.MediaKind
 import app.xreader.data.library.NavIndicatorStyle
 import app.xreader.data.prefs.PerfTier
-import app.xreader.ui.shell.GooeyIndicator
+import app.xreader.ui.shell.LensIndicator
 import app.xreader.ui.shell.NavIndicatorLogic
+import app.xreader.ui.shell.StretchIndicator
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 /**
  * Manga programme (M3): THE Novels | Manga switch — one
@@ -55,10 +58,14 @@ import kotlin.math.roundToInt
  * Nav-bar styles (v1.6.2, SPEC-NAVBAR-STYLES-2026-11-16
  * Change 3): the active segment's fill is no longer two
  * colours crossfading — it is a 2-stop INDICATOR in the dock's
- * language. Under GOOEY the fill is the dock's own melt
- * (GooeyIndicator over the two segment centres, bridge and
- * all); under every other travelling style a single pill
- * rides the shared travel spring between the stops; under
+ * language. Nav engine round (SPEC-NAV-ENGINE-2026-11-16 §5):
+ * the fill's shape follows [NavIndicatorLogic.switchStyleFor]'s
+ * pure mapping of the EFFECTIVE dock style — GOOEY / WORM ride
+ * the shared stretched pill (the two-edge engine, two stops),
+ * LENS rides the fake lens painter, and every other style the
+ * switch can express rides the plain travel pill (the
+ * inexpressible layout styles — EXPANDING, FLASHY, BUBBLE,
+ * NOTCH, MINIMAL — map to the SLIDE-equivalent pill); under
  * PLAIN (or reduced motion) it sits at the active stop
  * instantly. The fill wears the resolved indicator colour —
  * the user's nav colour choice reaches this switch too — and
@@ -93,6 +100,9 @@ fun MediaKindSwitch(
     val effective = NavIndicatorLogic.effectiveStyle(
         indicatorStyle, perfTier, reduceMotion
     )
+    // Which of the switch's three fills the effective style
+    // maps to (pure, pinned — NavIndicatorLogic).
+    val switchKind = NavIndicatorLogic.switchStyleFor(effective)
     val density = LocalDensity.current
     val padPx = with(density) { 4.dp.roundToPx() }
     var widthPx by remember { mutableIntStateOf(0) }
@@ -112,22 +122,85 @@ fun MediaKindSwitch(
             if (s == MediaKind.MANGA) segWidthPx + padPx else 0f
     val targetCentre = centreFor(side)
 
-    // The travelling pill's shared centre (non-gooey styles).
+    // The travelling pill's shared centre (the pill and lens
+    // fills). The run's from/to are remembered so the lens can
+    // read its trip progress in the draw phase.
     val travel = remember { Animatable(0f) }
     var travelInit by remember { mutableStateOf(false) }
+    var travelFrom by remember { mutableFloatStateOf(0f) }
+    var travelTo by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(targetCentre, effective, perfTier) {
         if (segWidthPx <= 0f) return@LaunchedEffect
         when {
-            effective == NavIndicatorStyle.GOOEY ||
+            switchKind == NavIndicatorLogic.SwitchIndicator.STRETCH ||
                 effective == NavIndicatorStyle.PLAIN -> Unit
             !travelInit -> {
                 travel.snapTo(targetCentre)
+                travelFrom = targetCentre
+                travelTo = targetCentre
                 travelInit = true
             }
-            else -> travel.animateTo(
-                targetCentre,
-                NavIndicatorLogic.navTravelSpec(perfTier)
-            )
+            else -> {
+                travelFrom = travel.value
+                travelTo = targetCentre
+                travel.animateTo(
+                    targetCentre,
+                    NavIndicatorLogic.navTravelSpec(perfTier)
+                )
+            }
+        }
+    }
+    val tripProgress: () -> Float = {
+        if (travelTo != travelFrom) {
+            ((travel.value - travelFrom) / (travelTo - travelFrom))
+                .coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+    }
+
+    // The stretched pill's two edges (nav engine round §1,
+    // two stops): the same host pattern as the dock's — the
+    // edge toward the tapped segment leads on the style's
+    // lead spring, the far edge lags on TrailLag; the first
+    // placement snaps.
+    val leadEdge = remember { Animatable(0f) }
+    val trailEdge = remember { Animatable(0f) }
+    var edgesInit by remember { mutableStateOf(false) }
+    var runFromLead by remember { mutableFloatStateOf(0f) }
+    var runToLead by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(targetCentre, effective, perfTier) {
+        if (switchKind != NavIndicatorLogic.SwitchIndicator.STRETCH) {
+            return@LaunchedEffect
+        }
+        if (segWidthPx <= 0f) return@LaunchedEffect
+        val targetLeft = targetCentre - segWidthPx / 2f
+        val targetRight = targetCentre + segWidthPx / 2f
+        if (!edgesInit) {
+            leadEdge.snapTo(targetRight)
+            trailEdge.snapTo(targetLeft)
+            runFromLead = targetRight
+            runToLead = targetRight
+            edgesInit = true
+            return@LaunchedEffect
+        }
+        val currentCentre = (leadEdge.value + trailEdge.value) / 2f
+        val movingRight = targetCentre >= currentCentre
+        val leadTarget = if (movingRight) targetRight else targetLeft
+        val trailTarget = if (movingRight) targetLeft else targetRight
+        runFromLead = leadEdge.value
+        runToLead = leadTarget
+        val leadSpec = NavIndicatorLogic.leadEdgeSpec(effective, perfTier)
+        val trailSpec = NavIndicatorLogic.trailEdgeSpec(effective, perfTier)
+        launch { leadEdge.animateTo(leadTarget, leadSpec) }
+        launch { trailEdge.animateTo(trailTarget, trailSpec) }
+    }
+    val squashProgress: () -> Float = {
+        if (runToLead != runFromLead) {
+            ((leadEdge.value - runFromLead) / (runToLead - runFromLead))
+                .coerceIn(0f, 1f)
+        } else {
+            1f
         }
     }
 
@@ -145,30 +218,44 @@ fun MediaKindSwitch(
                 }
         ) {
             if (segWidthPx > 0f && segHeightPx > 0f) {
-                when (effective) {
-                    NavIndicatorStyle.GOOEY -> GooeyIndicator(
-                        targetCentreX = targetCentre,
-                        slotWidthPx = segWidthPx,
-                        topPx = padPx.toFloat(),
-                        heightPx = segHeightPx,
-                        colour = colour,
-                        perfTier = perfTier,
-                        reduceMotion = reduceMotion,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    NavIndicatorStyle.PLAIN -> Canvas(Modifier.fillMaxSize()) {
-                        drawRoundRect(
-                            color = colour,
-                            topLeft = Offset(
-                                targetCentre - segWidthPx / 2f,
-                                padPx.toFloat()
-                            ),
-                            size = Size(segWidthPx, segHeightPx),
-                            cornerRadius = CornerRadius(
-                                segHeightPx / 2f, segHeightPx / 2f
+                when {
+                    effective == NavIndicatorStyle.PLAIN ->
+                        Canvas(Modifier.matchParentSize()) {
+                            drawRoundRect(
+                                color = colour,
+                                topLeft = Offset(
+                                    targetCentre - segWidthPx / 2f,
+                                    padPx.toFloat()
+                                ),
+                                size = Size(segWidthPx, segHeightPx),
+                                cornerRadius = CornerRadius(
+                                    segHeightPx / 2f, segHeightPx / 2f
+                                )
                             )
+                        }
+                    switchKind == NavIndicatorLogic.SwitchIndicator.STRETCH ->
+                        StretchIndicator(
+                            style = effective,
+                            colour = colour,
+                            leadEdge = leadEdge,
+                            trailEdge = trailEdge,
+                            topPx = padPx.toFloat(),
+                            heightPx = segHeightPx,
+                            slotWidthPx = segWidthPx,
+                            slotPitchPx = segWidthPx + padPx,
+                            squashProgress = squashProgress,
+                            modifier = Modifier.matchParentSize()
                         )
-                    }
+                    switchKind == NavIndicatorLogic.SwitchIndicator.LENS ->
+                        LensIndicator(
+                            travel = travel,
+                            colour = colour,
+                            topPx = padPx.toFloat(),
+                            heightPx = segHeightPx,
+                            slotWidthPx = segWidthPx,
+                            tripProgress = tripProgress,
+                            modifier = Modifier.matchParentSize()
+                        )
                     else -> Box(
                         Modifier
                             .offset {

@@ -1,6 +1,7 @@
 package app.xreader.core.motion
 
 import app.xreader.core.motion.SpringMotionEngine.MassClass
+import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -180,5 +181,92 @@ class SpringMotionEngineTest {
             "GooeyMelt settles in ${settle}ms — outside the 280–380ms window",
             settle in 280.0..380.0
         )
+    }
+
+    @Test
+    fun `trail lag settles inside the nav engine band`() {
+        // Nav engine round (SPEC-NAV-ENGINE-2026-11-16 §1): the
+        // stretched pill's TRAILING edge lags the lead on
+        // purpose — its settle must land in the spec's
+        // 420–540 ms window, clearly behind GooeyMelt's
+        // 280–380 ms lead (the pin above, unmodified), or the
+        // stretch reads as a plain slide — the exact failure
+        // the owner's "Gooye not working" verdict convicted.
+        val settle = SpringMotionEngine.settleMillis(SpringMotionEngine.TrailLag)
+        assertTrue(
+            "TrailLag settles in ${settle}ms — outside the 420–540ms window",
+            settle in 420.0..540.0
+        )
+    }
+
+    @Test
+    fun `trail lag minimal shortens in proportion to nav travel`() {
+        // §3: on MINIMAL the trail keeps but shortens
+        // proportionally — the same ratio NavTravelMinimal
+        // keeps to NavTravel.
+        val settle = SpringMotionEngine.settleMillis(
+            SpringMotionEngine.TrailLagMinimal
+        )
+        assertTrue(
+            "TrailLagMinimal settles in ${settle}ms",
+            settle in 270.0..330.0
+        )
+        val trailRatio = settle /
+            SpringMotionEngine.settleMillis(SpringMotionEngine.TrailLag)
+        val travelRatio = SpringMotionEngine.settleMillis(
+            SpringMotionEngine.NavTravelMinimal
+        ) / SpringMotionEngine.settleMillis(SpringMotionEngine.NavTravel)
+        assertTrue(
+            "trail ratio $trailRatio vs travel ratio $travelRatio",
+            abs(trailRatio - travelRatio) < 0.05
+        )
+    }
+
+    @Test
+    fun `trail lag stays out of the subtle family`() {
+        // Like the gooey family, the trail profiles are a
+        // separate sanctioned family (ζ 0.75 overshoots ~2.8% —
+        // the visible lag IS the feature) and must never leak
+        // into `profiles`, whose subtle contract is pinned
+        // above.
+        assertFalse(SpringMotionEngine.profiles.contains(SpringMotionEngine.TrailLag))
+        assertFalse(
+            SpringMotionEngine.profiles.contains(SpringMotionEngine.TrailLagMinimal)
+        )
+        assertTrue(
+            SpringMotionEngine.trailLagProfiles.contains(SpringMotionEngine.TrailLag)
+        )
+        assertTrue(
+            SpringMotionEngine.trailLagProfiles.contains(
+                SpringMotionEngine.TrailLagMinimal
+            )
+        )
+    }
+
+    @Test
+    fun `spring position model starts at from and lands on to`() {
+        // springPositionAt is the pure model of the host's
+        // Animatables — the silhouette test's ground truth.
+        val profile = SpringMotionEngine.NavTravel
+        assertEquals(
+            10f,
+            SpringMotionEngine.springPositionAt(profile, 10f, 110f, 0.0),
+            0f
+        )
+        assertEquals(
+            110f,
+            SpringMotionEngine.springPositionAt(profile, 10f, 110f, 5000.0),
+            0.5f
+        )
+        // Strictly increasing through the first 300 ms (the
+        // overshoot peak is far later for ζ 0.91).
+        var prev = Float.NEGATIVE_INFINITY
+        var t = 0.0
+        while (t <= 300.0) {
+            val x = SpringMotionEngine.springPositionAt(profile, 0f, 100f, t)
+            assertTrue("position at ${t}ms ($x) must exceed $prev", x > prev)
+            prev = x
+            t += 25.0
+        }
     }
 }

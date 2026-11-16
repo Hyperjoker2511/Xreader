@@ -29,11 +29,13 @@ import org.robolectric.annotation.GraphicsMode
  * CustomiseScreen over the REAL container (the V152 journey
  * shape, driven through the V159 compose harness).
  *
- * - The Navigation section carries the live preview, the six
- *   indicator-style chips and the colour row.
- * - A style chip writes the pref through the ViewModel; the
- *   colour writer flips the mode to CUSTOM; the Theme chip
- *   flips it back.
+ * - The Navigation section carries the live preview, the
+ *   sixteen indicator-style chips (nav engine round,
+ *   SPEC-NAV-ENGINE-2026-11-16 §2 — plain names, spec order)
+ *   and the colour row.
+ * - Every style chip writes its pref through the ViewModel;
+ *   the colour writer flips the mode to CUSTOM; the Theme
+ *   chip flips it back.
  *
  * Mutation dependence: cut CustomiseViewModel.setNavIndicatorStyle's
  * prefs call and the chip assertions go red; cut
@@ -88,13 +90,31 @@ class CustomiseNavIndicatorWiringTest {
             "Indicator style row",
             V159ComposeHarness.findByText(handle, "Indicator style")
         )
-        listOf("Gooey", "Slide", "Bubble", "Notch", "Glow", "Plain")
-            .forEach { label ->
-                assertNotNull(
-                    "$label chip",
-                    V159ComposeHarness.findByText(handle, label)
-                )
-            }
+        // All sixteen chips, plain names, in the spec's order.
+        val chipStyles = listOf(
+            "Gooey" to NavIndicatorStyle.GOOEY,
+            "Worm" to NavIndicatorStyle.WORM,
+            "Liquid lens" to NavIndicatorStyle.LENS,
+            "Slide" to NavIndicatorStyle.SLIDE,
+            "Bubble" to NavIndicatorStyle.BUBBLE,
+            "Notch" to NavIndicatorStyle.NOTCH,
+            "Expanding" to NavIndicatorStyle.EXPANDING,
+            "Segmented" to NavIndicatorStyle.SEGMENTED,
+            "Square" to NavIndicatorStyle.SQUIRCLE,
+            "Ring" to NavIndicatorStyle.RING,
+            "Dot" to NavIndicatorStyle.DOT,
+            "Top line" to NavIndicatorStyle.TOPLINE,
+            "Glow" to NavIndicatorStyle.GLOW,
+            "Minimal" to NavIndicatorStyle.MINIMAL,
+            "Flashy" to NavIndicatorStyle.FLASHY,
+            "Plain" to NavIndicatorStyle.PLAIN
+        )
+        chipStyles.forEach { (label, _) ->
+            assertNotNull(
+                "$label chip",
+                V159ComposeHarness.findByText(handle, label)
+            )
+        }
         assertNotNull(
             "Indicator colour row",
             V159ComposeHarness.findByText(handle, "Indicator colour")
@@ -115,18 +135,24 @@ class CustomiseNavIndicatorWiringTest {
                     "on, every style rests as Plain."
             )
         )
+        assertNotNull(
+            "the expanding and flashy caption",
+            V159ComposeHarness.findByText(
+                handle,
+                "Expanding and Flashy show the name only on the tab you " +
+                    "are on — Expanding puts it inside the coloured pill, " +
+                    "Flashy swaps the icon for the name."
+            )
+        )
 
-        // A style chip writes the pref through the ViewModel.
-        assertTrue(
-            "Slide chip clickable",
-            V159ComposeHarness.clickByLabel(handle, "Slide")
-        )
-        awaitStyle(container, NavIndicatorStyle.SLIDE)
-        assertTrue(
-            "Glow chip clickable",
-            V159ComposeHarness.clickByLabel(handle, "Glow")
-        )
-        awaitStyle(container, NavIndicatorStyle.GLOW)
+        // Every chip lands its enum through the ViewModel.
+        chipStyles.forEach { (label, style) ->
+            assertTrue(
+                "$label chip clickable",
+                V159ComposeHarness.clickByLabel(handle, label)
+            )
+            awaitStyle(container, style)
+        }
 
         // The colour writer flips the mode to CUSTOM...
         viewModel.setNavIndicatorColour(0xFF336699L)

@@ -39,15 +39,30 @@ class NavIndicatorLogicTest {
     }
 
     @Test
-    fun `minimal tier degrades notch to slide and keeps the rest`() {
+    fun `minimal tier degrades notch and lens to slide and keeps the rest`() {
+        // SPEC CHANGE, ordered by SPEC-NAV-ENGINE-2026-11-16
+        // §3/§5 (the matrix grows): NOTCH degrades to SLIDE as
+        // before, and LENS joins it — a drawn lens still costs
+        // a per-frame canvas on the weakest phones, so MINIMAL
+        // takes the honest disc instead. Every other style
+        // keeps its identity (the stretch styles keep their
+        // edges on the MINIMAL spring set — pinned below).
         assertEquals(
             NavIndicatorStyle.SLIDE,
             NavIndicatorLogic.effectiveStyle(
                 NavIndicatorStyle.NOTCH, PerfTier.MINIMAL, reduceMotion = false
             )
         )
+        assertEquals(
+            NavIndicatorStyle.SLIDE,
+            NavIndicatorLogic.effectiveStyle(
+                NavIndicatorStyle.LENS, PerfTier.MINIMAL, reduceMotion = false
+            )
+        )
         NavIndicatorStyle.entries
-            .filter { it != NavIndicatorStyle.NOTCH }
+            .filter {
+                it != NavIndicatorStyle.NOTCH && it != NavIndicatorStyle.LENS
+            }
             .forEach { style ->
                 assertEquals(
                     "$style survives MINIMAL",
@@ -324,5 +339,245 @@ class NavIndicatorLogicTest {
             centreXPx = 40f, slotWidthPx = 180f, docked = true
         )
         assertClose(180f * 0.42f, docked.centreX)
+    }
+
+    // -- Nav engine round (SPEC-NAV-ENGINE-2026-11-16) ----------------
+
+    @Test
+    fun `new styles follow the accent rules`() {
+        val indicator = 0xFF8B5CF6L
+        val on = NavIndicatorLogic.onIndicatorArgb(indicator)
+        // Filled newcomers: the icon sits ON the indicator.
+        listOf(
+            NavIndicatorStyle.WORM, NavIndicatorStyle.LENS,
+            NavIndicatorStyle.EXPANDING, NavIndicatorStyle.SQUIRCLE
+        ).forEach { style ->
+            assertEquals(
+                "$style icon",
+                on,
+                NavIndicatorLogic.navIconArgb(style, indicator, on)
+            )
+        }
+        // SEGMENTED's thumb is a pale wash, not a fill: the
+        // icon keeps the on-indicator colour like PLAIN's.
+        assertEquals(
+            on,
+            NavIndicatorLogic.navIconArgb(
+                NavIndicatorStyle.SEGMENTED, indicator, on
+            )
+        )
+        // Unfilled newcomers: the icon takes the accent.
+        listOf(
+            NavIndicatorStyle.RING, NavIndicatorStyle.DOT,
+            NavIndicatorStyle.TOPLINE, NavIndicatorStyle.MINIMAL,
+            NavIndicatorStyle.FLASHY
+        ).forEach { style ->
+            assertEquals(
+                "$style icon",
+                indicator,
+                NavIndicatorLogic.navIconArgb(style, indicator, on)
+            )
+        }
+        // Labels: the accent group gains the unfilled styles;
+        // the filled newcomers keep the on-indicator colour
+        // (LENS's label sits under the lens's fill; EXPANDING's
+        // inside its pill; SEGMENTED matches PLAIN).
+        listOf(
+            NavIndicatorStyle.RING, NavIndicatorStyle.DOT,
+            NavIndicatorStyle.TOPLINE, NavIndicatorStyle.MINIMAL,
+            NavIndicatorStyle.FLASHY
+        ).forEach { style ->
+            assertEquals(
+                "$style label",
+                indicator,
+                NavIndicatorLogic.navLabelArgb(style, indicator, on)
+            )
+        }
+        listOf(
+            NavIndicatorStyle.WORM, NavIndicatorStyle.LENS,
+            NavIndicatorStyle.EXPANDING, NavIndicatorStyle.SQUIRCLE,
+            NavIndicatorStyle.SEGMENTED
+        ).forEach { style ->
+            assertEquals(
+                "$style label",
+                on,
+                NavIndicatorLogic.navLabelArgb(style, indicator, on)
+            )
+        }
+    }
+
+    @Test
+    fun `edge profiles follow style and tier`() {
+        // The lead edge: GOOEY rides the melt spring itself
+        // (its 280–380 ms pin passes unmodified), WORM rides
+        // the centre travel spring; MINIMAL shortens both to
+        // the MINIMAL travel set.
+        assertEquals(
+            SpringMotionEngine.GooeyMelt,
+            NavIndicatorLogic.leadEdgeProfile(
+                NavIndicatorStyle.GOOEY, PerfTier.FULL
+            )
+        )
+        assertEquals(
+            SpringMotionEngine.NavTravel,
+            NavIndicatorLogic.leadEdgeProfile(
+                NavIndicatorStyle.WORM, PerfTier.FULL
+            )
+        )
+        assertEquals(
+            SpringMotionEngine.NavTravelMinimal,
+            NavIndicatorLogic.leadEdgeProfile(
+                NavIndicatorStyle.GOOEY, PerfTier.MINIMAL
+            )
+        )
+        assertEquals(
+            SpringMotionEngine.NavTravelMinimal,
+            NavIndicatorLogic.leadEdgeProfile(
+                NavIndicatorStyle.WORM, PerfTier.MINIMAL
+            )
+        )
+        // The trail edge always lags on TrailLag, shortened
+        // proportionally on MINIMAL.
+        assertEquals(
+            SpringMotionEngine.TrailLag,
+            NavIndicatorLogic.trailEdgeProfile(
+                NavIndicatorStyle.GOOEY, PerfTier.FULL
+            )
+        )
+        assertEquals(
+            SpringMotionEngine.TrailLag,
+            NavIndicatorLogic.trailEdgeProfile(
+                NavIndicatorStyle.WORM, PerfTier.STANDARD
+            )
+        )
+        assertEquals(
+            SpringMotionEngine.TrailLagMinimal,
+            NavIndicatorLogic.trailEdgeProfile(
+                NavIndicatorStyle.GOOEY, PerfTier.MINIMAL
+            )
+        )
+    }
+
+    @Test
+    fun `expanding weight profile follows the tier`() {
+        assertEquals(2.3f, NavIndicatorLogic.EXPANDING_SELECTED_WEIGHT, 0f)
+        assertEquals(
+            SpringMotionEngine.NavTravel,
+            NavIndicatorLogic.expandingWeightProfile(PerfTier.FULL)
+        )
+        assertEquals(
+            SpringMotionEngine.NavTravelMinimal,
+            NavIndicatorLogic.expandingWeightProfile(PerfTier.MINIMAL)
+        )
+    }
+
+    @Test
+    fun `stretch frame orders the edges and measures the stretch`() {
+        val settled = NavIndicatorLogic.stretchFrame(97f, 3f, 94f)
+        assertClose(3f, settled.leftPx)
+        assertClose(97f, settled.rightPx)
+        assertClose(94f, settled.widthPx)
+        assertClose(0f, settled.stretchPx)
+        val mid = NavIndicatorLogic.stretchFrame(150f, 30f, 94f)
+        assertClose(30f, mid.leftPx)
+        assertClose(150f, mid.rightPx)
+        assertClose(120f, mid.widthPx)
+        assertClose(26f, mid.stretchPx)
+    }
+
+    @Test
+    fun `worm thins with the stretch and saturates`() {
+        assertClose(1f, NavIndicatorLogic.wormHeightScale(0f, 100f))
+        // Halfway to full separation: sin(π/4) of the depth.
+        assertClose(
+            1f - 0.28f * 0.70711f,
+            NavIndicatorLogic.wormHeightScale(17.5f, 100f),
+            0.001f
+        )
+        // A full pitch of stretch saturates at 0.72×, and a
+        // longer jump stays there.
+        assertClose(0.72f, NavIndicatorLogic.wormHeightScale(100f, 100f))
+        assertClose(0.72f, NavIndicatorLogic.wormHeightScale(300f, 100f))
+    }
+
+    @Test
+    fun `lens stretch width and squash follow the spec numbers`() {
+        // Speed factor: still = 0, one slot ~8×/s = full.
+        assertClose(0f, NavIndicatorLogic.lensStretchFactor(0f, 94f))
+        assertClose(0.5f, NavIndicatorLogic.lensStretchFactor(94f * 4f, 94f))
+        assertClose(1f, NavIndicatorLogic.lensStretchFactor(94f * 8f, 94f))
+        assertClose(1f, NavIndicatorLogic.lensStretchFactor(-94f * 8f, 94f))
+        // Width: +24% at full stretch, the slot's own at rest.
+        assertClose(94f, NavIndicatorLogic.lensWidthPx(94f, 0f))
+        assertClose(94f * 1.24f, NavIndicatorLogic.lensWidthPx(94f, 1f))
+        // Squash: 0.92 at the first third's midpoint, 1.0 at
+        // both ends of the third and beyond it.
+        assertClose(1f, NavIndicatorLogic.lensHeightScale(0f))
+        assertClose(0.92f, NavIndicatorLogic.lensHeightScale(1f / 6f))
+        assertClose(1f, NavIndicatorLogic.lensHeightScale(1f / 3f))
+        assertClose(1f, NavIndicatorLogic.lensHeightScale(0.5f))
+        assertClose(1f, NavIndicatorLogic.lensHeightScale(1f))
+    }
+
+    @Test
+    fun `segmented squircle ring dot and topline geometry`() {
+        val thumb = NavIndicatorLogic.segmentedThumb(
+            centreX = 150f, slotWidthPx = 94f,
+            topPx = 6f, heightPx = 52f, insetPx = 3f
+        )
+        assertClose(106f, thumb.leftPx)
+        assertClose(9f, thumb.topPx)
+        assertClose(88f, thumb.widthPx)
+        assertClose(46f, thumb.heightPx)
+        // Dividers sit halfway between slot centres.
+        assertClose(100f, NavIndicatorLogic.slotBoundaryXPx(50f, 100f, 1))
+        assertClose(200f, NavIndicatorLogic.slotBoundaryXPx(50f, 100f, 2))
+        val cell = NavIndicatorLogic.squircleRect(
+            centreX = 150f, pitchPx = 100f,
+            barTopPx = 0f, barHeightPx = 64f, insetPx = 4f
+        )
+        assertClose(104f, cell.leftPx)
+        assertClose(4f, cell.topPx)
+        assertClose(92f, cell.widthPx)
+        assertClose(56f, cell.heightPx)
+        // The ring centres on the icon: pill top + half the
+        // slack + half the icon.
+        assertClose(
+            25f,
+            NavIndicatorLogic.ringCentreYPx(
+                topPx = 6f, heightPx = 52f, iconPx = 24f, labelPx = 14f
+            )
+        )
+        // The dot hugs the pill's bottom inner edge.
+        assertClose(
+            53f,
+            NavIndicatorLogic.dotCentreYPx(
+                topPx = 6f, heightPx = 52f, dotRadiusPx = 3f, gapPx = 2f
+            )
+        )
+        // The top line is 55% of the slot, centred.
+        assertClose(51.7f, NavIndicatorLogic.topLineWidthPx(94f), 0.01f)
+        assertClose(124.15f, NavIndicatorLogic.topLineLeftPx(150f, 94f), 0.01f)
+    }
+
+    @Test
+    fun `switch mapping covers all sixteen styles`() {
+        // SPEC-NAV-ENGINE §5: the stretch family keeps its
+        // stretch in the two-stop switch, the lens keeps its
+        // lens, and everything else — including the layout
+        // styles the switch cannot express (EXPANDING, FLASHY,
+        // BUBBLE, NOTCH, MINIMAL) — rides the plain pill.
+        val expected = mapOf(
+            NavIndicatorStyle.GOOEY to NavIndicatorLogic.SwitchIndicator.STRETCH,
+            NavIndicatorStyle.WORM to NavIndicatorLogic.SwitchIndicator.STRETCH,
+            NavIndicatorStyle.LENS to NavIndicatorLogic.SwitchIndicator.LENS
+        )
+        NavIndicatorStyle.entries.forEach { style ->
+            assertEquals(
+                "$style in the switch",
+                expected[style] ?: NavIndicatorLogic.SwitchIndicator.PILL,
+                NavIndicatorLogic.switchStyleFor(style)
+            )
+        }
     }
 }

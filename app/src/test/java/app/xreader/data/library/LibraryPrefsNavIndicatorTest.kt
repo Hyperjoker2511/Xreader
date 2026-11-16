@@ -100,6 +100,26 @@ class LibraryPrefsNavIndicatorTest {
     }
 
     @Test
+    fun `the style set is the sixteen of the nav engine round`() = runTest {
+        // SPEC-NAV-ENGINE-2026-11-16 §2: the original six keep
+        // their names (stored prefs read identically) and ten
+        // join — the count and the new names are pinned so a
+        // rename can never silently orphan a stored choice.
+        assertEquals(16, NavIndicatorStyle.entries.size)
+        listOf(
+            "WORM", "LENS", "EXPANDING", "SEGMENTED", "SQUIRCLE",
+            "RING", "DOT", "TOPLINE", "MINIMAL", "FLASHY"
+        ).forEach { name ->
+            assertEquals(name, NavIndicatorStyle.valueOf(name).name)
+        }
+        // The original six keep their stored order.
+        assertEquals(
+            listOf("GOOEY", "SLIDE", "BUBBLE", "NOTCH", "GLOW", "PLAIN"),
+            NavIndicatorStyle.entries.take(6).map { it.name }
+        )
+    }
+
+    @Test
     fun `the view reset clears the indicator choices`() = runTest {
         val prefs = LibraryPrefs(FakeDataStore())
         prefs.setNavIndicatorStyle(NavIndicatorStyle.NOTCH)

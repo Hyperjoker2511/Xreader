@@ -35,8 +35,29 @@ enum class TabLabelStyle { ALWAYS, SELECTED_ONLY, ICONS_ONLY }
  * icon with a soft glow; PLAIN is no travelling indicator at
  * all — the active slot tints instantly (the behaviour reduced
  * motion has always produced, made a first-class choice).
+ *
+ * Nav engine round (2026-11-16, SPEC-NAV-ENGINE-2026-11-16 —
+ * the owner's "All the good onces" from the catalogue
+ * research): GOOEY is REBUILT as a two-edge stretched pill
+ * (the shipped neck/trail melt never escaped the pill's
+ * outline on a 1-slot jump — the owner's "Gooye not working"),
+ * and ten styles join: WORM (the caterpillar stretch), LENS
+ * (a drawn liquid lens — no backdrop capture), EXPANDING
+ * (the selected slot widens, icon + label in a pill),
+ * SEGMENTED (a raised thumb in a divided track), SQUIRCLE
+ * (a rounded-square cell highlight), RING (an outline ring
+ * around the icon), DOT (a matte dot under the label),
+ * TOPLINE (a short line at the bar's top edge), MINIMAL
+ * (colour alone, no shape) and FLASHY (the selected slot's
+ * icon swaps up into its label). Stored values are enum
+ * NAMES — the first six keep their names and order, so every
+ * stored pref from the styles pass still reads identically.
  */
-enum class NavIndicatorStyle { GOOEY, SLIDE, BUBBLE, NOTCH, GLOW, PLAIN }
+enum class NavIndicatorStyle {
+    GOOEY, SLIDE, BUBBLE, NOTCH, GLOW, PLAIN,
+    WORM, LENS, EXPANDING, SEGMENTED, SQUIRCLE, RING,
+    DOT, TOPLINE, MINIMAL, FLASHY
+}
 
 /** Where the dock indicator's colour comes from (v1.6.2):
  * THEME = the colour scheme's primary (the shipped behaviour);

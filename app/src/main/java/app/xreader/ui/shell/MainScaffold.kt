@@ -68,6 +68,7 @@ import androidx.navigation.compose.rememberNavController
 import app.xreader.core.motion.fadeTween
 import app.xreader.core.motion.pressBounce
 import app.xreader.core.motion.segmentColorSpec
+import app.xreader.core.motion.flashySwapSpec
 import app.xreader.core.motion.stackEnter
 import app.xreader.core.motion.stackExit
 import app.xreader.core.motion.stackPopEnter
@@ -121,6 +122,9 @@ import app.xreader.ui.theme.VibrantCyan
 import app.xreader.ui.theme.dockOverlayClearance
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -2765,13 +2769,13 @@ private fun FloatingNavBar(
                 }
                 if (pillWidth > 0 && pillHeight > 0) {
                     // Liquid Glass, piece 4 (Gooey Nav) → nav-bar
-                    // styles (v1.6.2): the IndicatorHost dispatches
-                    // on the user's style where the direct
-                    // GooeyIndicator call used to sit — GOOEY is
-                    // still the default and still lands on
-                    // GooeyIndicator inside the host. Drawn first
-                    // inside the bar's content box so the slots
-                    // sit above it. The tint is the resolved
+                    // styles (v1.6.2) → the nav engine round: the
+                    // IndicatorHost dispatches on the user's style
+                    // where the direct GooeyIndicator call used to
+                    // sit — GOOEY is still the default, now drawn
+                    // as the host's two-edge stretched pill. Drawn
+                    // first inside the bar's content box so the
+                    // slots sit above it. The tint is the resolved
                     // indicator colour: the theme's primary under
                     // THEME (exactly what the old pill used), the
                     // user's exact colour under CUSTOM.
@@ -2785,17 +2789,39 @@ private fun FloatingNavBar(
                         travel = indicatorTravel,
                         perfTier = perfTier,
                         reduceMotion = reduceMotion,
+                        slotCount = itemCount,
+                        slotPitchPx = NavGeometry.slotWidthPx(
+                            barWidthPx, itemCount
+                        ).toFloat(),
+                        firstSlotCentreX = NavGeometry.slotWidthPx(
+                            barWidthPx, itemCount
+                        ) / 2f,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
                 Row(Modifier.fillMaxSize()) {
                     Tab.entries.forEach { tab ->
+                        // Nav engine round §2: under EXPANDING the
+                        // slots trade width — the selected slot
+                        // widens on the weight spring while the
+                        // bar itself keeps its size.
+                        val slotWeight = if (effectiveIndicator ==
+                            app.xreader.data.library.NavIndicatorStyle.EXPANDING
+                        ) {
+                            expandingSlotWeight(
+                                selected = tab == selected,
+                                perfTier = perfTier,
+                                reduceMotion = reduceMotion
+                            )
+                        } else {
+                            1f
+                        }
                         NavSlot(
                             tab = tab,
                             selected = tab == selected,
                             onClick = { onSelect(tab) },
                             modifier = Modifier
-                                .weight(1f)
+                                .weight(slotWeight)
                                 .fillMaxHeight(),
                             labelStyle = labelStyle,
                             indicatorStyle = effectiveIndicator,
@@ -3037,6 +3063,39 @@ private fun NavSlot(
         },
         label = "navSlotRise"
     )
+    // LENS (nav engine round §2): the selected icon is
+    // magnified 1.12× under the lens — the magnification the
+    // lens's name promises, drawn here because the lens shape
+    // itself is only translucent.
+    val lensScale by animateFloatAsState(
+        targetValue = if (styled && selected && indicatorStyle ==
+            app.xreader.data.library.NavIndicatorStyle.LENS
+        ) {
+            1.12f
+        } else {
+            1f
+        },
+        animationSpec = if (reduceMotion) {
+            androidx.compose.animation.core.snap()
+        } else {
+            SpringMotionEngine.Spatial.toSpec()
+        },
+        label = "navSlotLensScale"
+    )
+    // FLASHY (nav engine round §2): the icon/label swap's
+    // progress — 1 when selected (the label stands in the
+    // icon's place), 0 otherwise. Under reduced motion the
+    // host degrades FLASHY to PLAIN before the slot ever sees
+    // it, so the swap only runs on the full tiers.
+    val flashyProgress by animateFloatAsState(
+        targetValue = if (selected) 1f else 0f,
+        animationSpec = if (reduceMotion) {
+            androidx.compose.animation.core.snap()
+        } else {
+            flashySwapSpec()
+        },
+        label = "navSlotFlashy"
+    )
     // Under BUBBLE the selected icon rides IN the bubble (the
     // overlay draws it there) — the slot's own copy hides so
     // the two never double. A badged slot keeps its icon: the
@@ -3046,6 +3105,10 @@ private fun NavSlot(
         app.xreader.data.library.NavIndicatorStyle.BUBBLE &&
         badgeCount == 0
     val drawnIconTint = if (hideIcon) Color.Transparent else iconTint
+    val isExpanding = styled && indicatorStyle ==
+        app.xreader.data.library.NavIndicatorStyle.EXPANDING
+    val isFlashy = styled && indicatorStyle ==
+        app.xreader.data.library.NavIndicatorStyle.FLASHY
     Column(
         modifier
             .pressBounce(interaction, haptics = false)
@@ -3054,48 +3117,144 @@ private fun NavSlot(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
     ) {
-        Box(Modifier.offset { IntOffset(0, rise.roundToPx()) }) {
-            if (badgeCount > 0) {
-                androidx.compose.material3.BadgedBox(
-                    badge = {
-                        androidx.compose.material3.Badge {
-                            Text(badgeCount.toString())
+        when {
+            // EXPANDING (nav engine round §2): the selected
+            // slot IS the pill — icon + label inside the filled
+            // shape, wearing the on-indicator colours the logic
+            // resolved. The widening itself is the row's weight,
+            // animated in the dock.
+            isExpanding && selected -> Row(
+                Modifier
+                    .background(indicatorColour, RoundedCornerShape(50))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                NavSlotIcon(tab, badgeCount, iconTint)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    tab.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = labelColour,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+            // EXPANDING unselected: icon only — the style's
+            // rule, stated in plain words in Customise.
+            isExpanding -> NavSlotIcon(tab, badgeCount, iconTint)
+            // FLASHY (nav engine round §2): a clipped window
+            // one cell tall; inside it a two-cell column (icon
+            // over label + dot) slides up as the tab is
+            // selected — the icon leaves through the top while
+            // the label takes its place. Unselected tabs show
+            // the icon alone.
+            isFlashy -> {
+                val cellHeight = 26.dp
+                Box(
+                    Modifier.height(cellHeight).clipToBounds(),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    Column(
+                        Modifier.offset {
+                            IntOffset(
+                                0,
+                                (-flashyProgress * cellHeight.toPx())
+                                    .roundToInt()
+                            )
+                        },
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Box(
+                            Modifier.height(cellHeight),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            NavSlotIcon(tab, badgeCount, iconTint)
+                        }
+                        Column(
+                            Modifier.height(cellHeight),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement =
+                                androidx.compose.foundation.layout.Arrangement.Center
+                        ) {
+                            Text(
+                                tab.label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = labelColour,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                            Box(
+                                Modifier
+                                    .padding(top = 2.dp)
+                                    .size(6.dp)
+                                    .background(indicatorColour, CircleShape)
+                            )
                         }
                     }
-                ) {
-                    Icon(tab.icon, contentDescription = tab.label, tint = drawnIconTint)
                 }
-            } else {
-                Icon(tab.icon, contentDescription = tab.label, tint = drawnIconTint)
+            }
+            else -> {
+                Box(
+                    Modifier
+                        .offset { IntOffset(0, rise.roundToPx()) }
+                        .graphicsLayer {
+                            scaleX = lensScale
+                            scaleY = lensScale
+                        }
+                ) {
+                    NavSlotIcon(tab, badgeCount, drawnIconTint)
+                }
+                // v1.0.1 tab-label choice: always / selected only / icons only.
+                // The contentDescription always carries the label either way.
+                val showLabel = when (labelStyle) {
+                    app.xreader.data.library.TabLabelStyle.ALWAYS -> true
+                    app.xreader.data.library.TabLabelStyle.SELECTED_ONLY -> selected
+                    app.xreader.data.library.TabLabelStyle.ICONS_ONLY -> false
+                }
+                if (showLabel) {
+                    // Liquid Glass, piece 3 (Dock Glass): one line, always.
+                    // The label steps its size down (labelSmall's 11.sp →
+                    // a 9.sp floor) until it fits the slot instead of
+                    // wrapping — "Downloads" wrapped to two lines on
+                    // narrow phones and pushed its slot out of line.
+                    val labelBase = MaterialTheme.typography.labelSmall.fontSize
+                    var labelSize by remember(tab) { mutableStateOf(labelBase) }
+                    Text(
+                        tab.label,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = labelSize
+                        ),
+                        color = labelColour,
+                        maxLines = 1,
+                        softWrap = false,
+                        onTextLayout = { layout ->
+                            if (layout.didOverflowWidth && labelSize > 9.sp) {
+                                labelSize = (labelSize.value - 1f).sp
+                            }
+                        }
+                    )
+                }
             }
         }
-        // v1.0.1 tab-label choice: always / selected only / icons only.
-        // The contentDescription always carries the label either way.
-        val showLabel = when (labelStyle) {
-            app.xreader.data.library.TabLabelStyle.ALWAYS -> true
-            app.xreader.data.library.TabLabelStyle.SELECTED_ONLY -> selected
-            app.xreader.data.library.TabLabelStyle.ICONS_ONLY -> false
-        }
-        if (showLabel) {
-            // Liquid Glass, piece 3 (Dock Glass): one line, always.
-            // The label steps its size down (labelSmall's 11.sp →
-            // a 9.sp floor) until it fits the slot instead of
-            // wrapping — "Downloads" wrapped to two lines on
-            // narrow phones and pushed its slot out of line.
-            val labelBase = MaterialTheme.typography.labelSmall.fontSize
-            var labelSize by remember(tab) { mutableStateOf(labelBase) }
-            Text(
-                tab.label,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = labelSize),
-                color = labelColour,
-                maxLines = 1,
-                softWrap = false,
-                onTextLayout = { layout ->
-                    if (layout.didOverflowWidth && labelSize > 9.sp) {
-                        labelSize = (labelSize.value - 1f).sp
-                    }
+    }
+}
+
+/** One dock slot's icon, badged when the tab carries a count —
+ * shared by NavSlot's style branches so the badge lives in
+ * exactly one place. */
+@Composable
+private fun NavSlotIcon(tab: Tab, badgeCount: Int, tint: Color) {
+    if (badgeCount > 0) {
+        androidx.compose.material3.BadgedBox(
+            badge = {
+                androidx.compose.material3.Badge {
+                    Text(badgeCount.toString())
                 }
-            )
+            }
+        ) {
+            Icon(tab.icon, contentDescription = tab.label, tint = tint)
         }
+    } else {
+        Icon(tab.icon, contentDescription = tab.label, tint = tint)
     }
 }

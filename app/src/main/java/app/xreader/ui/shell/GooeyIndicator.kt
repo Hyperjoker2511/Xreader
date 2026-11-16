@@ -1,56 +1,32 @@
 package app.xreader.ui.shell
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.foundation.Canvas
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import app.xreader.core.motion.gooeyMeltShortSpec
-import app.xreader.core.motion.gooeyMeltSpec
-import app.xreader.data.prefs.PerfTier
 import kotlin.math.PI
 import kotlin.math.pow
 import kotlin.math.sin
 
 /**
- * Liquid Glass, piece 4 (Gooey Nav): the dock's selection indicator
- * MELTS between slots instead of sliding as a rigid pill. A leading
- * blob travels on a lagging ease, a trailing circle shrinks behind
- * it, and a liquid neck bridges the two — then everything settles
- * into exactly the pill the dock has always drawn (a full-slot
- * stadium in the theme's primary, full strength).
+ * The gooey melt's PURE geometry (Liquid Glass, piece 4;
+ * retained by the nav engine round, 2026-11-16,
+ * SPEC-NAV-ENGINE-2026-11-16 §2).
  *
- * The geometry is a pure function ([gooeyBridge]) so the contract is
- * JVM-testable: endpoints exact, neck zero at both ends and peaking
- * mid-travel under its cap, travel strictly monotonic. The
- * composable drives ONE [Animatable] progress on the piece-4 spring
- * and reads it ONLY in the Canvas draw phase, so a melt never
- * recomposes the bar per frame.
+ * History: this file's renderer drew the melt as a leading
+ * blob + trailing circle + liquid neck through [gooeyBridge].
+ * The fresh-context audit (2026-11-16) convicted that drawing:
+ * the blob was a full-slot-width stadium at every frame and
+ * the neck and trail never escaped its outline on a 1-slot
+ * jump (neck curve peak ~16.9 dp vs blob edge ~18.2 dp
+ * mid-trip), so on the owner's phone the melt read as a plain
+ * slide — "Gooye not working". The nav engine round rebuilt
+ * GOOEY as a two-edge STRETCHED PILL (see StretchIndicator in
+ * NavIndicator.kt, driven by the lead/trail springs in
+ * NavIndicatorLogic) and REMOVED the neck/trail drawing.
  *
- * Retargeting (rapid A→B→C): a mid-flight target change re-bases the
- * run from the CURRENT visual blob position — recomputed through
- * [gooeyBridge] itself — never back to the run's origin, so the blob
- * cannot pop. The radius is computed ONCE, here, from the slot
- * height and shared by the animation driver and the Canvas (a split
- * computation could make a retarget land on a different radius than
- * the frame being drawn).
- *
- * Device honesty: [perfTier] and [reduceMotion] are PASSED IN by the
- * bar (which resolves them from the app's existing paths) — this
- * composable reads no device state of its own. Reduced motion means
- * no melt at all: the pill sits at the target instantly, which is
- * the behaviour the dock had before this piece. The MINIMAL tier
- * (nav-bar styles pass, 2026-11-16) still melts — never a
- * teleport — but on the short spring (~180 ms).
+ * What stays here, pinned by GooeyGeometryTest: [gooeyBridge]
+ * and [gooeyTravelProgress] as pure functions — and, load
+ * bearing, the melt's SQUASH curve: the rebuilt GOOEY reads
+ * its height from [gooeySquashAt], which is [gooeyBridge]'s
+ * own squash output, so the shipped 0.70 mid-trip squeeze
+ * survives the rebuild exactly.
  */
 
 // -- Pure geometry -----------------------------------------------------
@@ -190,121 +166,14 @@ fun gooeyBridge(fromX: Float, toX: Float, progress: Float, radius: Float): Gooey
     )
 }
 
-// -- The indicator composable ------------------------------------------
-
 /**
- * Draws the gooey selection indicator behind the dock's slots.
- *
- * [targetCentreX] is the selected slot's centre in px, in the same
- * coordinate space the Canvas fills; [slotWidthPx] is the slot
- * (pill) width, [topPx] the pill's top edge and [heightPx] its
- * height — all from the bar's NavGeometry, so the settled frame is
- * the old pill rect exactly. [colour] is the pill's own tint, read
- * by the bar from the theme.
+ * The rebuilt GOOEY's height curve (nav engine round,
+ * SPEC-NAV-ENGINE-2026-11-16 §2): the stretched pill's
+ * vertical squash at trip [progress] — [gooeyBridge]'s own
+ * squash output, read off a unit run so the constant lives in
+ * exactly one place. 1.0 at both ends, 0.70 at mid-trip: the
+ * pill fattens back to full height as it lands, squeezed
+ * while it stretches.
  */
-@Composable
-fun GooeyIndicator(
-    targetCentreX: Float,
-    slotWidthPx: Float,
-    topPx: Float,
-    heightPx: Float,
-    colour: Color,
-    perfTier: PerfTier,
-    reduceMotion: Boolean,
-    modifier: Modifier = Modifier
-) {
-    // ONE radius computation, shared by the animation driver (the
-    // retarget maths in the effect below) and the Canvas.
-    val radius = heightPx / 2f
-    // Nav-bar styles pass (2026-11-16): reduced motion alone
-    // makes the melt instant now. The MINIMAL tier melts on the
-    // SHORT spring — travel shortens (~180 ms) but still
-    // travels; it never teleports. (The spec is picked INSIDE
-    // the effect: a SpringSpec is a fresh object per call, so
-    // keying the effect on it would relaunch — and cancel —
-    // the run on every recomposition.)
-    val instant = reduceMotion
-
-    var fromX by remember { mutableFloatStateOf(targetCentreX) }
-    var toX by remember { mutableFloatStateOf(targetCentreX) }
-    val progress = remember { Animatable(1f) }
-
-    LaunchedEffect(targetCentreX, instant, perfTier) {
-        val meltSpec = if (perfTier == PerfTier.MINIMAL) {
-            gooeyMeltShortSpec()
-        } else {
-            gooeyMeltSpec()
-        }
-        when {
-            instant -> {
-                fromX = targetCentreX
-                toX = targetCentreX
-                progress.snapTo(1f)
-            }
-            targetCentreX != toX -> {
-                // Retarget from the CURRENT visual position: the
-                // blob the user is looking at right now becomes
-                // the new run's origin — never the old origin.
-                // The visual position is read through the SAME
-                // warped progress the Canvas draws, so the
-                // re-base lands exactly on the drawn blob.
-                val visualX = gooeyBridge(
-                    fromX, toX, gooeyTravelProgress(progress.value), radius
-                ).mainBlobX
-                fromX = visualX
-                toX = targetCentreX
-                progress.snapTo(0f)
-                progress.animateTo(1f, meltSpec)
-            }
-        }
-    }
-
-    Canvas(modifier) {
-        if (radius <= 0f || slotWidthPx <= 0f || size.width <= 0f) return@Canvas
-        val bridge = gooeyBridge(
-            fromX, toX, gooeyTravelProgress(progress.value), radius
-        )
-        val cy = topPx + radius
-        // NavGeometry's invariant, kept: even with the spring's
-        // overshoot in the progress, the drawn blob never leaves
-        // the bar (centres arrive clamped; this bites ~1 px).
-        val centreX = bridge.mainBlobX.coerceIn(
-            slotWidthPx / 2f,
-            (size.width - slotWidthPx / 2f).coerceAtLeast(slotWidthPx / 2f)
-        )
-        // Trailing circle: emerges from behind the settled blob and
-        // shrinks away as the blob arrives.
-        if (bridge.trailRadius > 0f) {
-            drawCircle(
-                color = colour,
-                radius = bridge.trailRadius,
-                center = Offset(bridge.trailX, cy)
-            )
-        }
-        // The neck: a quadratic bridge between the trailing circle
-        // and the leading blob, pinched to neckWidth at its middle.
-        if (bridge.neckVisible && bridge.neckWidth > 0f) {
-            val mainRy = radius * bridge.mainBlobSquashY
-            val midX = (bridge.trailX + centreX) / 2f
-            val halfNeck = bridge.neckWidth / 2f
-            val neck = Path().apply {
-                moveTo(bridge.trailX, cy - bridge.trailRadius)
-                quadraticTo(midX, cy - halfNeck, centreX, cy - mainRy)
-                lineTo(centreX, cy + mainRy)
-                quadraticTo(midX, cy + halfNeck, bridge.trailX, cy + bridge.trailRadius)
-                close()
-            }
-            drawPath(neck, colour)
-        }
-        // The leading blob: the pill itself — a stadium of the
-        // slot's width, squashed vertically mid-travel. At rest
-        // (squash 1, centred on the slot) it IS the old pill.
-        val ry = radius * bridge.mainBlobSquashY
-        drawRoundRect(
-            color = colour,
-            topLeft = Offset(centreX - slotWidthPx / 2f, cy - ry),
-            size = Size(slotWidthPx, ry * 2f),
-            cornerRadius = CornerRadius(ry, ry)
-        )
-    }
-}
+fun gooeySquashAt(progress: Float): Float =
+    gooeyBridge(0f, 1f, progress, 1f).mainBlobSquashY

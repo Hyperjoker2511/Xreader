@@ -1483,6 +1483,26 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 )
                 FilterChip(
                     selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.WORM,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.WORM
+                        )
+                    },
+                    label = { Text("Worm") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.LENS,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.LENS
+                        )
+                    },
+                    label = { Text("Liquid lens") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.SLIDE,
                     onClick = {
                         viewModel.setNavIndicatorStyle(
@@ -1513,6 +1533,66 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 )
                 FilterChip(
                     selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.EXPANDING,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.EXPANDING
+                        )
+                    },
+                    label = { Text("Expanding") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.SEGMENTED,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.SEGMENTED
+                        )
+                    },
+                    label = { Text("Segmented") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.SQUIRCLE,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.SQUIRCLE
+                        )
+                    },
+                    label = { Text("Square") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.RING,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.RING
+                        )
+                    },
+                    label = { Text("Ring") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.DOT,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.DOT
+                        )
+                    },
+                    label = { Text("Dot") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.TOPLINE,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.TOPLINE
+                        )
+                    },
+                    label = { Text("Top line") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.GLOW,
                     onClick = {
                         viewModel.setNavIndicatorStyle(
@@ -1520,6 +1600,26 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                         )
                     },
                     label = { Text("Glow") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.MINIMAL,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.MINIMAL
+                        )
+                    },
+                    label = { Text("Minimal") }
+                )
+                FilterChip(
+                    selected = library.navIndicatorStyle ==
+                        app.xreader.data.library.NavIndicatorStyle.FLASHY,
+                    onClick = {
+                        viewModel.setNavIndicatorStyle(
+                            app.xreader.data.library.NavIndicatorStyle.FLASHY
+                        )
+                    },
+                    label = { Text("Flashy") }
                 )
                 FilterChip(
                     selected = library.navIndicatorStyle ==
@@ -1577,6 +1677,13 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             Text(
                 "The marker that travels under the tabs. With Reduce motion " +
                     "on, every style rests as Plain.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "Expanding and Flashy show the name only on the tab you " +
+                    "are on — Expanding puts it inside the coloured pill, " +
+                    "Flashy swaps the icon for the name.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

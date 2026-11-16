@@ -66,13 +66,19 @@ class MotionAdaptersTest {
     }
 
     @Test
-    fun `tab fades are the ghost fix pair`() {
-        // Nav-bar styles pass (2026-11-16, SPEC-NAVBAR-STYLES-
-        // 2026-11-16 Change 4): the incoming tab keeps the
-        // ColorOS pass's 120 ms fade; the OUTGOING tab drops to
-        // 80 ms so the two screens never sit at half strength
-        // together and double their headers mid-switch.
-        assertEquals(120, TAB_FADE_MS)
-        assertEquals(80, TAB_EXIT_FADE_MS)
+    fun `tab fades are the sequenced fade-through`() {
+        // SPEC CHANGE, ordered by SPEC-NAV-ENGINE-2026-11-16 §4
+        // (superseding the nav-bar styles pass's Change 4 pins —
+        // 120 in / 80 out — which this test previously held):
+        // peer tab switches are a SEQUENCED fade-through on ONE
+        // clock. The outgoing tab fades out over 100 ms; the
+        // incoming tab fades in over 200 ms DELAYED by the same
+        // 100 ms, so the two screens never overlap at partial
+        // strength (the ghosting the owner kept seeing) and no
+        // third clock (the old horizontal slide) runs beside
+        // them. Total 300 ms.
+        assertEquals(200, TAB_FADE_MS)
+        assertEquals(100, TAB_EXIT_FADE_MS)
+        assertEquals(100, TAB_ENTER_DELAY_MS)
     }
 }

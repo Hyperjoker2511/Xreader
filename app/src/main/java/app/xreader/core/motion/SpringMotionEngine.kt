@@ -1,7 +1,9 @@
 package app.xreader.core.motion
 
 import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -214,6 +216,30 @@ object SpringMotionEngine {
 
     val navTravelProfiles: List<SpringProfile> = listOf(NavTravel, NavTravelMinimal)
 
+    // ── Trail-lag family (nav engine round, 2026-11-16,
+    // SPEC-NAV-ENGINE-2026-11-16 §1) ─────────────────────────
+    // The SIXTH sanctioned family: the trailing edge of the
+    // dock's stretched-pill indicator (the rebuilt GOOEY and
+    // the new WORM). The two-edge research is unambiguous —
+    // shipped liquid docks run the trailing edge on a spring
+    // settling roughly 1.4–1.7× slower than the lead (trail /
+    // lead stiffness ratio ~0.34–0.54) — so the pill visibly
+    // stretches out and snaps back. TrailLag (k 120 / ζ 0.75)
+    // settles in ~487 ms by [settleMillis] against GooeyMelt's
+    // ~344 ms (stiffness ratio 120/240 = 0.50, inside the
+    // researched band). TrailLagMinimal is the same profile
+    // shortened by the MINIMAL tier's own proportion
+    // (NavTravelMinimal / NavTravel ≈ 0.61): ~298 ms, so the
+    // 2 GB phone's stretch still reads as a stretch.
+
+    /** Stretched-pill trailing edge: stiffness 120, dampingRatio 0.75. */
+    val TrailLag = SpringProfile("TrailLag", stiffness = 120f, dampingRatio = 0.75f)
+
+    /** Trailing edge, MINIMAL tier: stiffness 320, dampingRatio 0.75. */
+    val TrailLagMinimal = SpringProfile("TrailLagMinimal", stiffness = 320f, dampingRatio = 0.75f)
+
+    val trailLagProfiles: List<SpringProfile> = listOf(TrailLag, TrailLagMinimal)
+
     /**
      * Quantum Animation Engine 3.0's dynamic damping, as three mass
      * classes over a base profile: light elements run stiffer and a
@@ -255,6 +281,37 @@ object SpringMotionEngine {
     fun settleMillis(profile: SpringProfile): Double {
         val omega = sqrt(profile.stiffness.toDouble())
         return 4000.0 / (profile.dampingRatio * omega)
+    }
+
+    /**
+     * The analytic step response of [profile]: the position at
+     * [elapsedMs] of a value released from rest at [from] toward
+     * [to] — the closed-form solution of the same damped-spring
+     * ODE Compose integrates frame by frame for an Animatable.
+     * Pure, so tests can assert the SILHOUETTE a spring pair
+     * draws mid-trip (the nav stretch test) without a device.
+     * Under-damped profiles (ζ < 1 — every profile in this
+     * engine) use the exact damped-oscillation form; ζ ≥ 1
+     * falls back to the critically-damped form.
+     */
+    fun springPositionAt(
+        profile: SpringProfile,
+        from: Float,
+        to: Float,
+        elapsedMs: Double
+    ): Float {
+        if (elapsedMs <= 0.0) return from
+        val omega = sqrt(profile.stiffness.toDouble())
+        val zeta = profile.dampingRatio.toDouble()
+        val t = elapsedMs / 1000.0
+        val remaining = if (zeta < 1.0) {
+            val omegaD = omega * sqrt(1.0 - zeta * zeta)
+            exp(-zeta * omega * t) *
+                (cos(omegaD * t) + (zeta * omega / omegaD) * sin(omegaD * t))
+        } else {
+            (1.0 + omega * t) * exp(-omega * t)
+        }
+        return (to + (from - to) * remaining).toFloat()
     }
 
     /**

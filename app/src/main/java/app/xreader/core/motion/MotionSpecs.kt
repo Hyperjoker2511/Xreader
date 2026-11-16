@@ -78,19 +78,31 @@ val ProgressEasing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
 const val FADE_MS = 240
 const val PROGRESS_MS = 300
 
-/** Tab-switch fade (ColorOS motion pass, 2026-11-15): the slide
- * is the motion (Spatial spring); the fade only softens the
- * crossover — 120 ms, never phase-locked to the travel. */
-const val TAB_FADE_MS = 120
+/** Tab-switch ENTER fade (nav engine round, 2026-11-16,
+ * SPEC-NAV-ENGINE-2026-11-16 §4 — the one-clock retime): peer
+ * tab switches are now a SEQUENCED FADE-THROUGH. The incoming
+ * tab fades in over 200 ms, DELAYED by [TAB_ENTER_DELAY_MS]
+ * so it only starts once the outgoing tab is gone — no
+ * overlap, so no ghost (the two headers doubling, v1.6.1) and
+ * no dip (both screens at half strength over the dark
+ * backdrop, the audit's flicker). Total 300 ms — the content
+ * now lands WITH the dock indicator (~344 ms gooey settle)
+ * instead of on its own third clock. The horizontal slide is
+ * REMOVED for peer tabs: fade-through replaces it. (History:
+ * 120 ms alongside the Spatial slide in the ColorOS pass;
+ * 80 ms exit ghost fix in the nav-bar styles pass.) */
+const val TAB_FADE_MS = 200
 
-/** Tab-switch EXIT fade (nav-bar styles pass, 2026-11-16,
- * SPEC-NAVBAR-STYLES-2026-11-16 Change 4 — the ghost fix): the
- * outgoing tab's fade drops to 80 ms while the incoming keeps
- * the 120 ms [TAB_FADE_MS]. At the old symmetric 120/120 both
- * screens sat at half strength together mid-switch and the two
- * headers doubled — the owner's "ghosting" frame in the v1.6.1
- * proof. The slide geometry is unchanged (width/5, Spatial). */
-const val TAB_EXIT_FADE_MS = 80
+/** The fade-through's sequencing delay: the incoming tab
+ * waits this long — exactly the outgoing tab's fade — before
+ * it starts arriving (SPEC-NAV-ENGINE-2026-11-16 §4). */
+const val TAB_ENTER_DELAY_MS = 100
+
+/** Tab-switch EXIT fade (nav engine round, 2026-11-16,
+ * SPEC-NAV-ENGINE-2026-11-16 §4): the outgoing tab fades out
+ * over 100 ms — gone before the incoming tab's delayed fade
+ * begins, so the two screens are never on stage together. */
+const val TAB_EXIT_FADE_MS = 100
 
 /** Stack fade (ColorOS motion pass, 2026-11-15): 200 ms — the
  * segmentColorSpec precedent — under the Spatial-spring travel. */
@@ -102,12 +114,20 @@ const val AXIS_FADE_MS = 160
 
 fun <T> fadeTween() = tween<T>(durationMillis = FADE_MS, easing = FadeEasing)
 
-/** The tab-switch fade curve: [TAB_FADE_MS] on the shared
- * FadeEasing. (Replaces the fix round's tabSwitchSpec — one
- * 320 ms tween driving the slide AND the fade phase-locked; the
- * ColorOS pass put the slide on the Spatial spring and cut the
- * fade to this.) */
-fun <T> tabFadeSpec() = tween<T>(durationMillis = TAB_FADE_MS, easing = FadeEasing)
+/** The tab-switch ENTER fade curve: [TAB_FADE_MS] delayed by
+ * [TAB_ENTER_DELAY_MS] on the shared FadeEasing — the
+ * fade-through's second half (SPEC-NAV-ENGINE-2026-11-16 §4). */
+fun <T> tabFadeSpec() = tween<T>(
+    durationMillis = TAB_FADE_MS,
+    delayMillis = TAB_ENTER_DELAY_MS,
+    easing = FadeEasing
+)
+
+/** The reduced-motion tab crossfade: [TAB_FADE_MS] with NO
+ * delay — under reduced motion the two screens still trade
+ * places in one symmetric crossfade, as they always have
+ * (SPEC-NAV-ENGINE-2026-11-16 §4 keeps that path verbatim). */
+fun <T> tabCrossfadeSpec() = tween<T>(durationMillis = TAB_FADE_MS, easing = FadeEasing)
 
 /** The tab-switch EXIT fade curve: [TAB_EXIT_FADE_MS] on the
  * shared FadeEasing (the ghost fix — see the token). */
@@ -126,6 +146,13 @@ fun <T> axisFadeSpec() = tween<T>(durationMillis = AXIS_FADE_MS, easing = FadeEa
  * answers first. */
 fun segmentColorSpec() =
     tween<androidx.compose.ui.graphics.Color>(durationMillis = 200, easing = FadeEasing)
+
+/** The FLASHY dock style's icon↔label swap (nav engine round,
+ * SPEC-NAV-ENGINE-2026-11-16 §2): 260 ms on the shared
+ * FadeEasing — the selected slot's icon slides up and out
+ * while its label slides up into place. Alpha-adjacent work,
+ * so a tween (never a spring) per the engine's rules. */
+fun flashySwapSpec() = tween<Float>(durationMillis = 260, easing = FadeEasing)
 
 fun <T> progressTween() = tween<T>(durationMillis = PROGRESS_MS, easing = ProgressEasing)
 
@@ -222,48 +249,39 @@ fun stackPopExit(reduceMotion: Boolean): ExitTransition =
         fadeOut(stackFadeSpec())
 
 /**
- * Tab-to-tab (visible-layer fix round §D; curve superseded by
- * the ColorOS motion pass, 2026-11-15): a real directional
- * travel — the incoming tab slides a FIFTH of the container
- * width on the Spatial spring (position is physics:
- * interruptible, velocity-carrying) while the short 120 ms
- * [tabFadeSpec] fade softens the crossover. [direction] is the
- * sign of the tab-ordinal travel: +1 toward a LATER tab (the
- * incoming tab starts a fifth-width to the right and settles
- * in), −1 toward an EARLIER tab (mirror). Direction 0
- * (same-tab/unknown) or [reduceMotion] yields the plain
- * crossfade on the same short fade. (History: Patch 8's 12.dp
- * nudge on the 240 ms fade was invisible on the owner's phone;
- * the fix round's phase-locked 320 ms tween then read as a
- * timeline, not physics — "not good premium smooth". The stack
- * geometry above is NOT touched by this retune.)
+ * Tab-to-tab (nav engine round, 2026-11-16,
+ * SPEC-NAV-ENGINE-2026-11-16 §4): a SEQUENCED FADE-THROUGH —
+ * the outgoing tab fades out over [TAB_EXIT_FADE_MS], then the
+ * incoming tab fades in over [TAB_FADE_MS] after the
+ * [TAB_ENTER_DELAY_MS] delay. No slide: the research is blunt
+ * that full-screen slides are for pushes, not peers, and the
+ * audit convicted the old slide+fade pairing of landing on a
+ * different clock than the dock indicator. [direction] is
+ * still accepted (the shell computes it) but no longer steers
+ * anything — fade-through is direction-free. Under
+ * [reduceMotion] the pair stays the symmetric crossfade it
+ * has always been. Stack pushes/pops keep the shared-axis
+ * geometry above — untouched by this retime.
  */
 fun tabEnter(direction: Int = 0, reduceMotion: Boolean = false): EnterTransition =
-    if (direction == 0 || reduceMotion) fadeIn(tabFadeSpec())
-    else slideInHorizontally(SpringMotionEngine.Spatial.toSpec()) { direction * it / 5 } +
-        fadeIn(tabFadeSpec())
+    if (reduceMotion) fadeIn(tabCrossfadeSpec())
+    else fadeIn(tabFadeSpec())
 
-/** Tab-to-tab exit: the outgoing tab travels a fifth-width
- * AGAINST the travel direction on the Spatial spring while its
- * fade runs the SHORTER exit curve ([tabExitFadeSpec], 80 ms —
- * the nav-bar styles ghost fix: the outgoing screen is mostly
- * gone before the incoming reaches full strength, so the two
- * headers never double). Under [reduceMotion] the exit keeps
- * the symmetric 120 ms crossfade — the accessibility path's
- * behaviour is unchanged. */
+/** Tab-to-tab exit: the fade-through's first half — out over
+ * [TAB_EXIT_FADE_MS], before the incoming tab starts. Under
+ * [reduceMotion] the exit keeps the symmetric crossfade. */
 fun tabExit(direction: Int = 0, reduceMotion: Boolean = false): ExitTransition =
-    if (reduceMotion) fadeOut(tabFadeSpec())
-    else if (direction == 0) fadeOut(tabExitFadeSpec())
-    else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) { -direction * it / 5 } +
-        fadeOut(tabExitFadeSpec())
+    if (reduceMotion) fadeOut(tabCrossfadeSpec())
+    else fadeOut(tabExitFadeSpec())
 
 /**
  * The Library's Novels ↔ Manga side switch (fix round §D.3):
- * the SAME travel as a tab switch — it is one, conceptually;
- * the switch sits in the tab row's family — so it delegates to
- * the tab adapters verbatim: width / 5 on the Spatial spring,
- * the 120 ms tab fade, plain crossfade when direction is 0 or
- * motion is reduced. [direction] comes from the pure
+ * the SAME transition as a tab switch — it is one,
+ * conceptually; the switch sits in the tab row's family — so
+ * it delegates to the tab adapters verbatim: the sequenced
+ * fade-through since the nav engine round
+ * (SPEC-NAV-ENGINE-2026-11-16 §4), the symmetric crossfade
+ * under reduced motion. [direction] comes from the pure
  * LibrarySplit.switchDirection.
  */
 fun sideSwitchEnter(direction: Int, reduceMotion: Boolean): EnterTransition =

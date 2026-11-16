@@ -1,27 +1,35 @@
 package app.xreader.ui.shell
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +46,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
@@ -53,26 +63,42 @@ import app.xreader.data.library.NavBarStyle
 import app.xreader.data.library.NavIndicatorStyle
 import app.xreader.data.prefs.PerfTier
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 /**
- * Nav-bar styles (v1.6.2, SPEC-NAVBAR-STYLES-2026-11-16): the
- * dock indicator's renderers. ONE host ([IndicatorHost]) sits
- * where the direct GooeyIndicator call used to sit in the dock
- * and dispatches on the user's chosen style; every decision
- * (which style survives this tier, which colour sits where,
- * how fast it travels, each frame's geometry) is
- * [NavIndicatorLogic]'s pure math — this file only draws.
+ * Nav-bar styles (v1.6.2, SPEC-NAVBAR-STYLES-2026-11-16) + the
+ * nav engine round (SPEC-NAV-ENGINE-2026-11-16): the dock
+ * indicator's renderers. ONE host ([IndicatorHost]) sits where
+ * the direct GooeyIndicator call used to sit in the dock and
+ * dispatches on the user's chosen style; every decision (which
+ * style survives this tier, which colour sits where, how fast
+ * it travels, each frame's geometry) is [NavIndicatorLogic]'s
+ * pure math — this file only draws.
  *
- * The shared [travel] Animatable is the centre-x (px, bar
- * coordinates) every travelling style reads: SLIDE / GLOW draw
- * from it here, NOTCH's bar shape reads it in the surface, and
- * BUBBLE's overlay reads it outside the surface (the one style
- * that must escape the bar's clip). The host drives it on the
- * tier's travel spring — an Animatable retarget keeps the
- * current velocity, so a mid-flight tap re-aims the SAME
- * moving object (the spec's interruptibility bar). GOOEY keeps
- * its own melt driver inside [GooeyIndicator]; PLAIN draws the
- * settled pill at the target and never touches [travel].
+ * Three animation objects, all owned here:
+ * - the shared [travel] Animatable — the centre-x (px, bar
+ *   coordinates) the centre-riding styles read: SLIDE / GLOW /
+ *   LENS / SEGMENTED / SQUIRCLE / RING / DOT / TOPLINE draw
+ *   from it here, NOTCH's bar shape reads it in the surface,
+ *   and BUBBLE's overlay reads it outside the surface (the one
+ *   style that must escape the bar's clip). The host drives it
+ *   on the tier's travel spring — an Animatable retarget keeps
+ *   the current velocity, so a mid-flight tap re-aims the SAME
+ *   moving object (the spec's interruptibility bar).
+ * - the lead / trail EDGE Animatables — the stretched pill of
+ *   GOOEY (rebuilt: the shipped neck/trail melt never escaped
+ *   the pill's outline on a 1-slot jump) and WORM. The edge
+ *   toward the target rides the lead spring, the other edge
+ *   lags on TrailLag; the stadium drawn between them IS the
+ *   bridge, at any distance.
+ * - PLAIN draws the settled pill at the target and touches
+ *   nothing; MINIMAL / EXPANDING / FLASHY draw nothing here
+ *   at all — they live in the slots and the row's weights.
+ *
+ * Painters read animation values in the DRAW phase only (the
+ * Canvas lambdas), so a travelling indicator never recomposes
+ * the bar per frame; at settle every Animatable stops and the
+ * idle cost is zero.
  */
 
 /** How far the BUBBLE's disc extends above the bar's top edge. */
@@ -104,24 +130,43 @@ fun IndicatorHost(
     travel: Animatable<Float, AnimationVector1D>,
     perfTier: PerfTier,
     reduceMotion: Boolean,
+    /** Slot layout for the SEGMENTED dividers and the
+     * SQUIRCLE cell: how many slots, the centre-to-centre
+     * pitch, and the first slot's centre (all px). Zero =
+     * unknown (dividers skipped). */
+    slotCount: Int = 0,
+    slotPitchPx: Float = 0f,
+    firstSlotCentreX: Float = 0f,
     modifier: Modifier = Modifier
 ) {
     val effective = NavIndicatorLogic.effectiveStyle(style, perfTier, reduceMotion)
 
-    // Drive the shared travel for the styles that read it. The
-    // first known target SNAPS (there is nothing to travel
-    // from); every later target animates on the tier's spring.
+    // Drive the shared centre travel for the styles that read
+    // it. The first known target SNAPS (there is nothing to
+    // travel from); every later target animates on the tier's
+    // spring. The run's from/to are remembered so the LENS can
+    // read its trip progress in the draw phase.
     var travelInit by remember { mutableStateOf(false) }
+    var travelFrom by remember { mutableFloatStateOf(0f) }
+    var travelTo by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(targetCentreX, effective, perfTier) {
         if (effective == NavIndicatorStyle.GOOEY ||
-            effective == NavIndicatorStyle.PLAIN
+            effective == NavIndicatorStyle.WORM ||
+            effective == NavIndicatorStyle.PLAIN ||
+            effective == NavIndicatorStyle.MINIMAL ||
+            effective == NavIndicatorStyle.EXPANDING ||
+            effective == NavIndicatorStyle.FLASHY
         ) {
             return@LaunchedEffect
         }
         if (!travelInit) {
             travel.snapTo(targetCentreX)
+            travelFrom = targetCentreX
+            travelTo = targetCentreX
             travelInit = true
         } else {
+            travelFrom = travel.value
+            travelTo = targetCentreX
             travel.animateTo(
                 targetCentreX,
                 NavIndicatorLogic.navTravelSpec(perfTier)
@@ -129,15 +174,88 @@ fun IndicatorHost(
         }
     }
 
+    // The stretch engine (nav engine round §1): two more
+    // Animatables, owned by the host. On a target change both
+    // animate to the target slot's edges — the edge toward the
+    // target on the style's lead spring, the far edge on
+    // TrailLag — continuing from their current values AND
+    // velocities (Animatable's contract; never a snap except
+    // the first placement, which snaps all three objects).
+    val leadEdge = remember { Animatable(0f) }
+    val trailEdge = remember { Animatable(0f) }
+    var edgesInit by remember { mutableStateOf(false) }
+    var runFromLead by remember { mutableFloatStateOf(0f) }
+    var runToLead by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(targetCentreX, effective, perfTier) {
+        if (effective != NavIndicatorStyle.GOOEY &&
+            effective != NavIndicatorStyle.WORM
+        ) {
+            return@LaunchedEffect
+        }
+        if (slotWidthPx <= 0f) return@LaunchedEffect
+        val targetLeft = targetCentreX - slotWidthPx / 2f
+        val targetRight = targetCentreX + slotWidthPx / 2f
+        if (!edgesInit) {
+            leadEdge.snapTo(targetRight)
+            trailEdge.snapTo(targetLeft)
+            runFromLead = targetRight
+            runToLead = targetRight
+            edgesInit = true
+            return@LaunchedEffect
+        }
+        val currentCentre = (leadEdge.value + trailEdge.value) / 2f
+        val movingRight = targetCentreX >= currentCentre
+        val leadTarget = if (movingRight) targetRight else targetLeft
+        val trailTarget = if (movingRight) targetLeft else targetRight
+        runFromLead = leadEdge.value
+        runToLead = leadTarget
+        val leadSpec = NavIndicatorLogic.leadEdgeSpec(effective, perfTier)
+        val trailSpec = NavIndicatorLogic.trailEdgeSpec(effective, perfTier)
+        launch { leadEdge.animateTo(leadTarget, leadSpec) }
+        launch { trailEdge.animateTo(trailTarget, trailSpec) }
+    }
+    // The lead edge's run progress, read by the stretch
+    // painter in its draw phase for GOOEY's squash curve.
+    val squashProgress: () -> Float = {
+        if (runToLead != runFromLead) {
+            ((leadEdge.value - runFromLead) / (runToLead - runFromLead))
+                .coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+    }
+    // The centre's run progress, read by the lens painter for
+    // its first-third squash.
+    val tripProgress: () -> Float = {
+        if (travelTo != travelFrom) {
+            ((travel.value - travelFrom) / (travelTo - travelFrom))
+                .coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+    }
+
     when (effective) {
-        NavIndicatorStyle.GOOEY -> GooeyIndicator(
-            targetCentreX = targetCentreX,
-            slotWidthPx = slotWidthPx,
+        NavIndicatorStyle.GOOEY, NavIndicatorStyle.WORM -> StretchIndicator(
+            style = effective,
+            colour = colour,
+            leadEdge = leadEdge,
+            trailEdge = trailEdge,
             topPx = topPx,
             heightPx = heightPx,
+            slotWidthPx = slotWidthPx,
+            slotPitchPx = slotPitchPx,
+            squashProgress = squashProgress,
+            modifier = modifier
+        )
+
+        NavIndicatorStyle.LENS -> LensIndicator(
+            travel = travel,
             colour = colour,
-            perfTier = perfTier,
-            reduceMotion = reduceMotion,
+            topPx = topPx,
+            heightPx = heightPx,
+            slotWidthPx = slotWidthPx,
+            tripProgress = tripProgress,
             modifier = modifier
         )
 
@@ -193,12 +311,280 @@ fun IndicatorHost(
             )
         }
 
+        NavIndicatorStyle.SEGMENTED -> Canvas(modifier) {
+            if (heightPx <= 0f || slotWidthPx <= 0f) return@Canvas
+            // The track's hairline dividers: static geometry,
+            // white 0.08, 1 dp, inset a quarter of the bar from
+            // both edges.
+            if (slotCount > 1 && slotPitchPx > 0f) {
+                val divider = Color.White.copy(alpha = 0.08f)
+                val lineWidth = 1.dp.toPx()
+                val divTop = size.height * 0.25f
+                val divBottom = size.height * 0.75f
+                for (i in 1 until slotCount) {
+                    val x = NavIndicatorLogic.slotBoundaryXPx(
+                        firstSlotCentreX, slotPitchPx, i
+                    )
+                    drawLine(
+                        color = divider,
+                        start = Offset(x, divTop),
+                        end = Offset(x, divBottom),
+                        strokeWidth = lineWidth
+                    )
+                }
+            }
+            // The raised thumb: a pale stadium inset 3 dp from
+            // the slot, riding the centre travel.
+            val inset = 3.dp.toPx()
+            val thumb = NavIndicatorLogic.segmentedThumb(
+                travel.value, slotWidthPx, topPx, heightPx, inset
+            )
+            val thumbCorner = CornerRadius(
+                thumb.heightPx / 2f, thumb.heightPx / 2f
+            )
+            val thumbTopLeft = Offset(thumb.leftPx, thumb.topPx)
+            val thumbSize = Size(thumb.widthPx, thumb.heightPx)
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.10f),
+                topLeft = thumbTopLeft,
+                size = thumbSize,
+                cornerRadius = thumbCorner
+            )
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.14f),
+                topLeft = thumbTopLeft,
+                size = thumbSize,
+                cornerRadius = thumbCorner,
+                style = Stroke(width = 1.dp.toPx())
+            )
+        }
+
+        NavIndicatorStyle.SQUIRCLE -> Canvas(modifier) {
+            if (heightPx <= 0f || slotWidthPx <= 0f) return@Canvas
+            val pitch = if (slotPitchPx > 0f) slotPitchPx else slotWidthPx
+            val rect = NavIndicatorLogic.squircleRect(
+                centreX = travel.value,
+                pitchPx = pitch,
+                barTopPx = 0f,
+                barHeightPx = size.height,
+                insetPx = 4.dp.toPx()
+            )
+            val corner = 14.dp.toPx()
+            drawRoundRect(
+                color = colour,
+                topLeft = Offset(rect.leftPx, rect.topPx),
+                size = Size(rect.widthPx, rect.heightPx),
+                cornerRadius = CornerRadius(corner, corner)
+            )
+        }
+
+        NavIndicatorStyle.RING -> Canvas(modifier) {
+            if (heightPx <= 0f) return@Canvas
+            // A 2 dp ring around the selected icon only: the
+            // circle's diameter is the pill height, its centre
+            // the icon's centre inside the slot (the pure
+            // stack math in NavIndicatorLogic).
+            val centreY = NavIndicatorLogic.ringCentreYPx(
+                topPx = topPx,
+                heightPx = heightPx,
+                iconPx = 24.dp.toPx(),
+                labelPx = 14.dp.toPx()
+            )
+            drawCircle(
+                color = colour,
+                radius = heightPx / 2f,
+                center = Offset(travel.value, centreY),
+                style = Stroke(width = 2.dp.toPx())
+            )
+        }
+
+        NavIndicatorStyle.DOT -> Canvas(modifier) {
+            if (heightPx <= 0f) return@Canvas
+            // A matte 6 dp dot below the label — no halo; the
+            // halo is exactly what makes GLOW a different style.
+            val dotRadius = 3.dp.toPx()
+            drawCircle(
+                color = colour,
+                radius = dotRadius,
+                center = Offset(
+                    travel.value,
+                    NavIndicatorLogic.dotCentreYPx(
+                        topPx, heightPx, dotRadius, 2.dp.toPx()
+                    )
+                )
+            )
+        }
+
+        NavIndicatorStyle.TOPLINE -> Canvas(modifier) {
+            if (heightPx <= 0f || slotWidthPx <= 0f) return@Canvas
+            // A 3 dp rounded line at the bar's top inner edge,
+            // 55% of the slot wide, centred on the traveller.
+            val lineHeight = 3.dp.toPx()
+            val lineY = (topPx / 2f - lineHeight / 2f).coerceAtLeast(0f)
+            drawRoundRect(
+                color = colour,
+                topLeft = Offset(
+                    NavIndicatorLogic.topLineLeftPx(travel.value, slotWidthPx),
+                    lineY
+                ),
+                size = Size(
+                    NavIndicatorLogic.topLineWidthPx(slotWidthPx),
+                    lineHeight
+                ),
+                cornerRadius = CornerRadius(lineHeight / 2f, lineHeight / 2f)
+            )
+        }
+
         // BUBBLE is drawn by the overlay outside the bar's clip
         // and NOTCH by the bar's own shape — the host's only job
-        // for both is driving the shared travel (above).
-        NavIndicatorStyle.BUBBLE, NavIndicatorStyle.NOTCH ->
+        // for both is driving the shared travel (above). MINIMAL
+        // draws no shape at all (the slots wear the colour),
+        // EXPANDING lives in the row's weights and the selected
+        // slot's own pill, FLASHY inside the selected slot.
+        NavIndicatorStyle.BUBBLE, NavIndicatorStyle.NOTCH,
+        NavIndicatorStyle.MINIMAL, NavIndicatorStyle.EXPANDING,
+        NavIndicatorStyle.FLASHY ->
             Box(modifier) {}
     }
+}
+
+/**
+ * The stretched pill (nav engine round §1–§2): ONE stadium
+ * drawn between the host's two edge Animatables — the bridge
+ * is the pill's own body, so it spans any jump distance,
+ * unlike the retired neck geometry. GOOEY and WORM share the
+ * engine and differ in the height curve: GOOEY squeezes on
+ * the trip's own clock (the melt's squash curve,
+ * [gooeySquashAt] — 0.70× at mid-trip regardless of distance),
+ * WORM thins WITH the stretch itself
+ * ([NavIndicatorLogic.wormHeightScale] — down to 0.72× when
+ * fully stretched, however long the jump). Settled, both are
+ * exactly the slot's pill. Shared by the dock (via
+ * [IndicatorHost]) and the Library switch (two stops).
+ */
+@Composable
+fun StretchIndicator(
+    style: NavIndicatorStyle,
+    colour: Color,
+    leadEdge: Animatable<Float, AnimationVector1D>,
+    trailEdge: Animatable<Float, AnimationVector1D>,
+    topPx: Float,
+    heightPx: Float,
+    slotWidthPx: Float,
+    slotPitchPx: Float,
+    squashProgress: () -> Float,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier) {
+        if (heightPx <= 0f || slotWidthPx <= 0f) return@Canvas
+        val frame = NavIndicatorLogic.stretchFrame(
+            leadEdge.value, trailEdge.value, slotWidthPx
+        )
+        if (frame.widthPx <= 0f) return@Canvas
+        val heightScale = if (style == NavIndicatorStyle.WORM) {
+            NavIndicatorLogic.wormHeightScale(frame.stretchPx, slotPitchPx)
+        } else {
+            gooeySquashAt(squashProgress())
+        }
+        val ry = heightPx / 2f * heightScale
+        val cy = topPx + heightPx / 2f
+        drawRoundRect(
+            color = colour,
+            topLeft = Offset(frame.leftPx, cy - ry),
+            size = Size(frame.widthPx, ry * 2f),
+            cornerRadius = CornerRadius(ry, ry)
+        )
+    }
+}
+
+/**
+ * The fake liquid lens (nav engine round §2): a stadium lens
+ * over the selected slot, DRAWN — no backdrop capture, no
+ * RenderEffect, so it costs one Canvas path on any tier that
+ * keeps it (MINIMAL degrades it to SLIDE instead). Fill is the
+ * indicator colour at 0.28, the rim the same colour at 0.65,
+ * and a white specular streak (0.10) lies along the top. The
+ * lens rides the centre travel; its WIDTH grows with the
+ * travel speed ([NavIndicatorLogic.lensWidthPx]) and its
+ * height dips to 0.92 in the first third of the trip
+ * ([NavIndicatorLogic.lensHeightScale]).
+ */
+@Composable
+fun LensIndicator(
+    travel: Animatable<Float, AnimationVector1D>,
+    colour: Color,
+    topPx: Float,
+    heightPx: Float,
+    slotWidthPx: Float,
+    tripProgress: () -> Float,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier) {
+        if (heightPx <= 0f || slotWidthPx <= 0f) return@Canvas
+        val stretch = NavIndicatorLogic.lensStretchFactor(
+            travel.velocity, slotWidthPx
+        )
+        val width = NavIndicatorLogic.lensWidthPx(slotWidthPx, stretch)
+        val heightScale = NavIndicatorLogic.lensHeightScale(tripProgress())
+        val cy = topPx + heightPx / 2f
+        val rh = heightPx / 2f * heightScale
+        val left = travel.value - width / 2f
+        val topLeft = Offset(left, cy - rh)
+        val lensSize = Size(width, rh * 2f)
+        val corner = CornerRadius(rh, rh)
+        drawRoundRect(
+            color = colour.copy(alpha = 0.28f),
+            topLeft = topLeft,
+            size = lensSize,
+            cornerRadius = corner
+        )
+        // The specular streak: a soft white band along the
+        // lens's top, inside the fill.
+        val streakHeight = rh * 0.55f
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.10f),
+            topLeft = Offset(left + width * 0.12f, cy - rh + 2.dp.toPx()),
+            size = Size(width * 0.76f, streakHeight),
+            cornerRadius = CornerRadius(streakHeight / 2f, streakHeight / 2f)
+        )
+        drawRoundRect(
+            color = colour.copy(alpha = 0.65f),
+            topLeft = topLeft,
+            size = lensSize,
+            cornerRadius = corner,
+            style = Stroke(width = 1.dp.toPx())
+        )
+    }
+}
+
+/**
+ * EXPANDING's slot weight (nav engine round §2): the selected
+ * slot widens to [NavIndicatorLogic.EXPANDING_SELECTED_WEIGHT]
+ * while the others stay 1.0 — the bar's width never changes,
+ * the slots trade room. The weight rides the tier's weight
+ * spring; under reduced motion it swaps instantly (the
+ * style's widths, without the glide).
+ */
+@Composable
+internal fun expandingSlotWeight(
+    selected: Boolean,
+    perfTier: PerfTier,
+    reduceMotion: Boolean
+): Float {
+    val weight by animateFloatAsState(
+        targetValue = if (selected) {
+            NavIndicatorLogic.EXPANDING_SELECTED_WEIGHT
+        } else {
+            1f
+        },
+        animationSpec = if (reduceMotion) {
+            androidx.compose.animation.core.snap()
+        } else {
+            NavIndicatorLogic.expandingWeightSpec(perfTier)
+        },
+        label = "expandingSlotWeight"
+    )
+    return weight
 }
 
 /**
@@ -349,7 +735,10 @@ class NotchBarShape(
  * chosen style exactly as the dock will, so a style is judged
  * where it is set, not after a phone-proof round. The bar body
  * is a plain filled shape (no glass — the preview's job is the
- * indicator's motion, not the surface's material).
+ * indicator's motion, not the surface's material). The nav
+ * engine round's styles preview too: EXPANDING widens the
+ * fake slots on the same weights, FLASHY settles its selected
+ * slot into the label, the lens magnifies its icon.
  */
 @Composable
 fun NavIndicatorPreview(
@@ -374,6 +763,7 @@ fun NavIndicatorPreview(
         widthPx, itemCount, selectedIndex, insetPx
     )
     val pillY = NavGeometry.pillTargetYPx(barHeightPx, insetPx)
+    val pitchPx = NavGeometry.slotWidthPx(widthPx, itemCount)
     val travel = remember { Animatable(0f) }
     val effective = NavIndicatorLogic.effectiveStyle(style, perfTier, reduceMotion)
     // Read the travel value in composition: the notch shape's
@@ -423,11 +813,25 @@ fun NavIndicatorPreview(
                     travel = travel,
                     perfTier = perfTier,
                     reduceMotion = reduceMotion,
+                    slotCount = itemCount,
+                    slotPitchPx = pitchPx.toFloat(),
+                    firstSlotCentreX = pitchPx / 2f,
                     modifier = Modifier.fillMaxSize()
                 )
             }
             Row(Modifier.fillMaxSize()) {
                 Tab.entries.forEachIndexed { index, tab ->
+                    val slotWeight = if (effective ==
+                        NavIndicatorStyle.EXPANDING
+                    ) {
+                        expandingSlotWeight(
+                            selected = index == selectedIndex,
+                            perfTier = perfTier,
+                            reduceMotion = reduceMotion
+                        )
+                    } else {
+                        1f
+                    }
                     PreviewSlot(
                         tab = tab,
                         selected = index == selectedIndex,
@@ -437,7 +841,7 @@ fun NavIndicatorPreview(
                         reduceMotion = reduceMotion,
                         onClick = { selectedIndex = index },
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(slotWeight)
                             .fillMaxHeight()
                     )
                 }
@@ -462,7 +866,11 @@ fun NavIndicatorPreview(
 }
 
 /** One fake slot of the preview dock: the real tint and rise
- * decisions ([NavIndicatorLogic]) at miniature scale. */
+ * decisions ([NavIndicatorLogic]) at miniature scale. The
+ * layout styles render their SETTLED states here: EXPANDING's
+ * selected slot is a filled pill carrying icon + label (the
+ * others icon-only), FLASHY's selected slot shows its label
+ * and dot in place of the icon, and LENS magnifies its icon. */
 @Composable
 private fun PreviewSlot(
     tab: Tab,
@@ -509,6 +917,19 @@ private fun PreviewSlot(
         },
         label = "previewSlotRise"
     )
+    val lensScale by animateFloatAsState(
+        targetValue = if (selected && effective == NavIndicatorStyle.LENS) {
+            1.12f
+        } else {
+            1f
+        },
+        animationSpec = if (reduceMotion) {
+            androidx.compose.animation.core.snap()
+        } else {
+            SpringMotionEngine.Spatial.toSpec()
+        },
+        label = "previewLensScale"
+    )
     val hideIcon = selected && effective == NavIndicatorStyle.BUBBLE
     Box(
         modifier
@@ -519,15 +940,61 @@ private fun PreviewSlot(
             ),
         contentAlignment = Alignment.Center
     ) {
-        Box(
-            Modifier.offset(y = rise),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                tab.icon,
-                contentDescription = tab.label,
-                tint = if (hideIcon) Color.Transparent else tint
-            )
+        when {
+            // FLASHY settled: the label stands where the icon
+            // was, with its dot under it; the icon is gone.
+            selected && effective == NavIndicatorStyle.FLASHY -> Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    tab.label,
+                    color = colour,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1
+                )
+                Box(
+                    Modifier
+                        .padding(top = 2.dp)
+                        .size(6.dp)
+                        .background(colour, CircleShape)
+                )
+            }
+            // EXPANDING settled: the selected slot is a filled
+            // pill carrying icon + label, on-indicator colours.
+            selected && effective == NavIndicatorStyle.EXPANDING -> Row(
+                Modifier
+                    .background(colour, RoundedCornerShape(50))
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    tab.icon,
+                    contentDescription = tab.label,
+                    tint = onColour
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    tab.label,
+                    color = onColour,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1
+                )
+            }
+            else -> Box(
+                Modifier
+                    .offset(y = rise)
+                    .graphicsLayer {
+                        scaleX = lensScale
+                        scaleY = lensScale
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    tab.icon,
+                    contentDescription = tab.label,
+                    tint = if (hideIcon) Color.Transparent else tint
+                )
+            }
         }
     }
 }
