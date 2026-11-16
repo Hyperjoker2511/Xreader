@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
-import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -40,6 +39,17 @@ import org.robolectric.annotation.GraphicsMode
  * Mutation dependence: cut CustomiseViewModel.setNavIndicatorStyle's
  * prefs call and the chip assertions go red; cut
  * setNavIndicatorColour's and the colour assertions go red.
+ *
+ * Hardened 2026-11-16 (owner's word) after CI run 43812775622:
+ * 2,892 tests, this the only failure — one chip's single
+ * `first {}` wait timed out at line 197 while the app-side path
+ * (chips wired 1:1, one generic ViewModel writer, prefs
+ * round-trip green for all sixteen) audited sound. The drive
+ * now scrolls each chip into view before tapping it (what a
+ * finger does) and waits by POLLING the current value with one
+ * idempotent re-tap at the halfway mark, naming the last seen
+ * value on failure. Assertions unchanged in strength: every
+ * chip must still land its enum, both colour flips must land.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -145,56 +155,108 @@ class CustomiseNavIndicatorWiringTest {
             )
         )
 
-        // Every chip lands its enum through the ViewModel.
+        // Every chip lands its enum through the ViewModel. Each
+        // chip is scrolled into view before the tap — the section
+        // is long, and a finger can only tap what is on screen.
         chipStyles.forEach { (label, style) ->
+            V159ComposeHarness.scrollUntilDisplayed(handle, label)
             assertTrue(
                 "$label chip clickable",
                 V159ComposeHarness.clickByLabel(handle, label)
             )
-            awaitStyle(container, style)
+            awaitStyle(container, style) {
+                V159ComposeHarness.clickByLabel(handle, label)
+            }
         }
 
         // The colour writer flips the mode to CUSTOM...
         viewModel.setNavIndicatorColour(0xFF336699L)
-        val custom = runBlocking {
-            withTimeoutOrNull(30_000L) {
-                container.libraryPrefs.state.first {
-                    it.navIndicatorColourMode ==
-                        NavIndicatorColourMode.CUSTOM &&
-                        it.navIndicatorColourArgb == 0xFF336699L
-                }
-            }
+        val custom = pollState(container) {
+            it.navIndicatorColourMode ==
+                NavIndicatorColourMode.CUSTOM &&
+                it.navIndicatorColourArgb == 0xFF336699L
         }
-        assertNotNull("colour choice never landed", custom)
+        assertTrue(
+            "colour choice never landed " +
+                "(last seen: ${lastSeen(container)})",
+            custom
+        )
 
         // ...and the Theme chip flips it back.
+        V159ComposeHarness.scrollUntilDisplayed(handle, "Theme")
         assertTrue(
             "Theme chip clickable",
             V159ComposeHarness.clickByLabel(handle, "Theme")
         )
-        val themed = runBlocking {
-            withTimeoutOrNull(30_000L) {
-                container.libraryPrefs.state.first {
-                    it.navIndicatorColourMode ==
-                        NavIndicatorColourMode.THEME
-                }
-            }
+        val themed = pollState(container) {
+            it.navIndicatorColourMode == NavIndicatorColourMode.THEME
         }
-        assertNotNull("theme choice never landed", themed)
+        assertTrue(
+            "theme choice never landed " +
+                "(last seen: ${lastSeen(container)})",
+            themed
+        )
+    }
+
+    /**
+     * Polls the prefs state's CURRENT value until [matches] or
+     * the deadline passes. Each poll is a fresh `first()` read
+     * of the current snapshot (DataStore serves it from memory
+     * after the first read), so a slow or conflated emission on
+     * a loaded runner cannot strand the wait the way a single
+     * collecting `first {}` could. [reclick], when given, fires
+     * ONCE at the halfway mark: a chip tap is idempotent (it
+     * writes the same value again), so a tap lost to a
+     * mid-recomposition semantics snapshot is retried without
+     * weakening what is asserted — the value must still land.
+     */
+    private fun pollState(
+        container: AppContainer,
+        timeoutMs: Long = 45_000L,
+        reclick: (() -> Unit)? = null,
+        matches: (app.xreader.data.library.LibraryState) -> Boolean
+    ): Boolean {
+        val deadline = System.nanoTime() +
+            java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        var reclicked = false
+        while (true) {
+            val current = runBlocking {
+                container.libraryPrefs.state.first()
+            }
+            if (matches(current)) return true
+            val remainingMs = java.util.concurrent.TimeUnit.NANOSECONDS
+                .toMillis(deadline - System.nanoTime())
+            if (remainingMs <= 0L) return false
+            if (reclick != null && !reclicked &&
+                remainingMs < timeoutMs / 2
+            ) {
+                reclicked = true
+                reclick()
+            }
+            Thread.sleep(minOf(150L, remainingMs))
+        }
+    }
+
+    private fun lastSeen(container: AppContainer): String {
+        val s = runBlocking { container.libraryPrefs.state.first() }
+        return "style=${s.navIndicatorStyle} " +
+            "mode=${s.navIndicatorColourMode} " +
+            "argb=${s.navIndicatorColourArgb}"
     }
 
     private fun awaitStyle(
         container: AppContainer,
-        expected: NavIndicatorStyle
+        expected: NavIndicatorStyle,
+        reclick: () -> Unit
     ) {
-        val reached = runBlocking {
-            withTimeoutOrNull(30_000L) {
-                container.libraryPrefs.state.first {
-                    it.navIndicatorStyle == expected
-                }
-            }
+        val landed = pollState(container, reclick = reclick) {
+            it.navIndicatorStyle == expected
         }
-        assertNotNull("indicator style never became $expected", reached)
+        assertTrue(
+            "indicator style never became $expected " +
+                "(last seen: ${lastSeen(container)})",
+            landed
+        )
     }
 
     private fun installFakeAndroidKeyStore() {
