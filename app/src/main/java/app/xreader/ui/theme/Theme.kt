@@ -304,19 +304,22 @@ fun XreaderTheme(
         if (darkTheme && appearance.trueBlack) it.withTrueBlack() else it
     }
     val hazeState = remember { HazeState() }
-    // v1.6.2 (App size): the ONE size number scales the
-    // density's fontScale. The layout metrics scale by the
-    // same number in ProvideUiMetrics below, so words and
-    // layout stay in proportion — the v1.0.2 text-size %
-    // scaled the words alone and left every card, door and
-    // button behind (the defect the owner's 2 GB phone proof
-    // convicted). Reader text keeps its own size setting and
-    // its own rendering path, untouched as before.
+    // v1.6.2 (App size): the ONE size number IS the density's
+    // fontScale. The layout metrics scale by the same number
+    // in ProvideUiMetrics below, so words and layout stay in
+    // proportion — the v1.0.2 text-size % scaled the words
+    // alone and left every card, door and button behind (the
+    // defect the owner's 2 GB phone proof convicted). The
+    // system font scale does NOT multiply on top (owner's
+    // no-stacking rule, 2026-11-16): the number picked in
+    // Customise is exactly the size the app renders, on any
+    // phone. Reader text keeps its own size setting and its
+    // own rendering path, untouched as before.
     val baseDensity = androidx.compose.ui.platform.LocalDensity.current
     val scaledDensity = remember(baseDensity, appearance.appSize) {
         androidx.compose.ui.unit.Density(
             density = baseDensity.density,
-            fontScale = baseDensity.fontScale * appearance.appSize
+            fontScale = appearance.appSize
         )
     }
     // R01 boot sequence: while [hazeReady] is false the tree composes

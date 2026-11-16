@@ -27,10 +27,12 @@ import kotlin.math.roundToInt
  *
  * v1.6.2 (App size): the tier row is now only the BASE. The
  * provider scales it by the user's one App size number (see
- * [scaledMetrics]) and the theme scales the fontScale by the
- * same number — the manual control the owner asked for
- * ("customizable sizes… no need to automatically adopt")
- * replaces the tier as the size the user actually sees.
+ * [scaledMetrics]) and the theme sets the density's
+ * fontScale to that same number (the system font scale does
+ * not multiply on top — the owner's no-stacking rule) — the
+ * manual control the owner asked for ("customizable sizes…
+ * no need to automatically adopt") replaces the tier as the
+ * size the user actually sees.
  *
  * This piece lays the pipe: the table, the CompositionLocal, and
  * the provider the theme installs at the root. Screens adopt the
