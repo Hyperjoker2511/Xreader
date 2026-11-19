@@ -224,8 +224,13 @@ data class ReaderConfig(
     val mangaOrientation: MangaOrientation = MangaOrientation.FREE
 )
 
-/** How the reader moves between chapters (v1.0.1). */
-enum class ChapterTransition { CONTINUOUS, CHAPTER_BY_CHAPTER, PULL_FOR_NEXT }
+/** How the reader moves between chapters (v1.0.1).
+ * v1.7 one-engine (Q1 RULED): PULL_FOR_NEXT is REMOVED — it was
+ * a settings label with no mechanism behind it. A stored
+ * "PULL_FOR_NEXT" pref string no longer parses and falls back
+ * to CHAPTER_BY_CHAPTER through [ReaderValidation.parseEnum]
+ * (ReaderPrefs) — migration is automatic, no format change. */
+enum class ChapterTransition { CONTINUOUS, CHAPTER_BY_CHAPTER }
 
 /** Hardware-keyboard control presets (v1.0.2, R18/G18). */
 enum class KeyboardPreset { STANDARD, PAGE_KEYS, OFF }

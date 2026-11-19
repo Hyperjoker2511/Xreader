@@ -354,7 +354,17 @@ fun ZoomableImage(
      * behaviour is byte-identical to before: single taps stay
      * unconsumed and unreported, exactly as the arbitration
      * doc describes. */
-    onImageTap: (() -> Unit)? = null
+    onImageTap: (() -> Unit)? = null,
+    /** v1.7 one-engine (Item 4, A6): reserve a real box for the
+     * image before its painter reports a size — a default 3:2
+     * aspect (the [FailedImageSlot] precedent) until Coil's
+     * success reports the bitmap's true aspect, which then
+     * replaces it. Opt-in per call site: ONLY the unified
+     * scroll core enables it, because a zero-height image item
+     * inside its LazyColumn can be disposed before its load
+     * lands (the blank-illustration defect). Default off —
+     * every other caller's layout is byte-identical. */
+    reserveAspect: Boolean = false
 ) {
     if (isFailedImageSlot(model)) {
         FailedImageSlot(
@@ -375,7 +385,8 @@ fun ZoomableImage(
             lowRam = lowRam,
             onZoomActiveChanged = onZoomActiveChanged,
             colorFilter = colorFilter,
-            onImageTap = onImageTap
+            onImageTap = onImageTap,
+            reserveAspect = reserveAspect
         )
     }
 }
@@ -505,7 +516,9 @@ private fun ZoomableImageSurface(
      * (greyscale / invert) when one is in force. */
     colorFilter: androidx.compose.ui.graphics.ColorFilter? = null,
     /** v1.7 Patch 3 (Item 4f): see [ZoomableImage]. */
-    onImageTap: (() -> Unit)? = null
+    onImageTap: (() -> Unit)? = null,
+    /** v1.7 one-engine (Item 4): see [ZoomableImage]. */
+    reserveAspect: Boolean = false
 ) {
     val context = LocalContext.current
     // v1.5.2 fix (FIX-4, §6.3): past the ≥1.5× trigger the page
@@ -524,6 +537,11 @@ private fun ZoomableImageSurface(
     // loading and behind the label on error, so the slot is
     // never a silent blank.
     var loadFailed by remember(model) { mutableStateOf(false) }
+    // v1.7 one-engine (Item 4): the bitmap's true aspect once
+    // Coil reports it — the reserve's replacement value. Null
+    // until then (and forever when the load fails, so a failed
+    // slot keeps the 3:2 box too).
+    var loadedAspect by remember(model) { mutableStateOf<Float?>(null) }
     val slotPainter = rememberAsyncImagePainter(FAILED_IMAGE_ASSET_URI)
     val request = remember(context, model, redecodeWidthPx) {
         ReaderImageDecode.request(context, model, redecodeWidthPx)
@@ -825,9 +843,27 @@ private fun ZoomableImageSurface(
             placeholder = slotPainter,
             error = slotPainter,
             onLoading = { loadFailed = false },
-            onSuccess = { loadFailed = false },
+            onSuccess = { success ->
+                loadFailed = false
+                // Item 4: the true aspect replaces the 3:2
+                // reserve the moment the bitmap's size is known.
+                if (reserveAspect) {
+                    val size = success.painter.intrinsicSize
+                    if (size.width > 0f && size.height > 0f &&
+                        size.width.isFinite() && size.height.isFinite()
+                    ) {
+                        loadedAspect = size.width / size.height
+                    }
+                }
+            },
             onError = { loadFailed = true },
-            modifier = imageModifier.graphicsLayer {
+            modifier = (
+                if (reserveAspect) {
+                    imageModifier.aspectRatio(loadedAspect ?: (3f / 2f))
+                } else {
+                    imageModifier
+                }
+                ).graphicsLayer {
                 val zoom = zoomState.value
                 scaleX = zoom.scale
                 scaleY = zoom.scale

@@ -120,6 +120,11 @@ data class ReaderUiState(
     /** The endless stream's loaded window (scroll + continuous). */
     val streamEntries: List<StreamEntry> = emptyList(),
     val streamActive: Boolean = false,
+    /** v1.7 one-engine (Item 3): the honest reason standing in
+     * the pinned window's boundary FAILED row, when one does
+     * (the fetch layer's diagnostic-log line for that
+     * chapter). Null whenever no boundary failure stands. */
+    val streamFailedReason: String? = null,
     /** "This book / All books" settings scope (R18). */
     val settingsScope: ReaderSettingsScope = ReaderSettingsScope.ALL_BOOKS,
     val hasBookOverride: Boolean = false,
@@ -203,7 +208,15 @@ data class StreamEntry(
     /** v1.0.6.2 (F3-stream): this chapter's copy is travelling
      * through the download queue right now — the block says so
      * instead of offering a download that's already running. */
-    val fetching: Boolean = false
+    val fetching: Boolean = false,
+    /** v1.7 one-engine (Item 3): the live fetch for this
+     * chapter ENDED without landing a copy — the pinned
+     * window's boundary renders the in-flow FAILED row (the
+     * reason is the fetch layer's honest one, from the
+     * diagnostic log) with a retry door, QuickNovel's
+     * FailedSpanned shape. Only the pinned policy's boundary
+     * consumes it; Continuous keeps the shipped missing block. */
+    val failed: Boolean = false
 )
 
 /** R18 settings scope: where a reader-settings change lands. */
@@ -1175,9 +1188,13 @@ class ReaderViewModel(
      * already causes. */
     private fun reapplyTerms() {
         if (_state.value.streamActive) {
+            // v1.7 one-engine (A1): a terms rebuild reopens the
+            // window under the LIVE window policy — a pinned
+            // book stays pinned.
             openStream(
                 _state.value.chapterIndex,
-                _state.value.positionOffset
+                _state.value.positionOffset,
+                pinned = streamPinned
             )
             return
         }
@@ -2007,6 +2024,32 @@ class ReaderViewModel(
     private var streamJob: kotlinx.coroutines.Job? = null
     private val streamFractions = mutableMapOf<Int, Float>()
 
+    // ── v1.7 one-engine: the window policy ───────────────────
+    // The unified scroll core runs the stream machinery under
+    // BOTH transitions. CONTINUOUS keeps the shipped sliding
+    // window; CHAPTER_BY_CHAPTER pins the window to the current
+    // chapter (the planner's `behind` reserve still applies —
+    // a scroll back never waits) and never slides it. The one
+    // extension of the pinned window is Item 3's boundary
+    // crossing: as the current chapter's end is reached, the
+    // next chapter is requested and joins the window when it
+    // lands; the window then re-pins around it.
+    @Volatile
+    private var streamPinned: Boolean = false
+
+    /** The pinned window's one outstanding boundary request:
+     * the chapter being loaded in, or -1. Set when the current
+     * chapter's last block becomes visible; cleared when the
+     * chapter lands, fails, or the window re-plans. While set,
+     * the boundary renders the LOADING item and is not
+     * re-requested. */
+    private var boundaryNextIndex: Int = -1
+
+    /** The boundary chapter whose load FAILED (the FAILED row
+     * stands at the boundary), or -1. Cleared by a retry, a
+     * landing, or a window re-plan. */
+    private var boundaryFailedIndex: Int = -1
+
     private suspend fun loadStreamText(chapter: Chapter): ChapterText? {
         // The stream cache holds ORIGINALS (like chapterCache);
         // each caller gets the display copy for the terms in
@@ -2048,8 +2091,19 @@ class ReaderViewModel(
             }
         }
 
-    /** Open (or re-anchor) the stream at [anchorIndex]. */
-    fun openStream(anchorIndex: Int, anchorOffset: Int = 0) {
+    /** Open (or re-anchor) the stream at [anchorIndex].
+     * v1.7 one-engine: [pinned] selects the window policy —
+     * true under CHAPTER_BY_CHAPTER (the window is the current
+     * chapter plus the planner's behind reserve, and it never
+     * slides), false under CONTINUOUS (the shipped sliding
+     * window). A (re)open under either policy drops any
+     * outstanding boundary request: the window is being
+     * re-planned around the anchor. */
+    fun openStream(
+        anchorIndex: Int,
+        anchorOffset: Int = 0,
+        pinned: Boolean = false
+    ) {
         // Manga programme (slice M2): the endless stream is a
         // TEXT window — a manga book never enters it (its
         // chapters are page lists; the image reader owns them).
@@ -2058,6 +2112,9 @@ class ReaderViewModel(
         // resolves, once a chapter has shown what it is.
         if (bookConfig?.mediaKind?.isManga == true) return
         if (_state.value.mangaPages != null) return
+        streamPinned = pinned
+        boundaryNextIndex = -1
+        boundaryFailedIndex = -1
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
             val chapters = _state.value.chapters
@@ -2068,13 +2125,17 @@ class ReaderViewModel(
                 appearance.coverGlow
             )
             val counts = streamCharCounts(chapters)
-            val window = StreamWindowPlanner.plan(
-                anchorIndex = anchorIndex,
-                chapterCharCounts = counts,
-                charBudget = StreamWindowPlanner.charBudgetFor(
-                    policy.tier == app.xreader.data.prefs.PerfTier.MINIMAL
+            val window = if (pinned) {
+                pinnedWindow(anchorIndex, counts)
+            } else {
+                StreamWindowPlanner.plan(
+                    anchorIndex = anchorIndex,
+                    chapterCharCounts = counts,
+                    charBudget = StreamWindowPlanner.charBudgetFor(
+                        policy.tier == app.xreader.data.prefs.PerfTier.MINIMAL
+                    )
                 )
-            )
+            }
             val entries = buildStreamEntries(
                 window, anchorIndex,
                 minimalTier = policy.tier ==
@@ -2096,6 +2157,138 @@ class ReaderViewModel(
             )
             anchorEntry?.text?.let { onPosition(anchorOffset, 0f) }
         }
+    }
+
+    /** v1.7 one-engine: the pinned policy's window — the
+     * anchor chapter plus up to the planner's behind reserve
+     * (2), nothing ahead: the window never speculatively
+     * extends, and Item 3's boundary is its only way forward. */
+    private fun pinnedWindow(
+        anchorIndex: Int,
+        counts: List<Int>
+    ): StreamWindowPlanner.Window {
+        if (counts.isEmpty()) return StreamWindowPlanner.Window(0, -1)
+        val anchor = anchorIndex.coerceIn(0, counts.lastIndex)
+        return StreamWindowPlanner.Window(
+            fromIndex = (anchor - 2).coerceAtLeast(0),
+            toIndex = anchor
+        )
+    }
+
+    /**
+     * v1.7 one-engine (Item 3): the pinned window's boundary
+     * request — the unified core calls this when the CURRENT
+     * chapter's last block becomes visible (last-visible
+     * tracking in the surface; NO fraction threshold anywhere).
+     * The next chapter is requested over the same fetch path
+     * the stream already uses for missing chapters
+     * (ensureStored for a chapter with no copy; a stored copy
+     * simply joins), and [boundaryNextIndex] marks the request
+     * so the boundary renders the LOADING item and the request
+     * is never doubled. When the chapter lands,
+     * [landBoundaryChapter] extends the window by it and
+     * re-pins; when the fetch fails, [boundaryFailedIndex]
+     * stands the FAILED row at the boundary instead.
+     */
+    fun onBoundaryEndVisible() {
+        if (!streamPinned || !_state.value.streamActive) return
+        val stateNow = _state.value
+        val next = stateNow.chapterIndex + 1
+        if (next > stateNow.chapters.lastIndex) return
+        if (boundaryNextIndex == next) return
+        if (stateNow.streamEntries.any { it.chapterIndex == next }) return
+        boundaryNextIndex = next
+        boundaryFailedIndex = -1
+        if (stateNow.streamFailedReason != null) {
+            _state.value = stateNow.copy(streamFailedReason = null)
+        }
+        val chapter = stateNow.chapters.getOrNull(next) ?: return
+        if (chapter.contentPath != null) {
+            viewModelScope.launch { landBoundaryChapter(next) }
+        } else if (!startStreamLiveFetch(next)) {
+            // No fetch could start (the row vanished under
+            // us): fail honestly rather than load forever.
+            boundaryNextIndex = -1
+            boundaryFailedIndex = next
+        }
+    }
+
+    /** Item 3: the FAILED row's retry door — the same request
+     * again, through the same paths. */
+    fun retryBoundaryChapter() {
+        if (boundaryFailedIndex < 0) return
+        val next = boundaryFailedIndex
+        boundaryFailedIndex = -1
+        boundaryNextIndex = -1
+        // A failed entry may be standing in the window (a
+        // stored fetch that errored): drop it so the boundary
+        // re-requests cleanly.
+        _state.value = _state.value.copy(
+            streamEntries = _state.value.streamEntries.filter {
+                it.chapterIndex != next
+            },
+            streamFailedReason = null
+        )
+        onBoundaryEndVisible()
+    }
+
+    /** Item 3: the boundary chapter has landed (its stored
+     * copy exists): extend the pinned window by exactly it,
+     * re-pin around it, and let the scroll continue into it.
+     * The entries are swapped only when the replacement window
+     * is built — the outgoing window stays composed through
+     * the gap (A1/C9). */
+    private suspend fun landBoundaryChapter(next: Int) {
+        if (boundaryNextIndex != next) return
+        val stateNow = _state.value
+        val appearance = container.appearancePrefs.state.first()
+        val policy = app.xreader.data.prefs.PerformancePolicy.resolve(
+            appearance.performanceMode, container.totalRamMb(),
+            appearance.coverGlow
+        )
+        val counts = streamCharCounts(stateNow.chapters)
+        val window = pinnedWindow(next, counts)
+        val entries = buildStreamEntries(
+            window, next,
+            minimalTier = policy.tier ==
+                app.xreader.data.prefs.PerfTier.MINIMAL
+        )
+        if (boundaryNextIndex != next) return
+        boundaryNextIndex = -1
+        boundaryFailedIndex = -1
+        val keepIds = entries.map { it.chapterId }.toSet()
+        streamTexts.keys.retainAll(keepIds + listOfNotNull(stateNow.chapter?.id))
+        _state.value = _state.value.copy(streamEntries = entries)
+    }
+
+    /** Item 3: the boundary chapter's fetch ended WITHOUT a
+     * copy — the FAILED row stands at the boundary with the
+     * fetch layer's honest reason (its latest diagnostic-log
+     * line for this chapter, the reader error block's own
+     * source). No dead screen, no silent stop. */
+    private fun failBoundaryChapter(next: Int) {
+        if (boundaryNextIndex != next) return
+        boundaryNextIndex = -1
+        boundaryFailedIndex = next
+        val chapter = _state.value.chapters.getOrNull(next) ?: return
+        val reason = app.xreader.komikku.ReaderErrorDetail.fromLog(
+            app.xreader.data.extension.DiagnosticLog.entries(),
+            chapter.id
+        ) ?: "This chapter couldn't be fetched."
+        _state.value = _state.value.copy(
+            streamEntries = _state.value.streamEntries.filter {
+                it.chapterIndex != next
+            } + StreamEntry(
+                chapterIndex = next,
+                chapterId = chapter.id,
+                title = chapter.title,
+                text = null,
+                missing = true,
+                fetching = false,
+                failed = true
+            ),
+            streamFailedReason = reason
+        )
     }
 
     private suspend fun buildStreamEntries(
@@ -2128,6 +2321,11 @@ class ReaderViewModel(
             val entry = entries[position]
             if (!entry.missing) continue
             if (minimalTier && entry.chapterIndex != anchorIndex) continue
+            // v1.7 one-engine: under the pinned policy the same
+            // restraint applies at every tier — a pinned window
+            // never pulls a neighbour speculatively; the
+            // boundary request (Item 3) is its only fetch door.
+            if (streamPinned && entry.chapterIndex != anchorIndex) continue
             if (startStreamLiveFetch(entry.chapterIndex)) {
                 entries[position] = entry.copy(fetching = true)
             }
@@ -2162,6 +2360,7 @@ class ReaderViewModel(
             }
         )
         viewModelScope.launch {
+            var landed = false
             try {
                 // v1.0.6.2 (F9): the wait is the shared loader's —
                 // one fetch path for reader, stream and AI alike.
@@ -2170,6 +2369,7 @@ class ReaderViewModel(
                 if (outcome is
                     app.xreader.data.download.ChapterTextLoader.Outcome.Stored
                 ) {
+                    landed = true
                     val fresh = outcome.chapter
                     val text = loadStreamText(fresh)
                     _state.value = _state.value.copy(
@@ -2190,6 +2390,13 @@ class ReaderViewModel(
                             }
                         }
                     )
+                    // v1.7 one-engine (Item 3): this fetch was
+                    // the pinned window's boundary request — the
+                    // landed chapter joins the window and the
+                    // window re-pins around it.
+                    if (boundaryNextIndex == index) {
+                        landBoundaryChapter(index)
+                    }
                 }
             } finally {
                 streamLiveFetches.remove(chapter.id)
@@ -2203,6 +2410,11 @@ class ReaderViewModel(
                         }
                     }
                 )
+                // Item 3: a boundary fetch that ended WITHOUT a
+                // copy stands the FAILED row at the boundary.
+                if (!landed && boundaryNextIndex == index) {
+                    failBoundaryChapter(index)
+                }
             }
         }
         return true
@@ -2231,6 +2443,10 @@ class ReaderViewModel(
         }
         onPosition(charOffset, chapterFraction)
         // Slide the window when the reader nears either edge.
+        // v1.7 one-engine: CONTINUOUS only — the pinned window
+        // never slides; its forward motion is Item 3's boundary
+        // landing, which re-pins around the landed chapter.
+        if (streamPinned) return
         val entries = _state.value.streamEntries
         val first = entries.firstOrNull()?.chapterIndex ?: return
         val last = entries.lastOrNull()?.chapterIndex ?: return
@@ -2307,8 +2523,15 @@ class ReaderViewModel(
      * terms, or closing): the single-chapter path takes over. */
     fun closeStream() {
         streamJob?.cancel()
+        // v1.7 one-engine: a closed stream carries no boundary
+        // request with it — the next open re-plans from scratch.
+        boundaryNextIndex = -1
+        boundaryFailedIndex = -1
         if (_state.value.streamActive) {
-            _state.value = _state.value.copy(streamActive = false)
+            _state.value = _state.value.copy(
+                streamActive = false,
+                streamFailedReason = null
+            )
         }
     }
 
@@ -2874,6 +3097,32 @@ class ReaderViewModel(
         }
     }
 
+    /** v1.7 one-engine (Item 1, A5): a bookmark for a passage
+     * in ANY window chapter — the unified scroll core's
+     * paragraph menu carries the paragraph's own chapter
+     * identity, and the bookmark is written against THAT
+     * chapter at the paragraph's offset. The saved reading
+     * position is never touched (the retired single-chapter
+     * handler routed through onPosition first — inside a
+     * window that would have yanked the place). */
+    fun addBookmarkInChapter(chapterIndex: Int, charOffset: Int) {
+        val stateNow = _state.value
+        val chapter = stateNow.chapters.getOrNull(chapterIndex) ?: return
+        viewModelScope.launch {
+            container.database.bookmarkDao().insert(
+                Bookmark(
+                    bookId = bookId,
+                    chapterId = chapter.id,
+                    chapterIndex = chapterIndex,
+                    charOffset = charOffset,
+                    label = "",
+                    createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
     fun removeBookmarkAtCurrentPosition() {
         val stateNow = _state.value
         val target = _bookmarks.value.firstOrNull {
@@ -2918,6 +3167,43 @@ class ReaderViewModel(
         val stateNow = _state.value
         val chapter = stateNow.chapter ?: return
         val text = stateNow.chapterText ?: return
+        if (start < 0 || end > text.length || start >= end) return
+        viewModelScope.launch {
+            container.database.highlightDao().insert(
+                Highlight(
+                    bookId = bookId,
+                    chapterId = chapter.id,
+                    startOffset = start,
+                    endOffset = end,
+                    quotedText = text.text.substring(start, end).take(500),
+                    color = "amber",
+                    note = note?.takeIf { it.isNotBlank() },
+                    createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    /** v1.7 one-engine (Item 1, A5): a highlight in ANY window
+     * chapter — the range resolves against that entry's own
+     * text and the row is written against that entry's
+     * chapter. The current-chapter [addHighlight] above is
+     * unchanged for its existing callers (the note dialog). */
+    fun addHighlightInChapter(
+        chapterIndex: Int,
+        start: Int,
+        end: Int,
+        note: String? = null
+    ) {
+        val stateNow = _state.value
+        val chapter = stateNow.chapters.getOrNull(chapterIndex) ?: return
+        val text = if (chapterIndex == stateNow.chapterIndex) {
+            stateNow.chapterText
+        } else {
+            stateNow.streamEntries
+                .firstOrNull { it.chapterIndex == chapterIndex }?.text
+        } ?: return
         if (start < 0 || end > text.length || start >= end) return
         viewModelScope.launch {
             container.database.highlightDao().insert(

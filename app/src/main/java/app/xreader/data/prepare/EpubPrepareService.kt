@@ -484,6 +484,18 @@ class EpubPrepareService(
             if (row.title.isBlank()) return false
             if (!storage.resolve(path).isFile) return false
         }
+        // v1.7 one-engine (Item 5): the pictures verify too —
+        // every asset the parser emitted (the same enumeration
+        // the landing copy above and the prune keep-set use)
+        // must exist at content/<bookId>/img-<name> with bytes
+        // in it. A miss fails the landing honestly (prepare
+        // falls back to the old road) instead of landing a
+        // book with silent picture gaps.
+        val assets = parsed.assetsDir?.listFiles().orEmpty()
+        for (asset in assets) {
+            val landed = storage.contentFile(bookId, "img-${asset.name}")
+            if (!landed.isFile || landed.length() <= 0L) return false
+        }
         return true
     }
 

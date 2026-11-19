@@ -173,17 +173,44 @@ fun ReaderScreen(
             aiViewModel.bind(state.chapterIndex, chapter.id, state.positionOffset)
         }
     }
-    // v1.0.2 (R17): stream activation follows the mode+transition
-    // pair — entering Continuous scroll opens the stream at the
-    // current chapter; leaving it returns to single-chapter loads.
-    LaunchedEffect(config.mode, config.chapterTransition, state.chapters.size) {
-        val wantsStream = config.mode == ReaderMode.SCROLL &&
-            config.chapterTransition ==
-            app.xreader.domain.reader.ChapterTransition.CONTINUOUS
-        if (wantsStream && !state.streamActive && state.chapters.isNotEmpty()) {
-            viewModel.openStream(state.chapterIndex, state.restoreOffset)
+    // v1.7 one-engine (A1/A2): in SCROLL mode the unified
+    // stream core is the ONLY text surface, under BOTH
+    // transitions — the transition is the window policy
+    // (CONTINUOUS = the sliding window, CHAPTER_BY_CHAPTER =
+    // pinned to the current chapter). The effect is keyed on
+    // streamActive + the transition so the window (re)opens at
+    // the LIVE place (chapterIndex, positionOffset) after
+    // every loadChapter-path event — chrome next/prev,
+    // Contents/bookmark/search jumps, translation toggles,
+    // the Preparing reload; all of them close the stream —
+    // and a transition flip under an active stream re-plans
+    // the window around the same live place (tracked via
+    // appliedStreamPinned). Leaving SCROLL carries the live
+    // place into Paged via openChapterAt — never a
+    // chapter-start reload (Item 6).
+    var appliedStreamPinned by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(
+        config.mode, config.chapterTransition,
+        state.streamActive, state.chapters.size
+    ) {
+        val wantsStream = config.mode == ReaderMode.SCROLL
+        if (wantsStream && state.chapters.isNotEmpty()) {
+            val pinned = config.chapterTransition ==
+                app.xreader.domain.reader.ChapterTransition.CHAPTER_BY_CHAPTER
+            if (!state.streamActive) {
+                viewModel.openStream(
+                    state.chapterIndex, state.positionOffset, pinned = pinned
+                )
+                appliedStreamPinned = pinned
+            } else if (appliedStreamPinned != pinned) {
+                viewModel.openStream(
+                    state.chapterIndex, state.positionOffset, pinned = pinned
+                )
+                appliedStreamPinned = pinned
+            }
         } else if (!wantsStream && state.streamActive) {
-            viewModel.openChapter(state.chapterIndex)
+            viewModel.openChapterAt(state.chapterIndex, state.positionOffset)
+            appliedStreamPinned = null
         }
     }
     val context = LocalContext.current
@@ -335,7 +362,11 @@ fun ReaderScreen(
             }
         }
     var editingNoteFor by remember { mutableStateOf<Highlight?>(null) }
-    var pendingNoteHighlight by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    // v1.7 one-engine (A5): a pending note carries its chapter
+    // — (chapterIndex, start, end) — so the note lands on the
+    // paragraph's own chapter even if the reader has crossed
+    // into another one before saving.
+    var pendingNoteHighlight by remember { mutableStateOf<Triple<Int, Int, Int>?>(null) }
     var noteText by remember { mutableStateOf("") }
 
     LaunchedEffect(aiViewModel) {
@@ -749,9 +780,9 @@ fun ReaderScreen(
                 }
             }
 
-            // v1.0.2 (R17): the endless stream — scroll mode with
-            // the Continuous transition renders the window, not a
-            // single chapter.
+            // v1.7 one-engine: in SCROLL mode the unified
+            // stream core renders the window under BOTH
+            // transitions — it is the only scroll surface.
             state.streamActive && state.streamEntries.isNotEmpty() -> {
                 ScrollStreamReader(
                     entries = state.streamEntries,
@@ -759,7 +790,13 @@ fun ReaderScreen(
                     config = config,
                     palette = palette,
                     fontFamily = fontFamily,
-                    highlights = chapterHighlights,
+                    // Item 1 parity: highlights reach the core
+                    // UN-pre-filtered — the core filters per
+                    // entry, so marks in window chapters other
+                    // than the current one render too.
+                    highlights = allHighlights,
+                    spokenRange = spokenRange,
+                    overlayBlockId = state.overlayTextId,
                     restoreChapterIndex = state.chapterIndex,
                     restoreOffset = state.restoreOffset,
                     restoreGeneration = state.restoreGeneration,
@@ -768,12 +805,45 @@ fun ReaderScreen(
                     onStreamPosition = { chapterIndex, offset, fraction ->
                         viewModel.onStreamPosition(chapterIndex, offset, fraction)
                     },
+                    // A5: ranges resolve against the
+                    // paragraph's OWN entry text; marks are
+                    // written against that chapter. Bookmark
+                    // never routes through onPosition.
+                    onParagraphAction = { chapterIndex, blockIndex, action ->
+                        val entryText = state.streamEntries
+                            .firstOrNull { it.chapterIndex == chapterIndex }?.text
+                        val range = entryText?.rangeOf(blockIndex)
+                        if (range != null) {
+                            when (action) {
+                                ParagraphAction.HIGHLIGHT ->
+                                    viewModel.addHighlightInChapter(
+                                        chapterIndex, range.start, range.end
+                                    )
+                                ParagraphAction.NOTE ->
+                                    pendingNoteHighlight = Triple(
+                                        chapterIndex, range.start, range.end
+                                    )
+                                ParagraphAction.BOOKMARK -> {
+                                    viewModel.addBookmarkInChapter(
+                                        chapterIndex, range.start
+                                    )
+                                    notice = "Bookmarked this passage"
+                                }
+                            }
+                        }
+                    },
                     onCenterTap = { chromeVisible = !chromeVisible },
                     onChromeWanted = { wanted -> chromeVisible = wanted },
                     onSelectionAction = handleSelectionAction,
                     onDownloadChapter = { index ->
                         viewModel.downloadStreamChapter(index)
                     },
+                    onBoundaryEndVisible = { viewModel.onBoundaryEndVisible() },
+                    onChapterEndReached = {
+                        viewModel.markCurrentChapterFinished()
+                    },
+                    onRetryChapter = { viewModel.retryBoundaryChapter() },
+                    failedReason = state.streamFailedReason,
                     topInset = readerTopInset,
                     bottomInset = readerBottomInset
                 )
@@ -781,6 +851,13 @@ fun ReaderScreen(
 
             state.chapterText != null -> {
                 val chapterText = state.chapterText!!
+                // v1.7 one-engine (C1): Paged is the only
+                // single-chapter surface left — the retired
+                // ScrollReader is gone; in SCROLL mode the
+                // unified stream branch above owns the screen,
+                // and this branch is only the brief gap before
+                // activation, which renders nothing rather than
+                // a second, competing surface.
                 if (config.mode == ReaderMode.PAGED) {
                     PagedReader(
                         chapterText = chapterText,
@@ -812,48 +889,6 @@ fun ReaderScreen(
                         nextChapterText = state.layoutAheadNextText,
                         layoutAheadEnabled = state.layoutAheadEnabled,
                         fingerprintExtra = state.showingTranslation
-                    )
-                } else {
-                    ScrollReader(
-                        chapterText = chapterText,
-                        config = config,
-                        palette = palette,
-                        fontFamily = fontFamily,
-                        highlights = chapterHighlights,
-                        spokenRange = spokenRange,
-                        overlayBlockId = state.overlayTextId,
-                        restoreOffset = state.restoreOffset,
-                        restoreScrollFraction = state.restoreScrollFraction,
-                        restoreGeneration = state.restoreGeneration,
-                        externalTurns = viewModel.externalTurns,
-                        assetFile = { assetFile(bookId, it) },
-                        onPosition = { offset, fraction ->
-                            viewModel.onPosition(offset, fraction)
-                        },
-                        onReachedEnd = { viewModel.onScrollReachedEnd() },
-                        autoContinue = config.chapterTransition !=
-                            app.xreader.domain.reader.ChapterTransition.CHAPTER_BY_CHAPTER,
-                        onParagraphAction = { blockIndex, action ->
-                            val range = chapterText.rangeOf(blockIndex)
-                            if (range != null) {
-                                when (action) {
-                                    ParagraphAction.HIGHLIGHT ->
-                                        viewModel.addHighlight(range.start, range.end)
-                                    ParagraphAction.NOTE ->
-                                        pendingNoteHighlight = range.start to range.end
-                                    ParagraphAction.BOOKMARK -> {
-                                        viewModel.onPosition(range.start, 0f)
-                                        viewModel.addBookmarkHere()
-                                        notice = "Bookmarked this passage"
-                                    }
-                                }
-                            }
-                        },
-                        onCenterTap = { chromeVisible = !chromeVisible },
-                        onChromeWanted = { wanted -> chromeVisible = wanted },
-                        onSelectionAction = handleSelectionAction,
-                        topInset = readerTopInset,
-                        bottomInset = readerBottomInset
                     )
                 }
             }
@@ -1242,8 +1277,11 @@ fun ReaderScreen(
                         if (noteTarget != null) {
                             viewModel.updateHighlightNote(noteTarget, noteText)
                         } else if (pendingRange != null) {
-                            viewModel.addHighlight(
-                                pendingRange.first, pendingRange.second, noteText
+                            viewModel.addHighlightInChapter(
+                                pendingRange.first,
+                                pendingRange.second,
+                                pendingRange.third,
+                                noteText
                             )
                             notice = "Passage highlighted with your note"
                         }

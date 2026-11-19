@@ -137,6 +137,12 @@ fun PagedReader(
 ) {
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer()
+    // v1.7 one-engine (R4): layout-ahead measures on its OWN
+    // TextMeasurer — one measurer serves one job at a time.
+    // The visible chapter's pagination and the ahead job used
+    // to share a single TextMeasurer through chapterMeasurer;
+    // the ahead measurer below ends that sharing.
+    val aheadMeasurer = rememberTextMeasurer()
     val scope = rememberCoroutineScope()
 
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -197,6 +203,22 @@ fun PagedReader(
         ) {
             ComposeChapterMeasurer(
                 textMeasurer = measurer,
+                density = density,
+                fontFamily = fontFamily,
+                columnWidthPx = columnWidthPx,
+                contentHeightPx = contentHeightPx
+            )
+        }
+        // v1.7 one-engine (R4): the layout-ahead job's own
+        // measurer, on the ahead TextMeasurer — same remember
+        // keys as chapterMeasurer, used ONLY by the ahead job
+        // below. The visible path keeps chapterMeasurer.
+        val aheadChapterMeasurer = remember(
+            aheadMeasurer, density, fontFamily, columnWidthPx,
+            contentHeightPx
+        ) {
+            ComposeChapterMeasurer(
+                textMeasurer = aheadMeasurer,
                 density = density,
                 fontFamily = fontFamily,
                 columnWidthPx = columnWidthPx,
@@ -283,7 +305,9 @@ fun PagedReader(
                     config = config,
                     pageHeightPx = contentHeightPx,
                     fingerprint = layoutFingerprint,
-                    measurer = chapterMeasurer
+                    // R4: the ahead job never touches the
+                    // visible path's measurer.
+                    measurer = aheadChapterMeasurer
                 )
                 layoutService.cache.put(nextKey, layout)
             }
@@ -317,12 +341,33 @@ fun PagedReader(
         // Auto page-turn pause state (v1.0.1): any touch pauses;
         // a centre tap (the menu control) resumes.
         var autoPaused by remember(chapterText) { mutableStateOf(false) }
-        // v1.2.0: the last char offset actually reported upward —
-        // a re-pagination (font change, rotation) re-anchors the
-        // machine at THIS offset in the new page list, never back
-        // at the chapter's original restore offset.
+        // v1.2.0: the last char offset actually reported upward.
+        // v1.7 one-engine (R3): REPORTING ONLY from here on —
+        // re-pagination anchoring consumes capturedAnchorOffset
+        // below, never this value: a report can lag a settle,
+        // and the anchoring trap (A4) is reading any anchor out
+        // of state that the page-list swap has already moved.
         var lastReportedOffset by remember(chapterText) {
             mutableIntStateOf(restoreOffset)
+        }
+        // v1.7 one-engine (R3 + R3-capture / A4): the anchor
+        // offset for same-generation re-pagination, captured
+        // CONTINUOUSLY from the settled current page by the
+        // capture effect below — which deliberately has NO
+        // computedPages suspension, so a page settled on
+        // mid-re-pagination still updates the capture from the
+        // OUTGOING page list before lastPages is overwritten
+        // with the new one. The anchoring effect consumes this
+        // capture and never reads a page list itself.
+        var capturedAnchorOffset by remember(chapterText) {
+            mutableIntStateOf(restoreOffset)
+        }
+        // C7: a turn in flight when a re-pagination lands keeps
+        // its target — the target page's char offset in the
+        // outgoing pagination, recorded at turn start in turn()
+        // and cleared when the machine settles back to Idle.
+        var turnTargetOffset by remember(chapterText) {
+            mutableStateOf<Int?>(null)
         }
         // v1.2.0 (WS2 contract): a page image reporting zoom
         // active suppresses page-turn drags until it reports back.
@@ -396,6 +441,34 @@ fun PagedReader(
             }
         }
 
+        // v1.7 one-engine (R3-capture / A4): on every settled
+        // page, capture the current page's char offset into
+        // capturedAnchorOffset. Unlike the reporting effect
+        // above this is NOT suspended while computedPages is
+        // null: during a re-pagination `pages` is still the
+        // outgoing list for this chapter, and a turn settling
+        // in that window must move the capture — by anchoring
+        // time the new list has replaced it. The placeholder
+        // page of a fresh chapter (no list belongs to this
+        // chapterText yet) never captures.
+        LaunchedEffect(currentPage, targetPage, pages) {
+            if (targetPage == null &&
+                (computedPages != null || lastPagesText == chapterText)
+            ) {
+                capturedAnchorOffset =
+                    PageLocator.offsetForPage(pages, currentPage)
+            }
+        }
+
+        // C7 bookkeeping: once the machine is Idle again the
+        // recorded turn target has been reached (or rolled
+        // back) — the continuous capture rules from there.
+        LaunchedEffect(machineState) {
+            if (machineState is PageTurnMachine.State.Idle) {
+                turnTargetOffset = null
+            }
+        }
+
         /** Runs the turn animation to [targetPage]; ALWAYS settles
          * the machine — commit on finish, roll back on cancel. */
         fun animateCommit() {
@@ -430,6 +503,14 @@ fun PagedReader(
             when (val outcome = machine.requestTurn(direction)) {
                 is PageTurnMachine.Outcome.AnimateTo -> {
                     turnDirection = direction
+                    // C7: record the turn's target in char
+                    // offsets of the CURRENT pagination — if a
+                    // re-pagination lands mid-turn, the
+                    // anchoring effect aims at these words,
+                    // not at wherever the machine happened to
+                    // be resting.
+                    turnTargetOffset =
+                        PageLocator.offsetForPage(pages, outcome.page)
                     bump()
                     if (tier == PageTurnTier.MINIMAL || tier == PageTurnTier.EINK) {
                         machine.animationFinished()
@@ -450,9 +531,14 @@ fun PagedReader(
         // list that belongs to the current keys. A NEW restore
         // generation anchors at the restore hint exactly as
         // before; a fresh page list under the SAME generation
-        // (font-size change, rotation) re-anchors at the last
-        // reported offset instead — the reader stays on the same
-        // words under new typography.
+        // (font-size change, rotation) re-anchors at the
+        // captured current-page offset instead — the reader
+        // stays on the same words under new typography.
+        // v1.7 one-engine (R3): the same-generation anchor is
+        // capturedAnchorOffset (continuously captured, A4) —
+        // lastReportedOffset no longer feeds any jumpTo; and
+        // while a turn is in flight (C7) its recorded target
+        // offset wins over the capture.
         var restoredGeneration by remember { mutableIntStateOf(-1) }
         LaunchedEffect(restoreGeneration, computedPages) {
             val ready = computedPages ?: return@LaunchedEffect
@@ -466,8 +552,15 @@ fun PagedReader(
                 machine.jumpTo(alignPage(PageLocator.pageIndexForOffset(ready, anchor)))
                 progress.snapTo(0f)
             } else {
+                val anchorOffset = if (
+                    machine.state is PageTurnMachine.State.Turning
+                ) {
+                    turnTargetOffset ?: capturedAnchorOffset
+                } else {
+                    capturedAnchorOffset
+                }
                 machine.jumpTo(
-                    alignPage(PageLocator.pageIndexForOffset(ready, lastReportedOffset))
+                    alignPage(PageLocator.pageIndexForOffset(ready, anchorOffset))
                 )
             }
             bump()

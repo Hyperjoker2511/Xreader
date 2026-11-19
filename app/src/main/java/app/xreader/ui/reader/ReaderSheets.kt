@@ -404,9 +404,7 @@ fun ReaderSettingsSheet(
                         listOf(
                             app.xreader.domain.reader.ChapterTransition.CONTINUOUS to "Continuous",
                             app.xreader.domain.reader.ChapterTransition.CHAPTER_BY_CHAPTER to
-                                "Chapter by chapter",
-                            app.xreader.domain.reader.ChapterTransition.PULL_FOR_NEXT to
-                                "Pull for next"
+                                "Chapter by chapter"
                         ).forEach { (value, label) ->
                             NocturneChip(
                                 label = label,
