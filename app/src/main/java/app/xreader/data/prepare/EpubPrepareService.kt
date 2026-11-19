@@ -520,12 +520,14 @@ class EpubPrepareService(
          * its locator href first, the session bridge second. */
         fun resolveChapter(
             locatorJson: String?,
-            sessionIndex: Int
+            sessionIndex: Int?
         ): Int? {
             LocatorJson.epubLocatorHref(locatorJson)?.let { href ->
                 bridge.chapterForHref(href)?.let { return it }
             }
-            return bridge.chapterForSessionIndex(sessionHrefs, sessionIndex)
+            return sessionIndex?.let {
+                bridge.chapterForSessionIndex(sessionHrefs, it)
+            }
         }
 
         /** The mark's offset inside its converted chapter:
@@ -590,7 +592,10 @@ class EpubPrepareService(
             .getOrDefault(emptyList())
             .filter { it.locatorJson != null }
         for (row in highlights) {
-            val parserIndex = resolveChapter(row.locatorJson, row.chapterIndex)
+            // Highlight rows carry no chapterIndex column —
+            // the href rung inside resolveChapter is their
+            // bridge; a miss leaves the row unplaced (counted).
+            val parserIndex = resolveChapter(row.locatorJson, null)
             val landed = parserIndex?.let { landedRows.getOrNull(it) }
             var placed = false
             if (parserIndex != null && landed != null) {

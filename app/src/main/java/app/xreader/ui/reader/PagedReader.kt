@@ -340,7 +340,7 @@ fun PagedReader(
         // the turn is the place-corrupting half.
         var imageClaimAtMs by remember { mutableStateOf(0L) }
         val outerImageTapHandler = LocalImageTapHandler.current
-        val claimImageTapHandler = remember(outerImageTapHandler) {
+        val claimImageTapHandler: (Any?) -> Unit = remember(outerImageTapHandler) {
             { model: Any? ->
                 imageClaimAtMs = System.currentTimeMillis()
                 outerImageTapHandler?.invoke(model)
@@ -543,9 +543,9 @@ fun PagedReader(
                     // before.
                     val pageHasImage = pages
                         .getOrNull(currentPage)?.slices?.any { slice ->
-                            chapterText.content.blocks
+                            val block = chapterText.content.blocks
                                 .getOrNull(slice.blockIndex)
-                                is ChapterBlock.Image
+                            block is ChapterBlock.Image
                         } == true
                     if (pageHasImage) {
                         val tapAtMs = System.currentTimeMillis()

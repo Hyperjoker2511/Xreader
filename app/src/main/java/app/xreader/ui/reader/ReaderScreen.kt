@@ -270,7 +270,7 @@ fun ReaderScreen(
     // root below) into this state; the viewer renders last,
     // over everything, and Back or its Close chip dismisses.
     var plateFile by remember { mutableStateOf<java.io.File?>(null) }
-    val imageTapHandler = remember {
+    val imageTapHandler: (Any?) -> Unit = remember {
         { model: Any? ->
             (model as? java.io.File)?.let { plateFile = it }
         }
