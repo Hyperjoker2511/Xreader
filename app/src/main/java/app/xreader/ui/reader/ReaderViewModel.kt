@@ -36,7 +36,9 @@ import app.xreader.domain.reader.TermPair
 import app.xreader.domain.reader.TermReplacer
 import java.io.File
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -1274,6 +1276,22 @@ class ReaderViewModel(
         restoreScrollFraction: Float,
         hint: PageHint = PageHint.OFFSET
     ) {
+        // v1.7 one-engine (A1 fix): EVERY chapter load closes
+        // the stream at its own start — this one site covers
+        // every caller (chrome next/previous, Contents and
+        // search jumps, the translation toggles and
+        // onTranslationReady, the Preparing reload, the
+        // repair re-resolution, retry), including the ones
+        // that call loadChapter directly with no stream
+        // awareness. The result can therefore never dead-end
+        // in chapterText behind a live window: the stream is
+        // closed, and the activation effect — keyed on this
+        // load's landing (restoreGeneration) — reopens the
+        // window at the place the load lands at. The wrappers'
+        // own closeStream() calls stay: they are idempotent
+        // beside this one, and openChapter's early return
+        // relies on its close to trigger the re-entry.
+        closeStream()
         // v1.2.0 (Wave 3): the OUTGOING chapter's final position is
         // persisted exactly, before anything moves — a guaranteed
         // flush on chapter change that the progress coalescer can
@@ -2112,6 +2130,19 @@ class ReaderViewModel(
         // resolves, once a chapter has shown what it is.
         if (bookConfig?.mediaKind?.isManga == true) return
         if (_state.value.mangaPages != null) return
+        // v1.7 one-engine (A1 fix): the restore generation
+        // this call was issued under. The generation is
+        // bumped by exactly two writers — a loadChapter
+        // landing and this function's own landing copy — so
+        // if it has moved by the time the window is built, a
+        // load landed after this call was issued (the
+        // activation effect fires a first reopen the moment
+        // a load closes the stream, before the load lands)
+        // and this call's anchor is stale: the landing copy
+        // below must not overwrite the place the load landed
+        // at. The effect is keyed on the generation, so it
+        // reopens at the landed place instead.
+        val generationAtCall = _state.value.restoreGeneration
         streamPinned = pinned
         boundaryNextIndex = -1
         boundaryFailedIndex = -1
@@ -2141,6 +2172,15 @@ class ReaderViewModel(
                 minimalTier = policy.tier ==
                     app.xreader.data.prefs.PerfTier.MINIMAL
             )
+            // A1 fix (see generationAtCall): a load that
+            // landed while this window was being built owns
+            // the place now — this stale window never lands,
+            // and it leaves no trace (no visible-chapter
+            // write, no state copy).
+            if (_state.value.restoreGeneration != generationAtCall) {
+                return@launch
+            }
+            currentCoroutineContext().ensureActive()
             val anchorEntry = entries.firstOrNull { it.chapterIndex == anchorIndex }
             if (anchorEntry?.text != null) {
                 visibleTextChapterIndex = anchorIndex
@@ -3037,6 +3077,11 @@ class ReaderViewModel(
     fun onTranslationReady(chapterId: Long) {
         originalPreferred.remove(chapterId)
         chapterCache.remove(chapterId)
+        // A1 fix: the stream cache holds the same pre-toggle
+        // road chapterCache does — evict beside it, or a
+        // rebuilt window would serve the untranslated text
+        // from cache and the reopen would change nothing.
+        streamTexts.remove(chapterId)
         val stateNow = _state.value
         if (stateNow.chapter?.id == chapterId) {
             launchLoad {
@@ -3053,6 +3098,9 @@ class ReaderViewModel(
         val chapter = _state.value.chapter ?: return
         originalPreferred.add(chapter.id)
         chapterCache.remove(chapter.id)
+        // A1 fix: stream cache evicted beside chapterCache
+        // (see onTranslationReady).
+        streamTexts.remove(chapter.id)
         val stateNow = _state.value
         launchLoad {
             loadChapter(
@@ -3067,6 +3115,9 @@ class ReaderViewModel(
         val chapter = _state.value.chapter ?: return
         originalPreferred.remove(chapter.id)
         chapterCache.remove(chapter.id)
+        // A1 fix: stream cache evicted beside chapterCache
+        // (see onTranslationReady).
+        streamTexts.remove(chapter.id)
         val stateNow = _state.value
         launchLoad {
             loadChapter(

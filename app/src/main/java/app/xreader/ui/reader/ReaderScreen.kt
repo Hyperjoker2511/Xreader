@@ -182,16 +182,30 @@ fun ReaderScreen(
     // the LIVE place (chapterIndex, positionOffset) after
     // every loadChapter-path event — chrome next/prev,
     // Contents/bookmark/search jumps, translation toggles,
-    // the Preparing reload; all of them close the stream —
-    // and a transition flip under an active stream re-plans
-    // the window around the same live place (tracked via
-    // appliedStreamPinned). Leaving SCROLL carries the live
-    // place into Paged via openChapterAt — never a
-    // chapter-start reload (Item 6).
+    // the Preparing reload; every loadChapter closes the
+    // stream at its own start (A1 fix) — and a transition flip
+    // under an active stream re-plans the window around the
+    // same live place (tracked via appliedStreamPinned).
+    // Leaving SCROLL carries the live place into Paged via
+    // openChapterAt — never a chapter-start reload (Item 6).
+    //
+    // A1 fix: the load's landing (chapterIndex /
+    // restoreGeneration) is ALSO an effect key. A load closes
+    // the stream before it lands, so the streamActive relaunch
+    // alone reopens at the PRE-load place and races the load;
+    // the landing relaunch is the one that reads the place
+    // the load actually landed at — reopening the window if
+    // it is still closed, or re-planning it when the composed
+    // window no longer covers the landed chapter (an early
+    // reopen, issued mid-load, may have landed first; the
+    // ViewModel refuses to land a window built against a
+    // stale generation, and this branch is the other half of
+    // that discipline).
     var appliedStreamPinned by remember { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(
         config.mode, config.chapterTransition,
-        state.streamActive, state.chapters.size
+        state.streamActive, state.chapters.size,
+        state.chapterIndex, state.restoreGeneration
     ) {
         val wantsStream = config.mode == ReaderMode.SCROLL
         if (wantsStream && state.chapters.isNotEmpty()) {
@@ -202,7 +216,11 @@ fun ReaderScreen(
                     state.chapterIndex, state.positionOffset, pinned = pinned
                 )
                 appliedStreamPinned = pinned
-            } else if (appliedStreamPinned != pinned) {
+            } else if (appliedStreamPinned != pinned ||
+                state.streamEntries.none {
+                    it.chapterIndex == state.chapterIndex
+                }
+            ) {
                 viewModel.openStream(
                     state.chapterIndex, state.positionOffset, pinned = pinned
                 )
@@ -783,7 +801,17 @@ fun ReaderScreen(
             // v1.7 one-engine: in SCROLL mode the unified
             // stream core renders the window under BOTH
             // transitions — it is the only scroll surface.
-            state.streamActive && state.streamEntries.isNotEmpty() -> {
+            // A1 fix (C9): in SCROLL mode a just-closed
+            // stream's RETAINED entries stay composed through
+            // the re-entry gap — closeStream never clears
+            // them, and they are swapped only when the
+            // replacement window lands, so a crossing never
+            // falls through to a blank frame. In PAGED mode
+            // the branch still requires an active stream, so
+            // the SCROLL-exit gap keeps rendering the previous
+            // chapter through PagedReader, as before.
+            state.streamEntries.isNotEmpty() &&
+                (state.streamActive || config.mode == ReaderMode.SCROLL) -> {
                 ScrollStreamReader(
                     entries = state.streamEntries,
                     totalChapters = state.chapters.size,
