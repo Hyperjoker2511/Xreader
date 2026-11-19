@@ -2627,7 +2627,6 @@ private suspend fun openReaderViaResolver(
  * what place it on screen; the fix round changed only the
  * parent, never these.
  */
-@Composable
 /** v1.7 Patch 1 (item 3d): the dock's fill override — the
  * covers scrolling under the bar must visibly show through.
  * LIQUID keeps its 0.48; the plain TINTED tier gets the same
@@ -2644,6 +2643,7 @@ internal fun dockFillAlphaOverride(
     else -> null
 }
 
+@Composable
 private fun FloatingNavBar(
     selected: Tab,
     reduceMotion: Boolean,
