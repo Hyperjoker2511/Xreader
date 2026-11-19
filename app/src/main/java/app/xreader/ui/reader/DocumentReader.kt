@@ -48,7 +48,6 @@ import app.xreader.domain.reader.ChapterLayoutCache
 import app.xreader.domain.reader.ChapterLayoutService
 import app.xreader.domain.reader.ChapterText
 import app.xreader.domain.reader.ChapterTransition
-import app.xreader.domain.reader.PageHint
 import app.xreader.domain.reader.ReaderConfig
 import app.xreader.domain.reader.SegmentIndex
 import app.xreader.ui.theme.ReaderPalette
