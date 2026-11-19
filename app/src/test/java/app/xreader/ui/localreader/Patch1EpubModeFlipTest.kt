@@ -1,11 +1,15 @@
 package app.xreader.ui.localreader
 
+import android.app.Application
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.util.Url
 import org.readium.r2.shared.util.mediatype.MediaType
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * v1.7 Patch 1 (item 2): the EPUB mode flip carries the
@@ -14,7 +18,14 @@ import org.readium.r2.shared.util.mediatype.MediaType
  * book opened at; the handover now reads the ViewModel's
  * live locator first and falls back to the open-time place
  * only before the first position report lands.
+ *
+ * Robolectric because Readium's Url is built on
+ * android.net.Uri, which a plain JVM test cannot construct
+ * (the stub returns null and the factory NPEs) — the same
+ * runner the other local-reader Patch 1 tests use.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class, sdk = [35])
 class Patch1EpubModeFlipTest {
 
     // Readium 3.1.2: the Url factories return NULLABLE
