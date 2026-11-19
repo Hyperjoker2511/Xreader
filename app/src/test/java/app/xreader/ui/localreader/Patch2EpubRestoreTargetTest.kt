@@ -50,7 +50,14 @@ class Patch2EpubRestoreTargetTest {
         val container = AppContainer(app)
         val filesRoot = container.bookStorage.filesDir
         filesRoot.mkdirs()
-        val epub = LocalReaderEpubFixture.writeEpub(filesRoot)
+        // Post-Patch-3, a convertible reflowable book diverts
+        // to the core at open; the local road's population is
+        // fixed-layout / RTL / fallback books. The book stands
+        // here as a fixed-layout book — the restore ladder it
+        // exercises is the shared open code, layout-agnostic.
+        val epub = LocalReaderEpubFixture.writeEpub(
+            filesRoot, fixedLayout = true
+        )
         val bookId = runBlocking {
             val id = container.database.bookDao().insert(
                 Book(

@@ -88,7 +88,13 @@ class Patch2EpubExitSaveTest {
         val container = AppContainer(app)
         val filesRoot = container.bookStorage.filesDir
         filesRoot.mkdirs()
-        val epub = LocalReaderEpubFixture.writeEpub(filesRoot)
+        // Post-Patch-3, the book stands on the local road as a
+        // fixed-layout book (a convertible reflowable book
+        // diverts to the core at open); the locator-report and
+        // flush machinery under test is layout-agnostic.
+        val epub = LocalReaderEpubFixture.writeEpub(
+            filesRoot, fixedLayout = true
+        )
         val base = runBlocking {
             val probe = LocalReaderEpubFixture.openSession(filesRoot, epub)
             try {

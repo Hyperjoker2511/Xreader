@@ -16,11 +16,17 @@ import org.robolectric.RuntimeEnvironment
  * pattern) so preference submissions are asserted against the
  * toolkit's own editor output, not a copy. [fixedLayout] writes
  * `rendition:layout = pre-paginated` into the package metadata
- * (G10's classification input).
+ * (G10's classification input). [rtl] writes
+ * `page-progression-direction = rtl` on the spine (Patch 3's
+ * RTL classification input).
  */
 object LocalReaderEpubFixture {
 
-    fun writeEpub(dir: File, fixedLayout: Boolean = false): File {
+    fun writeEpub(
+        dir: File,
+        fixedLayout: Boolean = false,
+        rtl: Boolean = false
+    ): File {
         val out = ByteArrayOutputStream()
         ZipOutputStream(out).use { zip ->
             fun entry(name: String, content: ByteArray, stored: Boolean = false) {
@@ -47,6 +53,11 @@ object LocalReaderEpubFixture {
             } else {
                 ""
             }
+            val spineAttrs = if (rtl) {
+                """ page-progression-direction="rtl""""
+            } else {
+                ""
+            }
             entry(
                 "OEBPS/content.opf",
                 """<?xml version="1.0" encoding="UTF-8"?>
@@ -63,7 +74,7 @@ object LocalReaderEpubFixture {
                        <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
                        <item id="c2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
                      </manifest>
-                     <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
+                     <spine$spineAttrs><itemref idref="c1"/><itemref idref="c2"/></spine>
                    </package>""".toByteArray()
             )
             entry(

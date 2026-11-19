@@ -133,7 +133,18 @@ class EpubPrepareService(
             val fingerprint: String
             when {
                 book.filePath != null -> {
-                    val source = storage.resolve(book.filePath!!)
+                    // Stored paths arrive in both forms — the
+                    // importer writes them relative, older rows
+                    // may carry an absolute path — and resolve()
+                    // is relative-only (it would mangle an
+                    // absolute one), so an absolute stored path
+                    // is used exactly as stored.
+                    val storedPath = book.filePath!!
+                    val source = if (File(storedPath).isAbsolute) {
+                        File(storedPath)
+                    } else {
+                        storage.resolve(storedPath)
+                    }
                     if (!source.isFile) {
                         return EpubPrepareOutcome.Fallback(
                             "the book's file is not where it was"

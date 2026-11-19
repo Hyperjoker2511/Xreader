@@ -39,7 +39,13 @@ class V159BookmarkSeedTest {
         val container = AppContainer(app)
         val filesRoot = container.bookStorage.filesDir
         filesRoot.mkdirs()
-        val epub = LocalReaderEpubFixture.writeEpub(filesRoot)
+        // Post-Patch-3, the book stands on the local road as a
+        // fixed-layout book (a convertible reflowable book
+        // diverts to the core at open); the Ready-state seed
+        // under test is layout-agnostic.
+        val epub = LocalReaderEpubFixture.writeEpub(
+            filesRoot, fixedLayout = true
+        )
 
         // The seed locator: section 1's real Readium locator,
         // taken from a probe session over the same fixture.

@@ -38,12 +38,13 @@ class V1510FxlShippedBehaviourTest {
 
     private fun openBook(
         container: AppContainer,
-        fixedLayout: Boolean
+        fixedLayout: Boolean,
+        rtl: Boolean = false
     ): Pair<LocalDocReaderViewModel, LocalReaderState.Ready> {
         val filesRoot = container.bookStorage.filesDir
         filesRoot.mkdirs()
         val epub = LocalReaderEpubFixture.writeEpub(
-            filesRoot, fixedLayout = fixedLayout
+            filesRoot, fixedLayout = fixedLayout, rtl = rtl
         )
         val bookId = runBlocking {
             container.database.bookDao().insert(
@@ -92,7 +93,14 @@ class V1510FxlShippedBehaviourTest {
     fun `reflowable control keeps the scroll default`() {
         val app = RuntimeEnvironment.getApplication()
         val container = AppContainer(app)
-        val (viewModel, ready) = openBook(container, fixedLayout = false)
+        // The control is an RTL-progression book: still
+        // reflowable, but post-Patch-3 RTL books are a named
+        // local-road population (prepare is NotEligible for
+        // them), while an LTR reflowable book diverts to the
+        // core at open and never seeds local settings.
+        val (viewModel, ready) = openBook(
+            container, fixedLayout = false, rtl = true
+        )
         assertFalse(ready.isFixedLayout)
         assertTrue(
             "a reflowable book keeps the shipped scroll default",
