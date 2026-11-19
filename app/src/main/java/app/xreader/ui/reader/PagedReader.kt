@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -48,6 +49,7 @@ import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.xreader.core.motion.SpringMotionEngine
@@ -55,7 +57,11 @@ import app.xreader.core.motion.fadeTween
 import app.xreader.core.motion.toSpec
 import app.xreader.data.db.Highlight
 import app.xreader.domain.content.ChapterBlock
+import app.xreader.domain.reader.ChapterLayoutCache
+import app.xreader.domain.reader.ChapterLayoutService
+import app.xreader.domain.reader.ChapterMeasurer
 import app.xreader.domain.reader.ChapterText
+import app.xreader.domain.reader.LayoutAheadPolicy
 import app.xreader.domain.reader.MeasuredBlock
 import app.xreader.domain.reader.Page
 import app.xreader.domain.reader.PageLocator
@@ -63,7 +69,6 @@ import app.xreader.domain.reader.AutoScrollController
 import app.xreader.domain.reader.PageTurnMachine
 import app.xreader.domain.reader.PageTurnTier
 import app.xreader.domain.reader.TapZones
-import app.xreader.domain.reader.Paginator
 import app.xreader.domain.reader.ReaderAlignment
 import app.xreader.domain.reader.ReaderConfig
 import app.xreader.ui.theme.EmberAmber
@@ -73,6 +78,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -114,7 +120,20 @@ fun PagedReader(
     /** v1.0.6.2 (F7): measured chrome heights — pages are laid
      * out in the space BETWEEN the bars, never beneath them. */
     topInset: androidx.compose.ui.unit.Dp = 0.dp,
-    bottomInset: androidx.compose.ui.unit.Dp = 0.dp
+    bottomInset: androidx.compose.ui.unit.Dp = 0.dp,
+    /** v1.7 Patch 2 (item 2): the layout-service wiring — the
+     * current chapter's id (its layout-cache key), the NEXT
+     * chapter's id + display text for layout-ahead, the
+     * ViewModel's tier gate for it, and one extra fingerprint
+     * component (the translation/original selection; terms
+     * edits are covered by the content hash in the cache key).
+     * All defaulted: a caller that passes none keeps the
+     * shipped behaviour, with layout-ahead simply off. */
+    chapterId: Long = -1L,
+    nextChapterId: Long? = null,
+    nextChapterText: ChapterText? = null,
+    layoutAheadEnabled: Boolean = false,
+    fingerprintExtra: Any? = null
 ) {
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer()
@@ -154,63 +173,119 @@ fun PagedReader(
         // calculator over MeasuredBlocks (no awaitReady, no DB),
         // and the measuring loop below is the only per-block work:
         // one text measurement per prose block per pagination.
+        // v1.7 Patch 2 (item 2a/2b): measure + paginate run
+        // through the ChapterLayoutService now. The Compose
+        // measurer below is the UI-layer ChapterMeasurer — this
+        // reader's own measuring machinery (TextMeasurer +
+        // Density + blockTextStyle + annotated strings) moved
+        // behind the seam, verbatim in substance. The service's
+        // bounded cache (current + next chapter) lives as long
+        // as this reader does and is evicted with it.
+        val layoutService = remember { ChapterLayoutService() }
+        val layoutFingerprint = remember(
+            config, fontFamily, columnWidthPx, contentHeightPx,
+            density.fontScale, fingerprintExtra
+        ) {
+            listOf(
+                config, fontFamily, columnWidthPx, contentHeightPx,
+                density.fontScale, fingerprintExtra
+            )
+        }
+        val chapterMeasurer = remember(
+            measurer, density, fontFamily, columnWidthPx,
+            contentHeightPx
+        ) {
+            ComposeChapterMeasurer(
+                textMeasurer = measurer,
+                density = density,
+                fontFamily = fontFamily,
+                columnWidthPx = columnWidthPx,
+                contentHeightPx = contentHeightPx
+            )
+        }
+        var aheadJob by remember { mutableStateOf<Job?>(null) }
         var lastPages by remember { mutableStateOf<List<Page>>(emptyList()) }
         var lastPagesText by remember { mutableStateOf<ChapterText?>(null) }
         val computedPages by produceState<List<Page>?>(
             null, chapterText, config, fontFamily, columnWidthPx, contentHeightPx
         ) {
             value = null
-            if (lastPagesText == chapterText) {
-                delay(PAGINATION_DEBOUNCE_MS)
-            }
-            val paraSpacingPx = with(density) { config.paragraphSpacingDp.dp.toPx() }
-            value = withContext(Dispatchers.Default) {
-                val measured = chapterText.content.blocks.mapIndexed { index, block ->
-                    val range = chapterText.rangeOf(index)!!
-                    when (block) {
-                        is ChapterBlock.Image -> MeasuredBlock(
-                            blockIndex = index, blockStart = range.start, blockEnd = range.end,
-                            fixedHeightPx = contentHeightPx * 0.5f
-                        )
-                        is ChapterBlock.Rule -> MeasuredBlock(
-                            blockIndex = index, blockStart = range.start, blockEnd = range.end,
-                            fixedHeightPx = with(density) { 30.dp.toPx() }
-                        )
-                        else -> {
-                            val style = blockTextStyle(block, config, fontFamily)
-                            val layout = measurer.measure(
-                                annotatedForBlock(block, bionic = config.bionicReading),
-                                style,
-                                constraints = Constraints(maxWidth = columnWidthPx.toInt())
-                            )
-                            val lineStarts = if (layout.lineCount == 0) {
-                                listOf(range.start)
-                            } else {
-                                (0 until layout.lineCount).map {
-                                    range.start + layout.getLineStart(it)
-                                }
-                            }
-                            val lineHeightPx = if (layout.lineCount > 0) {
-                                layout.size.height.toFloat() / layout.lineCount
-                            } else {
-                                with(density) { config.fontSizeSp.sp.toPx() } * 1.4f
-                            }
-                            MeasuredBlock(
-                                blockIndex = index, blockStart = range.start,
-                                blockEnd = range.end,
-                                lineStarts = lineStarts,
-                                lineHeightPx = lineHeightPx,
-                                spaceBeforePx = if (block is ChapterBlock.Heading) {
-                                    lineHeightPx * 0.7f
-                                } else {
-                                    0f
-                                },
-                                spaceAfterPx = paraSpacingPx
-                            )
-                        }
-                    }
+            // v1.7 Patch 2 (item 2b): a request to lay out the
+            // chapter ON SCREEN pre-empts the ahead job — the
+            // visible chapter always wins the measuring budget.
+            aheadJob?.cancel()
+            val cacheKey = ChapterLayoutCache.Key(
+                chapterId = chapterId,
+                contentHash = ChapterLayoutCache.contentHash(chapterText),
+                fingerprint = layoutFingerprint
+            )
+            val cached = layoutService.cache.get(cacheKey)
+            if (cached != null) {
+                // An ahead-laid-out chapter (or an identical
+                // re-layout) serves from the cache — the key's
+                // content hash + fingerprint make a stale serve
+                // impossible.
+                value = cached.pages
+            } else {
+                if (lastPagesText == chapterText) {
+                    delay(PAGINATION_DEBOUNCE_MS)
                 }
-                Paginator(contentHeightPx).paginate(measured)
+                value = withContext(Dispatchers.Default) {
+                    layoutService.layout(
+                        chapterText = chapterText,
+                        config = config,
+                        pageHeightPx = contentHeightPx,
+                        fingerprint = layoutFingerprint,
+                        measurer = chapterMeasurer
+                    ).also { layout ->
+                        layoutService.cache.put(cacheKey, layout)
+                    }.pages
+                }
+            }
+        }
+        // v1.7 Patch 2 (item 2b): layout-ahead — once the
+        // visible chapter's pages are ready, the NEXT stored
+        // chapter's layout is computed on Dispatchers.Default
+        // into the same bounded cache, so turning into it is
+        // instant. Gated by the ViewModel's tier decision
+        // (FULL + STANDARD on, MINIMAL off) and the 1.5 M-char
+        // ahead cap; the job is cancelled whenever the inputs
+        // move on (this effect restarts), when the reader
+        // leaves (the scope dies with it), or when the visible
+        // chapter asks for layout (above).
+        LaunchedEffect(
+            computedPages, nextChapterId, nextChapterText,
+            layoutAheadEnabled, layoutFingerprint
+        ) {
+            aheadJob?.cancel()
+            aheadJob = null
+            val nextText = nextChapterText
+            val nextId = nextChapterId
+            if (!layoutAheadEnabled || nextText == null ||
+                nextId == null
+            ) {
+                return@LaunchedEffect
+            }
+            if (!LayoutAheadPolicy.withinCap(nextText.length)) {
+                return@LaunchedEffect
+            }
+            val nextKey = ChapterLayoutCache.Key(
+                chapterId = nextId,
+                contentHash = ChapterLayoutCache.contentHash(nextText),
+                fingerprint = layoutFingerprint
+            )
+            if (layoutService.cache.get(nextKey) != null) {
+                return@LaunchedEffect
+            }
+            aheadJob = scope.launch(Dispatchers.Default) {
+                val layout = layoutService.layout(
+                    chapterText = nextText,
+                    config = config,
+                    pageHeightPx = contentHeightPx,
+                    fingerprint = layoutFingerprint,
+                    measurer = chapterMeasurer
+                )
+                layoutService.cache.put(nextKey, layout)
             }
         }
         LaunchedEffect(computedPages) {
@@ -897,6 +972,81 @@ private fun PageContent(
                         color = palette.text
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * v1.7 Patch 2 (item 2a): the UI-layer [ChapterMeasurer] — the
+ * paged reader's measuring machinery (Compose [TextMeasurer] +
+ * [Density] + [blockTextStyle] + the bionic/annotated-string
+ * production) behind the layout service's seam. The measuring
+ * arithmetic is the shipped produceState loop's, moved
+ * verbatim in substance: prose measured at the column width,
+ * images at half the content height, rules at 30 dp, heading
+ * space-before at 0.7 line heights, paragraph space-after from
+ * the config.
+ */
+private class ComposeChapterMeasurer(
+    private val textMeasurer: TextMeasurer,
+    private val density: Density,
+    private val fontFamily: FontFamily,
+    private val columnWidthPx: Float,
+    private val contentHeightPx: Float
+) : ChapterMeasurer {
+
+    override fun measure(
+        chapterText: ChapterText,
+        blockIndex: Int,
+        config: ReaderConfig
+    ): MeasuredBlock {
+        val block = chapterText.content.blocks[blockIndex]
+        val range = chapterText.rangeOf(blockIndex)!!
+        return when (block) {
+            is ChapterBlock.Image -> MeasuredBlock(
+                blockIndex = blockIndex, blockStart = range.start,
+                blockEnd = range.end,
+                fixedHeightPx = contentHeightPx * 0.5f
+            )
+            is ChapterBlock.Rule -> MeasuredBlock(
+                blockIndex = blockIndex, blockStart = range.start,
+                blockEnd = range.end,
+                fixedHeightPx = with(density) { 30.dp.toPx() }
+            )
+            else -> {
+                val style = blockTextStyle(block, config, fontFamily)
+                val layout = textMeasurer.measure(
+                    annotatedForBlock(block, bionic = config.bionicReading),
+                    style,
+                    constraints = Constraints(maxWidth = columnWidthPx.toInt())
+                )
+                val lineStarts = if (layout.lineCount == 0) {
+                    listOf(range.start)
+                } else {
+                    (0 until layout.lineCount).map {
+                        range.start + layout.getLineStart(it)
+                    }
+                }
+                val lineHeightPx = if (layout.lineCount > 0) {
+                    layout.size.height.toFloat() / layout.lineCount
+                } else {
+                    with(density) { config.fontSizeSp.sp.toPx() } * 1.4f
+                }
+                MeasuredBlock(
+                    blockIndex = blockIndex, blockStart = range.start,
+                    blockEnd = range.end,
+                    lineStarts = lineStarts,
+                    lineHeightPx = lineHeightPx,
+                    spaceBeforePx = if (block is ChapterBlock.Heading) {
+                        lineHeightPx * 0.7f
+                    } else {
+                        0f
+                    },
+                    spaceAfterPx = with(density) {
+                        config.paragraphSpacingDp.dp.toPx()
+                    }
+                )
             }
         }
     }

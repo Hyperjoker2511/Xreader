@@ -2150,6 +2150,12 @@ private fun EpubBody(
                 onPositionReport = { locator ->
                     viewModel.onEpubLocator(locator)
                 },
+                // v1.7 Patch 2 (item 0b): the exit pull's report
+                // force-derives — the bucket gate does not apply
+                // to the place the reader is leaving from.
+                onFinalPositionReport = { locator ->
+                    viewModel.onEpubLocator(locator, forceDerive = true)
+                },
                 onFirstPaint = onFirstLocator,
                 onUnavailable = {
                     riverUnavailable = true

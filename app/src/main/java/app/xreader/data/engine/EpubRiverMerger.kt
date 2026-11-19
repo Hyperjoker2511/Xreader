@@ -236,8 +236,11 @@ object EpubRiverMerger {
     /** v1.5.34: v3 — the bridge JS is rebuilt (host-pulled
      * `__xrAnchor`, selection/marks/search/windowing entries)
      * and the base CSS gains the mark + gap styles, so every
-     * v2 cache is stale by construction. */
-    const val MERGER_VERSION = 4
+     * v2 cache is stale by construction.
+     * v1.7 Patch 2: v5 — `__xrGoto` records its landing in
+     * `window.__xrLastGoto` (item 0d), so every v4 cache is
+     * stale by the same construction. */
+    const val MERGER_VERSION = 5
 
     private const val HTML_FILE = "river.html"
     private const val MAP_FILE = "river.map.json"
@@ -1053,8 +1056,19 @@ object EpubRiverMerger {
             "return '';}" +
             "window.__xrAnchor=function(){return anchorGeom();};" +
             "window.__xrGoto=function(n,b,q){" +
+            // v1.7 Patch 2 (item 0d): every goto records HOW it
+            // landed in window.__xrLastGoto — 'quote' (the text
+            // quote matched), 'block' (the block element),
+            // 'section' (a genuine chapter-start request),
+            // 'missing' (a mid-chapter block was requested but
+            // its element is not in the document — a windowed
+            // gap — and the section element caught the fall),
+            // 'nosec' (no such section). The host reads the
+            // 'missing' signal to re-drive the window fill and
+            // retry instead of ratifying the section top.
+            "window.__xrLastGoto='';" +
             "var sec=secEl(n);" +
-            "if(!sec){return;}" +
+            "if(!sec){window.__xrLastGoto='nosec';return;}" +
             "var target=null;" +
             "if(q){" +
             "var needle=q.replace(/\\s+/g,' ')" +
@@ -1064,10 +1078,14 @@ object EpubRiverMerger {
             "for(var i=0;i<blocks.length;i++){" +
             "if(blocks[i].textContent.replace(/\\s+/g,' ')" +
             ".indexOf(needle)>=0){target=blocks[i];break;}}}}" +
+            "if(target){window.__xrLastGoto='quote';}" +
             "if(!target&&b>0){" +
             "target=sec.querySelector(" +
-            "'[data-xr-block=\"'+b+'\"]');}" +
-            "if(!target){target=sec;}" +
+            "'[data-xr-block=\"'+b+'\"]');" +
+            "if(target){window.__xrLastGoto='block';}}" +
+            "if(!target){" +
+            "window.__xrLastGoto=(b>0)?'missing':'section';" +
+            "target=sec;}" +
             "target.scrollIntoView();};" +
             // v1.5.35 (restore §C.2): __xrStart RETURNS the
             // post-scroll anchor — the host's acknowledgement

@@ -771,7 +771,15 @@ fun ReaderScreen(
                         onPreviousChapter = { viewModel.previousChapter() },
                         onCenterTap = { chromeVisible = !chromeVisible },
                         topInset = readerTopInset,
-                        bottomInset = readerBottomInset
+                        bottomInset = readerBottomInset,
+                        // v1.7 Patch 2 (item 2): the layout
+                        // service's cache key + layout-ahead
+                        // inputs, published by the ViewModel.
+                        chapterId = state.chapter?.id ?: -1L,
+                        nextChapterId = state.layoutAheadNextId,
+                        nextChapterText = state.layoutAheadNextText,
+                        layoutAheadEnabled = state.layoutAheadEnabled,
+                        fingerprintExtra = state.showingTranslation
                     )
                 } else {
                     ScrollReader(

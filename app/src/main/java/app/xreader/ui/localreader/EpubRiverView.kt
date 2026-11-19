@@ -117,6 +117,12 @@ internal fun EpubRiverView(
     initialQuote: String?,
     driver: EpubRiverDriver,
     onPositionReport: (Locator) -> Unit,
+    /** v1.7 Patch 2 (item 0b): the EXIT report road — the
+     * driver's final pull reports through this instead of
+     * [onPositionReport], so the ViewModel force-derives the
+     * live place past its bucket gate (the small-movement
+     * loss). Defaults to the ordinary road. */
+    onFinalPositionReport: (Locator) -> Unit = onPositionReport,
     onFirstPaint: () -> Unit,
     onUnavailable: () -> Unit,
     highlights: List<StoredSelectionHighlight>,
@@ -133,6 +139,7 @@ internal fun EpubRiverView(
     val firstPaintState = rememberUpdatedState(onFirstPaint)
     val unavailableState = rememberUpdatedState(onUnavailable)
     val positionState = rememberUpdatedState(onPositionReport)
+    val finalPositionState = rememberUpdatedState(onFinalPositionReport)
     val highlightTapState = rememberUpdatedState(onHighlightTap)
     val selectionActionState = rememberUpdatedState(onSelectionAction)
     val highlightsState = rememberUpdatedState(highlights)
@@ -479,7 +486,15 @@ internal fun EpubRiverView(
                 val deadlineMs = System.currentTimeMillis() + 4_000
                 var applications = 0
                 var confirmed = false
-                var expected: Pair<Int, Int>? = null
+                // v1.7 Patch 2 (item 0c): confirmation is measured
+                // against the TARGET — never against wherever the
+                // first application happened to land. (The shipped
+                // shape set the expectation from the first landed
+                // anchor, so a landing at the section top ratified
+                // itself, unlocked reports, and the position loop
+                // then overwrote the stored place with the chapter
+                // cover — the exit→reopen place loss.)
+                val expected = target
                 while (applications < 3 && !confirmed) {
                     if (tracker.readerTookOver) break
                     val typeNow = suspendEvaluate(
@@ -493,23 +508,52 @@ internal fun EpubRiverView(
                     )
                     val landed = parseAnchor(reply)
                         ?: pullAnchorRaw(view)
-                    if (expected == null) {
-                        expected = landed ?: target
-                    }
                     Log.i(
                         RIVER_LOG_TAG,
                         "restore: attempt $applications, " +
                             "__xrStart=$typeNow, anchor=" +
                             (landed?.let {
                                 "${it.first}:${it.second}"
-                            } ?: "none")
+                            } ?: "none") +
+                            ", target=${target.first}:" +
+                            "${target.second}"
                     )
                     if (applications >= 3) break
+                    // v1.7 Patch 2 (item 0c/0d): when the page
+                    // script reports the requested block element
+                    // is not in the filled window ('missing'),
+                    // the loop itself re-drives the fill for the
+                    // target section before the next attempt —
+                    // it does not accept the section top the
+                    // fallback landed on. (ensureWindow no-ops
+                    // on non-windowed books, where every block
+                    // element is already in the document.)
+                    val gotoStatus = suspendEvaluate(
+                        view,
+                        "window.__xrLastGoto ? " +
+                            "window.__xrLastGoto : null"
+                    )
+                    if (gotoStatus == "missing") {
+                        ensureWindow(
+                            view = view,
+                            document = doc,
+                            tracker = tracker,
+                            centre = initialSection,
+                            onFillsSettled = {
+                                applyMarks(
+                                    view, session, doc,
+                                    highlightsState.value
+                                )
+                            }
+                        )
+                    }
                     awaitRiverSettle(deadlineMs)
                     if (tracker.readerTookOver) break
                     val verify = pullAnchorRaw(view)
                     if (verify != null &&
-                        anchorMatches(verify, expected!!)
+                        EpubRiverPosition.restoreConfirms(
+                            verify, expected
+                        )
                     ) {
                         confirmed = true
                     }
@@ -519,8 +563,10 @@ internal fun EpubRiverView(
                     // pull (§C.2), after its settle beat.
                     awaitRiverSettle(deadlineMs)
                     val verify = pullAnchorRaw(view)
-                    if (verify != null && expected != null &&
-                        anchorMatches(verify, expected!!)
+                    if (verify != null &&
+                        EpubRiverPosition.restoreConfirms(
+                            verify, expected
+                        )
                     ) {
                         confirmed = true
                     }
@@ -540,8 +586,8 @@ internal fun EpubRiverView(
                         Log.i(
                             RIVER_LOG_TAG,
                             "restore: confirmed at " +
-                                "${expected?.first}:" +
-                                "${expected?.second} after " +
+                                "${expected.first}:" +
+                                "${expected.second} after " +
                                 "$applications application(s)"
                         )
                     }
@@ -938,13 +984,37 @@ internal fun EpubRiverView(
             // the save-eligibility gate (§C.3) applies to it
             // exactly as to any loop pull: an unconfirmed,
             // untouched open reports nothing.
+            // v1.7 Patch 2 (item 0b): the report goes through
+            // the FINAL road (the ViewModel force-derives it
+            // past the bucket gate), and after the normal pull
+            // the live anchor is re-reported unconditionally —
+            // pullAnchor only emits on anchor CHANGE, so a
+            // resting anchor identical to the last loop report
+            // (whose own derivation the bucket gate may have
+            // suppressed) would otherwise never reach the exit
+            // save at all. The §C.3 eligibility gate still
+            // applies to the re-report exactly as to any pull.
             driver.requestFinalPull = { done ->
                 scope.launch {
                     try {
                         pullAnchor(
                             view, session, currentDocument, tracker,
                             onSectionChange = {}
-                        ) { locator -> positionState.value(locator) }
+                        ) { locator ->
+                            finalPositionState.value(locator)
+                        }
+                        if (tracker.reportsAllowed ||
+                            tracker.readerTookOver
+                        ) {
+                            pullAnchorRaw(view)?.let { anchor ->
+                                EpubRiverPosition.locator(
+                                    session, currentDocument,
+                                    anchor.first, anchor.second
+                                )?.let { locator ->
+                                    finalPositionState.value(locator)
+                                }
+                            }
+                        }
                     } finally {
                         done()
                     }
@@ -1126,23 +1196,6 @@ private fun parseAnchor(raw: String?): Pair<Int, Int>? {
     val block = parts[1].trim().toIntOrNull() ?: return null
     return section to block
 }
-
-/**
- * v1.5.35 (restore §C.2): the restore's confirmation test —
- * a pulled anchor confirms the landing when it names the
- * SAME section and a block within a small window of the
- * expected one. Exact equality is too strict: the anchor
- * names the first block whose bottom is on screen, which
- * can sit a block either side of the scrolled-to element
- * when a tall block straddles the viewport top. A section
- * miss, or a drift beyond the window, never confirms.
- */
-private fun anchorMatches(
-    actual: Pair<Int, Int>,
-    expected: Pair<Int, Int>
-): Boolean =
-    actual.first == expected.first &&
-        kotlin.math.abs(actual.second - expected.second) <= 2
 
 private suspend fun pullAnchorRaw(view: WebView): Pair<Int, Int>? =
     parseAnchor(

@@ -16,6 +16,7 @@ import app.xreader.data.engine.LocatorJson
 import app.xreader.data.engine.OutlineEntry
 import app.xreader.data.engine.PdfSession
 import app.xreader.data.engine.ReadiumEpubSession
+import app.xreader.data.extension.DiagnosticLog
 import app.xreader.data.prefs.settingsDataStore
 import org.readium.r2.shared.publication.services.positionsByReadingOrder
 import app.xreader.data.reader.ReadAloudController
@@ -357,6 +358,14 @@ class LocalDocReaderViewModel(
 
     @Volatile private var position: Position? = null
     private var saveJob: Job? = null
+
+    /** v1.7 Patch 2 (item 0b): the derived [position] is newer
+     * than the last row [saveProgressNow] wrote. Set wherever a
+     * position is derived (EPUB derive, PDF position), cleared
+     * by the write itself. The exit flush consults it so a
+     * forced exit derivation lands even when its debounce job
+     * was already consumed or never scheduled. */
+    @Volatile private var progressDirty: Boolean = false
     private var session: DocSession? = null
     private var book: Book? = null
     private var password: String? = null
@@ -582,9 +591,74 @@ class LocalDocReaderViewModel(
                 _pdfSettings.value = pdfSettingsNow
                 val initialIndex = resolveInitialIndex(opened, target, saved)
                 val initialLocator = (opened as? ReadiumEpubSession)?.let { epub ->
-                    epub.locatorFromJson(target)
-                        ?: epub.locatorFromJson(saved?.locatorJson)
+                    // (target already defaults to the saved
+                    // locator when no start target was given —
+                    // the rungs are attributed by which JSON was
+                    // actually parsed, so the log stays honest.)
+                    val fromTarget = if (startTargetJson != null) {
+                        epub.locatorFromJson(target)
+                    } else {
+                        null
+                    }
+                    val fromSaved = if (fromTarget == null) {
+                        epub.locatorFromJson(saved?.locatorJson)
+                    } else {
+                        null
+                    }
+                    val resolved = fromTarget ?: fromSaved
                         ?: epub.locatorForSection(initialIndex)
+                    // v1.7 Patch 2 (item 0a/0d): which rung of the
+                    // locator ladder produced the restore target
+                    // goes on the record — the section-start
+                    // fallback rung in particular must never be
+                    // silent again (it lands the reader at the
+                    // chapter top with no trace of why).
+                    DiagnosticLog.record(
+                        "epub-restore",
+                        when {
+                            fromTarget != null ->
+                                "restore target: jump/bookmark locator"
+                            fromSaved != null ->
+                                "restore target: saved locator"
+                            resolved != null ->
+                                "restore target: section-start " +
+                                    "fallback (no usable saved locator)"
+                            else ->
+                                "restore target: none resolved"
+                        }
+                    )
+                    // v1.7 Patch 2 (item 0f): when the resolved
+                    // locator carries NO in-section progression
+                    // (a saved locator whose progression did not
+                    // survive, or the section fallback above), the
+                    // restore target's progression is repaired
+                    // from the saved row's scrollFraction — which
+                    // saveProgressNow writes as exactly that
+                    // in-section progression — when the row names
+                    // the chapter being opened. A 0/absent
+                    // scrollFraction leaves the honest chapter
+                    // start. Fires only when progression is
+                    // absent; the write side is unchanged.
+                    if (resolved != null &&
+                        resolved.locations.progression == null &&
+                        saved != null &&
+                        initialIndex == saved.chapterIndex &&
+                        saved.scrollFraction > 0f
+                    ) {
+                        DiagnosticLog.record(
+                            "epub-restore",
+                            "restore target progression repaired " +
+                                "from the saved row's scrollFraction"
+                        )
+                        resolved.copy(
+                            locations = resolved.locations.copy(
+                                progression = saved.scrollFraction
+                                    .toDouble()
+                            )
+                        )
+                    } else {
+                        resolved
+                    }
                 }
                 if (opened is PdfSession) {
                     _pdfProgress.value = PdfProgress(
@@ -703,8 +777,16 @@ class LocalDocReaderViewModel(
 
     // ── Position reports from the surfaces ───────────────────────
 
-    /** EPUB: the navigator's current locator moved. */
-    fun onEpubLocator(locator: Locator) {
+    /** EPUB: the navigator's current locator moved.
+     *
+     * v1.7 Patch 2 (item 0b): [forceDerive] is the EXIT road —
+     * the river's final pull reports through it so the live
+     * place is derived and saved even when the movement since
+     * the last derivation fell inside one 0.1% bucket (the
+     * small-movement loss). The gate is still consulted, so its
+     * bookkeeping stays in sync; only its veto is bypassed. In
+     * session, ordinary reports keep the gate exactly as is. */
+    fun onEpubLocator(locator: Locator, forceDerive: Boolean = false) {
         val epub = session as? ReadiumEpubSession ?: return
         // v1.5.9 (F-3b): the RAW locator is always kept (bookmark
         // fidelity), and the section is a precomputed-map lookup
@@ -717,7 +799,7 @@ class LocalDocReaderViewModel(
             ?: position?.index ?: 0
         if (!epubLocatorGate.shouldDerive(
                 section, locator.locations.totalProgression
-            )
+            ) && !forceDerive
         ) {
             return
         }
@@ -733,6 +815,7 @@ class LocalDocReaderViewModel(
             inSectionFraction = locator.locations.progression?.toFloat() ?: 0f,
             anchorTitle = anchor
         )
+        progressDirty = true
         _epubProgress.value = EpubProgress(
             fraction = fraction.coerceIn(0f, 1f),
             chapterTitle = anchor,
@@ -758,6 +841,7 @@ class LocalDocReaderViewModel(
             inSectionFraction = inPageFraction,
             anchorTitle = pdf.anchorTitleFor(page)
         )
+        progressDirty = true
         _pdfProgress.value = PdfProgress(page = page, pageCount = pdf.sectionCount)
         scheduleSave()
     }
@@ -858,16 +942,44 @@ class LocalDocReaderViewModel(
      * is being torn down, so it cannot be the only flush).
      * The 800 ms debounce itself is unchanged, and this is the
      * progress path only — never the F-4a settings persistence.
-     * No pending save (debounce already landed, or no position
-     * yet) = no-op. The commit rides the IO dispatcher like the
-     * VM's other store writes, so the caller's thread never
+     * No pending save and no unsaved derived position (below,
+     * item 0b) = no-op. The commit rides the IO dispatcher like
+     * the VM's other store writes, so the caller's thread never
      * blocks on the database.
      */
     fun flushPendingProgressSave() {
+        // v1.7 Patch 2 (item 0b): first re-derive the LIVE
+        // place from the raw locator the seam always keeps —
+        // a movement the bucket gate suppressed in-session
+        // must not survive into the stored row just because
+        // no debounce job is active when the exit arrives.
+        // The derivation is onEpubLocator's own chain under
+        // its exit force flag (never a parallel derivation),
+        // so every caller of this shared flush — river exit,
+        // legacy-branch exit, memory-pressure flush — writes
+        // the live derived position. PDF has no gate and
+        // needs none of this: its position derives on every
+        // report.
+        val raw = currentEpubLocator
+        if (raw != null && session is ReadiumEpubSession) {
+            onEpubLocator(raw, forceDerive = true)
+        }
         val pending = saveJob
-        if (pending == null || !pending.isActive) return
-        pending.cancel()
-        saveJob = null
+        val hadPending = pending != null && pending.isActive
+        if (pending != null) {
+            pending.cancel()
+            saveJob = null
+        }
+        // v1.7 Patch 2 (item 0b): the flush fires not only for a
+        // live debounce job but whenever the derived position is
+        // newer than the stored row (progressDirty) — the exit
+        // road force-derives the final pulled anchor through
+        // onEpubLocator, and that derivation must land even when
+        // its debounce was already consumed. All three callers
+        // of this shared flush (river exit, legacy-branch exit,
+        // Patch 1's memory-pressure flush) get the same rule.
+        // Nothing pending and nothing newer = no-op, as before.
+        if (!hadPending && !progressDirty) return
         viewModelScope.launch(container.ioDispatcher) {
             runCatching { saveProgressNow() }
         }
@@ -876,6 +988,9 @@ class LocalDocReaderViewModel(
     private suspend fun saveProgressNow() {
         val current = position ?: return
         val currentBook = book ?: return
+        // The snapshot being written is no longer dirty; a
+        // derivation landing after this point re-marks it.
+        progressDirty = false
         container.database.readingProgressDao().upsert(
             ReadingProgress(
                 bookId = currentBook.id,

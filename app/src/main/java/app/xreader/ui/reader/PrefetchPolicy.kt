@@ -214,3 +214,50 @@ class ChapterPositionIndex private constructor(
         }
     }
 }
+
+/**
+ * v1.7 Patch 2 (item 1b): the stored-fraction monotonicity
+ * clamp for the novel progress writers.
+ *
+ * The book % is char-based through [app.xreader.domain.reader.BookDocument],
+ * whose unmeasured chapters are priced by estimate; as chapters
+ * are parsed, estimates refine toward truth and a recomputed
+ * fraction can tick DOWN slightly for the same place. The
+ * stored row must not move backwards for a reader who hasn't:
+ * at every novel-path write of `ReadingProgress.fraction`, when
+ * the new position is at or ahead of the stored
+ * (chapterIndex, charOffset), the writer stores
+ * `max(computed, stored.fraction)`. A genuinely earlier
+ * position (the reader went back) may still write lower.
+ *
+ * Both novel write sites route through this one clamp
+ * (ReaderViewModel.saveProgressNow and onCleared's final
+ * upsert). Rows written by sync / progress-linking are
+ * comparison inputs only — their writers are untouched. With
+ * the measured-average estimator the clamp is a guard, not a
+ * crutch: refinement moves estimates toward truth, and the
+ * clamp only absorbs the residual.
+ */
+object BookProgressClamp {
+
+    fun clamp(
+        computed: Float,
+        newChapterIndex: Int,
+        newCharOffset: Int,
+        storedChapterIndex: Int?,
+        storedCharOffset: Int?,
+        storedFraction: Float?
+    ): Float {
+        if (storedChapterIndex == null || storedFraction == null) {
+            return computed.coerceIn(0f, 1f)
+        }
+        val atOrAhead = newChapterIndex > storedChapterIndex ||
+            (newChapterIndex == storedChapterIndex &&
+                newCharOffset >= (storedCharOffset ?: 0))
+        return if (atOrAhead) {
+            maxOf(computed, storedFraction).coerceIn(0f, 1f)
+        } else {
+            computed.coerceIn(0f, 1f)
+        }
+    }
+}

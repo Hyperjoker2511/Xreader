@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.xreader.data.db.Book
 import app.xreader.data.db.BookFormat
+import app.xreader.data.extension.DiagnosticLog
 import app.xreader.data.prefs.settingsDataStore
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -275,9 +276,24 @@ class ReadiumEpubSession private constructor(
     /** A Readium [Locator] from stored JSON, or null. */
     fun locatorFromJson(locatorJson: String?): Locator? {
         if (locatorJson.isNullOrBlank()) return null
-        return runCatching {
+        val parsed = runCatching {
             Locator.fromJSON(org.json.JSONObject(locatorJson))
         }.getOrNull()
+        if (parsed == null) {
+            // v1.7 Patch 2 (item 0a): a stored locator that no
+            // longer parses used to fail silently — the restore
+            // then fell back along the chain toward the section
+            // start and the place was lost without a trace. The
+            // failure is recorded (bounded log) so a fault
+            // report carries it. No behaviour change.
+            DiagnosticLog.record(
+                "epub-locator",
+                "stored EPUB locator failed to parse " +
+                    "(${locatorJson.length} chars) — restore " +
+                    "falls back along the locator chain"
+            )
+        }
+        return parsed
     }
 
     /** The [Link] an outline entry jumps to. */

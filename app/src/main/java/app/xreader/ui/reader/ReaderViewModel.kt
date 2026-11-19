@@ -17,9 +17,11 @@ import app.xreader.data.reader.ReadAloudController
 import app.xreader.data.reader.SoundscapePlayer
 import app.xreader.di.AppContainer
 import app.xreader.domain.content.ChapterContent
+import app.xreader.domain.reader.BookDocument
 import app.xreader.domain.reader.ChapterText
 import app.xreader.domain.reader.FocusState
 import app.xreader.domain.reader.FocusTimer
+import app.xreader.domain.reader.LayoutAheadPolicy
 import app.xreader.domain.reader.OverlaySync
 import app.xreader.domain.reader.PageLocator
 import app.xreader.domain.reader.PageTurnTier
@@ -149,7 +151,19 @@ data class ReaderUiState(
     val mangaHasOverrides: Boolean = false,
     /** True on the low-RAM (MINIMAL) performance tier: manga
      * pages then decode downscaled to screen width. */
-    val imageLowRam: Boolean = false
+    val imageLowRam: Boolean = false,
+    // ── v1.7 Patch 2 (item 2b) ───────────────────────────────
+    /** Layout-ahead inputs for the paged reader: the NEXT
+     * chapter's display text + id when prefetch already holds
+     * it, so PagedReader can lay it out ahead through the
+     * ChapterLayoutService. Null when the next chapter isn't
+     * parsed yet — nothing is laid out ahead then. */
+    val layoutAheadNextId: Long? = null,
+    val layoutAheadNextText: ChapterText? = null,
+    /** The tier gate for layout-ahead (FULL + STANDARD on,
+     * MINIMAL off — LayoutAheadPolicy), resolved by the
+     * ViewModel, which already reads the tier for prefetch. */
+    val layoutAheadEnabled: Boolean = false
 ) {
     val chapter: Chapter? get() = chapters.getOrNull(chapterIndex)
     val hasPrevious: Boolean get() = chapterIndex > 0
@@ -529,8 +543,20 @@ class ReaderViewModel(
      * the index can never drift from the state's list. */
     private fun chaptersUpdated(chapters: List<Chapter>): List<Chapter> {
         chapterPositionIndex = ChapterPositionIndex.build(chapters)
+        // v1.7 Patch 2 (item 1a): the char map rebuilds with the
+        // list — exact lengths for still-present chapter ids
+        // carry over, new chapters enter at the estimate.
+        bookDocument = bookDocument.rebuild(chapters)
         return chapters
     }
+
+    /** v1.7 Patch 2 (item 1a): the book-wide char map
+     * ([BookDocument]) — rebuilt ONLY through [chaptersUpdated]
+     * (exact lengths carry over by chapter id) and fed the
+     * DISPLAY length wherever a display [ChapterText] is built:
+     * chapter load, prefetch, stream. In-memory only; book
+     * offsets are derived, never persisted. */
+    private var bookDocument: BookDocument = BookDocument.EMPTY
 
     /** When progress writes may land (settle + coarse cap). */
     private val progressCoalescer = ProgressSaveCoalescer()
@@ -601,7 +627,14 @@ class ReaderViewModel(
                     appearance.coverGlow
                 ).tier
                 _state.value = _state.value.copy(
-                    pageTurnTier = computeTier(_config.value)
+                    pageTurnTier = computeTier(_config.value),
+                    // v1.7 Patch 2 (item 2b): the layout-ahead
+                    // gate follows the same tier (FULL +
+                    // STANDARD on, MINIMAL off).
+                    layoutAheadEnabled = LayoutAheadPolicy.enabled(
+                        minimalTier = performanceTier ==
+                            app.xreader.data.prefs.PerfTier.MINIMAL
+                    )
                 )
             }
         }
@@ -980,6 +1013,11 @@ class ReaderViewModel(
         val original = chapterCache[chapter.id]
             ?: streamTexts[chapter.id] ?: return
         val display = displayText(original, chapter.id)
+        // v1.7 Patch 2 (item 1a): a terms change rebuilds the
+        // visible chapter's display text — its map length is
+        // rebuilt with it, so the char map stays in display
+        // coordinates.
+        bookDocument.setExactLength(chapter.id, display.length)
         if (display !== _state.value.chapterText) {
             _state.value = _state.value.copy(chapterText = display)
         }
@@ -1232,9 +1270,14 @@ class ReaderViewModel(
         tracker.begin()
         currentChapterMaxOffset = restoreOffset
         visibleTextChapterIndex = index
+        val displayCopy = displayText(text, chapter.id)
+        // v1.7 Patch 2 (item 1a): feed the char map the DISPLAY
+        // length — every offset the map serves is reported
+        // against the display text the renderers consume.
+        bookDocument.setExactLength(chapter.id, displayCopy.length)
         _state.value = _state.value.copy(
             loading = false,
-            chapterText = displayText(text, chapter.id),
+            chapterText = displayCopy,
             restoreOffset = restoreOffset,
             restoreScrollFraction = restoreScrollFraction,
             restoreHint = hint,
@@ -1671,8 +1714,44 @@ class ReaderViewModel(
                 }
                 if (chapterCache.containsKey(chapter.id)) continue
                 val result = container.bookStorage.readChapterContent(bookId, chapter.id)
-                if (result is AppResult.Ok) cacheChapter(chapter.id, ChapterText(result.value))
+                if (result is AppResult.Ok) {
+                    val parsed = ChapterText(result.value)
+                    cacheChapter(chapter.id, parsed)
+                    // v1.7 Patch 2 (item 1a): the cache holds
+                    // ORIGINALS — they price the char map only
+                    // when no terms copy exists (no terms in
+                    // force ⇒ original == display). With terms
+                    // in force the chapter is fed at load, when
+                    // its display copy is built.
+                    if (activeTerms.isEmpty()) {
+                        bookDocument.setExactLength(
+                            chapter.id, parsed.length
+                        )
+                    }
+                }
             }
+            // v1.7 Patch 2 (item 2b): publish the layout-ahead
+            // candidate — the NEXT chapter's DISPLAY text when
+            // prefetch holds its original (the display copy is
+            // what the paged reader will paginate when the
+            // chapter opens from this same cache) — plus the
+            // tier gate, for PagedReader's ahead layout.
+            val nextChapter = _state.value.chapters.getOrNull(index + 1)
+            val nextOriginal = nextChapter?.let { chapterCache[it.id] }
+            _state.value = _state.value.copy(
+                layoutAheadNextId = nextChapter?.id,
+                layoutAheadNextText = if (
+                    nextChapter != null && nextOriginal != null
+                ) {
+                    displayText(nextOriginal, nextChapter.id)
+                } else {
+                    null
+                },
+                layoutAheadEnabled = LayoutAheadPolicy.enabled(
+                    minimalTier = performanceTier ==
+                        app.xreader.data.prefs.PerfTier.MINIMAL
+                )
+            )
         }
     }
 
@@ -1760,7 +1839,14 @@ class ReaderViewModel(
         // The stream cache holds ORIGINALS (like chapterCache);
         // each caller gets the display copy for the terms in
         // force right now.
-        streamTexts[chapter.id]?.let { return displayText(it, chapter.id) }
+        // v1.7 Patch 2 (item 1a): the display copy this returns
+        // is a char-map feed, on both roads — the stream renders
+        // display text, so the map prices display lengths.
+        streamTexts[chapter.id]?.let { cached ->
+            val display = displayText(cached, chapter.id)
+            bookDocument.setExactLength(chapter.id, display.length)
+            return display
+        }
         if (chapter.contentPath == null) return null
         val useTranslation = chapter.id !in originalPreferred &&
             container.bookStorage.hasTranslatedContent(bookId, chapter.id)
@@ -1772,8 +1858,23 @@ class ReaderViewModel(
         val original = (result as? AppResult.Ok)?.value
             ?.let { ChapterText(it) } ?: return null
         streamTexts[chapter.id] = original
-        return displayText(original, chapter.id)
+        val display = displayText(original, chapter.id)
+        bookDocument.setExactLength(chapter.id, display.length)
+        return display
     }
+
+    /** v1.7 Patch 2 (item 1d): the stream planner's per-chapter
+     * char counts — the char map's EXACT length where the map
+     * has the chapter parsed, the word-count estimate otherwise.
+     * The planner's budget values are unchanged. */
+    private fun streamCharCounts(chapters: List<Chapter>): List<Int> =
+        chapters.mapIndexed { index, chapter ->
+            if (bookDocument.isExact(index)) {
+                bookDocument.lengthOf(index)
+            } else {
+                (chapter.wordCount * 6).coerceAtLeast(1)
+            }
+        }
 
     /** Open (or re-anchor) the stream at [anchorIndex]. */
     fun openStream(anchorIndex: Int, anchorOffset: Int = 0) {
@@ -1794,7 +1895,7 @@ class ReaderViewModel(
                 appearance.performanceMode, container.totalRamMb(),
                 appearance.coverGlow
             )
-            val counts = chapters.map { (it.wordCount * 6).coerceAtLeast(1) }
+            val counts = streamCharCounts(chapters)
             val window = StreamWindowPlanner.plan(
                 anchorIndex = anchorIndex,
                 chapterCharCounts = counts,
@@ -1992,7 +2093,7 @@ class ReaderViewModel(
                 appearance.performanceMode, container.totalRamMb(),
                 appearance.coverGlow
             )
-            val counts = chapters.map { (it.wordCount * 6).coerceAtLeast(1) }
+            val counts = streamCharCounts(chapters)
             val window = StreamWindowPlanner.plan(
                 anchorIndex = anchorIndex,
                 chapterCharCounts = counts,
@@ -2083,9 +2184,39 @@ class ReaderViewModel(
         val chapterIndex = chapterPositionIndex
             .indexOfChapter(stateBefore.chapter?.id)
             ?: stateBefore.chapterIndex
-        val bookFraction = PageLocator.bookFraction(
-            chapterIndex, chapterFraction, stateBefore.chapters.size
-        )
+        // v1.7 Patch 2 (item 1b): the book fraction is CHAR-based
+        // through the BookDocument map — bookOffset / totalChars
+        // — so a 500-char chapter no longer weighs the same as a
+        // 50 000-char one. The current chapter's length is exact
+        // while it is being read (fed at load), so the numerator
+        // is a true char offset into the book. An image chapter's
+        // char offsets sit at ~0 by construction (see the
+        // chapterFraction note above), so its in-chapter share
+        // rides the renderer's fraction of its char length. The
+        // count-based PageLocator fraction stays as the fallback
+        // for any state the map cannot price (no chapters, or a
+        // book whose priced total is zero).
+        val doc = bookDocument
+        val bookFraction = if (
+            doc.chapterCount > 0 &&
+            chapterIndex in 0 until doc.chapterCount &&
+            doc.totalChars > 0
+        ) {
+            val withinChars = if (
+                ReaderCounters.isImageChapter(text.content) ||
+                text.content.isImageChapter
+            ) {
+                (chapterFraction * doc.lengthOf(chapterIndex)).toInt()
+            } else {
+                clamped
+            }
+            (doc.bookOffset(chapterIndex, withinChars).toFloat() /
+                doc.totalChars).coerceIn(0f, 1f)
+        } else {
+            PageLocator.bookFraction(
+                chapterIndex, chapterFraction, stateBefore.chapters.size
+            )
+        }
         val estimator = container.wpmEstimator
         val wordsLeftChapter =
             ChapterContent.countWords(text.text.substring(clamped.coerceAtMost(text.length)))
@@ -2170,13 +2301,28 @@ class ReaderViewModel(
         // onPosition resumes saves the moment its text lands.
         if (visibleTextChapterIndex != stateNow.chapterIndex) return
         val now = System.currentTimeMillis()
+        // v1.7 Patch 2 (item 1b): the stored fraction never moves
+        // backwards for an at-or-ahead position (BookProgressClamp
+        // — estimate refinement under the char-based % can tick a
+        // recomputed fraction down; the stored row is the guard).
+        val storedRow = runCatching {
+            container.database.readingProgressDao().getForBook(bookId)
+        }.getOrNull()
+        val writeFraction = BookProgressClamp.clamp(
+            computed = stateNow.bookFraction,
+            newChapterIndex = stateNow.chapterIndex,
+            newCharOffset = stateNow.positionOffset,
+            storedChapterIndex = storedRow?.chapterIndex,
+            storedCharOffset = storedRow?.charOffset,
+            storedFraction = storedRow?.fraction
+        )
         container.database.readingProgressDao().upsert(
             ReadingProgress(
                 bookId = bookId,
                 chapterId = chapter.id,
                 chapterIndex = stateNow.chapterIndex,
                 charOffset = stateNow.positionOffset,
-                fraction = stateNow.bookFraction,
+                fraction = writeFraction,
                 scrollFraction = stateNow.chapterFraction,
                 updatedAt = now
             )
@@ -2298,13 +2444,30 @@ class ReaderViewModel(
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                 if (chapterAtClear != null) {
                     runCatching {
+                        // v1.7 Patch 2 (item 1b): the final upsert
+                        // routes through the same clamp as
+                        // saveProgressNow — the stored fraction
+                        // never moves backwards for an at-or-ahead
+                        // position, whichever writer lands last.
+                        val storedRow = runCatching {
+                            container.database.readingProgressDao()
+                                .getForBook(bookId)
+                        }.getOrNull()
+                        val writeFraction = BookProgressClamp.clamp(
+                            computed = stateAtClear.bookFraction,
+                            newChapterIndex = stateAtClear.chapterIndex,
+                            newCharOffset = stateAtClear.positionOffset,
+                            storedChapterIndex = storedRow?.chapterIndex,
+                            storedCharOffset = storedRow?.charOffset,
+                            storedFraction = storedRow?.fraction
+                        )
                         container.database.readingProgressDao().upsert(
                             ReadingProgress(
                                 bookId = bookId,
                                 chapterId = chapterAtClear.id,
                                 chapterIndex = stateAtClear.chapterIndex,
                                 charOffset = stateAtClear.positionOffset,
-                                fraction = stateAtClear.bookFraction,
+                                fraction = writeFraction,
                                 scrollFraction = stateAtClear.chapterFraction,
                                 updatedAt = System.currentTimeMillis()
                             )

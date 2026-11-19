@@ -69,6 +69,30 @@ internal object EpubRiverPosition {
         return block
     }
 
+    /**
+     * v1.7 Patch 2 (item 0c): the restore confirmation rule —
+     * a landing confirms the restore iff it is in the TARGET's
+     * section AND within ±2 blocks of the target block (the
+     * tall-block window the restore has always allowed: the
+     * anchor names the first block whose bottom is on screen,
+     * which can sit either side of the scrolled-to element)
+     * AND it is not a section-top landing against a
+     * mid-chapter target (landed block 0 while the target
+     * block is > 2 — the signature of a block element that was
+     * never in the filled window, quietly fallen back to the
+     * section element). A genuine chapter-start target (block
+     * 0) confirms on a block-0 landing. Exact equality is NOT
+     * required — it would regress tall-block restores.
+     */
+    fun restoreConfirms(
+        landed: Pair<Int, Int>,
+        target: Pair<Int, Int>
+    ): Boolean {
+        if (landed.first != target.first) return false
+        if (landed.second == 0 && target.second > 2) return false
+        return kotlin.math.abs(landed.second - target.second) <= 2
+    }
+
     /** Resolve an in-section progression (any vintage) to a
      * (section, block) anchor — the §4.3 ladder's progression
      * rung. River-written progressions are char fractions and
