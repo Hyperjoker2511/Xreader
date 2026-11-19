@@ -396,6 +396,12 @@ class EpubParser : BookParser {
         }
 
         val writer = ChapterFileWriter(File(workDir, "chapters"))
+        // v1.7 Patch 3 (Item 3a): the spine href of every
+        // EMITTED chapter, parallel to writer.metas — recorded
+        // at exactly the writer.add sites, so skipped items
+        // (F7) and unlandable plates never appear here. This
+        // is the parser-space half of the place bridge.
+        val chapterHrefs = mutableListOf<String>()
         var failures = 0
         // v1.5.4 (WS-7): chapter pictures that resolve to nothing.
         // Counted, never silent — the importer surfaces the count
@@ -443,6 +449,7 @@ class EpubParser : BookParser {
                             )
                         )
                     )
+                    chapterHrefs += relPath
                 } else {
                     droppedImages++
                 }
@@ -480,6 +487,7 @@ class EpubParser : BookParser {
             if (converted == null) {
                 failures++
                 writer.add(titles[relPath] ?: "Chapter ${index + 1}", ChapterContent())
+                chapterHrefs += relPath
             } else {
                 // v1.5.5 (§5): pictures that genuinely couldn't
                 // be read — remote references stay a designed
@@ -522,6 +530,7 @@ class EpubParser : BookParser {
                         titles[relPath] ?: converted.heading ?: "Chapter ${index + 1}",
                         content
                     )
+                    chapterHrefs += relPath
                 }
             }
             onProgress(if (spineItems.isEmpty()) 1f else (index + 1).toFloat() / spineItems.size)
@@ -572,7 +581,8 @@ class EpubParser : BookParser {
                 chapters = writer.metas,
                 chaptersDir = File(workDir, "chapters"),
                 assetsDir = assetsDir.takeIf { it.list()?.isNotEmpty() == true },
-                droppedImages = droppedImages
+                droppedImages = droppedImages,
+                chapterHrefs = chapterHrefs.toList()
             )
         )
     }

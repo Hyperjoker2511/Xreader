@@ -189,6 +189,12 @@ class FakeBookmarkDao : BookmarkDao {
         return id
     }
 
+    override suspend fun update(bookmark: Bookmark) {
+        bookmarks.value = bookmarks.value.map {
+            if (it.id == bookmark.id) bookmark else it
+        }
+    }
+
     override suspend fun delete(bookmark: Bookmark) {
         bookmarks.value = bookmarks.value.filterNot { it.id == bookmark.id }
     }

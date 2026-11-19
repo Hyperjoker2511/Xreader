@@ -3,6 +3,7 @@ package app.xreader.ui.localreader
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import app.xreader.core.error.AppResult
 import app.xreader.data.db.Book
 import app.xreader.data.db.BookFormat
@@ -241,6 +242,15 @@ internal fun storedPositionsUsable(
     sectionCount: Int
 ): Boolean = stored != null && stored.sectionCount == sectionCount
 
+/** v1.7 Patch 3 (Item 1a): the local open flow's verdict for
+ * an EPUB — leave for the core route, refuse honestly, or
+ * carry on opening on the local road exactly as before. */
+private sealed interface EpubOpenStep {
+    data class Redirect(val chapterIndex: Int) : EpubOpenStep
+    data class Refused(val message: String) : EpubOpenStep
+    data object ContinueLocal : EpubOpenStep
+}
+
 class LocalDocReaderViewModel(
     private val container: AppContainer,
     private val bookId: Long,
@@ -260,6 +270,14 @@ class LocalDocReaderViewModel(
 
     private val _jumps = MutableSharedFlow<LocalJump>(extraBufferCapacity = 4)
     val jumps: SharedFlow<LocalJump> = _jumps.asSharedFlow()
+
+    /** v1.7 Patch 3 (Item 1a): a prepared EPUB leaves this
+     * reader for the core route — the emission is the core
+     * chapter index to open at. The screen collects it and
+     * navigates (popping this destination); the state stays
+     * Loading meanwhile, so nothing flashes behind it. */
+    private val _coreRedirect = MutableSharedFlow<Int>(extraBufferCapacity = 1)
+    val coreRedirect: SharedFlow<Int> = _coreRedirect.asSharedFlow()
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
@@ -535,6 +553,26 @@ class LocalDocReaderViewModel(
                 session = opened
                 runCatching { container.recordHistoryStart(bookId) }
                 val saved = container.database.readingProgressDao().getForBook(bookId)
+                // v1.7 Patch 3 (Item 1a): an EPUB's road to the
+                // shared core runs HERE, where the detect
+                // session already exists — the already-prepared
+                // redirect, or the one-time prepare — before
+                // any local surface is built. PDF never enters.
+                if (opened is ReadiumEpubSession) {
+                    when (
+                        val step = runEpubPrepareStep(loaded, opened, saved)
+                    ) {
+                        is EpubOpenStep.Redirect -> {
+                            _coreRedirect.tryEmit(step.chapterIndex)
+                            return@launch
+                        }
+                        is EpubOpenStep.Refused -> {
+                            _state.value = LocalReaderState.Failed(step.message)
+                            return@launch
+                        }
+                        EpubOpenStep.ContinueLocal -> Unit
+                    }
+                }
                 val target = startTargetJson ?: saved?.locatorJson
                 val fontMultiplier = runCatching {
                     (container.readerPrefs.config.first().fontSizeSp / 16.0)
@@ -749,6 +787,97 @@ class LocalDocReaderViewModel(
                     "That book couldn't be opened. (${e.javaClass.simpleName})"
                 )
             }
+        }
+    }
+
+    /**
+     * v1.7 Patch 3 (Item 1): the EPUB prepare step of the
+     * open flow. Detect comes from the session this open
+     * already holds (Item 1b — no second open): fixed-layout
+     * and RTL-progression books keep the picture surface; a
+     * book with a current prepare record redirects to the
+     * core route at its saved core place; anything else runs
+     * the one-time prepare, whose failure leaves the book on
+     * this road, unprepared and retryable (Item 1f).
+     */
+    private suspend fun runEpubPrepareStep(
+        book: Book,
+        session: ReadiumEpubSession,
+        saved: ReadingProgress?
+    ): EpubOpenStep {
+        val detect = app.xreader.data.prepare.EpubDetect(
+            isFixedLayout = session.isFixedLayout,
+            isRtlProgression = session.publication.metadata
+                .readingProgression ==
+                org.readium.r2.shared.publication.ReadingProgression.RTL,
+            sessionHrefs = session.readingOrderHrefList()
+        )
+        if (detect.isFixedLayout || detect.isRtlProgression) {
+            return EpubOpenStep.ContinueLocal
+        }
+        val record = runCatching { localPrefs.epubPrepareRecord(bookId) }
+            .getOrNull()
+        if (app.xreader.data.prepare.EpubPrepareAccess
+                .isPrepared(record, book)
+        ) {
+            val rows = runCatching {
+                container.database.chapterDao().forBook(bookId)
+            }.getOrDefault(emptyList())
+            val contentInPlace = rows.any { it.contentPath != null }
+            val placeIsCore = saved == null || saved.chapterId != 0L
+            if (contentInPlace && placeIsCore) {
+                return EpubOpenStep.Redirect(
+                    (saved?.chapterIndex ?: 0)
+                        .coerceIn(0, maxOf(0, rows.lastIndex))
+                )
+            }
+            // A record without its landed content (the book's
+            // downloads were deleted) or with a place that was
+            // never migrated: fall through and prepare again —
+            // the landing re-lands and Item 3 carries the place.
+        }
+        _state.value = LocalReaderState.Loading(
+            "Preparing the book for the reader…"
+        )
+        val service = app.xreader.data.prepare.EpubPrepareService(
+            chapterDao = container.database.chapterDao(),
+            readingProgressDao = container.database.readingProgressDao(),
+            bookmarkDao = container.database.bookmarkDao(),
+            highlightDao = container.database.highlightDao(),
+            storage = container.bookStorage,
+            prefs = localPrefs,
+            bookReaderPrefs = container.bookReaderPrefs,
+            selectionHighlightStore = SelectionHighlightStore(
+                container.applicationContext.settingsDataStore
+            ),
+            contentResolver = container.applicationContext.contentResolver,
+            inTransaction = { block ->
+                container.database.withTransaction(block)
+            }
+        )
+        return when (
+            val outcome = service.prepare(book, detect) { fraction ->
+                val pct = fraction?.let {
+                    " ${(it * 100).toInt()}%"
+                } ?: ""
+                _state.value = LocalReaderState.Loading(
+                    "Preparing the book for the reader…$pct"
+                )
+            }
+        ) {
+            is app.xreader.data.prepare.EpubPrepareOutcome.Redirect ->
+                EpubOpenStep.Redirect(outcome.chapterIndex)
+            is app.xreader.data.prepare.EpubPrepareOutcome.Refused ->
+                EpubOpenStep.Refused(outcome.message)
+            is app.xreader.data.prepare.EpubPrepareOutcome.Fallback -> {
+                DiagnosticLog.record(
+                    "epub-prepare",
+                    "book $bookId stays on the local road: ${outcome.reason}"
+                )
+                EpubOpenStep.ContinueLocal
+            }
+            app.xreader.data.prepare.EpubPrepareOutcome.NotEligible ->
+                EpubOpenStep.ContinueLocal
         }
     }
 

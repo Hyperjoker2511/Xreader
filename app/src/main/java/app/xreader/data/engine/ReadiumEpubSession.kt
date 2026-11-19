@@ -214,6 +214,13 @@ class ReadiumEpubSession private constructor(
         map
     }
 
+    /** v1.7 Patch 3 (Item 1b/3a): the reading-order hrefs
+     * themselves, exposed for the EPUB prepare bridge — the
+     * detect session's own index space, which the place
+     * migration matches against the parser's spine hrefs BY
+     * HREF, never by position (the two spaces diverge). */
+    fun readingOrderHrefList(): List<String> = readingOrderHrefs
+
     /** v1.5.9 (F-3a): anchor title per section, precomputed
      * once (see [buildAnchorBySection]) — [anchorTitleFor] is
      * a list index and parses no JSON per call. */

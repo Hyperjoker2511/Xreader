@@ -317,6 +317,87 @@ class ReaderRouteResolverTest {
         )
     }
 
+    // ── v1.7 Patch 3 (Item 2b): the prepared-EPUB verdict ────
+    // ADDED tests (the spec's named expectation change): the
+    // existing localFileBookRoutesToLocalDoc above stays valid
+    // unmodified — a resolver built WITHOUT the prepare seam
+    // has no record to key on. With the seam wired, a prepared
+    // EPUB is a converted book and routes to the novel reader;
+    // an unprepared one keeps the LocalDoc verdict (its
+    // prepare runs inside the local open flow), and a PDF's
+    // verdict is untouched even when the seam says yes.
+
+    @Test
+    fun localFileEpubWithPrepareRecordRoutesToNovelReader() = runBlocking {
+        val (service, _) = declarativeStack(listOf(FixtureSite.config()))
+        val id = bookDao.insert(
+            Book(
+                title = "Prepared EPUB",
+                sourceType = SourceType.LOCAL_FILE,
+                localFormat = app.xreader.data.db.BookFormat.EPUB,
+                filePath = "/storage/emulated/0/Download/prepared.epub",
+                addedAt = 0,
+                updatedAt = 0
+            )
+        )
+        val resolver = ReaderRouteResolver(
+            bookDao, chapterDao, service,
+            epubPrepared = { true }
+        )
+        assertEquals(
+            ReaderRoute.NovelReader(bookId = id, chapterIndex = 2),
+            resolver.resolve(id, chapterIndex = 2)
+        )
+    }
+
+    @Test
+    fun localFileEpubWithoutPrepareRecordRoutesToLocalDoc() = runBlocking {
+        val (service, _) = declarativeStack(listOf(FixtureSite.config()))
+        val id = bookDao.insert(
+            Book(
+                title = "Unprepared EPUB",
+                sourceType = SourceType.LOCAL_FILE,
+                localFormat = app.xreader.data.db.BookFormat.EPUB,
+                filePath = "/storage/emulated/0/Download/unprepared.epub",
+                addedAt = 0,
+                updatedAt = 0
+            )
+        )
+        val resolver = ReaderRouteResolver(
+            bookDao, chapterDao, service,
+            epubPrepared = { false }
+        )
+        assertEquals(
+            ReaderRoute.LocalDoc(bookId = id),
+            resolver.resolve(id, chapterIndex = 0)
+        )
+    }
+
+    @Test
+    fun localFilePdfWithPrepareRecordStillRoutesToLocalDoc() = runBlocking {
+        val (service, _) = declarativeStack(listOf(FixtureSite.config()))
+        val id = bookDao.insert(
+            Book(
+                title = "Local PDF",
+                sourceType = SourceType.LOCAL_FILE,
+                localFormat = app.xreader.data.db.BookFormat.PDF,
+                filePath = "/storage/emulated/0/Download/local.pdf",
+                addedAt = 0,
+                updatedAt = 0
+            )
+        )
+        // The seam is EPUB-gated inside the resolver: even a
+        // (nonsensical) true answer must not move a PDF.
+        val resolver = ReaderRouteResolver(
+            bookDao, chapterDao, service,
+            epubPrepared = { true }
+        )
+        assertEquals(
+            ReaderRoute.LocalDoc(bookId = id),
+            resolver.resolve(id, chapterIndex = 0)
+        )
+    }
+
     @Test
     fun unknownKindWithUnresolvableSourceFallsBackToNovelReader() = runBlocking {
         val (service, _) = declarativeStack(listOf(FixtureSite.config()))

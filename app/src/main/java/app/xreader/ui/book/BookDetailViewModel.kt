@@ -10,6 +10,7 @@ import app.xreader.data.db.Chapter
 import app.xreader.data.db.DownloadState
 import app.xreader.data.db.ReadingProgress
 import app.xreader.di.AppContainer
+import app.xreader.data.prefs.settingsDataStore
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
@@ -489,11 +490,41 @@ class BookDetailViewModel(
 
     private val storyLocal = kotlinx.coroutines.flow.MutableStateFlow(BookDetailUiState())
 
+    /** v1.7 Patch 3: the local reader's prefs — the prepare
+     * record's store, read for the prepared checks below. */
+    private val localReaderPrefs =
+        app.xreader.ui.localreader.LocalReaderPrefs(
+            container.applicationContext.settingsDataStore
+        )
+
+    /** v1.7 Patch 3 (Item 4m): true when this book is a
+     * PREPARED EPUB — its prepare record current for the
+     * book's file (EpubPrepareAccess.isPrepared, the one rule
+     * the route resolver and both readers share). A prepared
+     * book's page is the core book page: its Contents come
+     * from the chapter rows, not the local outline. */
+    val preparedEpub: StateFlow<Boolean> = combine(
+        container.database.bookDao().observeById(bookId),
+        localReaderPrefs.epubPrepareRecordFlow(bookId)
+    ) { book, record ->
+        book != null &&
+            app.xreader.data.prepare.EpubPrepareAccess
+                .isPrepared(record, book)
+    }.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), false
+    )
+
     /** v1.5.6 (§3.1 row 7): an in-place local book's Contents —
      * its local_outline rows (title + targetJson). Empty for every
-     * other book population. */
+     * other book population. v1.7 Patch 3 (Item 4m): also empty
+     * for a PREPARED EPUB — its outline rows describe the old
+     * road's sections; the page renders the Chapters section
+     * from the landed rows instead (one Contents, never two). */
     val localOutline: StateFlow<List<app.xreader.data.db.LocalOutline>> =
-        container.database.localOutlineDao().observeForBook(bookId)
+        combine(
+            container.database.localOutlineDao().observeForBook(bookId),
+            preparedEpub
+        ) { rows, prepared -> if (prepared) emptyList() else rows }
             .stateIn(
                 viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
             )
@@ -538,14 +569,25 @@ class BookDetailViewModel(
                     )
                 }
             },
-        container.database.readingProgressDao().observeForBook(bookId),
+        // v1.7 Patch 3 (Item 4m): the progress arrives paired
+        // with the book's prepared flag — a prepared EPUB's
+        // progress is CORE-shaped (it keys on the landed
+        // chapter rows), so it takes the identity re-anchor
+        // below like any core book; only an UNPREPARED local
+        // book keeps the locator exemption.
+        combine(
+            container.database.readingProgressDao().observeForBook(bookId),
+            preparedEpub
+        ) { p, prepared -> p to prepared },
         storyLocal
             .onStart { pageCollected.value = true }
             .onCompletion { pageCollected.value = false },
         container.bookMetaPrefs.all
-    ) { book, chaptersAndLabel, progress, story, metas ->
+    ) { book, chaptersAndLabel, progressPair, story, metas ->
         val chapters = chaptersAndLabel.first
         val expectedNextLabel = chaptersAndLabel.second
+        val progress = progressPair.first
+        val isPrepared = progressPair.second
         // v1.3.1 (V120-CHECK 55): progress keys on chapter
         // IDENTITY. A stored pointer whose chapterId no longer
         // resolves in the current list (the list changed shape
@@ -559,7 +601,18 @@ class BookDetailViewModel(
             // is locator-keyed (chapterId = 0, no chapter rows) —
             // the identity re-anchor below would NULL it out. Local
             // progress is read from the locator directly.
-            if (book?.sourceType == app.xreader.data.db.SourceType.LOCAL_FILE) {
+            // v1.7 Patch 3 (Item 4m): a PREPARED EPUB is the
+            // exception to the exemption — its progress is
+            // core-shaped: prepare (and every core save since)
+            // writes it against the landed chapter rows, so
+            // the identity re-anchor resolves it like any core
+            // book's. The exemption is NOT narrowed by an
+            // emptiness condition: retained-copy local books
+            // arrive WITH chapter rows, and their locator
+            // progress must keep the exemption.
+            if (book?.sourceType == app.xreader.data.db.SourceType.LOCAL_FILE &&
+                !isPrepared
+            ) {
                 p
             } else {
                 val anchor = chapters.firstOrNull { it.id == p.chapterId }

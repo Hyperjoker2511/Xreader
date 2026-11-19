@@ -232,6 +232,71 @@ internal fun decodeEpubPositionsIndex(raw: String?): EpubPositionsIndex? {
     return EpubPositionsIndex(sections, starts, counts)
 }
 
+// ── EPUB prepare record (v1.7 Patch 3, Item 1e) ─────────────
+
+/**
+ * The record that an in-place EPUB has been PREPARED onto
+ * the shared reader core: its file was converted once into
+ * Chapter rows + content files (see EpubPrepareService),
+ * and routing may now send the book to the novel reader.
+ * Written LAST in prepare, only after every landed row and
+ * content file verifies — routing keys on this record,
+ * never on row existence, so a half-landed prepare simply
+ * prepares again on the next open.
+ *
+ * [fingerprint] is the converted file's SHA-256 hex (the
+ * sha segment of the book's `Book.fileFingerprint` form);
+ * [sectionMap] is the prepare-time bridge from the detect
+ * session's reading-order index space to the landed core
+ * chapter ids (Item 2e's Contents-door map); [notePending]
+ * carries Item 3e's one-time first-open note until the core
+ * reader has shown it.
+ */
+data class EpubPrepareRecord(
+    val fingerprint: String,
+    val loaderVersion: Int,
+    val sectionMap: Map<Int, Long> = emptyMap(),
+    val notePending: Boolean = false
+)
+
+/** One string per book:
+ * "loaderVersion|sha256hex|note(0/1)|sec:chapterId,sec:chapterId,…". */
+internal fun encodeEpubPrepareRecord(record: EpubPrepareRecord): String =
+    "${record.loaderVersion}|${record.fingerprint}|" +
+        (if (record.notePending) "1" else "0") + "|" +
+        record.sectionMap.entries
+            .sortedBy { it.key }
+            .joinToString(",") { "${it.key}:${it.value}" }
+
+/** Strict decode — anything malformed reads as null (no
+ * record: the book prepares again), never a half record. */
+internal fun decodeEpubPrepareRecord(raw: String?): EpubPrepareRecord? {
+    if (raw.isNullOrBlank()) return null
+    val parts = raw.split("|")
+    if (parts.size != 4) return null
+    val version = parts[0].toIntOrNull() ?: return null
+    if (version <= 0) return null
+    val fingerprint = parts[1]
+    if (fingerprint.isBlank()) return null
+    val note = when (parts[2]) {
+        "0" -> false
+        "1" -> true
+        else -> return null
+    }
+    val map = LinkedHashMap<Int, Long>()
+    if (parts[3].isNotEmpty()) {
+        for (entry in parts[3].split(",")) {
+            val pair = entry.split(":")
+            if (pair.size != 2) return null
+            val section = pair[0].toIntOrNull() ?: return null
+            val chapterId = pair[1].toLongOrNull() ?: return null
+            if (section < 0 || chapterId <= 0) return null
+            map[section] = chapterId
+        }
+    }
+    return EpubPrepareRecord(fingerprint, version, map, note)
+}
+
 // ── Store ────────────────────────────────────────────────────────
 
 class LocalReaderPrefs(private val store: DataStore<Preferences>) {
@@ -453,6 +518,32 @@ class LocalReaderPrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    // ── EPUB prepare record (v1.7 Patch 3, Item 1e) ────────
+
+    suspend fun epubPrepareRecord(bookId: Long): EpubPrepareRecord? =
+        decodeEpubPrepareRecord(store.data.first()[epubPrepareKey(bookId)])
+
+    /** The record as a flow — the book page's prepared gate
+     * (Item 4m) follows prepares that land while it is open. */
+    fun epubPrepareRecordFlow(bookId: Long): Flow<EpubPrepareRecord?> =
+        store.data.map { prefs ->
+            decodeEpubPrepareRecord(prefs[epubPrepareKey(bookId)])
+        }
+
+    suspend fun saveEpubPrepareRecord(bookId: Long, record: EpubPrepareRecord) {
+        store.edit { prefs ->
+            prefs[epubPrepareKey(bookId)] = encodeEpubPrepareRecord(record)
+        }
+    }
+
+    /** Whether this book carries ANY stored EPUB book-mode
+     * settings (the theme key is written by every saveEpub) —
+     * Item 4g's mapping runs only for books the owner actually
+     * shaped on the old road; an untouched book's core
+     * overrides stay untouched. */
+    suspend fun hasStoredEpubSettings(bookId: Long): Boolean =
+        store.data.first().contains(epubTheme(bookId))
+
     // EPUB keys
     private fun epubFontFamily(id: Long) = stringPreferencesKey("localreader.$id.epub.font_family")
     private fun epubFontSize(id: Long) = doublePreferencesKey("localreader.$id.epub.font_size")
@@ -480,6 +571,8 @@ class LocalReaderPrefs(private val store: DataStore<Preferences>) {
         "localreader.$id" +
             app.xreader.data.engine.ReadiumEpubSession.USER_FONT_FILE_KEY_SUFFIX
     )
+    private fun epubPrepareKey(id: Long) =
+        stringPreferencesKey("localreader.$id.epub.prepare")
     private fun epubPositionsKey(id: Long) =
         stringPreferencesKey("localreader.$id.epub.positions")
 

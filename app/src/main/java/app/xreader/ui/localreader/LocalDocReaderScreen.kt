@@ -100,7 +100,13 @@ fun LocalDocReaderScreen(
     // shell supplies it; defaulted null so other callers keep
     // the honest absent-door behaviour (no "Book page" row in
     // either reader's Book information sheet).
-    onOpenBookPage: (() -> Unit)? = null
+    onOpenBookPage: (() -> Unit)? = null,
+    // v1.7 Patch 3 (Item 1a): a prepared EPUB leaves for the
+    // core route — the shell navigates to
+    // "reader/<bookId>/<chapterIndex>", popping this
+    // destination. Defaulted to a no-op so other callers keep
+    // compiling; the shell always supplies it.
+    onOpenCoreReader: (chapterIndex: Int) -> Unit = {}
 ) {
     val viewModel: LocalDocReaderViewModel = viewModel(
         key = "local-reader-$bookId",
@@ -110,6 +116,11 @@ fun LocalDocReaderScreen(
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(viewModel) {
         viewModel.messages.collect { snackbar.showSnackbar(it) }
+    }
+    LaunchedEffect(viewModel) {
+        viewModel.coreRedirect.collect { chapterIndex ->
+            onOpenCoreReader(chapterIndex)
+        }
     }
 
     var passwordOpen by remember { mutableStateOf(false) }

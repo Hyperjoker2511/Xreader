@@ -81,6 +81,7 @@ import app.xreader.core.motion.SpringMotionEngine
 import app.xreader.data.db.Book
 import app.xreader.data.extension.player.PlayerChallengeBridge
 import app.xreader.data.prefs.AppearanceState
+import app.xreader.data.prefs.settingsDataStore
 import app.xreader.di.AppContainer
 import app.xreader.ui.book.BookDetailScreen
 import app.xreader.ui.book.BookDetailViewModel
@@ -2162,10 +2163,64 @@ private fun XreaderNavHost(
                 // the shared chapter door's index cannot express
                 // it (the LocalDoc verdict is book-scoped).
                 onReadLocalTarget = { id, targetJson ->
-                    navController.navigate(
-                        "local/$id?target=" +
-                            android.net.Uri.encode(targetJson)
-                    )
+                    // v1.7 Patch 3 (Item 2e): for a PREPARED
+                    // book the door's session-space
+                    // {"section":i} target translates through
+                    // the prepare record's section map and
+                    // opens the CORE route at that chapter (a
+                    // section with no map entry opens the book
+                    // at its Continue place). Unprepared/FXL
+                    // books take the local route exactly as
+                    // before.
+                    scope.launch {
+                        val book = container.database.bookDao()
+                            .getById(id)
+                        val record = if (
+                            book != null &&
+                            book.sourceType ==
+                                app.xreader.data.db.SourceType.LOCAL_FILE &&
+                            book.localFormat ==
+                                app.xreader.data.db.BookFormat.EPUB
+                        ) {
+                            runCatching {
+                                localReaderPrefsFor(container)
+                                    .epubPrepareRecord(id)
+                            }.getOrNull()
+                        } else {
+                            null
+                        }
+                        if (book != null && record != null &&
+                            app.xreader.data.prepare.EpubPrepareAccess
+                                .isPrepared(record, book)
+                        ) {
+                            val continueIndex = runCatching {
+                                container.database
+                                    .readingProgressDao()
+                                    .getForBook(id)?.chapterIndex
+                            }.getOrNull() ?: 0
+                            val landedChapters = runCatching {
+                                container.database.chapterDao()
+                                    .forBook(id)
+                            }.getOrDefault(emptyList())
+                            val chapterIndex =
+                                app.xreader.data.prepare
+                                    .EpubPrepareAccess
+                                    .contentsChapterIndex(
+                                        record = record,
+                                        targetJson = targetJson,
+                                        landedChapters = landedChapters,
+                                        continueChapterIndex = continueIndex
+                                    )
+                            navController.navigate(
+                                "reader/$id/$chapterIndex"
+                            )
+                        } else {
+                            navController.navigate(
+                                "local/$id?target=" +
+                                    android.net.Uri.encode(targetJson)
+                            )
+                        }
+                    }
                 },
                 onExportEpub = {
                     val book = viewModel.state.value.book
@@ -2377,7 +2432,20 @@ private fun XreaderNavHost(
                 container = container,
                 bookId = bookId,
                 startTargetJson = target,
-                onClose = { navController.popBackStack() }
+                onClose = { navController.popBackStack() },
+                // v1.7 Patch 3 (Item 1a): a prepared EPUB
+                // continues on the core route, this
+                // destination popped so Back never returns
+                // to the preparing shell.
+                onOpenCoreReader = { chapterIndex ->
+                    navController.navigate(
+                        "reader/$bookId/$chapterIndex"
+                    ) {
+                        popUpTo("local/{bookId}?target={target}") {
+                            inclusive = true
+                        }
+                    }
+                }
             )
         }
         composable(
@@ -2528,14 +2596,44 @@ private fun navigateToTab(navController: NavHostController, tab: Tab) {
  * the construction here uses exactly the container's database
  * DAOs + extension service, so both wirings are identical.)
  */
+/** v1.7 Patch 3: the shell's LocalReaderPrefs handle (the
+ * prepare record's store) — one construction for the
+ * resolver's prepared check and the Contents door below. */
+private fun localReaderPrefsFor(
+    container: AppContainer
+): app.xreader.ui.localreader.LocalReaderPrefs =
+    app.xreader.ui.localreader.LocalReaderPrefs(
+        container.applicationContext.settingsDataStore
+    )
+
 private fun readerRouteResolverFor(
     container: AppContainer
-): app.xreader.domain.reader.ReaderRouteResolver =
-    app.xreader.domain.reader.ReaderRouteResolver(
+): app.xreader.domain.reader.ReaderRouteResolver {
+    val localPrefs = localReaderPrefsFor(container)
+    return app.xreader.domain.reader.ReaderRouteResolver(
         bookDao = container.database.bookDao(),
         chapterDao = container.database.chapterDao(),
-        extensionService = container.extensionService
+        extensionService = container.extensionService,
+        // v1.7 Patch 3 (Item 2a): a LOCAL_FILE EPUB routes to
+        // the core reader when its prepare record is current
+        // (record + fingerprint, the one rule in
+        // EpubPrepareAccess) AND its converted content is in
+        // place — the content half guards the delete-downloads
+        // case (rows reset, files gone): such a book routes
+        // here instead, where the open flow re-prepares and
+        // heals it. The record stays necessary in both halves:
+        // rows alone never route a book to the core (Item 1e).
+        epubPrepared = { book ->
+            val record = runCatching {
+                localPrefs.epubPrepareRecord(book.id)
+            }.getOrNull()
+            app.xreader.data.prepare.EpubPrepareAccess
+                .isPrepared(record, book) &&
+                container.database.chapterDao().forBook(book.id)
+                    .any { it.contentPath != null }
+        }
     )
+}
 
 /**
  * v1.5.6 (§2): dispatch ONE resolver verdict — the only way a

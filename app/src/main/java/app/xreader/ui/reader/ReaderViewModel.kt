@@ -10,6 +10,7 @@ import app.xreader.data.db.Chapter
 import app.xreader.data.db.Highlight
 import app.xreader.data.db.ReadingProgress
 import app.xreader.data.prefs.VoiceEngine
+import app.xreader.data.prefs.settingsDataStore
 import app.xreader.data.reader.EdgeVoiceTable
 import app.xreader.data.reader.MlKitEyeTracker
 import app.xreader.data.reader.OverlayPlayer
@@ -43,6 +44,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -51,6 +53,17 @@ import kotlinx.coroutines.launch
 
 /** Where a freshly loaded chapter should open. */
 enum class PageHint { FIRST, LAST, OFFSET }
+
+/** v1.7 Patch 3 (Item 4b): one in-book search hit on the core
+ * road — the chapter it lives in and its char offset there,
+ * with the snippet the results list shows. */
+data class CoreSearchHit(
+    val chapterIndex: Int,
+    val chapterId: Long,
+    val chapterTitle: String,
+    val charOffset: Int,
+    val snippet: String
+)
 
 data class ReaderUiState(
     val bookTitle: String = "",
@@ -416,6 +429,50 @@ class ReaderViewModel(
     private val _highlights = MutableStateFlow<List<Highlight>>(emptyList())
     val highlights: StateFlow<List<Highlight>> = _highlights
 
+    // ── v1.7 Patch 3: prepared-EPUB state ────────────────────
+    /** The local reader's prefs — the prepare record's store
+     * (Item 1e) and the per-book EPUB settings (Item 4f's
+     * plate filter). Read-only here: prepare writes, this
+     * reader consumes. */
+    private val localReaderPrefs =
+        app.xreader.ui.localreader.LocalReaderPrefs(
+            container.applicationContext.settingsDataStore
+        )
+
+    /** True when this book is a PREPARED local EPUB (Item 2a):
+     * its bookmark/highlight lists then include only
+     * core-shaped rows — the unconverted locator rows stay
+     * stored but are not this road's marks (Item 3e). */
+    private val _preparedEpub = MutableStateFlow(false)
+    val preparedEpub: StateFlow<Boolean> = _preparedEpub
+
+    /** Item 4f: the book's stored EPUB plate filter, applied
+     * by the core plate viewer. ORIGINAL for every book that
+     * never carried one. */
+    private val _plateFilter =
+        MutableStateFlow(app.xreader.ui.localreader.EpubPlateFilter.ORIGINAL)
+    val plateFilter: StateFlow<app.xreader.ui.localreader.EpubPlateFilter> =
+        _plateFilter
+
+    /** Item 3e's first-open note: set once when a prepared
+     * book with a pending note opens here; the screen shows
+     * it through the reader's transient notice and consumes
+     * it. The pending flag is cleared in the record as the
+     * note is taken, so it is shown exactly once. */
+    private val _migrationNote = MutableStateFlow<String?>(null)
+    val migrationNote: StateFlow<String?> = _migrationNote
+
+    fun consumeMigrationNote() {
+        _migrationNote.value = null
+    }
+
+    // ── v1.7 Patch 3 (Item 4b): in-book search ───────────────
+    private val _searchHits = MutableStateFlow<List<CoreSearchHit>?>(null)
+    val searchHits: StateFlow<List<CoreSearchHit>?> = _searchHits
+    private val _searchBusy = MutableStateFlow(false)
+    val searchBusy: StateFlow<Boolean> = _searchBusy
+    private var searchJob: Job? = null
+
     private val _focus = MutableStateFlow(FocusUiState())
     val focus: StateFlow<FocusUiState> = _focus
 
@@ -704,15 +761,67 @@ class ReaderViewModel(
             }
         }
         viewModelScope.launch {
-            container.database.bookmarkDao().observeForBook(bookId)
-                .collectLatest { _bookmarks.value = it }
+            // v1.7 Patch 3 (Item 3e): for a PREPARED EPUB only
+            // core-shaped rows are this road's marks — a
+            // locator row here is an unconverted leftover (or
+            // a not-yet-converted mark), and showing it would
+            // double-list every converted mark's chapter.
+            // Every other book keeps the unfiltered list.
+            combine(
+                container.database.bookmarkDao().observeForBook(bookId),
+                _preparedEpub
+            ) { rows, prepared ->
+                if (prepared) rows.filter { it.locatorJson == null } else rows
+            }.collectLatest { _bookmarks.value = it }
         }
         viewModelScope.launch {
-            container.database.highlightDao().observeForBook(bookId)
-                .collectLatest { _highlights.value = it }
+            combine(
+                container.database.highlightDao().observeForBook(bookId),
+                _preparedEpub
+            ) { rows, prepared ->
+                if (prepared) rows.filter { it.locatorJson == null } else rows
+            }.collectLatest { _highlights.value = it }
         }
         viewModelScope.launch {
             val book = container.database.bookDao().getById(bookId)
+            // v1.7 Patch 3: a prepared EPUB's per-book state —
+            // the mark filter above, the plate filter (4f) and
+            // the one-time migration note (3e) — resolves from
+            // the prepare record in this book-load pass; the
+            // collectors re-filter the moment the flag lands.
+            if (book != null &&
+                book.sourceType ==
+                    app.xreader.data.db.SourceType.LOCAL_FILE &&
+                book.localFormat == app.xreader.data.db.BookFormat.EPUB
+            ) {
+                val record = runCatching {
+                    localReaderPrefs.epubPrepareRecord(bookId)
+                }.getOrNull()
+                if (app.xreader.data.prepare.EpubPrepareAccess
+                        .isPrepared(record, book)
+                ) {
+                    _preparedEpub.value = true
+                    _plateFilter.value = runCatching {
+                        localReaderPrefs.epubSettings(bookId)
+                            .first().plateFilter
+                    }.getOrDefault(
+                        app.xreader.ui.localreader.EpubPlateFilter.ORIGINAL
+                    )
+                    if (record!!.notePending) {
+                        _migrationNote.value =
+                            "Your place and marks were carried over " +
+                                "from the old EPUB reader as closely " +
+                                "as the old format allows — chapter " +
+                                "counts may differ slightly."
+                        runCatching {
+                            localReaderPrefs.saveEpubPrepareRecord(
+                                bookId,
+                                record.copy(notePending = false)
+                            )
+                        }
+                    }
+                }
+            }
             // v1.5.10 (B5): book-aware resolution (stable
             // identity + heal on a row-id miss).
             bookConfig = book
@@ -929,6 +1038,69 @@ class ReaderViewModel(
     fun openChapterAt(index: Int, charOffset: Int) {
         closeStream()
         launchLoad { loadChapter(index, charOffset, 0f, PageHint.OFFSET) }
+    }
+
+    /**
+     * v1.7 Patch 3 (Item 4b): in-book search over the book's
+     * stored chapter text — the core road's first search,
+     * built for the converted EPUBs that lost the local
+     * reader's search with the move. One hit per chapter (its
+     * first match, the local search's per-section shape),
+     * sequential over the chapter rows on IO, capped at
+     * [SEARCH_HIT_CAP]. A tap on a hit is an [openChapterAt]
+     * to its (chapter, charOffset). Live in-page hit
+     * highlighting is Patch 5's find work, not this patch's.
+     */
+    fun searchBook(query: String) {
+        val needle = query.trim()
+        searchJob?.cancel()
+        if (needle.isEmpty()) {
+            _searchHits.value = null
+            _searchBusy.value = false
+            return
+        }
+        _searchBusy.value = true
+        searchJob = viewModelScope.launch(container.ioDispatcher) {
+            val hits = ArrayList<CoreSearchHit>()
+            try {
+                val chapters = container.database.chapterDao()
+                    .forBook(bookId)
+                for (chapter in chapters) {
+                    if (hits.size >= SEARCH_HIT_CAP) break
+                    if (chapter.contentPath == null) continue
+                    val result = container.bookStorage
+                        .readChapterContent(bookId, chapter.id)
+                    val content = (result as? AppResult.Ok)?.value
+                        ?: continue
+                    val text = ChapterText(content).text
+                    val at = text.indexOf(needle, ignoreCase = true)
+                    if (at < 0) continue
+                    val start = (at - 40).coerceAtLeast(0)
+                    val end = (at + needle.length + 60)
+                        .coerceAtMost(text.length)
+                    hits += CoreSearchHit(
+                        chapterIndex = chapter.index,
+                        chapterId = chapter.id,
+                        chapterTitle = chapter.title,
+                        charOffset = at,
+                        snippet = (if (start > 0) "…" else "") +
+                            text.substring(start, end)
+                                .replace('\n', ' ') +
+                            (if (end < text.length) "…" else "")
+                    )
+                }
+                _searchHits.value = hits
+            } finally {
+                _searchBusy.value = false
+            }
+        }
+    }
+
+    /** Item 4b: leaving the search sheet drops its results. */
+    fun clearBookSearch() {
+        searchJob?.cancel()
+        _searchHits.value = null
+        _searchBusy.value = false
     }
 
     fun nextChapter() {
@@ -2964,6 +3136,11 @@ class ReaderViewModel(
          * lives in [ProgressSaveCoalescer.SETTLE_MS] (same value). */
         const val SAVE_DEBOUNCE_MS = ProgressSaveCoalescer.SETTLE_MS
         const val BOOKMARK_SNAP_CHARS = 400
+
+        /** v1.7 Patch 3 (Item 4b): the in-book search result
+         * cap — one hit per chapter, so the cap bounds the
+         * chapters listed, not the matches counted. */
+        const val SEARCH_HIT_CAP = 200
 
         /** v1.0.6.2 (F3): the live-fetch wait — polls × cadence
          * ≈ 3 minutes, generous for slow links; the queue item

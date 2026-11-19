@@ -76,6 +76,20 @@ object LocatorJson {
         return locations["progression"]?.jsonPrimitive?.doubleOrNull?.toFloat()
     }
 
+    /** v1.7 Patch 3 (Item 3e): the `text.highlight` quote a
+     * Readium locator JSON carries (selection-made locators
+     * store the selected words there, with before/after
+     * context) — the re-anchor the place migration searches
+     * for in the converted chapter text. Null when the
+     * locator carries no quote. */
+    fun epubLocatorQuote(locatorJson: String?): String? {
+        val obj = parseObject(locatorJson) ?: return null
+        val text = runCatching { obj["text"]?.jsonObject }.getOrNull()
+            ?: return null
+        return text["highlight"]?.jsonPrimitive?.content
+            ?.takeIf { it.isNotBlank() }
+    }
+
     fun parseObject(text: String?): kotlinx.serialization.json.JsonObject? {
         if (text.isNullOrBlank()) return null
         return runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()

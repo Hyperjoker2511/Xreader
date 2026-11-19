@@ -83,7 +83,18 @@ sealed interface ReaderRoute {
 class ReaderRouteResolver(
     private val bookDao: BookDao,
     private val chapterDao: ChapterDao,
-    private val extensionService: ExtensionService
+    private val extensionService: ExtensionService,
+    /**
+     * v1.7 Patch 3 (Item 2a): the prepare-record check for
+     * LOCAL_FILE EPUB books — true when the book carries a
+     * current prepare record (Item 1e) with its converted
+     * content in place, in which case it routes to the novel
+     * reader like any converted book. The shell wires the
+     * real check (record + fingerprint + landed content);
+     * absent (every pre-Patch-3 construction), local books
+     * keep the LocalDoc verdict exactly as before.
+     */
+    private val epubPrepared: (suspend (Book) -> Boolean)? = null
 ) {
 
     /** Resolve by book id (the entry-point shape: most surfaces
@@ -101,6 +112,18 @@ class ReaderRouteResolver(
         // Priority 3 for non-extension books (see class doc):
         // a local file always reads in place.
         if (book.sourceType == SourceType.LOCAL_FILE) {
+            // v1.7 Patch 3 (Item 2a): a PREPARED EPUB (Item 1's
+            // one-time conversion landed + recorded) is a
+            // converted book and routes to the core reader;
+            // every other local book — unprepared EPUBs (whose
+            // prepare runs inside the local open flow), FXL/RTL
+            // EPUBs, and PDFs, whose verdict is byte-identical
+            // — keeps the LocalDoc verdict.
+            if (book.localFormat == app.xreader.data.db.BookFormat.EPUB &&
+                epubPrepared?.invoke(book) == true
+            ) {
+                return ReaderRoute.NovelReader(book.id, chapterIndex)
+            }
             return ReaderRoute.LocalDoc(book.id)
         }
         val handle = handleFor(book)

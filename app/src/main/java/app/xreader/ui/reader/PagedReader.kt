@@ -327,6 +327,25 @@ fun PagedReader(
         // v1.2.0 (WS2 contract): a page image reporting zoom
         // active suppresses page-turn drags until it reports back.
         var imageZoomActive by remember(chapterText) { mutableStateOf(false) }
+        // v1.7 Patch 3 (Item 4f): the plate-viewer claim clock.
+        // A page image's single tap is reported by ZoomableImage
+        // only after its double-tap window closes (~300 ms
+        // after the tap), while this surface's tap zones decide
+        // at the tap itself — so on a page carrying an image,
+        // the tap-zone action below defers briefly and stands
+        // down when a claim (this timestamp, stamped by the
+        // subtree handler wrapped around the pages) lands after
+        // the tap. Without the stand-down, a side tap on an
+        // illustration would turn the page AND open the viewer;
+        // the turn is the place-corrupting half.
+        var imageClaimAtMs by remember { mutableStateOf(0L) }
+        val outerImageTapHandler = LocalImageTapHandler.current
+        val claimImageTapHandler = remember(outerImageTapHandler) {
+            { model: Any? ->
+                imageClaimAtMs = System.currentTimeMillis()
+                outerImageTapHandler?.invoke(model)
+            }
+        }
 
         fun alignPage(index: Int): Int {
             val clamped = index.coerceIn(0, pages.lastIndex)
@@ -500,15 +519,42 @@ fun PagedReader(
                         config.tapZoneLayout, config.pagedDirection,
                         xFraction, yFraction
                     )
-                    when {
-                        action > 0 -> { autoPaused = true; turn(1) }
-                        action < 0 -> { autoPaused = true; turn(-1) }
-                        else -> {
-                            // Centre tap = the menu control: it also
-                            // RESUMES auto page-turn after a touch pause.
-                            autoPaused = false
-                            onCenterTap()
+                    val act = {
+                        when {
+                            action > 0 -> { autoPaused = true; turn(1) }
+                            action < 0 -> { autoPaused = true; turn(-1) }
+                            else -> {
+                                // Centre tap = the menu control: it also
+                                // RESUMES auto page-turn after a touch pause.
+                                autoPaused = false
+                                onCenterTap()
+                            }
                         }
+                    }
+                    // v1.7 Patch 3 (Item 4f): on a page carrying
+                    // an image, the tap may be the image's own
+                    // (the plate viewer opens ~300 ms later, at
+                    // the double-tap window's close). Defer the
+                    // zone action past that report and stand
+                    // down if the image claimed the tap — a
+                    // turned page here would move the reader
+                    // off the place the viewer opened from.
+                    // Pages without images act at once, as
+                    // before.
+                    val pageHasImage = pages
+                        .getOrNull(currentPage)?.slices?.any { slice ->
+                            chapterText.content.blocks
+                                .getOrNull(slice.blockIndex)
+                                is ChapterBlock.Image
+                        } == true
+                    if (pageHasImage) {
+                        val tapAtMs = System.currentTimeMillis()
+                        scope.launch {
+                            kotlinx.coroutines.delay(400)
+                            if (imageClaimAtMs < tapAtMs) act()
+                        }
+                    } else {
+                        act()
                     }
                 }
             }
@@ -590,6 +636,11 @@ fun PagedReader(
                 .then(gestureModifier)
         ) {
             val displayPage = targetPage ?: currentPage
+            // Item 4f: page images report their taps through
+            // the claiming handler (see imageClaimAtMs above).
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalImageTapHandler provides claimImageTapHandler
+            ) {
             when (tier) {
                 PageTurnTier.EINK -> SpreadOrSingle(
                     pages, currentPage, spread, columnWidth, contentHeight,
@@ -708,6 +759,7 @@ fun PagedReader(
                         }
                     }
                 }
+            }
             }
         }
     }

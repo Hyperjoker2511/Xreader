@@ -44,7 +44,18 @@ data class ParsedBook(
      * a complete import. Parsers without a prose floor leave
      * the default.
      */
-    val droppedChapters: Int = 0
+    val droppedChapters: Int = 0,
+    /**
+     * v1.7 Patch 3 (Item 3a): the spine href (OPF-relative, the
+     * parser's own resolved path form) of each emitted chapter,
+     * parallel to [chapters] — the bridge key between the
+     * parser's chapter space and a Readium session's reading
+     * order, whose index spaces provably diverge (the parser
+     * skips empty-converting items and never reads `linear`).
+     * Parsers that cannot name their chapters' sources leave
+     * the default.
+     */
+    val chapterHrefs: List<String> = emptyList()
 )
 
 data class ParsedChapterMeta(

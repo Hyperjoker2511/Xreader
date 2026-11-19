@@ -43,6 +43,7 @@ import coil.request.ImageRequest
 import coil.size.Dimension
 import coil.size.Size
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -318,6 +319,20 @@ internal fun failedImageLabelVisible(
  * a stored file turns out unloadable, so no image slot in any
  * reader is ever a silent blank.
  */
+/** v1.7 Patch 3 (Item 4f): the image-tap handler for the
+ * current reader subtree — the plate viewer's door. The
+ * reader screen provides it once; every ZoomableImage below
+ * reports a genuine single tap (its model) through it when
+ * no explicit onImageTap parameter was passed. A
+ * CompositionLocal because the paged surface's render paths
+ * (six tier branches through two wrapper composables) make
+ * parameter threading the brittle option; the handler is
+ * process-stable (remembered by the provider), so the static
+ * local never invalidates. Absent (null) everywhere outside
+ * the novel reader — manga keeps its exact behaviour. */
+val LocalImageTapHandler =
+    androidx.compose.runtime.staticCompositionLocalOf<((Any?) -> Unit)?> { null }
+
 @Composable
 fun ZoomableImage(
     model: Any?,
@@ -329,7 +344,17 @@ fun ZoomableImage(
     disableZoomOut: Boolean = false,
     lowRam: Boolean = false,
     onZoomActiveChanged: (Boolean) -> Unit = {},
-    colorFilter: androidx.compose.ui.graphics.ColorFilter? = null
+    colorFilter: androidx.compose.ui.graphics.ColorFilter? = null,
+    /** v1.7 Patch 3 (Item 4f): a genuine single tap on the
+     * image (quick, unmoved, single-finger, at fit) — fired
+     * only after the double-tap window closes unused, so a
+     * double tap still zooms and never also reports a tap.
+     * Null (every pre-Patch-3 caller) falls back to
+     * [LocalImageTapHandler]; with neither in force, tap
+     * behaviour is byte-identical to before: single taps stay
+     * unconsumed and unreported, exactly as the arbitration
+     * doc describes. */
+    onImageTap: (() -> Unit)? = null
 ) {
     if (isFailedImageSlot(model)) {
         FailedImageSlot(
@@ -349,7 +374,8 @@ fun ZoomableImage(
             disableZoomOut = disableZoomOut,
             lowRam = lowRam,
             onZoomActiveChanged = onZoomActiveChanged,
-            colorFilter = colorFilter
+            colorFilter = colorFilter,
+            onImageTap = onImageTap
         )
     }
 }
@@ -477,7 +503,9 @@ private fun ZoomableImageSurface(
     onZoomActiveChanged: (Boolean) -> Unit = {},
     /** v1.5.0 (Part C): the manga reader's colour matrix
      * (greyscale / invert) when one is in force. */
-    colorFilter: androidx.compose.ui.graphics.ColorFilter? = null
+    colorFilter: androidx.compose.ui.graphics.ColorFilter? = null,
+    /** v1.7 Patch 3 (Item 4f): see [ZoomableImage]. */
+    onImageTap: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     // v1.5.2 fix (FIX-4, §6.3): past the ≥1.5× trigger the page
@@ -532,6 +560,13 @@ private fun ZoomableImageSurface(
     val doubleTapEnabledState = rememberUpdatedState(doubleTapToZoom)
     val disableZoomOutState = rememberUpdatedState(disableZoomOut)
     val activeCallback = rememberUpdatedState(onZoomActiveChanged)
+    // Item 4f: the explicit parameter wins; the subtree
+    // handler (the plate viewer's door) is the fallback.
+    val localTapHandler = LocalImageTapHandler.current
+    val effectiveOnImageTap = onImageTap ?: localTapHandler?.let { handler ->
+        { handler(model) }
+    }
+    val imageTapState = rememberUpdatedState(effectiveOnImageTap)
 
     val lockActive = gesturing.value || zoomState.value.isZoomedIn
     LaunchedEffect(lockActive) { activeCallback.value(lockActive) }
@@ -548,10 +583,21 @@ private fun ZoomableImageSurface(
                 var hasLastTap = false
                 var lastTapUptimeMs = 0L
                 var lastTapPosition = Offset.Zero
+                // v1.7 Patch 3 (Item 4f): a single tap's report
+                // waits out the double-tap window (scheduled at
+                // the tap verdict below); any new gesture start
+                // cancels it, so the second tap of a double tap
+                // zooms and never also reports a tap.
+                var pendingTapJob: Job? = null
 
                 fun cancelAnimation() {
                     animationJob?.cancel()
                     animationJob = null
+                }
+
+                fun cancelPendingTap() {
+                    pendingTapJob?.cancel()
+                    pendingTapJob = null
                 }
 
                 fun applyTransform(centroid: Offset, pan: Offset, zoomChange: Float) {
@@ -607,6 +653,9 @@ private fun ZoomableImageSurface(
                         val firstEvent = awaitPointerEvent(PointerEventPass.Initial)
                         val primaryDown = firstEvent.changes.firstOrNull { it.pressed }
                             ?: continue
+                        // A new gesture supersedes the previous
+                        // tap's pending report (Item 4f).
+                        cancelPendingTap()
 
                         // ── one gesture: first down → all up ──
                         val primaryId = primaryDown.id
@@ -728,6 +777,7 @@ private fun ZoomableImageSurface(
                                         viewConfiguration.touchSlop * 6f
                                     if (isDoubleTap) {
                                         hasLastTap = false
+                                        cancelPendingTap()
                                         if (doubleTapEnabledState.value) {
                                             upChange.consume()
                                             applyDoubleTap(upChange.position)
@@ -736,6 +786,23 @@ private fun ZoomableImageSurface(
                                         hasLastTap = true
                                         lastTapUptimeMs = upChange.uptimeMillis
                                         lastTapPosition = upChange.position
+                                        // v1.7 Patch 3 (Item 4f):
+                                        // report the tap once the
+                                        // double-tap window closes
+                                        // unused — a second tap
+                                        // cancels at its gesture
+                                        // start (above) and zooms
+                                        // instead.
+                                        if (imageTapState.value != null) {
+                                            pendingTapJob = animationScope.launch {
+                                                delay(
+                                                    viewConfiguration
+                                                        .doubleTapTimeoutMillis
+                                                        .toLong()
+                                                )
+                                                imageTapState.value?.invoke()
+                                            }
+                                        }
                                     }
                                 } else {
                                     hasLastTap = false

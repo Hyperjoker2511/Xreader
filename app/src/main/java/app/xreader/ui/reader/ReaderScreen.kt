@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
@@ -96,7 +97,7 @@ import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class ActiveSheet { SETTINGS, LISTEN, TOC, FOCUS }
+private enum class ActiveSheet { SETTINGS, LISTEN, TOC, FOCUS, SEARCH }
 
 private val EInkPalette = ReaderPalette(
     name = "e-Ink",
@@ -151,6 +152,13 @@ fun ReaderScreen(
     val focus by viewModel.focus.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
     val allHighlights by viewModel.highlights.collectAsStateWithLifecycle()
+    // v1.7 Patch 3: the prepared-EPUB surfaces — in-book
+    // search (Item 4b), the plate viewer's filter (4f) and
+    // the one-time migration note (3e).
+    val searchHits by viewModel.searchHits.collectAsStateWithLifecycle()
+    val searchBusy by viewModel.searchBusy.collectAsStateWithLifecycle()
+    val plateFilter by viewModel.plateFilter.collectAsStateWithLifecycle()
+    val migrationNote by viewModel.migrationNote.collectAsStateWithLifecycle()
     val chapterSummary by viewModel.chapterSummary.collectAsStateWithLifecycle()
 
     // Phase 5: the Ask AI sheet brain, bound to the chapter on screen.
@@ -256,6 +264,17 @@ fun ReaderScreen(
         }
     }
     var notice by remember { mutableStateOf<String?>(null) }
+    // v1.7 Patch 3 (Item 4f): the open plate, if any — an
+    // illustration tap in any surface reports its asset file
+    // through LocalImageTapHandler (provided at the reader
+    // root below) into this state; the viewer renders last,
+    // over everything, and Back or its Close chip dismisses.
+    var plateFile by remember { mutableStateOf<java.io.File?>(null) }
+    val imageTapHandler = remember {
+        { model: Any? ->
+            (model as? java.io.File)?.let { plateFile = it }
+        }
+    }
     // Patch 11: the selection menu's dialog states. A menu tap
     // only ever OPENS one of these (or runs a read-only lookup);
     // the Replace dialog writes nothing until its own Save.
@@ -332,6 +351,16 @@ fun ReaderScreen(
         state.browserViewNotice?.let { text ->
             notice = text
             viewModel.consumeBrowserNotice()
+        }
+    }
+
+    // v1.7 Patch 3 (Item 3e): the migration note rides the
+    // same transient notice, once — the ViewModel cleared the
+    // record's pending flag as it took the note.
+    LaunchedEffect(migrationNote) {
+        migrationNote?.let { text ->
+            notice = text
+            viewModel.consumeMigrationNote()
         }
     }
 
@@ -475,7 +504,10 @@ fun ReaderScreen(
     // opposite luminance (light app theme + AMOLED page rendered the
     // "Can't open this chapter" message dark-on-black).
     androidx.compose.runtime.CompositionLocalProvider(
-        androidx.compose.material3.LocalContentColor provides palette.text
+        androidx.compose.material3.LocalContentColor provides palette.text,
+        // v1.7 Patch 3 (Item 4f): illustration taps anywhere in
+        // the reader subtree open the plate viewer.
+        LocalImageTapHandler provides imageTapHandler
     ) {
     val readerFocus = remember { androidx.compose.ui.focus.FocusRequester() }
     LaunchedEffect(Unit) { runCatching { readerFocus.requestFocus() } }
@@ -886,6 +918,7 @@ fun ReaderScreen(
                 viewModel.openChapter(target)
             },
             onOpenToc = { activeSheet = ActiveSheet.TOC },
+            onOpenSearch = { activeSheet = ActiveSheet.SEARCH },
             onOpenListen = { activeSheet = ActiveSheet.LISTEN },
             onOpenFocus = { activeSheet = ActiveSheet.FOCUS },
             onOpenSettings = {
@@ -1004,7 +1037,14 @@ fun ReaderScreen(
     // -- Sheets ---------------------------------------------------------------
     activeSheet?.let { sheet ->
         ModalBottomSheet(
-            onDismissRequest = { activeSheet = null },
+            onDismissRequest = {
+                // Item 4b: leaving the search sheet drops its
+                // results (a reopened sheet starts fresh).
+                if (sheet == ActiveSheet.SEARCH) {
+                    viewModel.clearBookSearch()
+                }
+                activeSheet = null
+            },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
@@ -1149,6 +1189,16 @@ fun ReaderScreen(
                         }
                     }
                 )
+                ActiveSheet.SEARCH -> BookSearchSheet(
+                    hits = searchHits,
+                    busy = searchBusy,
+                    onSearch = { query -> viewModel.searchBook(query) },
+                    onJump = { hit ->
+                        viewModel.clearBookSearch()
+                        activeSheet = null
+                        viewModel.openChapterAt(hit.chapterIndex, hit.charOffset)
+                    }
+                )
                 ActiveSheet.FOCUS -> FocusSheet(
                     focus = focus,
                     onStart = { minutes, soundscape ->
@@ -1248,6 +1298,19 @@ fun ReaderScreen(
             onDismiss = { selectionTranslation = null }
         )
     }
+
+    // v1.7 Patch 3 (Item 4f): the plate viewer renders LAST in
+    // the reader — over the surfaces, the chrome and the
+    // sheets. Back or its Close chip dismisses it; the place
+    // underneath never moved (PagedReader's claim arbitration
+    // is what guarantees that in paged mode).
+    plateFile?.let { file ->
+        CorePlateViewer(
+            file = file,
+            filter = plateFilter,
+            onDismiss = { plateFile = null }
+        )
+    }
 }
 
 @Composable
@@ -1282,6 +1345,8 @@ private fun ReaderChrome(
     onOpenFocus: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAi: () -> Unit,
+    /** v1.7 Patch 3 (Item 4b): the in-book search sheet door. */
+    onOpenSearch: () -> Unit = {},
     /** v1.0.6.2 (F7): the bars' measured heights (px), so the
      * text insets match the real chrome, never a guess. */
     onTopBarHeight: (Int) -> Unit = {},
@@ -1460,8 +1525,10 @@ private fun ReaderChrome(
                             Icon(Icons.AutoMirrored.Filled.ArrowForward, "Next chapter")
                         }
                     }
-                    // ONE row of action tiles. Contents / Listen /
-                    // Ask AI / Focus keep their doors. Type, Theme
+                    // ONE row of action tiles. Contents / Search /
+                    // Listen / Ask AI / Focus keep their doors (the
+                    // Search tile is v1.7 Patch 3's Item 4b door).
+                    // Type, Theme
                     // and Auto folded into the settings sheet —
                     // verified present there by symbol before
                     // folding (ReaderSheets.kt): typography on the
@@ -1482,6 +1549,10 @@ private fun ReaderChrome(
                     ) {
                         ChromeAction(
                             Icons.Filled.List, "Contents", palette, onOpenToc,
+                            modifier = Modifier.weight(1f)
+                        )
+                        ChromeAction(
+                            Icons.Filled.Search, "Search", palette, onOpenSearch,
                             modifier = Modifier.weight(1f)
                         )
                         ChromeAction(

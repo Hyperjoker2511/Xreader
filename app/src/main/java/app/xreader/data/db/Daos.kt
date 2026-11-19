@@ -181,6 +181,10 @@ interface ReadingProgressDao {
 @Dao
 interface BookmarkDao {
     @Insert suspend fun insert(bookmark: Bookmark): Long
+    /** v1.7 Patch 3 (Item 3e): the in-place mark conversion
+     * flips a locator-shaped row to core shape in place —
+     * the same row, never a second converted copy. */
+    @Update suspend fun update(bookmark: Bookmark)
     @Delete suspend fun delete(bookmark: Bookmark)
     @Query("SELECT * FROM bookmarks WHERE bookId = :bookId ORDER BY chapterIndex, charOffset")
     fun observeForBook(bookId: Long): Flow<List<Bookmark>>
