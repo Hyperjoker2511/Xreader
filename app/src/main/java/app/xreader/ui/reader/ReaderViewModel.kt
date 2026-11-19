@@ -17,6 +17,7 @@ import app.xreader.data.reader.OverlayPlayer
 import app.xreader.data.reader.ReadAloudController
 import app.xreader.data.reader.SoundscapePlayer
 import app.xreader.di.AppContainer
+import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.reader.BookDocument
 import app.xreader.domain.reader.ChapterText
@@ -27,7 +28,9 @@ import app.xreader.domain.reader.OverlaySync
 import app.xreader.domain.reader.PageLocator
 import app.xreader.domain.reader.PageTurnTier
 import app.xreader.domain.reader.PageTurnTiers
+import app.xreader.domain.reader.ChapterTransition
 import app.xreader.domain.reader.ReaderConfig
+import app.xreader.domain.reader.ReaderMode
 import app.xreader.domain.reader.SessionTracker
 import app.xreader.domain.reader.SleepMode
 import app.xreader.domain.reader.StreamWindowPlanner
@@ -36,9 +39,7 @@ import app.xreader.domain.reader.TermPair
 import app.xreader.domain.reader.TermReplacer
 import java.io.File
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -118,15 +119,30 @@ data class ReaderUiState(
     val currentPositionBookmarked: Boolean = false,
     val pageTurnTier: PageTurnTier = PageTurnTier.FULL,
     val isImageBook: Boolean = false,
-    // ── v1.0.2 (R17/R18) ─────────────────────────────────────────
-    /** The endless stream's loaded window (scroll + continuous). */
-    val streamEntries: List<StreamEntry> = emptyList(),
-    val streamActive: Boolean = false,
-    /** v1.7 one-engine (Item 3): the honest reason standing in
-     * the pinned window's boundary FAILED row, when one does
-     * (the fetch layer's diagnostic-log line for that
-     * chapter). Null whenever no boundary failure stands. */
-    val streamFailedReason: String? = null,
+    // ── v1.7 Moon+ document engine (Item 1) ──────────────────
+    // The document is the book's chapter list as SEGMENTS, one
+    // per chapter, keyed by chapter ID (never a bare index — a
+    // mid-session chapter-list change must not rebind a key).
+    // Segment state is DERIVED from the chapter row plus the
+    // fetch machinery and published per segment; it is never
+    // persisted. The windowed stream these fields replace is
+    // retired: there is no window and no stream to re-enter.
+    /** Every segment's state, keyed by chapter id. */
+    val segmentStates: Map<Long, SegmentState> = emptyMap(),
+    /** Display copies of the RESIDENT segments, keyed by
+     * chapter id — what the document surface renders. */
+    val segmentTexts: Map<Long, ChapterText> = emptyMap(),
+    /** FAILED segments' honest reasons, keyed by chapter id. */
+    val segmentFailedReasons: Map<Long, String> = emptyMap(),
+    /** The resident run's chapter ids (Item 7) — the UI-side
+     * layout worker evicts a segment's records when its id
+     * leaves this set (Item 2, A4). */
+    val residentSegmentIds: Set<Long> = emptySet(),
+    /** Layout-ahead candidates (Item 2): the resident run's
+     * display texts in distance order from the anchor, anchor
+     * first — the UI-side worker measures them ahead into the
+     * shared layout store. */
+    val layoutAheadCandidates: List<Pair<Long, ChapterText>> = emptyList(),
     /** "This book / All books" settings scope (R18). */
     val settingsScope: ReaderSettingsScope = ReaderSettingsScope.ALL_BOOKS,
     val hasBookOverride: Boolean = false,
@@ -173,16 +189,11 @@ data class ReaderUiState(
      * pages then decode downscaled to screen width. */
     val imageLowRam: Boolean = false,
     // ── v1.7 Patch 2 (item 2b) ───────────────────────────────
-    /** Layout-ahead inputs for the paged reader: the NEXT
-     * chapter's display text + id when prefetch already holds
-     * it, so PagedReader can lay it out ahead through the
-     * ChapterLayoutService. Null when the next chapter isn't
-     * parsed yet — nothing is laid out ahead then. */
-    val layoutAheadNextId: Long? = null,
-    val layoutAheadNextText: ChapterText? = null,
     /** The tier gate for layout-ahead (FULL + STANDARD on,
      * MINIMAL off — LayoutAheadPolicy), resolved by the
-     * ViewModel, which already reads the tier for prefetch. */
+     * ViewModel, which already reads the tier for prefetch.
+     * Under the document engine the candidates are
+     * [layoutAheadCandidates] above; the gate is unchanged. */
     val layoutAheadEnabled: Boolean = false
 ) {
     val chapter: Chapter? get() = chapters.getOrNull(chapterIndex)
@@ -198,28 +209,20 @@ data class FocusUiState(
     val completedUninterrupted: Boolean = false
 )
 
-/** One chapter inside the endless stream's window (R17). A null
- * [text] with [missing] set renders the honest "not downloaded"
- * block instead of a gap. */
-data class StreamEntry(
-    val chapterIndex: Int,
-    val chapterId: Long,
-    val title: String,
-    val text: ChapterText?,
-    val missing: Boolean = false,
-    /** v1.0.6.2 (F3-stream): this chapter's copy is travelling
-     * through the download queue right now — the block says so
-     * instead of offering a download that's already running. */
-    val fetching: Boolean = false,
-    /** v1.7 one-engine (Item 3): the live fetch for this
-     * chapter ENDED without landing a copy — the pinned
-     * window's boundary renders the in-flow FAILED row (the
-     * reason is the fetch layer's honest one, from the
-     * diagnostic log) with a retry door, QuickNovel's
-     * FailedSpanned shape. Only the pinned policy's boundary
-     * consumes it; Continuous keeps the shipped missing block. */
-    val failed: Boolean = false
-)
+/**
+ * v1.7 Moon+ document engine (Item 1): one segment's state in
+ * the document. Derived, never persisted:
+ * RESIDENT — its text is held and it renders its blocks;
+ * LOADING — a parse or a live fetch is in flight (or a stored
+ * copy stands ready to parse) and it renders the small
+ * in-flow loading row;
+ * MISSING — no copy on the phone and nothing in flight; it
+ * renders the honest not-downloaded row with a download door;
+ * FAILED — its last fill ended without a copy; it renders the
+ * in-flow FAILED row with the reason and a retry door, and it
+ * never auto-refills from composition (its retry is explicit).
+ */
+enum class SegmentState { RESIDENT, LOADING, MISSING, FAILED }
 
 /** R18 settings scope: where a reader-settings change lands. */
 enum class ReaderSettingsScope { ALL_BOOKS, THIS_BOOK }
@@ -322,7 +325,7 @@ class ReaderViewModel(
      * caches read-aloud speaks from), sampled at the first
      * substantial sentence. */
     private fun detectVoiceLanguage(chapterId: Long?): String {
-        val original = chapterId?.let { chapterCache[it] ?: streamTexts[it] }
+        val original = chapterId?.let { chapterCache[it] ?: segmentOriginals[it] }
             ?: _state.value.chapterText
             ?: return "en-US"
         val sample = app.xreader.domain.reader.SentenceSplitter.split(original.text)
@@ -525,7 +528,13 @@ class ReaderViewModel(
             controller.onChapterFinished = {
                 if (_state.value.hasNext) {
                     pendingAutoplayTts = true
-                    openChapter(_state.value.chapterIndex + 1)
+                    // v1.7 document engine (B2): the advance is
+                    // the NARRATION LANDING, not a chapter open —
+                    // in scroll it follows into the next segment
+                    // without touching the restore generation
+                    // (a follow-class move, Item 5); in paged it
+                    // is the shipped chapter turn.
+                    advanceNarration(_state.value.chapterIndex + 1)
                 }
             }
         }
@@ -904,6 +913,63 @@ class ReaderViewModel(
                 0 to 0f
             }
             loadChapter(startIndex, restore.first, restore.second)
+            // v1.7 document engine (Item 3, row 10 + Item 6):
+            // the book opens exactly as it always has — the
+            // anchor chapter through loadChapter, its saved
+            // place consumed untouched. Only AFTER that first
+            // load returns does the document exist: in scroll
+            // mode the residency planner starts filling the
+            // segments around the anchor. Nothing else is read
+            // at open; the segment index the surface builds is
+            // O(chapters) over the descriptors already loaded.
+            readerOpened = true
+            if (_config.value.mode == ReaderMode.SCROLL) {
+                planResidency(startIndex)
+            }
+        }
+        // v1.7 document engine (Item 5): a reading-mode flip
+        // mid-session carries the LIVE place — paged→scroll
+        // anchors the document at (chapterIndex, positionOffset)
+        // through moveAnchor; scroll→paged re-enters through
+        // the shipped loadChapter road at the same place. The
+        // first emission never acts (it is the stored config
+        // arriving, and the book may not be open yet).
+        viewModelScope.launch {
+            var lastMode: ReaderMode? = null
+            _config.map { it.mode }.distinctUntilChanged()
+                .collectLatest { mode ->
+                    val previous = lastMode
+                    lastMode = mode
+                    if (!readerOpened || previous == null ||
+                        previous == mode
+                    ) {
+                        return@collectLatest
+                    }
+                    if (mode == ReaderMode.SCROLL) {
+                        moveAnchor(
+                            _state.value.chapterIndex,
+                            _state.value.positionOffset,
+                            PageHint.OFFSET
+                        )
+                    } else {
+                        openChapterAt(
+                            _state.value.chapterIndex,
+                            _state.value.positionOffset
+                        )
+                    }
+                }
+        }
+        // A transition flip inside scroll re-plans the
+        // residency shape (Item 4: headers, fill policy and
+        // end reporting are the surface's and the planner's
+        // readings of the same config value).
+        viewModelScope.launch {
+            _config.map { it.chapterTransition }.distinctUntilChanged()
+                .collectLatest {
+                    if (readerOpened) {
+                        planResidency(_state.value.chapterIndex)
+                    }
+                }
         }
         viewModelScope.launch {
             overlayPlayer.state.collectLatest { playerState ->
@@ -1044,15 +1110,119 @@ class ReaderViewModel(
         loadJob = viewModelScope.launch { block() }
     }
 
+    /**
+     * v1.7 document engine (Item 3, row 2): a chapter jump is
+     * an ANCHOR MOVE in scroll mode — the document stays one
+     * document; the anchor, the restore fields and the
+     * generation move through [moveAnchor], and the target
+     * segment fills if it isn't resident. In paged mode the
+     * shipped loadChapter road runs exactly as before.
+     * Deliberate small behaviour change (spec Item 3, row 2):
+     * opening the CURRENT chapter in scroll now scrolls to
+     * its segment's top — the windowed build's early return
+     * made Contents-on-current-chapter a no-op; the paged
+     * early return below is unchanged.
+     */
     fun openChapter(index: Int) {
-        closeStream()
+        if (_config.value.mode == ReaderMode.SCROLL) {
+            moveAnchor(index, 0, PageHint.FIRST)
+            return
+        }
         if (index == _state.value.chapterIndex && _state.value.chapterText != null) return
         launchLoad { loadChapter(index, 0, 0f) }
     }
 
+    /** Item 3, row 2: a jump to a place inside a chapter
+     * (Contents, search, bookmarks) — an anchor move in
+     * scroll, the shipped load in paged. */
     fun openChapterAt(index: Int, charOffset: Int) {
-        closeStream()
+        if (_config.value.mode == ReaderMode.SCROLL) {
+            moveAnchor(index, charOffset, PageHint.OFFSET)
+            return
+        }
         launchLoad { loadChapter(index, charOffset, 0f, PageHint.OFFSET) }
+    }
+
+    /**
+     * v1.7 document engine (Item 5): THE anchor move — the
+     * only scroll-mode bumper of restoreGeneration (the only
+     * other bump is loadChapter's landing). Discipline,
+     * mirroring loadChapter's: the outgoing place is flushed
+     * FIRST (progress + session segment, exactly, while the
+     * state still describes it), then ONE state copy publishes
+     * (chapterIndex, restoreOffset, restoreHint,
+     * restoreGeneration + 1) — and, when the target segment is
+     * RESIDENT, its display as chapterText in the same copy,
+     * so the surface's restore effect can assert at once.
+     * When the target is not resident, chapterText keeps the
+     * previous chapter (the keep-previous discipline) until
+     * the fill lands and [followAnchorChapter] publishes it.
+     * The restore hint is carried, never pre-resolved: LAST
+     * resolves against the segment's text length at assertion
+     * time, inside the surface.
+     */
+    fun moveAnchor(index: Int, charOffset: Int, hint: PageHint) {
+        val stateNow = _state.value
+        val chapter = stateNow.chapters.getOrNull(index) ?: return
+        val chapterChanges = index != stateNow.chapterIndex
+        viewModelScope.launch {
+            if (chapterChanges) {
+                flushProgressNow()
+                flushSession()
+                runCatching { container.recordHistoryStart(bookId) }
+            }
+            val display = segmentDisplay[chapter.id]
+            _state.value = _state.value.copy(
+                chapterIndex = index,
+                restoreOffset = charOffset,
+                restoreHint = hint,
+                restoreGeneration = _state.value.restoreGeneration + 1,
+                chapterText = display ?: _state.value.chapterText,
+                showingTranslation = if (display != null) {
+                    chapter.id in segmentTranslatedIds
+                } else {
+                    _state.value.showingTranslation
+                }
+            )
+            if (chapterChanges) tracker.begin()
+            if (display != null) {
+                visibleTextChapterIndex = index
+                followSummaryFor(index)
+            }
+            requestSegmentFill(chapter.id)
+            planResidency(index)
+        }
+    }
+
+    /** The anchor segment's display is on screen: publish it
+     * as the visible chapter (chapterText + its translation
+     * road) and follow it with the summary observation — the
+     * scroll-mode half of a landing, used when a fill lands
+     * on the anchor and by [moveAnchor] for resident targets.
+     * Never touches the restore fields or the generation. */
+    private fun followAnchorChapter(index: Int) {
+        val chapter = _state.value.chapters.getOrNull(index) ?: return
+        val display = segmentDisplay[chapter.id] ?: return
+        visibleTextChapterIndex = index
+        _state.value = _state.value.copy(
+            chapterText = display,
+            showingTranslation = chapter.id in segmentTranslatedIds
+        )
+        followSummaryFor(index)
+    }
+
+    /** Follow [index]'s cached AI summary for the Contents
+     * sheet (clears first so a stale summary never shows) —
+     * the summary half of every landing, extracted so
+     * loadChapter's landing and the scroll follows share it. */
+    private fun followSummaryFor(index: Int) {
+        val chapter = _state.value.chapters.getOrNull(index) ?: return
+        _chapterSummary.value = null
+        summaryJob?.cancel()
+        summaryJob = viewModelScope.launch {
+            container.database.aiSummaryDao().observe(bookId, chapter.id)
+                .collectLatest { _chapterSummary.value = it }
+        }
     }
 
     /**
@@ -1120,15 +1290,29 @@ class ReaderViewModel(
 
     fun nextChapter() {
         if (!_state.value.hasNext) return
-        closeStream()
         markCurrentChapterFinished()
-        launchLoad { loadChapter(_state.value.chapterIndex + 1, 0, 0f) }
+        val target = _state.value.chapterIndex + 1
+        if (_config.value.mode == ReaderMode.SCROLL) {
+            moveAnchor(target, 0, PageHint.FIRST)
+        } else {
+            launchLoad { loadChapter(target, 0, 0f) }
+        }
     }
 
     fun previousChapter() {
         if (!_state.value.hasPrevious) return
-        closeStream()
-        launchLoad { loadChapter(_state.value.chapterIndex - 1, 0, 0f, PageHint.LAST) }
+        val target = _state.value.chapterIndex - 1
+        if (_config.value.mode == ReaderMode.SCROLL) {
+            // Item 3, row 2: chrome Previous in scroll is an
+            // anchor move carrying the LAST hint — the surface
+            // resolves it against the target segment's text
+            // length when it asserts (the hint travels; it is
+            // never resolved here against a text that may not
+            // be resident yet).
+            moveAnchor(target, 0, PageHint.LAST)
+        } else {
+            launchLoad { loadChapter(target, 0, 0f, PageHint.LAST) }
+        }
     }
 
     private var growJob: kotlinx.coroutines.Job? = null
@@ -1187,27 +1371,50 @@ class ReaderViewModel(
      * from the cached originals. The reading position is kept
      * as-is — offsets can drift by the length difference of
      * the terms before it, the same drift a translation toggle
-     * already causes. */
+     * already causes.
+     *
+     * v1.7 document engine (Item 3, row 9): a terms change is
+     * a content swap on EVERY resident segment — each held
+     * original is re-derived under the new terms, each
+     * derivation feeds the char map its display length, and
+     * the published segment texts are refreshed in the same
+     * pass. The paged road below it is the shipped one: the
+     * visible chapter re-derives from its cached original.
+     * In scroll the anchor's scoped re-assert rides
+     * [moveAnchor] with the saved offset clamped to the new
+     * text — today's clamped-offset semantics, preserved
+     * deliberately (a content-swap landing can drift a
+     * sentence; that is the accepted cost, recorded in the
+     * spec's risks). */
     private fun reapplyTerms() {
-        if (_state.value.streamActive) {
-            // v1.7 one-engine (A1): a terms rebuild reopens the
-            // window under the LIVE window policy — a pinned
-            // book stays pinned.
-            openStream(
-                _state.value.chapterIndex,
-                _state.value.positionOffset,
-                pinned = streamPinned
-            )
+        if (segmentOriginals.isNotEmpty()) {
+            for ((id, original) in segmentOriginals.toMap()) {
+                val display = displayText(original, id)
+                segmentDisplay[id] = display
+                // Item 1a: the map prices DISPLAY lengths.
+                bookDocument.setExactLength(id, display.length)
+            }
+            publishDocumentState()
+        }
+        val stateNow = _state.value
+        val chapter = stateNow.chapter ?: return
+        if (_config.value.mode == ReaderMode.SCROLL) {
+            val anchorDisplay = segmentDisplay[chapter.id]
+            if (anchorDisplay != null) {
+                if (anchorDisplay !== stateNow.chapterText) {
+                    _state.value = stateNow.copy(chapterText = anchorDisplay)
+                }
+                moveAnchor(
+                    stateNow.chapterIndex,
+                    stateNow.positionOffset.coerceAtMost(anchorDisplay.length),
+                    PageHint.OFFSET
+                )
+            }
             return
         }
-        val chapter = _state.value.chapter ?: return
         val original = chapterCache[chapter.id]
-            ?: streamTexts[chapter.id] ?: return
+            ?: segmentOriginals[chapter.id] ?: return
         val display = displayText(original, chapter.id)
-        // v1.7 Patch 2 (item 1a): a terms change rebuilds the
-        // visible chapter's display text — its map length is
-        // rebuilt with it, so the char map stays in display
-        // coordinates.
         bookDocument.setExactLength(chapter.id, display.length)
         if (display !== _state.value.chapterText) {
             _state.value = _state.value.copy(chapterText = display)
@@ -1276,22 +1483,15 @@ class ReaderViewModel(
         restoreScrollFraction: Float,
         hint: PageHint = PageHint.OFFSET
     ) {
-        // v1.7 one-engine (A1 fix): EVERY chapter load closes
-        // the stream at its own start — this one site covers
-        // every caller (chrome next/previous, Contents and
-        // search jumps, the translation toggles and
-        // onTranslationReady, the Preparing reload, the
-        // repair re-resolution, retry), including the ones
-        // that call loadChapter directly with no stream
-        // awareness. The result can therefore never dead-end
-        // in chapterText behind a live window: the stream is
-        // closed, and the activation effect — keyed on this
-        // load's landing (restoreGeneration) — reopens the
-        // window at the place the load lands at. The wrappers'
-        // own closeStream() calls stay: they are idempotent
-        // beside this one, and openChapter's early return
-        // relies on its close to trigger the re-entry.
-        closeStream()
+        // v1.7 document engine: the windowed build's Fix-1
+        // stream close stood here. It is retired WITH the
+        // machinery it patched — there is no stream to close
+        // and no window to re-enter; a load's landing is a
+        // state publish the document surface reads directly
+        // (Item 3's table: every ex-A1 path is a segment
+        // operation now, and the ones that still ride this
+        // function — paged opens, retries, the Preparing
+        // reload — behave exactly as they did).
         // v1.2.0 (Wave 3): the OUTGOING chapter's final position is
         // persisted exactly, before anything moves — a guaranteed
         // flush on chapter change that the progress coalescer can
@@ -1474,21 +1674,81 @@ class ReaderViewModel(
                 )
             }
         }
+        // The landing itself is the extracted narration
+        // landing (B2) — loadChapter calls it with the
+        // generation bump, exactly the landing this function
+        // has always performed.
+        performNarrationLanding(
+            index = index,
+            chapter = chapter,
+            original = text,
+            useTranslation = useTranslation,
+            restoreOffset = restoreOffset,
+            restoreScrollFraction = restoreScrollFraction,
+            hint = hint,
+            bumpGeneration = true
+        )
+    }
+
+    /**
+     * v1.7 document engine (B2): THE NARRATION LANDING —
+     * loadChapter's landing sequence, extracted as one named
+     * step with the generation bump as a parameter, performing
+     * in loadChapter's landing order: (1) tracker.begin();
+     * (2) visibleTextChapterIndex = the landed chapter and
+     * currentChapterMaxOffset = the restore offset (0 on a
+     * narration follow); (3) the char map fed the landed
+     * chapter's DISPLAY length; (4) the landing state publish
+     * (chapterText = the display copy, showingTranslation,
+     * hasOverlay / isImageBook / mangaPages / mangaChapterId
+     * from the content, loading = false; the restore fields
+     * and the generation bump ONLY when [bumpGeneration]);
+     * (5) the summary follow; (6) onPosition(restoreOffset,
+     * restoreScrollFraction); (7) the Media Overlay prepare
+     * when the chapter carries one; (8) prefetchNeighbours
+     * for the landed chapter; (9) the autoplay block, when
+     * armed — the controller is loaded from the SEGMENT
+     * STORE'S HELD ORIGINAL for the chapter, never the
+     * display copy (the P0 rule: the voice speaks originals;
+     * terms change what's seen, not what's spoken).
+     *
+     * Callers: loadChapter (bump = true — the open/paged
+     * road, behaviour unchanged) and the read-aloud follow
+     * advance (bump = false — a follow-class move: the
+     * surface is never re-anchored out from under the
+     * listener).
+     */
+    private fun performNarrationLanding(
+        index: Int,
+        chapter: Chapter,
+        original: ChapterText,
+        useTranslation: Boolean,
+        restoreOffset: Int,
+        restoreScrollFraction: Float,
+        hint: PageHint,
+        bumpGeneration: Boolean
+    ) {
+        val content: ChapterContent = original.content
         tracker.begin()
         currentChapterMaxOffset = restoreOffset
         visibleTextChapterIndex = index
-        val displayCopy = displayText(text, chapter.id)
+        val displayCopy = displayText(original, chapter.id)
         // v1.7 Patch 2 (item 1a): feed the char map the DISPLAY
         // length — every offset the map serves is reported
         // against the display text the renderers consume.
         bookDocument.setExactLength(chapter.id, displayCopy.length)
         _state.value = _state.value.copy(
             loading = false,
+            chapterIndex = index,
             chapterText = displayCopy,
             restoreOffset = restoreOffset,
             restoreScrollFraction = restoreScrollFraction,
             restoreHint = hint,
-            restoreGeneration = _state.value.restoreGeneration + 1,
+            restoreGeneration = if (bumpGeneration) {
+                _state.value.restoreGeneration + 1
+            } else {
+                _state.value.restoreGeneration
+            },
             hasOverlay = content.mediaOverlay != null,
             isImageBook = content.isImageBook,
             // Manga programme (slice M2): an image chapter's
@@ -1501,14 +1761,7 @@ class ReaderViewModel(
             mangaChapterId = if (content.isImageChapter) chapter.id else null,
             showingTranslation = useTranslation
         )
-        // Follow this chapter's cached AI summary for the Contents
-        // sheet (clears first so a stale summary never shows).
-        _chapterSummary.value = null
-        summaryJob?.cancel()
-        summaryJob = viewModelScope.launch {
-            container.database.aiSummaryDao().observe(bookId, chapter.id)
-                .collectLatest { _chapterSummary.value = it }
-        }
+        followSummaryFor(index)
         onPosition(restoreOffset, restoreScrollFraction)
         // Media Overlay: prepare (but don't play) the book's own audio.
         content.mediaOverlay?.let { overlay ->
@@ -1518,18 +1771,63 @@ class ReaderViewModel(
             )
             overlayPlayer.load(audio)
         }
+        prefetchNeighbours(index)
         if (pendingAutoplayTts) {
             pendingAutoplayTts = false
-            // Read-aloud deliberately gets the ORIGINAL text:
-            // terms change what's seen, not what's spoken. Its
-            // sentence range is remapped for the highlight in
-            // [ttsState].
+            // Read-aloud deliberately gets the ORIGINAL text —
+            // the segment store's held original for this
+            // chapter (chapterCache's copy of the same
+            // original on the paged road), never the display
+            // copy. Its sentence range is remapped for the
+            // highlight in [ttsState].
             ttsChapterId = chapter.id
-            readAloud.loadChapter(text, 0)
+            readAloud.loadChapter(
+                segmentOriginals[chapter.id]
+                    ?: chapterCache[chapter.id]
+                    ?: original,
+                0
+            )
             readAloud.setRate(_config.value.speechRate)
             readAloud.play()
         }
-        prefetchNeighbours(index)
+    }
+
+    /**
+     * v1.7 document engine (B2): the read-aloud follow
+     * advance — the controller finished a chapter and the
+     * next one takes over the narration. PAGED: the shipped
+     * chapter turn (loadChapter, which lands through
+     * [performNarrationLanding] with the bump). SCROLL: if
+     * the next segment is RESIDENT, the narration landing
+     * runs at once from the store's held original — NO
+     * generation bump, so the surface never re-anchors; if
+     * it is not resident, its fill is requested at anchor
+     * priority and the landing runs when the fill completes
+     * (the pending record below) — Listen advancing faster
+     * than fills simply waits, honestly.
+     */
+    private fun advanceNarration(index: Int) {
+        if (_config.value.mode == ReaderMode.PAGED) {
+            launchLoad { loadChapter(index, 0, 0f) }
+            return
+        }
+        val chapter = _state.value.chapters.getOrNull(index) ?: return
+        val original = segmentOriginals[chapter.id]
+        if (original != null) {
+            performNarrationLanding(
+                index = index,
+                chapter = chapter,
+                original = original,
+                useTranslation = chapter.id in segmentTranslatedIds,
+                restoreOffset = 0,
+                restoreScrollFraction = 0f,
+                hint = PageHint.FIRST,
+                bumpGeneration = false
+            )
+        } else {
+            pendingNarrationChapterId = chapter.id
+            requestSegmentFill(chapter.id)
+        }
     }
 
     /**
@@ -1780,9 +2078,20 @@ class ReaderViewModel(
     }
 
     /** F3: the error block's retry — re-runs the current
-     * chapter's load; its fetch resumes through the queue. */
+     * chapter's load; its fetch resumes through the queue.
+     * v1.7 document engine (Item 3, row 7): in scroll with no
+     * load error standing, the retry is the anchor segment's
+     * explicit fill re-request — the FAILED row's own door
+     * (retrySegment) is the same call for any segment. */
     fun retryCurrentChapter() {
-        launchLoad { loadChapter(_state.value.chapterIndex, 0, 0f) }
+        val stateNow = _state.value
+        if (_config.value.mode == ReaderMode.SCROLL &&
+            stateNow.errorMessage == null
+        ) {
+            stateNow.chapter?.id?.let { retrySegment(it) }
+        } else {
+            launchLoad { loadChapter(stateNow.chapterIndex, 0, 0f) }
+        }
     }
 
     /** v1.3.3 (scope S6): chapters whose extraction failure
@@ -1937,28 +2246,12 @@ class ReaderViewModel(
                     }
                 }
             }
-            // v1.7 Patch 2 (item 2b): publish the layout-ahead
-            // candidate — the NEXT chapter's DISPLAY text when
-            // prefetch holds its original (the display copy is
-            // what the paged reader will paginate when the
-            // chapter opens from this same cache) — plus the
-            // tier gate, for PagedReader's ahead layout.
-            val nextChapter = _state.value.chapters.getOrNull(index + 1)
-            val nextOriginal = nextChapter?.let { chapterCache[it.id] }
-            _state.value = _state.value.copy(
-                layoutAheadNextId = nextChapter?.id,
-                layoutAheadNextText = if (
-                    nextChapter != null && nextOriginal != null
-                ) {
-                    displayText(nextOriginal, nextChapter.id)
-                } else {
-                    null
-                },
-                layoutAheadEnabled = LayoutAheadPolicy.enabled(
-                    minimalTier = performanceTier ==
-                        app.xreader.data.prefs.PerfTier.MINIMAL
-                )
-            )
+            // v1.7 document engine (Item 2): the Patch-2
+            // layout-ahead candidate pair this block used to
+            // publish is retired — the candidates are the
+            // resident run's display texts, published by
+            // publishDocumentState() from the segment store;
+            // the tier gate rides the appearance collector.
         }
     }
 
@@ -2028,79 +2321,143 @@ class ReaderViewModel(
         }
     }
 
-    // ── The endless stream (v1.0.2, R17) ─────────────────────────
+    // ── The document (v1.7 Moon+ document engine) ────────────
     //
-    // Scroll + Continuous renders ONE LazyColumn over a window of
-    // chapters planned by StreamWindowPlanner (behind 2 reserved,
-    // forward growth inside a tier-scaled char budget). The window
-    // slides as the reader moves; position is always reported as
-    // (chapterIndex, charOffset) into the same progress machinery
-    // the single-chapter reader uses, so bookmarks, sessions and
-    // sync don't know the stream exists.
+    // The book is ONE document of segments (Item 1): every
+    // chapter is a segment, keyed by chapter ID, holding one
+    // of four derived states (RESIDENT / LOADING / MISSING /
+    // FAILED). Segments fill IN PLACE — there is no window to
+    // open, close, slide or re-enter, and the windowed build's
+    // whole A1 apparatus (openStream / extendStream /
+    // closeStream, the pinned window, the boundary indices)
+    // is retired with it. Position is always reported as
+    // (chapterIndex, charOffset) into the same progress
+    // machinery the paged reader uses, so bookmarks, sessions
+    // and sync don't know the document exists.
 
-    private val streamTexts = mutableMapOf<Long, ChapterText>()
-    private var streamJob: kotlinx.coroutines.Job? = null
-    private val streamFractions = mutableMapOf<Int, Float>()
+    /** The segment store: ORIGINALS held per segment, keyed
+     * by chapter id (the successor of the stream cache —
+     * chapterCache's discipline: originals only, display
+     * copies derived per read). */
+    private val segmentOriginals = mutableMapOf<Long, ChapterText>()
 
-    // ── v1.7 one-engine: the window policy ───────────────────
-    // The unified scroll core runs the stream machinery under
-    // BOTH transitions. CONTINUOUS keeps the shipped sliding
-    // window; CHAPTER_BY_CHAPTER pins the window to the current
-    // chapter (the planner's `behind` reserve still applies —
-    // a scroll back never waits) and never slides it. The one
-    // extension of the pinned window is Item 3's boundary
-    // crossing: as the current chapter's end is reached, the
-    // next chapter is requested and joins the window when it
-    // lands; the window then re-pins around it.
+    /** The current DISPLAY derivation of each held original,
+     * keyed by chapter id — published into the state by
+     * [publishDocumentState] and read by the anchor paths.
+     * Kept beside the originals so a terms swap re-derives
+     * every resident segment in one pass. */
+    private val segmentDisplay = mutableMapOf<Long, ChapterText>()
+
+    /** Segments whose held text came from the RAW translation
+     * (their display rides the translated road). */
+    private val segmentTranslatedIds = mutableSetOf<Long>()
+
+    /** FAILED segments' honest reasons, keyed by chapter id. */
+    private val segmentFailedReasonsMap = mutableMapOf<Long, String>()
+
+    /** THE one in-flight set (Item 1): every segment fill —
+     * parse fills and fetch fills alike — registers here, so
+     * any number of triggers for one segment produce exactly
+     * one fill. */
+    private val segmentFillsInFlight = mutableSetOf<Long>()
+
+    /** Per-chapter settled fractions, for the CONTINUOUS
+     * left-behind marking (Item 4). */
+    private val reportedFractions = mutableMapOf<Int, Float>()
+
+    private var residencyJob: kotlinx.coroutines.Job? = null
+
+    /** The current resident run (chapter indices), the
+     * planner's output — published as ids in the state. */
+    private var residentRunIndices: List<Int> = emptyList()
+
+    /** True once the book's first load has returned and the
+     * document exists (Item 3, row 10). Residency planning
+     * and mode flips act only after this. */
     @Volatile
-    private var streamPinned: Boolean = false
+    private var readerOpened: Boolean = false
 
-    /** The pinned window's one outstanding boundary request:
-     * the chapter being loaded in, or -1. Set when the current
-     * chapter's last block becomes visible; cleared when the
-     * chapter lands, fails, or the window re-plans. While set,
-     * the boundary renders the LOADING item and is not
-     * re-requested. */
-    private var boundaryNextIndex: Int = -1
+    /** The segment the surface last reported approaching
+     * (Item 1's approach door): protected from eviction
+     * while it is the target. One field; a newer report
+     * replaces it. */
+    private var approachTargetId: Long? = null
 
-    /** The boundary chapter whose load FAILED (the FAILED row
-     * stands at the boundary), or -1. Cleared by a retry, a
-     * landing, or a window re-plan. */
-    private var boundaryFailedIndex: Int = -1
+    /** B2: a narration advance waiting on its segment's
+     * fill — the landing runs when the fill completes. */
+    private var pendingNarrationChapterId: Long? = null
 
-    private suspend fun loadStreamText(chapter: Chapter): ChapterText? {
-        // The stream cache holds ORIGINALS (like chapterCache);
-        // each caller gets the display copy for the terms in
-        // force right now.
-        // v1.7 Patch 2 (item 1a): the display copy this returns
-        // is a char-map feed, on both roads — the stream renders
-        // display text, so the map prices display lengths.
-        streamTexts[chapter.id]?.let { cached ->
+    /** Item 3, row 1: anchor segments whose content swap
+     * (translation / terms) is in flight — when the swapped
+     * text lands, the place re-asserts once, scoped to the
+     * anchor, through [moveAnchor]. */
+    private val pendingSwapReassertIds = mutableSetOf<Long>()
+
+    /**
+     * The segment store's read (Item 1): the parse road of a
+     * segment fill. Holds ORIGINALS (like chapterCache); each
+     * caller gets the display copy for the terms in force
+     * right now, and the derivation is kept in
+     * [segmentDisplay] for the anchor paths.
+     * v1.7 Patch 2 (item 1a): the display copy is a char-map
+     * feed on both roads — the document renders display text,
+     * so the map prices display lengths.
+     *
+     * A7 (the swap-vs-fill race, decided): the parse captures
+     * its inputs — the originalPreferred membership and the
+     * translated-content presence — BEFORE the storage read;
+     * if either changed when the read lands, the landed text
+     * is DISCARDED (never held, never published) and the
+     * parse re-runs under the current preference. The current
+     * preference always wins; no interleaving can publish a
+     * stale-road text. The re-run is bounded; past the bound
+     * the segment stays LOADING and a later trigger re-runs
+     * it (a preference cannot flip forever).
+     */
+    private suspend fun loadSegmentText(chapter: Chapter): ChapterText? {
+        segmentOriginals[chapter.id]?.let { cached ->
             val display = displayText(cached, chapter.id)
+            segmentDisplay[chapter.id] = display
             bookDocument.setExactLength(chapter.id, display.length)
             return display
         }
         if (chapter.contentPath == null) return null
-        val useTranslation = chapter.id !in originalPreferred &&
-            container.bookStorage.hasTranslatedContent(bookId, chapter.id)
-        val result = if (useTranslation) {
-            container.bookStorage.readTranslatedContent(bookId, chapter.id)
-        } else {
-            container.bookStorage.readChapterContent(bookId, chapter.id)
+        var attempts = 0
+        while (true) {
+            val useTranslation = chapter.id !in originalPreferred &&
+                container.bookStorage.hasTranslatedContent(bookId, chapter.id)
+            val result = if (useTranslation) {
+                container.bookStorage.readTranslatedContent(bookId, chapter.id)
+            } else {
+                container.bookStorage.readChapterContent(bookId, chapter.id)
+            }
+            val original = (result as? AppResult.Ok)?.value
+                ?.let { ChapterText(it) } ?: return null
+            val stillUseTranslation = chapter.id !in originalPreferred &&
+                container.bookStorage.hasTranslatedContent(bookId, chapter.id)
+            if (stillUseTranslation != useTranslation) {
+                if (++attempts >= 3) return null
+                continue
+            }
+            segmentOriginals[chapter.id] = original
+            if (useTranslation) {
+                segmentTranslatedIds += chapter.id
+            } else {
+                segmentTranslatedIds -= chapter.id
+            }
+            val display = displayText(original, chapter.id)
+            segmentDisplay[chapter.id] = display
+            bookDocument.setExactLength(chapter.id, display.length)
+            return display
         }
-        val original = (result as? AppResult.Ok)?.value
-            ?.let { ChapterText(it) } ?: return null
-        streamTexts[chapter.id] = original
-        val display = displayText(original, chapter.id)
-        bookDocument.setExactLength(chapter.id, display.length)
-        return display
     }
 
-    /** v1.7 Patch 2 (item 1d): the stream planner's per-chapter
-     * char counts — the char map's EXACT length where the map
-     * has the chapter parsed, the word-count estimate otherwise.
-     * The planner's budget values are unchanged. */
-    private fun streamCharCounts(chapters: List<Chapter>): List<Int> =
+    /** v1.7 Patch 2 (item 1d): the residency planner's
+     * per-chapter char counts — the char map's EXACT length
+     * where the map has the chapter parsed, the word-count
+     * estimate otherwise. The planner's budget values are
+     * unchanged. */
+    private fun documentCharCounts(chapters: List<Chapter>): List<Int> =
         chapters.mapIndexed { index, chapter ->
             if (bookDocument.isExact(index)) {
                 bookDocument.lengthOf(index)
@@ -2109,390 +2466,432 @@ class ReaderViewModel(
             }
         }
 
-    /** Open (or re-anchor) the stream at [anchorIndex].
-     * v1.7 one-engine: [pinned] selects the window policy —
-     * true under CHAPTER_BY_CHAPTER (the window is the current
-     * chapter plus the planner's behind reserve, and it never
-     * slides), false under CONTINUOUS (the shipped sliding
-     * window). A (re)open under either policy drops any
-     * outstanding boundary request: the window is being
-     * re-planned around the anchor. */
-    fun openStream(
-        anchorIndex: Int,
-        anchorOffset: Int = 0,
-        pinned: Boolean = false
-    ) {
-        // Manga programme (slice M2): the endless stream is a
-        // TEXT window — a manga book never enters it (its
-        // chapters are page lists; the image reader owns them).
-        // The book-config check covers the book; the pages
-        // check covers the brief window before the config
-        // resolves, once a chapter has shown what it is.
-        if (bookConfig?.mediaKind?.isManga == true) return
-        if (_state.value.mangaPages != null) return
-        // v1.7 one-engine (A1 fix): the restore generation
-        // this call was issued under. The generation is
-        // bumped by exactly two writers — a loadChapter
-        // landing and this function's own landing copy — so
-        // if it has moved by the time the window is built, a
-        // load landed after this call was issued (the
-        // activation effect fires a first reopen the moment
-        // a load closes the stream, before the load lands)
-        // and this call's anchor is stale: the landing copy
-        // below must not overwrite the place the load landed
-        // at. The effect is keyed on the generation, so it
-        // reopens at the landed place instead.
-        val generationAtCall = _state.value.restoreGeneration
-        streamPinned = pinned
-        boundaryNextIndex = -1
-        boundaryFailedIndex = -1
-        streamJob?.cancel()
-        streamJob = viewModelScope.launch {
-            val chapters = _state.value.chapters
-            if (chapters.isEmpty()) return@launch
-            val appearance = container.appearancePrefs.state.first()
-            val policy = app.xreader.data.prefs.PerformancePolicy.resolve(
-                appearance.performanceMode, container.totalRamMb(),
-                appearance.coverGlow
-            )
-            val counts = streamCharCounts(chapters)
-            val window = if (pinned) {
-                pinnedWindow(anchorIndex, counts)
-            } else {
-                StreamWindowPlanner.plan(
-                    anchorIndex = anchorIndex,
-                    chapterCharCounts = counts,
-                    charBudget = StreamWindowPlanner.charBudgetFor(
-                        policy.tier == app.xreader.data.prefs.PerfTier.MINIMAL
-                    )
-                )
-            }
-            val entries = buildStreamEntries(
-                window, anchorIndex,
-                minimalTier = policy.tier ==
-                    app.xreader.data.prefs.PerfTier.MINIMAL
-            )
-            // A1 fix (see generationAtCall): a load that
-            // landed while this window was being built owns
-            // the place now — this stale window never lands,
-            // and it leaves no trace (no visible-chapter
-            // write, no state copy).
-            if (_state.value.restoreGeneration != generationAtCall) {
-                return@launch
-            }
-            currentCoroutineContext().ensureActive()
-            val anchorEntry = entries.firstOrNull { it.chapterIndex == anchorIndex }
-            if (anchorEntry?.text != null) {
-                visibleTextChapterIndex = anchorIndex
-            }
-            _state.value = _state.value.copy(
-                streamActive = true,
-                streamEntries = entries,
-                loading = false,
-                errorMessage = null,
-                chapterIndex = anchorIndex,
-                chapterText = anchorEntry?.text ?: _state.value.chapterText,
-                restoreOffset = anchorOffset,
-                restoreGeneration = _state.value.restoreGeneration + 1
-            )
-            anchorEntry?.text?.let { onPosition(anchorOffset, 0f) }
-        }
-    }
-
-    /** v1.7 one-engine: the pinned policy's window — the
-     * anchor chapter plus up to the planner's behind reserve
-     * (2), nothing ahead: the window never speculatively
-     * extends, and Item 3's boundary is its only way forward. */
-    private fun pinnedWindow(
-        anchorIndex: Int,
-        counts: List<Int>
-    ): StreamWindowPlanner.Window {
-        if (counts.isEmpty()) return StreamWindowPlanner.Window(0, -1)
-        val anchor = anchorIndex.coerceIn(0, counts.lastIndex)
-        return StreamWindowPlanner.Window(
-            fromIndex = (anchor - 2).coerceAtLeast(0),
-            toIndex = anchor
-        )
-    }
-
     /**
-     * v1.7 one-engine (Item 3): the pinned window's boundary
-     * request — the unified core calls this when the CURRENT
-     * chapter's last block becomes visible (last-visible
-     * tracking in the surface; NO fraction threshold anywhere).
-     * The next chapter is requested over the same fetch path
-     * the stream already uses for missing chapters
-     * (ensureStored for a chapter with no copy; a stored copy
-     * simply joins), and [boundaryNextIndex] marks the request
-     * so the boundary renders the LOADING item and the request
-     * is never doubled. When the chapter lands,
-     * [landBoundaryChapter] extends the window by it and
-     * re-pins; when the fetch fails, [boundaryFailedIndex]
-     * stands the FAILED row at the boundary instead.
+     * The ONE writer of the document's published state
+     * (Item 1): segment states are a PURE FUNCTION of the
+     * facts — a segment is RESIDENT when its original is
+     * held, FAILED when a failure reason stands, LOADING
+     * when a fill is in flight or a stored copy stands ready
+     * to parse, MISSING otherwise — re-derived over the
+     * chapter list in O(chapters) and published in ONE state
+     * copy together with the resident display texts, the
+     * failure reasons, the resident run's ids and the
+     * layout-ahead candidates. Called only at disciplined
+     * sites: a fill starting, landing or failing; an
+     * invalidation; an eviction; a residency (re)plan; a
+     * chapter-list change that adds segments. Read-flag
+     * copies (chaptersUpdated) never call it — the id-keyed
+     * maps stay valid across them by construction.
      */
-    fun onBoundaryEndVisible() {
-        if (!streamPinned || !_state.value.streamActive) return
+    private fun publishDocumentState() {
         val stateNow = _state.value
-        val next = stateNow.chapterIndex + 1
-        if (next > stateNow.chapters.lastIndex) return
-        if (boundaryNextIndex == next) return
-        if (stateNow.streamEntries.any { it.chapterIndex == next }) return
-        boundaryNextIndex = next
-        boundaryFailedIndex = -1
-        if (stateNow.streamFailedReason != null) {
-            _state.value = stateNow.copy(streamFailedReason = null)
-        }
-        val chapter = stateNow.chapters.getOrNull(next) ?: return
-        if (chapter.contentPath != null) {
-            viewModelScope.launch { landBoundaryChapter(next) }
-        } else if (!startStreamLiveFetch(next)) {
-            // No fetch could start (the row vanished under
-            // us): fail honestly rather than load forever.
-            boundaryNextIndex = -1
-            boundaryFailedIndex = next
-        }
-    }
-
-    /** Item 3: the FAILED row's retry door — the same request
-     * again, through the same paths. */
-    fun retryBoundaryChapter() {
-        if (boundaryFailedIndex < 0) return
-        val next = boundaryFailedIndex
-        boundaryFailedIndex = -1
-        boundaryNextIndex = -1
-        // A failed entry may be standing in the window (a
-        // stored fetch that errored): drop it so the boundary
-        // re-requests cleanly.
-        _state.value = _state.value.copy(
-            streamEntries = _state.value.streamEntries.filter {
-                it.chapterIndex != next
-            },
-            streamFailedReason = null
-        )
-        onBoundaryEndVisible()
-    }
-
-    /** Item 3: the boundary chapter has landed (its stored
-     * copy exists): extend the pinned window by exactly it,
-     * re-pin around it, and let the scroll continue into it.
-     * The entries are swapped only when the replacement window
-     * is built — the outgoing window stays composed through
-     * the gap (A1/C9). */
-    private suspend fun landBoundaryChapter(next: Int) {
-        if (boundaryNextIndex != next) return
-        val stateNow = _state.value
-        val appearance = container.appearancePrefs.state.first()
-        val policy = app.xreader.data.prefs.PerformancePolicy.resolve(
-            appearance.performanceMode, container.totalRamMb(),
-            appearance.coverGlow
-        )
-        val counts = streamCharCounts(stateNow.chapters)
-        val window = pinnedWindow(next, counts)
-        val entries = buildStreamEntries(
-            window, next,
-            minimalTier = policy.tier ==
-                app.xreader.data.prefs.PerfTier.MINIMAL
-        )
-        if (boundaryNextIndex != next) return
-        boundaryNextIndex = -1
-        boundaryFailedIndex = -1
-        val keepIds = entries.map { it.chapterId }.toSet()
-        streamTexts.keys.retainAll(keepIds + listOfNotNull(stateNow.chapter?.id))
-        _state.value = _state.value.copy(streamEntries = entries)
-    }
-
-    /** Item 3: the boundary chapter's fetch ended WITHOUT a
-     * copy — the FAILED row stands at the boundary with the
-     * fetch layer's honest reason (its latest diagnostic-log
-     * line for this chapter, the reader error block's own
-     * source). No dead screen, no silent stop. */
-    private fun failBoundaryChapter(next: Int) {
-        if (boundaryNextIndex != next) return
-        boundaryNextIndex = -1
-        boundaryFailedIndex = next
-        val chapter = _state.value.chapters.getOrNull(next) ?: return
-        val reason = app.xreader.komikku.ReaderErrorDetail.fromLog(
-            app.xreader.data.extension.DiagnosticLog.entries(),
-            chapter.id
-        ) ?: "This chapter couldn't be fetched."
-        _state.value = _state.value.copy(
-            streamEntries = _state.value.streamEntries.filter {
-                it.chapterIndex != next
-            } + StreamEntry(
-                chapterIndex = next,
-                chapterId = chapter.id,
-                title = chapter.title,
-                text = null,
-                missing = true,
-                fetching = false,
-                failed = true
-            ),
-            streamFailedReason = reason
-        )
-    }
-
-    private suspend fun buildStreamEntries(
-        window: StreamWindowPlanner.Window,
-        anchorIndex: Int,
-        minimalTier: Boolean
-    ): List<StreamEntry> {
-        val chapters = _state.value.chapters
-        val entries = mutableListOf<StreamEntry>()
-        for (index in window.fromIndex..window.toIndex) {
-            val chapter = chapters.getOrNull(index) ?: continue
-            val text = loadStreamText(chapter)
-            entries += StreamEntry(
-                chapterIndex = index,
-                chapterId = chapter.id,
-                title = chapter.title,
-                text = text,
-                missing = text == null
-            )
-        }
-        // v1.0.6.2 (F3-stream): a window chapter with no copy on
-        // the phone is pulled LIVE through the same download
-        // queue as everything else — the scroll chains straight
-        // into it instead of stopping at a download prompt. The
-        // stream is served first: these fills ARE the reader's
-        // prefetch now. On the MINIMAL tier (P1) only the
-        // anchor chapter itself is pulled — lookahead fills are
-        // prefetch, and prefetch is off there.
-        for (position in entries.indices) {
-            val entry = entries[position]
-            if (!entry.missing) continue
-            if (minimalTier && entry.chapterIndex != anchorIndex) continue
-            // v1.7 one-engine: under the pinned policy the same
-            // restraint applies at every tier — a pinned window
-            // never pulls a neighbour speculatively; the
-            // boundary request (Item 3) is its only fetch door.
-            if (streamPinned && entry.chapterIndex != anchorIndex) continue
-            if (startStreamLiveFetch(entry.chapterIndex)) {
-                entries[position] = entry.copy(fetching = true)
+        val chapters = stateNow.chapters
+        if (chapters.isEmpty()) return
+        val states = HashMap<Long, SegmentState>(chapters.size)
+        for (chapter in chapters) {
+            states[chapter.id] = when {
+                chapter.id in segmentOriginals -> SegmentState.RESIDENT
+                chapter.id in segmentFailedReasonsMap -> SegmentState.FAILED
+                chapter.id in segmentFillsInFlight -> SegmentState.LOADING
+                chapter.contentPath != null -> SegmentState.LOADING
+                else -> SegmentState.MISSING
             }
         }
-        return entries
-    }
-
-    /** Chapters the stream is already pulling live — one fetch
-     * per chapter, however many triggers ask for it. */
-    private val streamLiveFetches = mutableSetOf<Long>()
-
-    /**
-     * v1.0.6.2 (F3-stream): fetch a stream chapter that isn't on
-     * the phone yet, through the download queue, and fill its
-     * block in when the stored copy lands (the state's chapter
-     * row becomes the stored one — one identity, as everywhere).
-     * A failed fetch leaves the honest missing block standing;
-     * its reason is already in the diagnostic log. Returns true
-     * when a fetch is in flight for the chapter afterwards.
-     */
-    private fun startStreamLiveFetch(index: Int): Boolean {
-        val chapter = _state.value.chapters.getOrNull(index) ?: return false
-        if (chapter.contentPath != null) return false
-        if (!streamLiveFetches.add(chapter.id)) return true
-        _state.value = _state.value.copy(
-            streamEntries = _state.value.streamEntries.map {
-                if (it.chapterIndex == index && it.text == null) {
-                    it.copy(fetching = true)
-                } else {
-                    it
+        val anchor = stateNow.chapterIndex
+        val candidates = residentRunIndices
+            .sortedBy { kotlin.math.abs(it - anchor) }
+            .mapNotNull { i ->
+                chapters.getOrNull(i)?.let { ch ->
+                    segmentDisplay[ch.id]?.let { ch.id to it }
                 }
             }
+        _state.value = stateNow.copy(
+            segmentStates = states,
+            segmentTexts = segmentDisplay.toMap(),
+            segmentFailedReasons = segmentFailedReasonsMap.toMap(),
+            residentSegmentIds = residentRunIndices
+                .mapNotNull { chapters.getOrNull(it)?.id }
+                .toSet(),
+            layoutAheadCandidates = candidates
         )
+    }
+
+    /**
+     * Item 7: residency planning — a launched job (a segment
+     * loop never runs on the composition path), scroll mode
+     * only, and only once the book is open. The run's SHAPE
+     * is the transition's (Item 4): CONTINUOUS plans through
+     * [StreamWindowPlanner.plan] under the tier budget (the
+     * planner and its pinned test stand unmodified);
+     * CHAPTER_BY_CHAPTER keeps the shipped pinned shape —
+     * the anchor plus up to 2 behind, nothing ahead — as a
+     * residency shape: the boundary trigger is its only fill
+     * door forward. Fills are requested in distance order
+     * from the anchor (anchor first); segments outside the
+     * run ± the 2-segment hysteresis are evicted (never the
+     * anchor, the approach target, the narration chapters or
+     * a fill in flight).
+     */
+    private fun planResidency(anchorIndex: Int) {
+        if (!readerOpened) return
+        if (_config.value.mode != ReaderMode.SCROLL) return
+        // Manga programme (slice M2): the document is a TEXT
+        // model — a manga book never plans residency in it
+        // (its chapters are page lists; the image reader owns
+        // them). Carried from the retired openStream guard.
+        if (bookConfig?.mediaKind?.isManga == true) return
+        if (_state.value.mangaPages != null) return
+        residencyJob?.cancel()
+        residencyJob = viewModelScope.launch {
+            val chapters = _state.value.chapters
+            if (chapters.isEmpty()) return@launch
+            val anchor = anchorIndex.coerceIn(0, chapters.lastIndex)
+            val counts = documentCharCounts(chapters)
+            val minimal = performanceTier ==
+                app.xreader.data.prefs.PerfTier.MINIMAL
+            val run: List<Int> = if (
+                _config.value.chapterTransition ==
+                ChapterTransition.CHAPTER_BY_CHAPTER
+            ) {
+                ((anchor - 2).coerceAtLeast(0)..anchor).toList()
+            } else {
+                val window = StreamWindowPlanner.plan(
+                    anchorIndex = anchor,
+                    chapterCharCounts = counts,
+                    charBudget = StreamWindowPlanner.charBudgetFor(minimal)
+                )
+                (window.fromIndex..window.toIndex).toList()
+            }
+            residentRunIndices = run
+            publishDocumentState()
+            for (index in run.sortedBy { kotlin.math.abs(it - anchor) }) {
+                chapters.getOrNull(index)?.let {
+                    requestSegmentFill(it.id)
+                }
+            }
+            evictSegmentsOutsideRun(run, anchor)
+        }
+    }
+
+    /** Item 7: drop the held text of segments outside the
+     * run ± the hysteresis — on the fill-worker's side,
+     * never the composition path. A segment whose list
+     * position no longer resolves (the repair path rebuilt
+     * the list) is dropped too: the maps are id-keyed, so a
+     * survivor is never mis-bound, and a dropped segment
+     * simply re-derives from its chapter row. */
+    private fun evictSegmentsOutsideRun(run: List<Int>, anchor: Int) {
+        if (run.isEmpty()) return
+        val chapters = _state.value.chapters
+        val from = (run.first() - 2).coerceAtLeast(0)
+        val to = (run.last() + 2).coerceAtMost(chapters.lastIndex)
+        val stateNow = _state.value
+        val protectedIds = buildSet {
+            chapters.getOrNull(anchor)?.id?.let { add(it) }
+            approachTargetId?.let { add(it) }
+            ttsChapterId?.let { add(it) }
+            pendingNarrationChapterId?.let { add(it) }
+            // A segment carrying the Media Overlay target
+            // (overlay ids live on heading/paragraph blocks).
+            stateNow.overlayTextId?.let { overlayId ->
+                segmentDisplay.entries.firstOrNull { (_, text) ->
+                    text.content.blocks.any { block ->
+                        (block as? ChapterBlock.Heading)?.id == overlayId ||
+                            (block as? ChapterBlock.Paragraph)?.id == overlayId
+                    }
+                }?.key?.let { add(it) }
+            }
+        }
+        val evicted = segmentOriginals.keys.filter { id ->
+            val idx = chapterPositionIndex.indexOfChapter(id)
+            (idx == null || idx < from || idx > to) &&
+                id !in protectedIds &&
+                id !in segmentFillsInFlight
+        }
+        if (evicted.isEmpty()) return
+        for (id in evicted) {
+            segmentOriginals.remove(id)
+            segmentDisplay.remove(id)
+            segmentTranslatedIds.remove(id)
+        }
+        publishDocumentState()
+    }
+
+    /**
+     * v1.7 document engine (Item 4): the CHAPTER_BY_CHAPTER
+     * boundary trigger — the surface calls this when the
+     * CURRENT segment's last block becomes the last visible
+     * item (last-visible tracking; NO fraction threshold
+     * anywhere). The next segment's fill is requested through
+     * the one fill door; its state item already stands at the
+     * boundary in the document (LOADING while the fill runs,
+     * FAILED with its retry if it ends without a copy), and
+     * when it lands the scroll simply continues into it —
+     * the QuickNovel pattern, with per-segment state carrying
+     * everything the retired boundary indices used to.
+     */
+    fun onBoundaryEndVisible() {
+        if (_config.value.mode != ReaderMode.SCROLL) return
+        if (_config.value.chapterTransition !=
+            ChapterTransition.CHAPTER_BY_CHAPTER
+        ) {
+            return
+        }
+        val stateNow = _state.value
+        val next = stateNow.chapters.getOrNull(stateNow.chapterIndex + 1)
+            ?: return
+        requestSegmentFill(next.id)
+    }
+
+    /** Item 3, row 7: the FAILED row's retry door — an
+     * explicit re-request of that segment's fill (the one
+     * trigger allowed to clear a FAILED state). */
+    fun retrySegment(chapterId: Long) {
+        requestSegmentFill(chapterId, explicit = true)
+    }
+
+    /** Item 1: the MISSING row's download door — the same
+     * fill, explicitly requested: a stored copy parses, no
+     * copy fetches live through the download queue. */
+    fun downloadSegmentChapter(chapterId: Long) {
+        requestSegmentFill(chapterId, explicit = true)
+    }
+
+    /**
+     * Item 1: THE FILL — the one door every trigger uses
+     * (residency planning, the state item's composition
+     * trigger, the approach door, the boundary trigger, the
+     * MISSING row's download door, the FAILED row's explicit
+     * retry, a translation invalidation, the narration
+     * advance). One in-flight set covers BOTH roads, so any
+     * number of triggers for one segment produce exactly one
+     * fill:
+     * — a segment already RESIDENT or already in flight is a
+     *   no-op;
+     * — a FAILED segment refills only on an [explicit]
+     *   request (its retry door); the explicit request clears
+     *   the failure first;
+     * — a segment WITH a stored copy parses through
+     *   [loadSegmentText] (the parse road, with the A7
+     *   swap-race rule inside);
+     * — a segment with NO copy fetches through the shared
+     *   loader (ChapterTextLoader.ensureStored — the same
+     *   fetch path the reader, downloads and AI use): Stored
+     *   updates the chapter row and parses; Preparing keeps
+     *   the segment LOADING and re-requests when the import
+     *   lands (fetchChapterLive's discipline); a failure
+     *   stands the segment FAILED with the fetch layer's
+     *   honest reason from the diagnostic log.
+     * Fills run as launched jobs — never on the composition
+     * path (the MINIMAL-tier discipline: composition requests,
+     * the worker fills).
+     */
+    private fun requestSegmentFill(chapterId: Long, explicit: Boolean = false) {
+        if (chapterId in segmentOriginals) return
+        if (chapterId in segmentFillsInFlight) return
+        if (!explicit && chapterId in segmentFailedReasonsMap) return
+        val chapter = _state.value.chapters
+            .firstOrNull { it.id == chapterId } ?: return
+        if (explicit) segmentFailedReasonsMap.remove(chapterId)
+        segmentFillsInFlight += chapterId
+        publishDocumentState()
         viewModelScope.launch {
-            var landed = false
+            var refillAfterImport = false
             try {
-                // v1.0.6.2 (F9): the wait is the shared loader's —
-                // one fetch path for reader, stream and AI alike.
-                val outcome = container.chapterTextLoader
-                    .ensureStored(bookId, chapter)
-                if (outcome is
-                    app.xreader.data.download.ChapterTextLoader.Outcome.Stored
-                ) {
-                    landed = true
-                    val fresh = outcome.chapter
-                    val text = loadStreamText(fresh)
-                    _state.value = _state.value.copy(
-                        chapters = chaptersUpdated(
-                            _state.value.chapters.map {
-                                if (it.id == fresh.id) fresh else it
-                            }
-                        ),
-                        streamEntries = _state.value.streamEntries.map {
-                            if (it.chapterIndex == index) {
-                                it.copy(
-                                    text = text,
-                                    missing = text == null,
-                                    fetching = false
+                if (chapter.contentPath != null) {
+                    loadSegmentText(chapter)
+                } else {
+                    when (val outcome = container.chapterTextLoader
+                        .ensureStored(bookId, chapter)
+                    ) {
+                        is app.xreader.data.download.ChapterTextLoader
+                            .Outcome.Stored -> {
+                            val fresh = outcome.chapter
+                            _state.value = _state.value.copy(
+                                chapters = chaptersUpdated(
+                                    _state.value.chapters.map {
+                                        if (it.id == fresh.id) fresh else it
+                                    }
                                 )
-                            } else {
-                                it
-                            }
+                            )
+                            loadSegmentText(fresh)
                         }
-                    )
-                    // v1.7 one-engine (Item 3): this fetch was
-                    // the pinned window's boundary request — the
-                    // landed chapter joins the window and the
-                    // window re-pins around it.
-                    if (boundaryNextIndex == index) {
-                        landBoundaryChapter(index)
+                        is app.xreader.data.download.ChapterTextLoader
+                            .Outcome.Preparing -> {
+                            // The segment stays LOADING; the
+                            // fill re-requests itself when the
+                            // import lands (below, after the
+                            // in-flight mark is released).
+                            refillAfterImport = true
+                        }
+                        is app.xreader.data.download.ChapterTextLoader
+                            .Outcome.Failed,
+                        is app.xreader.data.download.ChapterTextLoader
+                            .Outcome.TimedOut -> {
+                            segmentFailedReasonsMap[chapterId] =
+                                app.xreader.komikku.ReaderErrorDetail.fromLog(
+                                    app.xreader.data.extension.DiagnosticLog
+                                        .entries(),
+                                    chapterId
+                                ) ?: if (outcome is
+                                    app.xreader.data.download.ChapterTextLoader
+                                        .Outcome.TimedOut
+                                ) {
+                                    "This chapter is taking a long time " +
+                                        "to arrive — it may still land " +
+                                        "in Downloads."
+                                } else {
+                                    "This chapter couldn't be fetched."
+                                }
+                        }
                     }
                 }
             } finally {
-                streamLiveFetches.remove(chapter.id)
-                // Never leave a block claiming a fetch that ended.
-                _state.value = _state.value.copy(
-                    streamEntries = _state.value.streamEntries.map {
-                        if (it.chapterIndex == index && it.text == null) {
-                            it.copy(fetching = false)
-                        } else {
-                            it
+                segmentFillsInFlight -= chapterId
+                if (chapterId in segmentOriginals) {
+                    onSegmentLanded(chapterId)
+                } else {
+                    publishDocumentState()
+                }
+                if (refillAfterImport) {
+                    viewModelScope.launch {
+                        runCatching {
+                            app.xreader.data.importer.ImportCompletionState
+                                .statusFlow(bookId)
+                                .first { status ->
+                                    val row = container.database
+                                        .chapterDao().getById(chapterId)
+                                    row?.contentPath != null ||
+                                        status == null || !status.running
+                                }
                         }
+                        requestSegmentFill(chapterId)
                     }
-                )
-                // Item 3: a boundary fetch that ended WITHOUT a
-                // copy stands the FAILED row at the boundary.
-                if (!landed && boundaryNextIndex == index) {
-                    failBoundaryChapter(index)
                 }
             }
         }
-        return true
     }
 
-    /** The stream reader reports its settled position here. */
-    fun onStreamPosition(chapterIndex: Int, charOffset: Int, chapterFraction: Float) {
+    /** A fill landed: the segment is RESIDENT. Publish, then
+     * run the landing hooks — a waiting narration advance
+     * (B2) takes its landing; an anchor landing follows the
+     * anchor onto the screen; a pending content swap on the
+     * anchor re-asserts the place once, scoped to the anchor,
+     * with the saved offset clamped to the new text (Item 3,
+     * row 1). */
+    private fun onSegmentLanded(chapterId: Long) {
+        publishDocumentState()
+        val index = chapterPositionIndex.indexOfChapter(chapterId)
+            ?: return
+        var narrated = false
+        if (pendingNarrationChapterId == chapterId) {
+            pendingNarrationChapterId = null
+            val chapter = _state.value.chapters.getOrNull(index)
+            val original = segmentOriginals[chapterId]
+            if (chapter != null && original != null) {
+                performNarrationLanding(
+                    index = index,
+                    chapter = chapter,
+                    original = original,
+                    useTranslation = chapterId in segmentTranslatedIds,
+                    restoreOffset = 0,
+                    restoreScrollFraction = 0f,
+                    hint = PageHint.FIRST,
+                    bumpGeneration = false
+                )
+                narrated = true
+            }
+        }
+        if (index == _state.value.chapterIndex) {
+            if (!narrated) followAnchorChapter(index)
+            if (pendingSwapReassertIds.remove(chapterId)) {
+                val display = segmentDisplay[chapterId]
+                if (display != null) {
+                    moveAnchor(
+                        index,
+                        _state.value.positionOffset
+                            .coerceAtMost(display.length),
+                        PageHint.OFFSET
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * The document surface reports its settled position here.
+     *
+     * B1's guard, restated for the document: a report naming
+     * a segment with NO text is never accepted as a position
+     * — the reporter routes textless first-visible items to
+     * the approach door ([onSegmentApproached]) or, in the
+     * boundary posture, reports the previous segment at its
+     * end; it never names a textless segment here. The guard
+     * below is the second half of that contract: the named
+     * segment must be RESIDENT (its display held), or the
+     * report is dropped.
+     *
+     * Crossing follows the shipped discipline: the visible
+     * chapter and its text publish on the crossing; in
+     * CONTINUOUS a chapter left behind at ≥90% read counts as
+     * finished (Item 4 — in CHAPTER_BY_CHAPTER the finish is
+     * the surface's end report instead); an anchor change
+     * re-plans residency around the new anchor. There is no
+     * window to slide.
+     */
+    fun onDocumentPosition(chapterIndex: Int, charOffset: Int, chapterFraction: Float) {
         val stateNow = _state.value
-        val entry = stateNow.streamEntries.firstOrNull { it.chapterIndex == chapterIndex }
-        val text = entry?.text ?: return
+        val chapter = stateNow.chapters.getOrNull(chapterIndex) ?: return
+        val text = segmentDisplay[chapter.id] ?: return
         val previousIndex = stateNow.chapterIndex
-        streamFractions[chapterIndex] = chapterFraction
+        reportedFractions[chapterIndex] = chapterFraction
         if (chapterIndex != previousIndex) {
-            // Crossing into a new chapter: the one left behind at
-            // ≥90% read counts as finished (same rule the paged
-            // reader's turns apply, honestly labelled).
-            val leftFraction = streamFractions[previousIndex] ?: 0f
+            val leftFraction = reportedFractions[previousIndex] ?: 0f
             visibleTextChapterIndex = chapterIndex
             _state.value = stateNow.copy(
                 chapterIndex = chapterIndex,
                 chapterText = text
             )
-            if (chapterIndex > previousIndex && leftFraction >= 0.9f) {
+            if (chapterIndex > previousIndex && leftFraction >= 0.9f &&
+                _config.value.chapterTransition ==
+                ChapterTransition.CONTINUOUS
+            ) {
                 markCurrentChapterFinishedFor(previousIndex)
             }
+            planResidency(chapterIndex)
         }
         onPosition(charOffset, chapterFraction)
-        // Slide the window when the reader nears either edge.
-        // v1.7 one-engine: CONTINUOUS only — the pinned window
-        // never slides; its forward motion is Item 3's boundary
-        // landing, which re-pins around the landed chapter.
-        if (streamPinned) return
-        val entries = _state.value.streamEntries
-        val first = entries.firstOrNull()?.chapterIndex ?: return
-        val last = entries.lastOrNull()?.chapterIndex ?: return
-        if (chapterIndex >= last - 1 || chapterIndex <= first + 1) {
-            extendStream(chapterIndex)
+        // A text-carrying report from another segment means
+        // the reader has moved on: the approach target is
+        // spent.
+        if (approachTargetId != null && approachTargetId != chapter.id) {
+            approachTargetId = null
         }
+    }
+
+    /** Item 1: the composition trigger's other half — a
+     * state item standing in the composed range asks for its
+     * segment's fill at approach priority (the same door;
+     * ahead of speculative run fills because it is called
+     * directly, not queued behind the residency job). */
+    fun onSegmentVisible(chapterId: Long) {
+        requestSegmentFill(chapterId)
+    }
+
+    /**
+     * Item 1: THE APPROACH DOOR. The surface calls this when
+     * the first visible item belongs to a segment with no
+     * text and no boundary posture covers it. It records the
+     * approached segment as the eviction-protected target
+     * and requests its fill at anchor priority — and writes
+     * NOTHING else: no chapterIndex, no chapterText, no
+     * position, no progress. The reader's place is exactly
+     * where they left it; when the fill lands, the segment
+     * simply has text.
+     */
+    fun onSegmentApproached(chapterId: Long) {
+        approachTargetId = chapterId
+        requestSegmentFill(chapterId)
     }
 
     private fun markCurrentChapterFinishedFor(index: Int) {
@@ -2509,70 +2908,6 @@ class ReaderViewModel(
                 }
             )
         )
-    }
-
-    private fun extendStream(anchorIndex: Int) {
-        if (streamJob?.isActive == true) return
-        streamJob = viewModelScope.launch {
-            val chapters = _state.value.chapters
-            if (chapters.isEmpty()) return@launch
-            val appearance = container.appearancePrefs.state.first()
-            val policy = app.xreader.data.prefs.PerformancePolicy.resolve(
-                appearance.performanceMode, container.totalRamMb(),
-                appearance.coverGlow
-            )
-            val counts = streamCharCounts(chapters)
-            val window = StreamWindowPlanner.plan(
-                anchorIndex = anchorIndex,
-                chapterCharCounts = counts,
-                charBudget = StreamWindowPlanner.charBudgetFor(
-                    policy.tier == app.xreader.data.prefs.PerfTier.MINIMAL
-                )
-            )
-            val current = _state.value.streamEntries
-            if (current.isNotEmpty() &&
-                window.fromIndex == current.first().chapterIndex &&
-                window.toIndex == current.last().chapterIndex
-            ) {
-                return@launch
-            }
-            val entries = buildStreamEntries(
-                window, anchorIndex,
-                minimalTier = policy.tier ==
-                    app.xreader.data.prefs.PerfTier.MINIMAL
-            )
-            // Release texts that fell out of the window (the
-            // planner's whole point); the anchor's text survives
-            // because the window always contains the anchor.
-            val keepIds = entries.map { it.chapterId }.toSet()
-            streamTexts.keys.retainAll(keepIds)
-            _state.value = _state.value.copy(streamEntries = entries)
-        }
-    }
-
-    /** R17: a not-yet-downloaded chapter inside the stream can be
-     * fetched in place; when it lands, its block fills in.
-     * v1.0.6.2: this is the same live pull the stream now starts
-     * on its own when a window chapter is missing — the tap is
-     * just the explicit retry of it. */
-    fun downloadStreamChapter(index: Int) {
-        startStreamLiveFetch(index)
-    }
-
-    /** Leaving the stream (a chapter jump in chapter-by-chapter
-     * terms, or closing): the single-chapter path takes over. */
-    fun closeStream() {
-        streamJob?.cancel()
-        // v1.7 one-engine: a closed stream carries no boundary
-        // request with it — the next open re-plans from scratch.
-        boundaryNextIndex = -1
-        boundaryFailedIndex = -1
-        if (_state.value.streamActive) {
-            _state.value = _state.value.copy(
-                streamActive = false,
-                streamFailedReason = null
-            )
-        }
     }
 
     // -- Position & progress -----------------------------------------------------
@@ -2946,7 +3281,7 @@ class ReaderViewModel(
                 // the reader is looking at.
                 val chapterId = _state.value.chapter?.id
                 val original = chapterId
-                    ?.let { chapterCache[it] ?: streamTexts[it] }
+                    ?.let { chapterCache[it] ?: segmentOriginals[it] }
                     ?: display
                 val startOffset = if (original === display) {
                     _state.value.positionOffset
@@ -3073,17 +3408,21 @@ class ReaderViewModel(
     // -- Translated view (Phase 5) -----------------------------------------------
 
     /** A RAW translation just finished for [chapterId]: drop the
-     * cached original and reload if that chapter is on screen. */
+     * cached original and reload if that chapter is on screen.
+     * v1.7 document engine (Item 3, row 1): the reload is a
+     * segment CONTENT SWAP — the segment store's entry is
+     * invalidated (the Fix-1 evictions, subsumed: the store's
+     * invalidation rule IS that eviction, generalised), the
+     * segment returns to LOADING, and its fill re-reads under
+     * the new preference; PAGED keeps the shipped loadChapter
+     * road for the on-screen chapter. */
     fun onTranslationReady(chapterId: Long) {
         originalPreferred.remove(chapterId)
-        chapterCache.remove(chapterId)
-        // A1 fix: the stream cache holds the same pre-toggle
-        // road chapterCache does — evict beside it, or a
-        // rebuilt window would serve the untranslated text
-        // from cache and the reopen would change nothing.
-        streamTexts.remove(chapterId)
+        invalidateSegmentForSwap(chapterId)
         val stateNow = _state.value
-        if (stateNow.chapter?.id == chapterId) {
+        if (stateNow.chapter?.id == chapterId &&
+            _config.value.mode == ReaderMode.PAGED
+        ) {
             launchLoad {
                 loadChapter(
                     stateNow.chapterIndex,
@@ -3097,34 +3436,68 @@ class ReaderViewModel(
     fun showOriginalChapter() {
         val chapter = _state.value.chapter ?: return
         originalPreferred.add(chapter.id)
-        chapterCache.remove(chapter.id)
-        // A1 fix: stream cache evicted beside chapterCache
-        // (see onTranslationReady).
-        streamTexts.remove(chapter.id)
-        val stateNow = _state.value
-        launchLoad {
-            loadChapter(
-                stateNow.chapterIndex,
-                stateNow.positionOffset,
-                stateNow.chapterFraction
-            )
-        }
+        swapCurrentChapterRoad()
     }
 
     fun showTranslatedChapter() {
         val chapter = _state.value.chapter ?: return
         originalPreferred.remove(chapter.id)
-        chapterCache.remove(chapter.id)
-        // A1 fix: stream cache evicted beside chapterCache
-        // (see onTranslationReady).
-        streamTexts.remove(chapter.id)
+        swapCurrentChapterRoad()
+    }
+
+    /** Item 3, row 1: the current chapter's translation
+     * toggle — in paged, the shipped reload; in scroll, the
+     * segment swap: invalidate the anchor segment and refill
+     * it, arming the scoped re-assert so the landing restores
+     * the place against the new text. */
+    private fun swapCurrentChapterRoad() {
         val stateNow = _state.value
-        launchLoad {
-            loadChapter(
-                stateNow.chapterIndex,
-                stateNow.positionOffset,
-                stateNow.chapterFraction
-            )
+        val chapter = stateNow.chapter ?: return
+        if (_config.value.mode == ReaderMode.SCROLL) {
+            invalidateSegmentForSwap(chapter.id)
+        } else {
+            chapterCache.remove(chapter.id)
+            segmentOriginals.remove(chapter.id)
+            segmentDisplay.remove(chapter.id)
+            segmentTranslatedIds.remove(chapter.id)
+            launchLoad {
+                loadChapter(
+                    stateNow.chapterIndex,
+                    stateNow.positionOffset,
+                    stateNow.chapterFraction
+                )
+            }
+        }
+    }
+
+    /**
+     * Item 3, row 1: a segment's content swap (a translation
+     * arriving or a road toggle). The store entry is dropped
+     * — original, display and failure alike — so the segment
+     * returns to LOADING; chapterCache is evicted beside it
+     * (the Fix-1 discipline, kept). If the segment is
+     * resident-or-anchor in scroll, its fill is re-requested
+     * at once; if it is the anchor, the scoped re-assert is
+     * armed so the landing restores the reader's place
+     * against the new text and no other segment's place
+     * moves. The A7 race rule inside the parse covers a swap
+     * landing while a fill is already in flight.
+     */
+    private fun invalidateSegmentForSwap(chapterId: Long) {
+        chapterCache.remove(chapterId)
+        val wasHeld = segmentOriginals.remove(chapterId) != null
+        segmentDisplay.remove(chapterId)
+        segmentTranslatedIds.remove(chapterId)
+        segmentFailedReasonsMap.remove(chapterId)
+        publishDocumentState()
+        if (_config.value.mode != ReaderMode.SCROLL) return
+        val stateNow = _state.value
+        val index = chapterPositionIndex.indexOfChapter(chapterId)
+            ?: return
+        val isAnchor = index == stateNow.chapterIndex
+        if (isAnchor || wasHeld || index in residentRunIndices) {
+            if (isAnchor) pendingSwapReassertIds += chapterId
+            requestSegmentFill(chapterId)
         }
     }
 
@@ -3252,8 +3625,10 @@ class ReaderViewModel(
         val text = if (chapterIndex == stateNow.chapterIndex) {
             stateNow.chapterText
         } else {
-            stateNow.streamEntries
-                .firstOrNull { it.chapterIndex == chapterIndex }?.text
+            // v1.7 document engine: any RESIDENT segment's
+            // display, by its chapter's id.
+            stateNow.chapters.getOrNull(chapterIndex)
+                ?.let { stateNow.segmentTexts[it.id] }
         } ?: return
         if (start < 0 || end > text.length || start >= end) return
         viewModelScope.launch {
@@ -3371,8 +3746,8 @@ class ReaderViewModel(
             val dao = container.database.vocabDao()
             if (dao.findByWord(word) != null) return@launch
             val fullText = _state.value.chapterText?.text
-                ?: _state.value.streamEntries
-                    .firstOrNull { it.text != null }?.text?.text
+                ?: _state.value.segmentTexts.values
+                    .firstOrNull()?.text
                 ?: ""
             val now = System.currentTimeMillis()
             dao.insert(

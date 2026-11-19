@@ -61,7 +61,6 @@ import app.xreader.domain.reader.ChapterLayoutCache
 import app.xreader.domain.reader.ChapterLayoutService
 import app.xreader.domain.reader.ChapterMeasurer
 import app.xreader.domain.reader.ChapterText
-import app.xreader.domain.reader.LayoutAheadPolicy
 import app.xreader.domain.reader.MeasuredBlock
 import app.xreader.domain.reader.Page
 import app.xreader.domain.reader.PageLocator
@@ -78,7 +77,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -121,28 +119,31 @@ fun PagedReader(
      * out in the space BETWEEN the bars, never beneath them. */
     topInset: androidx.compose.ui.unit.Dp = 0.dp,
     bottomInset: androidx.compose.ui.unit.Dp = 0.dp,
-    /** v1.7 Patch 2 (item 2): the layout-service wiring — the
-     * current chapter's id (its layout-cache key), the NEXT
-     * chapter's id + display text for layout-ahead, the
-     * ViewModel's tier gate for it, and one extra fingerprint
-     * component (the translation/original selection; terms
-     * edits are covered by the content hash in the cache key).
-     * All defaulted: a caller that passes none keeps the
-     * shipped behaviour, with layout-ahead simply off. */
+    /** v1.7 Patch 2 (item 2): the current chapter's id (its
+     * layout-cache key). */
     chapterId: Long = -1L,
-    nextChapterId: Long? = null,
-    nextChapterText: ChapterText? = null,
-    layoutAheadEnabled: Boolean = false,
-    fingerprintExtra: Any? = null
+    /** v1.7 document engine (Item 2): the SHARED layout store
+     * and its inputs, hoisted to ReaderScreen — one store for
+     * the whole reader. [layoutFingerprint] /
+     * [spreadFingerprint] are the two width families (single
+     * column == the scroll surface's width, so a chapter laid
+     * out ahead by the worker serves a paged open of the same
+     * chapter, and the spread's own family lives beside it);
+     * [layoutContentHeightPx] is the height both were
+     * assembled with (== this surface's own content height).
+     * [preemptAheadLayout] is the screen worker's cancel
+     * handle: a visible-chapter request pre-empts the ahead
+     * job (R4). */
+    layoutService: ChapterLayoutService,
+    layoutFingerprint: List<Any?>,
+    spreadFingerprint: List<Any?>,
+    singleColumnWidthPx: Float,
+    spreadColumnWidthPx: Float,
+    layoutContentHeightPx: Float,
+    preemptAheadLayout: () -> Unit
 ) {
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer()
-    // v1.7 one-engine (R4): layout-ahead measures on its OWN
-    // TextMeasurer — one measurer serves one job at a time.
-    // The visible chapter's pagination and the ahead job used
-    // to share a single TextMeasurer through chapterMeasurer;
-    // the ahead measurer below ends that sharing.
-    val aheadMeasurer = rememberTextMeasurer()
     val scope = rememberCoroutineScope()
 
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -180,66 +181,61 @@ fun PagedReader(
         // and the measuring loop below is the only per-block work:
         // one text measurement per prose block per pagination.
         // v1.7 Patch 2 (item 2a/2b): measure + paginate run
-        // through the ChapterLayoutService now. The Compose
+        // through the ChapterLayoutService. The Compose
         // measurer below is the UI-layer ChapterMeasurer — this
         // reader's own measuring machinery (TextMeasurer +
-        // Density + blockTextStyle + annotated strings) moved
-        // behind the seam, verbatim in substance. The service's
-        // bounded cache (current + next chapter) lives as long
-        // as this reader does and is evicted with it.
-        val layoutService = remember { ChapterLayoutService() }
-        val layoutFingerprint = remember(
-            config, fontFamily, columnWidthPx, contentHeightPx,
-            density.fontScale, fingerprintExtra
-        ) {
-            listOf(
-                config, fontFamily, columnWidthPx, contentHeightPx,
-                density.fontScale, fingerprintExtra
-            )
+        // Density + blockTextStyle + annotated strings) behind
+        // the seam, verbatim in substance.
+        // v1.7 document engine (Item 2): the store, the
+        // fingerprints and the geometry are HOISTED — passed in
+        // from ReaderScreen, which assembles the fingerprint
+        // ONCE for both surfaces. The ACTIVE fingerprint and
+        // width follow the spread: the single-column family is
+        // the same key family the scroll surface and the
+        // screen's ahead worker use (same width by
+        // construction), the spread is the second family in
+        // the same store. A record's absence costs a measure,
+        // never a place (the scoped-eviction invariant).
+        val activeFingerprint = if (spread) {
+            spreadFingerprint
+        } else {
+            layoutFingerprint
+        }
+        val activeColumnWidthPx = if (spread) {
+            spreadColumnWidthPx
+        } else {
+            singleColumnWidthPx
         }
         val chapterMeasurer = remember(
-            measurer, density, fontFamily, columnWidthPx,
-            contentHeightPx
+            measurer, density, fontFamily, activeColumnWidthPx,
+            layoutContentHeightPx
         ) {
             ComposeChapterMeasurer(
                 textMeasurer = measurer,
                 density = density,
                 fontFamily = fontFamily,
-                columnWidthPx = columnWidthPx,
-                contentHeightPx = contentHeightPx
+                columnWidthPx = activeColumnWidthPx,
+                contentHeightPx = layoutContentHeightPx
             )
         }
-        // v1.7 one-engine (R4): the layout-ahead job's own
-        // measurer, on the ahead TextMeasurer — same remember
-        // keys as chapterMeasurer, used ONLY by the ahead job
-        // below. The visible path keeps chapterMeasurer.
-        val aheadChapterMeasurer = remember(
-            aheadMeasurer, density, fontFamily, columnWidthPx,
-            contentHeightPx
-        ) {
-            ComposeChapterMeasurer(
-                textMeasurer = aheadMeasurer,
-                density = density,
-                fontFamily = fontFamily,
-                columnWidthPx = columnWidthPx,
-                contentHeightPx = contentHeightPx
-            )
-        }
-        var aheadJob by remember { mutableStateOf<Job?>(null) }
         var lastPages by remember { mutableStateOf<List<Page>>(emptyList()) }
         var lastPagesText by remember { mutableStateOf<ChapterText?>(null) }
         val computedPages by produceState<List<Page>?>(
-            null, chapterText, config, fontFamily, columnWidthPx, contentHeightPx
+            null, chapterText, config, fontFamily,
+            activeColumnWidthPx, layoutContentHeightPx
         ) {
             value = null
             // v1.7 Patch 2 (item 2b): a request to lay out the
             // chapter ON SCREEN pre-empts the ahead job — the
             // visible chapter always wins the measuring budget.
-            aheadJob?.cancel()
+            // v1.7 document engine (Item 2): the ahead job is
+            // ReaderScreen's worker over the resident run now;
+            // the pre-emption is its cancel handle.
+            preemptAheadLayout()
             val cacheKey = ChapterLayoutCache.Key(
                 chapterId = chapterId,
                 contentHash = ChapterLayoutCache.contentHash(chapterText),
-                fingerprint = layoutFingerprint
+                fingerprint = activeFingerprint
             )
             val cached = layoutService.cache.get(cacheKey)
             if (cached != null) {
@@ -256,8 +252,8 @@ fun PagedReader(
                     layoutService.layout(
                         chapterText = chapterText,
                         config = config,
-                        pageHeightPx = contentHeightPx,
-                        fingerprint = layoutFingerprint,
+                        pageHeightPx = layoutContentHeightPx,
+                        fingerprint = activeFingerprint,
                         measurer = chapterMeasurer
                     ).also { layout ->
                         layoutService.cache.put(cacheKey, layout)
@@ -265,53 +261,10 @@ fun PagedReader(
                 }
             }
         }
-        // v1.7 Patch 2 (item 2b): layout-ahead — once the
-        // visible chapter's pages are ready, the NEXT stored
-        // chapter's layout is computed on Dispatchers.Default
-        // into the same bounded cache, so turning into it is
-        // instant. Gated by the ViewModel's tier decision
-        // (FULL + STANDARD on, MINIMAL off) and the 1.5 M-char
-        // ahead cap; the job is cancelled whenever the inputs
-        // move on (this effect restarts), when the reader
-        // leaves (the scope dies with it), or when the visible
-        // chapter asks for layout (above).
-        LaunchedEffect(
-            computedPages, nextChapterId, nextChapterText,
-            layoutAheadEnabled, layoutFingerprint
-        ) {
-            aheadJob?.cancel()
-            aheadJob = null
-            val nextText = nextChapterText
-            val nextId = nextChapterId
-            if (!layoutAheadEnabled || nextText == null ||
-                nextId == null
-            ) {
-                return@LaunchedEffect
-            }
-            if (!LayoutAheadPolicy.withinCap(nextText.length)) {
-                return@LaunchedEffect
-            }
-            val nextKey = ChapterLayoutCache.Key(
-                chapterId = nextId,
-                contentHash = ChapterLayoutCache.contentHash(nextText),
-                fingerprint = layoutFingerprint
-            )
-            if (layoutService.cache.get(nextKey) != null) {
-                return@LaunchedEffect
-            }
-            aheadJob = scope.launch(Dispatchers.Default) {
-                val layout = layoutService.layout(
-                    chapterText = nextText,
-                    config = config,
-                    pageHeightPx = contentHeightPx,
-                    fingerprint = layoutFingerprint,
-                    // R4: the ahead job never touches the
-                    // visible path's measurer.
-                    measurer = aheadChapterMeasurer
-                )
-                layoutService.cache.put(nextKey, layout)
-            }
-        }
+        // The Patch-2 layout-ahead effect that lived here is
+        // retired: layout-ahead is ReaderScreen's worker over
+        // the published resident-run candidates (Item 2), into
+        // this same shared store.
         LaunchedEffect(computedPages) {
             val ready = computedPages
             if (ready != null) {
@@ -1133,7 +1086,7 @@ private fun PageContent(
  * space-before at 0.7 line heights, paragraph space-after from
  * the config.
  */
-private class ComposeChapterMeasurer(
+class ComposeChapterMeasurer(
     private val textMeasurer: TextMeasurer,
     private val density: Density,
     private val fontFamily: FontFamily,

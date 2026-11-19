@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -83,7 +84,11 @@ import app.xreader.core.motion.sharedAxisYEnter
 import app.xreader.core.motion.sharedAxisYExit
 import app.xreader.data.db.Highlight
 import app.xreader.di.AppContainer
+import androidx.compose.ui.text.rememberTextMeasurer
+import app.xreader.domain.reader.ChapterLayoutCache
+import app.xreader.domain.reader.ChapterLayoutService
 import app.xreader.domain.reader.EyeState
+import app.xreader.domain.reader.LayoutAheadPolicy
 import app.xreader.domain.reader.ReaderMode
 import app.xreader.domain.reader.WpmEstimator
 import app.xreader.ui.common.ElasticSlider
@@ -94,7 +99,10 @@ import app.xreader.ui.theme.ReaderPalettes
 import app.xreader.ui.theme.aiAccentColor
 import app.xreader.ui.theme.maxContrast
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 private enum class ActiveSheet { SETTINGS, LISTEN, TOC, FOCUS, SEARCH }
@@ -173,64 +181,15 @@ fun ReaderScreen(
             aiViewModel.bind(state.chapterIndex, chapter.id, state.positionOffset)
         }
     }
-    // v1.7 one-engine (A1/A2): in SCROLL mode the unified
-    // stream core is the ONLY text surface, under BOTH
-    // transitions — the transition is the window policy
-    // (CONTINUOUS = the sliding window, CHAPTER_BY_CHAPTER =
-    // pinned to the current chapter). The effect is keyed on
-    // streamActive + the transition so the window (re)opens at
-    // the LIVE place (chapterIndex, positionOffset) after
-    // every loadChapter-path event — chrome next/prev,
-    // Contents/bookmark/search jumps, translation toggles,
-    // the Preparing reload; every loadChapter closes the
-    // stream at its own start (A1 fix) — and a transition flip
-    // under an active stream re-plans the window around the
-    // same live place (tracked via appliedStreamPinned).
-    // Leaving SCROLL carries the live place into Paged via
-    // openChapterAt — never a chapter-start reload (Item 6).
-    //
-    // A1 fix: the load's landing (chapterIndex /
-    // restoreGeneration) is ALSO an effect key. A load closes
-    // the stream before it lands, so the streamActive relaunch
-    // alone reopens at the PRE-load place and races the load;
-    // the landing relaunch is the one that reads the place
-    // the load actually landed at — reopening the window if
-    // it is still closed, or re-planning it when the composed
-    // window no longer covers the landed chapter (an early
-    // reopen, issued mid-load, may have landed first; the
-    // ViewModel refuses to land a window built against a
-    // stale generation, and this branch is the other half of
-    // that discipline).
-    var appliedStreamPinned by remember { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(
-        config.mode, config.chapterTransition,
-        state.streamActive, state.chapters.size,
-        state.chapterIndex, state.restoreGeneration
-    ) {
-        val wantsStream = config.mode == ReaderMode.SCROLL
-        if (wantsStream && state.chapters.isNotEmpty()) {
-            val pinned = config.chapterTransition ==
-                app.xreader.domain.reader.ChapterTransition.CHAPTER_BY_CHAPTER
-            if (!state.streamActive) {
-                viewModel.openStream(
-                    state.chapterIndex, state.positionOffset, pinned = pinned
-                )
-                appliedStreamPinned = pinned
-            } else if (appliedStreamPinned != pinned ||
-                state.streamEntries.none {
-                    it.chapterIndex == state.chapterIndex
-                }
-            ) {
-                viewModel.openStream(
-                    state.chapterIndex, state.positionOffset, pinned = pinned
-                )
-                appliedStreamPinned = pinned
-            }
-        } else if (!wantsStream && state.streamActive) {
-            viewModel.openChapterAt(state.chapterIndex, state.positionOffset)
-            appliedStreamPinned = null
-        }
-    }
+    // v1.7 document engine: the windowed build's activation
+    // effect stood here — it (re)opened the stream window at
+    // the live place after every loadChapter-path event, and
+    // carried the place across mode flips. It is retired
+    // WITH the window: the document surface below is composed
+    // directly from the published per-segment state, anchor
+    // moves are the ViewModel's moveAnchor, and mode flips
+    // are carried VM-side by its config collectors. There is
+    // nothing here left to activate.
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -618,6 +577,147 @@ fun ReaderScreen(
             )
         }
 
+        // v1.7 document engine (Item 2): ONE layout store for
+        // the whole reader, hoisted here — the only place the
+        // geometry BOTH surfaces consume can be computed. The
+        // store's bound follows the tier gate (FULL/STANDARD
+        // 64 segment layouts, MINIMAL 8 — LayoutAheadPolicy's
+        // tiers); a bound change replaces the store (records
+        // are accelerants — losing them costs speed, never a
+        // place). The fingerprint is assembled ONCE here and
+        // shared by both surfaces and the worker: (config,
+        // font family, column width px, content height px,
+        // App-size scale, translation selection) — the scroll
+        // width and the single-page paged width are the SAME
+        // width by construction, so one key family serves
+        // both; the spread is the second family in the same
+        // store. Widths: (maxWidth − margins) here ==
+        // PagedReader's own (maxWidth − marginH×2); the spread
+        // subtracts PagedReader's 36.dp column gap — the two
+        // computations must stay tied (a drift would only cost
+        // cache hits, never correctness: the key carries the
+        // width).
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val layoutBound = if (state.layoutAheadEnabled) 64 else 8
+            val layoutService = remember(layoutBound) {
+                ChapterLayoutService(cacheBound = layoutBound)
+            }
+            val singleColumnWidthPx = with(densityNow) {
+                (maxWidth - config.marginHorizontalDp.dp * 2).toPx()
+            }
+            val spreadColumnWidthPx = with(densityNow) {
+                ((maxWidth - config.marginHorizontalDp.dp * 2 -
+                    36.dp) / 2).toPx()
+            }
+            val layoutContentHeightPx = with(densityNow) {
+                (maxHeight - config.marginVerticalDp.dp * 2 -
+                    readerTopInset - readerBottomInset).toPx()
+            }
+            val layoutFingerprint = remember(
+                config, fontFamily, singleColumnWidthPx,
+                layoutContentHeightPx, densityNow.fontScale,
+                state.showingTranslation
+            ) {
+                listOf(
+                    config, fontFamily, singleColumnWidthPx,
+                    layoutContentHeightPx, densityNow.fontScale,
+                    state.showingTranslation
+                )
+            }
+            val spreadFingerprint = remember(
+                config, fontFamily, spreadColumnWidthPx,
+                layoutContentHeightPx, densityNow.fontScale,
+                state.showingTranslation
+            ) {
+                listOf(
+                    config, fontFamily, spreadColumnWidthPx,
+                    layoutContentHeightPx, densityNow.fontScale,
+                    state.showingTranslation
+                )
+            }
+            // The layout-ahead worker (Item 2): measures the
+            // published resident-run candidates in order —
+            // anchor first — into the shared store, on
+            // Dispatchers.Default, under the tier gate and the
+            // 1.5 M-char cap. R4: it owns its OWN measurer, and
+            // a visible-chapter request pre-empts it through
+            // [preemptAheadLayout]. Each landed record bumps
+            // layoutVersion — the document surface's stage-2
+            // refinement re-checks the store when it moves.
+            val aheadTextMeasurer = rememberTextMeasurer()
+            val aheadChapterMeasurer = remember(
+                aheadTextMeasurer, densityNow, fontFamily,
+                singleColumnWidthPx, layoutContentHeightPx
+            ) {
+                ComposeChapterMeasurer(
+                    textMeasurer = aheadTextMeasurer,
+                    density = densityNow,
+                    fontFamily = fontFamily,
+                    columnWidthPx = singleColumnWidthPx,
+                    contentHeightPx = layoutContentHeightPx
+                )
+            }
+            var layoutVersion by remember { mutableIntStateOf(0) }
+            var aheadLayoutJob by remember { mutableStateOf<Job?>(null) }
+            LaunchedEffect(
+                state.layoutAheadCandidates, layoutFingerprint,
+                state.layoutAheadEnabled
+            ) {
+                aheadLayoutJob?.cancel()
+                aheadLayoutJob = null
+                if (!state.layoutAheadEnabled) return@LaunchedEffect
+                val candidates = state.layoutAheadCandidates
+                if (candidates.isEmpty()) return@LaunchedEffect
+                aheadLayoutJob = scope.launch(Dispatchers.Default) {
+                    for ((id, text) in candidates) {
+                        ensureActive()
+                        if (!LayoutAheadPolicy.withinCap(text.length)) {
+                            continue
+                        }
+                        val key = ChapterLayoutCache.Key(
+                            id,
+                            ChapterLayoutCache.contentHash(text),
+                            layoutFingerprint
+                        )
+                        if (layoutService.cache.get(key) != null) continue
+                        val layout = runCatching {
+                            layoutService.layout(
+                                text, config, layoutContentHeightPx,
+                                layoutFingerprint, aheadChapterMeasurer
+                            )
+                        }.getOrNull() ?: continue
+                        layoutService.cache.put(key, layout)
+                        layoutVersion++
+                    }
+                }
+            }
+            val preemptAheadLayout: () -> Unit =
+                { aheadLayoutJob?.cancel() }
+            // A4: records follow residency — a segment leaving
+            // the published run loses its records (every key
+            // variant); a fingerprint change clears the store
+            // (the old entries are unreachable by key anyway).
+            var recordRunIds by remember {
+                mutableStateOf<Set<Long>>(emptySet())
+            }
+            LaunchedEffect(state.residentSegmentIds) {
+                val gone = recordRunIds - state.residentSegmentIds
+                gone.forEach { layoutService.cache.evictChapter(it) }
+                recordRunIds = state.residentSegmentIds
+            }
+            var lastLayoutFingerprints by remember {
+                mutableStateOf<Pair<List<Any?>, List<Any?>>?>(null)
+            }
+            LaunchedEffect(layoutFingerprint, spreadFingerprint) {
+                val current = layoutFingerprint to spreadFingerprint
+                if (lastLayoutFingerprints != null &&
+                    lastLayoutFingerprints != current
+                ) {
+                    layoutService.cache.clear()
+                }
+                lastLayoutFingerprints = current
+            }
+
         when {
             // v1.2.0 (Wave 3): the full-screen spinner shows ONLY
             // when there is no previous chapter to keep on screen
@@ -798,49 +898,51 @@ fun ReaderScreen(
                 }
             }
 
-            // v1.7 one-engine: in SCROLL mode the unified
-            // stream core renders the window under BOTH
-            // transitions — it is the only scroll surface.
-            // A1 fix (C9): in SCROLL mode a just-closed
-            // stream's RETAINED entries stay composed through
-            // the re-entry gap — closeStream never clears
-            // them, and they are swapped only when the
-            // replacement window lands, so a crossing never
-            // falls through to a blank frame. In PAGED mode
-            // the branch still requires an active stream, so
-            // the SCROLL-exit gap keeps rendering the previous
-            // chapter through PagedReader, as before.
-            state.streamEntries.isNotEmpty() &&
-                (state.streamActive || config.mode == ReaderMode.SCROLL) -> {
-                ScrollStreamReader(
-                    entries = state.streamEntries,
-                    totalChapters = state.chapters.size,
+            // v1.7 document engine: in SCROLL mode the
+            // document surface renders the WHOLE BOOK as
+            // segments under BOTH transitions — it is the only
+            // scroll surface. It composes from the published
+            // per-segment state; there is no window and no
+            // activation gap.
+            config.mode == ReaderMode.SCROLL && state.chapterText != null -> {
+                DocumentReader(
+                    chapters = state.chapters,
+                    segmentStates = state.segmentStates,
+                    segmentTexts = state.segmentTexts,
+                    segmentFailedReasons = state.segmentFailedReasons,
                     config = config,
                     palette = palette,
                     fontFamily = fontFamily,
-                    // Item 1 parity: highlights reach the core
-                    // UN-pre-filtered — the core filters per
-                    // entry, so marks in window chapters other
-                    // than the current one render too.
+                    // Highlights reach the surface
+                    // UN-pre-filtered — it filters per
+                    // segment, so marks in chapters other than
+                    // the current one render too.
                     highlights = allHighlights,
                     spokenRange = spokenRange,
                     overlayBlockId = state.overlayTextId,
-                    restoreChapterIndex = state.chapterIndex,
+                    anchorChapterIndex = state.chapterIndex,
                     restoreOffset = state.restoreOffset,
+                    restoreHint = state.restoreHint,
                     restoreGeneration = state.restoreGeneration,
                     externalTurns = viewModel.externalTurns,
                     assetFile = { assetFile(bookId, it) },
-                    onStreamPosition = { chapterIndex, offset, fraction ->
-                        viewModel.onStreamPosition(chapterIndex, offset, fraction)
+                    layoutService = layoutService,
+                    layoutFingerprint = layoutFingerprint,
+                    layoutColumnWidthPx = singleColumnWidthPx,
+                    layoutContentHeightPx = layoutContentHeightPx,
+                    layoutVersion = layoutVersion,
+                    onDocumentPosition = { chapterIndex, offset, fraction ->
+                        viewModel.onDocumentPosition(chapterIndex, offset, fraction)
                     },
                     // A5: ranges resolve against the
-                    // paragraph's OWN entry text; marks are
+                    // paragraph's OWN segment text; marks are
                     // written against that chapter. Bookmark
                     // never routes through onPosition.
                     onParagraphAction = { chapterIndex, blockIndex, action ->
-                        val entryText = state.streamEntries
-                            .firstOrNull { it.chapterIndex == chapterIndex }?.text
-                        val range = entryText?.rangeOf(blockIndex)
+                        val segmentText = state.chapters
+                            .getOrNull(chapterIndex)
+                            ?.let { state.segmentTexts[it.id] }
+                        val range = segmentText?.rangeOf(blockIndex)
                         if (range != null) {
                             when (action) {
                                 ParagraphAction.HIGHLIGHT ->
@@ -863,15 +965,22 @@ fun ReaderScreen(
                     onCenterTap = { chromeVisible = !chromeVisible },
                     onChromeWanted = { wanted -> chromeVisible = wanted },
                     onSelectionAction = handleSelectionAction,
-                    onDownloadChapter = { index ->
-                        viewModel.downloadStreamChapter(index)
+                    onDownloadChapter = { chapterId ->
+                        viewModel.downloadSegmentChapter(chapterId)
+                    },
+                    onRetryChapter = { chapterId ->
+                        viewModel.retrySegment(chapterId)
+                    },
+                    onSegmentVisible = { chapterId ->
+                        viewModel.onSegmentVisible(chapterId)
+                    },
+                    onSegmentApproached = { chapterId ->
+                        viewModel.onSegmentApproached(chapterId)
                     },
                     onBoundaryEndVisible = { viewModel.onBoundaryEndVisible() },
                     onChapterEndReached = {
                         viewModel.markCurrentChapterFinished()
                     },
-                    onRetryChapter = { viewModel.retryBoundaryChapter() },
-                    failedReason = state.streamFailedReason,
                     topInset = readerTopInset,
                     bottomInset = readerBottomInset
                 )
@@ -910,17 +1019,25 @@ fun ReaderScreen(
                         topInset = readerTopInset,
                         bottomInset = readerBottomInset,
                         // v1.7 Patch 2 (item 2): the layout
-                        // service's cache key + layout-ahead
-                        // inputs, published by the ViewModel.
+                        // cache key's chapter id.
+                        // v1.7 document engine (Item 2): the
+                        // shared store + fingerprints +
+                        // geometry, hoisted above — paged is
+                        // sliced from the same records the
+                        // document surface and the worker use.
                         chapterId = state.chapter?.id ?: -1L,
-                        nextChapterId = state.layoutAheadNextId,
-                        nextChapterText = state.layoutAheadNextText,
-                        layoutAheadEnabled = state.layoutAheadEnabled,
-                        fingerprintExtra = state.showingTranslation
+                        layoutService = layoutService,
+                        layoutFingerprint = layoutFingerprint,
+                        spreadFingerprint = spreadFingerprint,
+                        singleColumnWidthPx = singleColumnWidthPx,
+                        spreadColumnWidthPx = spreadColumnWidthPx,
+                        layoutContentHeightPx = layoutContentHeightPx,
+                        preemptAheadLayout = preemptAheadLayout
                     )
                 }
             }
         }
+        } // BoxWithConstraints (the hoisted layout store's scope)
 
         // Manga programme (slice M2): while the image reader
         // owns the screen it draws its OWN chrome (its bottom

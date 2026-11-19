@@ -35,12 +35,20 @@ data class ChapterLayout(
     val fingerprint: List<Any?>
 )
 
-class ChapterLayoutService {
+class ChapterLayoutService(
+    cacheBound: Int = ChapterLayoutCache.MAX_ENTRIES
+) {
 
     /** The bounded layout cache (item 2b) — current chapter +
-     * next chapter. Memory-only; it lives and dies with the
-     * service instance its reader holds. */
-    val cache: ChapterLayoutCache = ChapterLayoutCache()
+     * next chapter at the DEFAULT bound. Memory-only; it lives
+     * and dies with the service instance its reader holds.
+     * v1.7 document engine (Item 2): the bound is a constructor
+     * parameter whose default is [ChapterLayoutCache.MAX_ENTRIES]
+     * — a default-constructed service behaves byte-identically
+     * (its pinned test stands unmodified); the document's
+     * hoisted store passes the document bound (records tied to
+     * text residency, capped per tier). */
+    val cache: ChapterLayoutCache = ChapterLayoutCache(cacheBound)
 
     /** Measure every block of [chapterText] in order through
      * [measurer] and pack the blocks into pages of
@@ -84,7 +92,9 @@ class ChapterLayoutService {
  * density) and treated as opaque here. A stale-fingerprint
  * result is never served: a different tuple is a different key.
  */
-class ChapterLayoutCache {
+class ChapterLayoutCache(
+    private val maxEntries: Int = MAX_ENTRIES
+) {
 
     data class Key(
         val chapterId: Long,
@@ -100,15 +110,33 @@ class ChapterLayoutCache {
     fun get(key: Key): ChapterLayout? = synchronized(lock) { entries[key] }
 
     /** Insert (or refresh) an entry, evicting the eldest beyond
-     * the bound. */
+     * the bound. The LRU is insertion-ordered: [get] does NOT
+     * refresh recency — only a [put]'s remove+reinsert does. */
     fun put(key: Key, layout: ChapterLayout) {
         synchronized(lock) {
             entries.remove(key)
             entries[key] = layout
-            while (entries.size > MAX_ENTRIES) {
+            while (entries.size > maxEntries) {
                 entries.remove(entries.keys.first())
             }
         }
+    }
+
+    /** v1.7 document engine (Item 2, A4): drop EVERY entry for
+     * [chapterId] — all content-hash / fingerprint variants,
+     * stale ones included. Additive: a default-constructed
+     * cache's get/put behaviour is unchanged. */
+    fun evictChapter(chapterId: Long) {
+        synchronized(lock) {
+            entries.keys.removeAll { it.chapterId == chapterId }
+        }
+    }
+
+    /** v1.7 document engine (Item 2, A4): drop every entry —
+     * the surface's answer to a fingerprint change, whose old
+     * entries are unreachable by key anyway. */
+    fun clear() {
+        synchronized(lock) { entries.clear() }
     }
 
     companion object {
