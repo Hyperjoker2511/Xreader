@@ -1796,6 +1796,18 @@ private class SeamSelectionNavigator(
     }
 }
 
+/** v1.7 Patch 1 (item 2): the EPUB mode-flip handover —
+ * the live place wins, the open-time place is only the
+ * fallback before the first position report lands. Pure so
+ * the rule is pinned by test (Patch1EpubModeFlipTest):
+ * live place in, live place out — never the open-time
+ * place once the reader has moved. */
+internal fun effectiveEpubLocator(
+    liveLocator: org.readium.r2.shared.publication.Locator?,
+    openTimeLocator: org.readium.r2.shared.publication.Locator?
+): org.readium.r2.shared.publication.Locator? =
+    liveLocator ?: openTimeLocator
+
 @OptIn(org.readium.r2.shared.ExperimentalReadiumApi::class)
 @Composable
 private fun EpubBody(
@@ -1838,6 +1850,21 @@ private fun EpubBody(
     // the book falls back to the classic reader below, the
     // reader SAYS so — the fallback used to be silent.
     var riverFallbackNote by remember(session) { mutableStateOf(false) }
+    // v1.7 Patch 1 (item 2): the mode flip carries the LIVE
+    // place, not the open-time one. Both branches below used
+    // to hand over [initialLocator] — the place the book
+    // opened at — so flipping Scrolling ↔ Page-by-page
+    // mid-book jumped back to the open-time place. The
+    // ViewModel's [currentEpubLocator] always holds the live
+    // locator (every position report lands there), so the
+    // handover reads it first and falls back to the
+    // open-time place only before the first report lands
+    // (first open is unchanged). Read fresh at each
+    // composition: a flip recomposes, and the read gives the
+    // place the reader is actually at.
+    val effectiveLocator = effectiveEpubLocator(
+        viewModel.currentEpubLocator, initialLocator
+    )
     val riverRouted = settings.scroll && !session.isFixedLayout &&
         !riverUnavailable &&
         session.publication.metadata.readingProgression !=
@@ -2114,11 +2141,11 @@ private fun EpubBody(
                 bookId = bookId,
                 bookFingerprint = bookFingerprint,
                 settings = settings,
-                initialSection = initialLocator?.href?.toString()
+                initialSection = effectiveLocator?.href?.toString()
                     ?.let { session.sectionIndexOfHref(it) } ?: 0,
-                initialProgression = initialLocator?.locations
+                initialProgression = effectiveLocator?.locations
                     ?.progression,
-                initialQuote = initialLocator?.text?.highlight,
+                initialQuote = effectiveLocator?.text?.highlight,
                 driver = riverDriver,
                 onPositionReport = { locator ->
                     viewModel.onEpubLocator(locator)
@@ -2331,7 +2358,18 @@ private fun EpubBody(
                 if (manager.findFragmentById(containerId) == null) {
                     val factory = EpubNavigatorFactory(session.publication)
                         .createFragmentFactory(
-                            initialLocator = initialLocator,
+                            // v1.7 Patch 1 (item 2): read the
+                            // live place HERE, at install time —
+                            // the install runs when the container
+                            // attaches (after a flip), and the
+                            // live locator then is the place the
+                            // reader is actually at, not the
+                            // open-time one this lambda closed
+                            // over when it was remembered.
+                            initialLocator = effectiveEpubLocator(
+                                viewModel.currentEpubLocator,
+                                initialLocator
+                            ),
                             initialPreferences = initialPreferences,
                             // v1.5.12 (E3): the Configuration
                             // ALWAYS carries the native selection

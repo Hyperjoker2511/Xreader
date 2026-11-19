@@ -39,6 +39,23 @@ class XreaderApp : Application(), ImageLoaderFactory {
         container = AppContainer(this)
     }
 
+    /** v1.7 Patch 1 (item 6b): reading state is flushed on
+     * memory pressure — progress and place are saved before
+     * the OS can kill the process. The signal only EMITS
+     * here (a non-blocking tryEmit on the container's bus);
+     * the live readers commit their own pending saves on IO,
+     * so this callback never blocks the main thread and never
+     * touches the database itself. */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        runCatching { container.signalMemoryPressure() }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        runCatching { container.signalMemoryPressure() }
+    }
+
     override fun newImageLoader(): ImageLoader {
         // v1.3.1 (item 58): the loader's disk-cache ceiling is
         // the user's auto-clean cap, read once here (the loader
@@ -55,8 +72,12 @@ class XreaderApp : Application(), ImageLoaderFactory {
             }
         }.getOrNull()
         // v1.3.2 (scope A3): covers ride the browser view's
-        // session (see ImageSessionClient).
-        val callFactory = app.xreader.di.ImageSessionClient.create(this)
+        // session (see ImageSessionClient). v1.7 Patch 1
+        // (item 5): cover lookups resolve through the same
+        // switchable DoH resolver as the rest of source HTTP.
+        val callFactory = app.xreader.di.ImageSessionClient.create(
+            this, container.sourceDns
+        )
         return if (capMb != null) {
             AppImageLoader.build(
                 this,

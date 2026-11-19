@@ -172,9 +172,12 @@ fun glassEffectPlanFor(
     )
     // TINTED: pure chroma (Kimi) — the fill IS a theme-primary
     // gradient (0.20 → 0.10, multiplied by the user's opacity
-    // token at composition) over an opaque background base; the
-    // hue is the surface. Rim is primary too (0.55 top, 0.25
-    // bottom). No blur, no shader, ever — static by construction.
+    // token at composition) over a see-through background base
+    // at the fill alpha (v1.7 Patch 1, item 3d — the base used
+    // to be opaque, so the plain-tier dock read as a solid
+    // slab); the hue is the surface. Rim is primary too (0.55
+    // top, 0.25 bottom). No blur, no shader, ever — static by
+    // construction.
     GlassStyle.TINTED -> GlassEffectPlan(
         usesBackdropBlur = false,
         usesRefraction = false,
@@ -441,14 +444,19 @@ fun LiquidGlassSurface(
             // No blur on this plan (TINTED/SOLID), a static variant,
             // backdrop sampling off (cards), or no haze source in
             // this part of the tree: the plain fill. TINTED's base
-            // is the OPAQUE scheme background — its identity is the
-            // primary chroma gradient drawn over it in the overlay
-            // layer below (deterministic on black; no neutral
-            // surface colour in the fill at all). Every other
-            // identity takes the plan's fill at its pinned alpha
-            // (or the user's token / the caller's override).
+            // is the scheme background AT THE FILL ALPHA — a
+            // see-through tint, never an opaque slab: the
+            // pre-Patch-1 base was the opaque scheme background,
+            // so on the plain tier the dock read as a solid bar
+            // with nothing showing through (v1.7 Patch 1,
+            // item 3d). The identity's chroma gradient rides
+            // over it in the overlay layer below (deterministic
+            // on black; no neutral surface colour in the fill
+            // at all). Every other identity takes the plan's
+            // fill at its pinned alpha (or the user's token /
+            // the caller's override).
             backdrop = if (identityStyle == GlassStyle.TINTED) {
-                backdrop.background(scheme.background)
+                backdrop.background(scheme.background.copy(alpha = fillAlpha))
             } else {
                 backdrop.background(fillColor)
             }

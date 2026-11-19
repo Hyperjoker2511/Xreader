@@ -1139,6 +1139,10 @@ private fun PhoneShell(
                 // numeric badge (donor pattern).
                 val sourcesState by sourcesViewModel.state
                     .collectAsStateWithLifecycle()
+                // v1.7 Patch 1 (item 4): a newer release known
+                // raises the Profile tab's badge (same system).
+                val updateState by appUpdateViewModel.state
+                    .collectAsStateWithLifecycle()
                 FloatingNavBar(
                     selected = selectedTab(navController),
                     reduceMotion = appearance.reduceMotion,
@@ -1153,7 +1157,8 @@ private fun PhoneShell(
                     indicatorColourArgb =
                         libraryState.navIndicatorColourArgb,
                     exploreBadgeCount =
-                        sourcesState.keiyoushiPendingUpdateCount
+                        sourcesState.keiyoushiPendingUpdateCount,
+                    updateAvailable = updateState.release != null
                 )
             }
         }
@@ -1205,6 +1210,10 @@ private fun RailShell(
                 ) {
                 val railSourcesState by sourcesViewModel.state
                     .collectAsStateWithLifecycle()
+                // v1.7 Patch 1 (item 4): a newer release known
+                // raises the Profile tab's badge (same system).
+                val railUpdateState by appUpdateViewModel.state
+                    .collectAsStateWithLifecycle()
                 NavRail(
                     selected = selectedTab(navController),
                     reduceMotion = appearance.reduceMotion,
@@ -1212,7 +1221,8 @@ private fun RailShell(
                     onAddBook = onAddBook,
                     labelStyle = libraryState.tabLabelStyle,
                     exploreBadgeCount =
-                        railSourcesState.keiyoushiPendingUpdateCount
+                        railSourcesState.keiyoushiPendingUpdateCount,
+                    updateAvailable = railUpdateState.release != null
                 )
                 }
                 XreaderNavHost(
@@ -2454,7 +2464,7 @@ private fun XreaderNavHost(
                 onAutoCheckChange = { appUpdateViewModel.setAutoCheck(it) },
                 onOpenWhatsNew = { navController.navigate("whatsNew") },
                 onOpenAbout = { navController.navigate("about") },
-                onUpdateNow = { appUpdateViewModel.startDownload() },
+                onUpdateNow = { appUpdateViewModel.updateNow() },
                 onInstall = { appUpdateViewModel.install() },
                 onOpenInstallSettings = {
                     appUpdateViewModel.openInstallPermissionSettings()
@@ -2618,6 +2628,22 @@ private suspend fun openReaderViaResolver(
  * parent, never these.
  */
 @Composable
+/** v1.7 Patch 1 (item 3d): the dock's fill override — the
+ * covers scrolling under the bar must visibly show through.
+ * LIQUID keeps its 0.48; the plain TINTED tier gets the same
+ * 0.48 now that its base is a see-through tint instead of an
+ * opaque slab (LiquidGlassSurface). FROSTED keeps its pinned
+ * 0.72 and SOLID its opaque identity — neither is the plain
+ * tier this item is about. Pure so the tier rule is pinned
+ * by test (Patch1DockTintTest). */
+internal fun dockFillAlphaOverride(
+    tier: app.xreader.data.prefs.GlassTier
+): Float? = when (tier) {
+    app.xreader.data.prefs.GlassTier.LIQUID,
+    app.xreader.data.prefs.GlassTier.TINTED -> 0.48f
+    else -> null
+}
+
 private fun FloatingNavBar(
     selected: Tab,
     reduceMotion: Boolean,
@@ -2639,7 +2665,10 @@ private fun FloatingNavBar(
         app.xreader.data.library.DEFAULT_NAV_INDICATOR_ARGB,
     /** v1.5.39 (item 4): pending manga-source updates,
      * badged numerically on the Explore tab (0 = no badge). */
-    exploreBadgeCount: Int = 0
+    exploreBadgeCount: Int = 0,
+    /** v1.7 Patch 1 (item 4): a newer release known — the
+     * Profile tab's badge (see [tabBadgeCount]). */
+    updateAvailable: Boolean = false
 ) {
     val density = LocalDensity.current
     var barWidthPx by remember { mutableIntStateOf(0) }
@@ -2775,11 +2804,14 @@ private fun FloatingNavBar(
             // card plan's 0.62 — the covers scrolling under the
             // bar must visibly show through (the owner's dock
             // complaint), and the scrim below keeps icons readable
-            // at that lighter fill. The dock keeps sampling the
-            // backdrop (sampleBackdrop default): it floats over
-            // real scrolling content, where blur is real.
+            // at that lighter fill. v1.7 Patch 1 (item 3d): the
+            // plain TINTED tier gets the same 0.48 — its base is
+            // a see-through tint now, not the opaque slab it
+            // was. The dock keeps sampling the backdrop
+            // (sampleBackdrop default): it floats over real
+            // scrolling content, where blur is real.
             style = appearance.glassStyle,
-            fillAlphaOverride = if (dockTier == app.xreader.data.prefs.GlassTier.LIQUID) 0.48f else null
+            fillAlphaOverride = dockFillAlphaOverride(dockTier)
         ) {
             Box(
                 Modifier
@@ -2942,11 +2974,9 @@ private fun FloatingNavBar(
                             onIndicatorColour = onIndicatorColour,
                             reduceMotion = reduceMotion,
                             labelCoverage = slotCoverage,
-                            badgeCount = if (tab == Tab.Browse) {
-                                exploreBadgeCount
-                            } else {
-                                0
-                            }
+                            badgeCount = tabBadgeCount(
+                                tab, exploreBadgeCount, updateAvailable
+                            )
                         )
                     }
                 }
@@ -3021,6 +3051,23 @@ private fun FloatingNavBar(
     }
 }
 
+/** v1.7 Patch 1 (item 4): the dock badge per tab — the
+ * EXISTING badge system, extended, not a new channel. The
+ * Explore tab keeps its pending manga-source update count;
+ * the Profile tab (where Updates & about lives) shows 1
+ * while a newer release is known, 0 once it is installed
+ * or dismissed. Pure so the mapping is pinned by test
+ * (Patch1UpdateBadgeTest). */
+internal fun tabBadgeCount(
+    tab: Tab,
+    exploreBadgeCount: Int,
+    updateAvailable: Boolean
+): Int = when (tab) {
+    Tab.Browse -> exploreBadgeCount
+    Tab.Me -> if (updateAvailable) 1 else 0
+    else -> 0
+}
+
 /** The tablet left rail: fixed width, fixed-height slots stacked from the
  * top, "+ Add a book" pinned at the base (DESIGN.md). The pill's rect is
  * [NavGeometry] rail math over the deterministic slots region. */
@@ -3033,7 +3080,10 @@ private fun NavRail(
     labelStyle: app.xreader.data.library.TabLabelStyle =
         app.xreader.data.library.TabLabelStyle.ALWAYS,
     /** v1.5.39 (item 4): see [FloatingNavBar]. */
-    exploreBadgeCount: Int = 0
+    exploreBadgeCount: Int = 0,
+    /** v1.7 Patch 1 (item 4): a newer release known — the
+     * Profile tab's badge (see [tabBadgeCount]). */
+    updateAvailable: Boolean = false
 ) {
     val glass = LocalGlassSettings.current
     val density = LocalDensity.current
@@ -3104,11 +3154,9 @@ private fun NavRail(
                                 .height(RailSlotHeight),
                             labelStyle = labelStyle,
                             reduceMotion = reduceMotion,
-                            badgeCount = if (tab == Tab.Browse) {
-                                exploreBadgeCount
-                            } else {
-                                0
-                            }
+                            badgeCount = tabBadgeCount(
+                                tab, exploreBadgeCount, updateAvailable
+                            )
                         )
                     }
                 }

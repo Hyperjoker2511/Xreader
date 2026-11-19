@@ -120,7 +120,14 @@ class OkHttpTransport(
      * isolated from rendered fetches and the rest of the
      * app's IO (see FetchLanes). */
     private val dispatcher: kotlinx.coroutines.CoroutineDispatcher =
-        Dispatchers.IO
+        Dispatchers.IO,
+    /** v1.7 Patch 1 (item 5): the resolver this transport's
+     * clients resolve through — [okhttp3.Dns.SYSTEM] by
+     * default, the app's switchable DoH resolver when the
+     * container builds the source clients. The search-scoped
+     * client below takes it too, so search is source traffic
+     * like any other fetch. */
+    private val dns: okhttp3.Dns = okhttp3.Dns.SYSTEM
 ) : HttpTransport {
 
     override suspend fun execute(request: HttpTransport.Request): AppResult<HttpTransport.Response> {
@@ -179,7 +186,7 @@ class OkHttpTransport(
                     // printed §4 configuration is the one that runs.
                     val base = if (request.callTimeoutSeconds ==
                         SEARCH_CALL_TIMEOUT_SECONDS
-                    ) searchClient() else client
+                    ) searchClient(dns) else client
                     base.newBuilder()
                         .callTimeout(request.callTimeoutSeconds, TimeUnit.SECONDS)
                         .build().newCall(call.request())
@@ -238,7 +245,10 @@ class OkHttpTransport(
         const val SEARCH_CALL_TIMEOUT_SECONDS = 15L
 
         /** v1.5.2 (§4): search-scoped client (15 s call timeout). */
-        fun searchClient(): OkHttpClient = OkHttpClient.Builder()
+        fun searchClient(
+            dns: okhttp3.Dns = okhttp3.Dns.SYSTEM
+        ): OkHttpClient = OkHttpClient.Builder()
+            .dns(dns)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .callTimeout(SEARCH_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -246,7 +256,10 @@ class OkHttpTransport(
             .followSslRedirects(false)
             .build()
 
-        fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
+        fun defaultClient(
+            dns: okhttp3.Dns = okhttp3.Dns.SYSTEM
+        ): OkHttpClient = OkHttpClient.Builder()
+            .dns(dns)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .callTimeout(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -258,7 +271,10 @@ class OkHttpTransport(
          * redirects — ExtensionHttpClient follows them manually so the
          * domain whitelist is re-checked on every hop (§9.1).
          */
-        fun extensionClient(): OkHttpClient = OkHttpClient.Builder()
+        fun extensionClient(
+            dns: okhttp3.Dns = okhttp3.Dns.SYSTEM
+        ): OkHttpClient = OkHttpClient.Builder()
+            .dns(dns)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .callTimeout(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)

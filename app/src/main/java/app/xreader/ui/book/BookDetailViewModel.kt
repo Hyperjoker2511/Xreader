@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 data class BookDetailUiState(
@@ -94,6 +95,11 @@ data class BookDetailUiState(
     val enrichmentLoaded: Boolean = false,
     // ── v1.0.2 (R05/R11/R12/R22 + sweep) ─────────────────────────
     val favourite: Boolean = false,
+    /** v1.7 Patch 1 (item 1): the un-favourite prompt is
+     * showing — the favourite was this book's ONLY library
+     * claim, so un-favouriting asks "also remove from
+     * library?" with explicit Yes/No doors. */
+    val askRemoveOnUnfavourite: Boolean = false,
     /** v1.5.2 fix (FIX-8c): chapters whose STORED body is a stub
      * (login-wall/preview shape) — their stored wordCount renders
      * NOWHERE. Computed off the render path by the VM. */
@@ -385,6 +391,18 @@ object BookCopyDetails {
         providerName.contains("fenrir", ignoreCase = true) ||
             sourceName.contains("fenrir", ignoreCase = true)
 }
+
+/** v1.7 Patch 1 (item 1): the un-favourite prompt verdict —
+ * the prompt appears exactly when the favourite was the
+ * book's ONLY library claim: nothing downloaded, no reading
+ * status set, on no shelf. Any other claim keeps
+ * un-favourite plain, with no prompt. Pure so the truth
+ * table is pinned by test (Patch1RemoveFromLibraryTest). */
+internal fun favouriteIsOnlyLibraryClaim(
+    downloaded: Boolean,
+    hasStatus: Boolean,
+    onShelf: Boolean
+): Boolean = !downloaded && !hasStatus && !onShelf
 
 enum class OtherSourcesState { NOT_LOADED, LOADING, LOADED, FAILED }
 
@@ -904,12 +922,30 @@ class BookDetailViewModel(
             storyLocal.value = storyLocal.value.copy(
                 chaptersLoading = true, chaptersError = null
             )
-            when (
-                val result = container.sourceBookSync.ensureChapters(
+            // v1.7 Patch 1 (item 0 — Murim Login): the same
+            // containment as refreshChapters, at the
+            // book-open entry itself — ensureChapters'
+            // preamble (DAO reads, source resolution) sits
+            // outside refresh()'s net, and an uncaught throw
+            // here dies in this launch on Main exactly as the
+            // 2026-11-19 crash did. Cancellation still
+            // propagates untouched.
+            val result = try {
+                container.sourceBookSync.ensureChapters(
                     book,
                     app.xreader.data.extension.SourceBookSync.FIRST_CHUNK_MIN
                 )
-            ) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                app.xreader.core.error.AppResult.Err(
+                    app.xreader.core.error.AppError.ExtensionFailed(
+                        "the source",
+                        "the chapter list couldn't be loaded — try again"
+                    )
+                )
+            }
+            when (result) {
                 is app.xreader.core.error.AppResult.Ok -> {
                     storyLocal.value = storyLocal.value.copy(
                         chaptersLoading = false
@@ -1480,6 +1516,13 @@ class BookDetailViewModel(
             // SourceBookSync.refresh converts the same throws
             // itself; this is the second net, at the caller
             // the forensics named.
+            // v1.7 Patch 1 (item 0 — Murim Login): the net
+            // widens to EVERY non-cancellation throw, in step
+            // with refresh() itself — a NetworkOnMainThread-
+            // Exception escaping the refresh killed the
+            // process here (2026-11-19) because this net, like
+            // the first, caught only the two SQL classes.
+            // Cancellation still propagates untouched.
             val result = try {
                 container.sourceBookSync.refresh(book)
             } catch (
@@ -1494,6 +1537,15 @@ class BookDetailViewModel(
                 app.xreader.core.error.AppResult.Err(
                     app.xreader.core.error.AppError.StorageFailed(
                         "saving the chapter list"
+                    )
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                app.xreader.core.error.AppResult.Err(
+                    app.xreader.core.error.AppError.ExtensionFailed(
+                        "the source",
+                        "the chapter list couldn't be loaded — try again"
                     )
                 )
             }
@@ -1846,7 +1898,25 @@ class BookDetailViewModel(
 
     fun setFavourite(favourite: Boolean) {
         viewModelScope.launch {
-            container.bookMetaPrefs.setFavourite(bookId, favourite)
+            if (!favourite) {
+                // v1.7 Patch 1 (item 1): un-favourite asks
+                // "also remove from library?" ONLY when the
+                // favourite was the book's ONLY library claim
+                // — not downloaded, no reading status, on no
+                // shelf. The favourite clears at once either
+                // way; the prompt is about the library
+                // membership, not the mark. When other claims
+                // exist, un-favourite is plain, no prompt.
+                val onlyClaim = checkFavouriteIsOnlyClaim()
+                container.bookMetaPrefs.setFavourite(bookId, false)
+                if (onlyClaim) {
+                    storyLocal.value = storyLocal.value.copy(
+                        askRemoveOnUnfavourite = true
+                    )
+                }
+                return@launch
+            }
+            container.bookMetaPrefs.setFavourite(bookId, true)
             // v1.5.3 (item 24, finding #9 strand A4): favouriting
             // is a membership act — a favourited PREVIEW row must
             // surface on the Favourites shelf, and every Library
@@ -1854,8 +1924,55 @@ class BookDetailViewModel(
             // the mark alone could never appear (Favourites · 0
             // despite two marked books). Mirrors the download
             // promotion. Unfavouriting never demotes membership.
-            if (favourite) container.sourceBookSync.markInLibrary(bookId)
+            container.sourceBookSync.markInLibrary(bookId)
         }
+    }
+
+    /** v1.7 Patch 1 (item 1): the un-favourite prompt's Yes —
+     * remove the book from the library (downloaded chapters
+     * stay — this is the soft remove, same as the action-area
+     * door's "Remove book only"). Clears the prompt first so
+     * a second tap can't re-fire it. */
+    fun confirmUnfavouriteRemove(onDone: () -> Unit) {
+        storyLocal.value = storyLocal.value.copy(
+            askRemoveOnUnfavourite = false
+        )
+        removeFromLibrary(deleteFiles = false, onDone = onDone)
+    }
+
+    /** v1.7 Patch 1 (item 1): the un-favourite prompt's No —
+     * the book stays in the library; only the favourite
+     * mark is gone. */
+    fun dismissUnfavouriteRemove() {
+        storyLocal.value = storyLocal.value.copy(
+            askRemoveOnUnfavourite = false
+        )
+    }
+
+    /** v1.7 Patch 1 (item 1): is the favourite this book's
+     * ONLY library claim? True exactly when the book is in
+     * the library and holds no other claim — no downloaded
+     * chapters, no reading status, on no shelf. A preview
+     * row (never in the library) is never an only-claim
+     * case, and a favourited book is always a member, so
+     * the membership read is a guard, not the verdict. */
+    private suspend fun checkFavouriteIsOnlyClaim(): Boolean {
+        val book = container.database.bookDao().getById(bookId)
+            ?: return false
+        if (!book.inLibrary) return false
+        val downloaded = container.database.chapterDao()
+            .downloadedCount(bookId) > 0
+        val hasStatus = state.value.bookMeta.status !=
+            app.xreader.data.library.ReadingStatus.NONE
+        val shelfDao = container.database.shelfDao()
+        val onShelf = shelfDao.all().any { shelf ->
+            bookId in shelfDao.bookIdsOn(shelf.id)
+        }
+        return favouriteIsOnlyLibraryClaim(
+            downloaded = downloaded,
+            hasStatus = hasStatus,
+            onShelf = onShelf
+        )
     }
 
     /** R22: add a tag by the name the user typed (or a seed name).

@@ -146,7 +146,11 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
             app.xreader.data.extension.ContentVisibility.DEFAULT,
         /** Keiyoushi player (K6): the player's kill switch —
          * off means no Keiyoushi extension loads at all. */
-        val keiyoushiPlayerEnabled: Boolean = true
+        val keiyoushiPlayerEnabled: Boolean = true,
+        /** v1.7 Patch 1 (item 5): DNS-over-HTTPS — source
+         * lookups through Cloudflare (1.1.1.1) instead of
+         * the device's resolver. Default OFF. */
+        val dohEnabled: Boolean = false
     )
 
     /** FIX-18: the Komikku manga reader's GLOBAL defaults,
@@ -162,7 +166,8 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         container.downloadPrefs.settings,
         container.sourcePrefs.browserViewEnabled,
         container.sourcePrefs.contentVisibility,
-        container.sourcePrefs.keiyoushiPlayerEnabled
+        container.sourcePrefs.keiyoushiPlayerEnabled,
+        container.sourcePrefs.dohEnabled
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         UiState(
@@ -176,7 +181,8 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
             browserViewEnabled = values[5] as Boolean,
             contentVisibility = values[6]
                 as app.xreader.data.extension.ContentVisibility,
-            keiyoushiPlayerEnabled = values[7] as Boolean
+            keiyoushiPlayerEnabled = values[7] as Boolean,
+            dohEnabled = values[8] as Boolean
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
@@ -358,6 +364,11 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             container.sourcePrefs.setKeiyoushiPlayerEnabled(value)
         }
+    }
+
+    /** v1.7 Patch 1 (item 5): the DNS-over-HTTPS toggle. */
+    fun setDohEnabled(value: Boolean) {
+        viewModelScope.launch { container.sourcePrefs.setDohEnabled(value) }
     }
 
     // ── v1.0.4 (D10/D13): the download switches, moved here from
@@ -2314,6 +2325,22 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     "they load again.",
                 checked = state.keiyoushiPlayerEnabled,
                 onChange = { viewModel.setKeiyoushiPlayerEnabled(it) }
+            )
+            // v1.7 Patch 1 (item 5): DNS-over-HTTPS — one
+            // toggle routing source lookups around ISP
+            // blocking. Default off; on means Cloudflare
+            // (1.1.1.1) answers the lookups instead of the
+            // device's own resolver.
+            CustomiseSwitch(
+                label = "Use DNS-over-HTTPS for sources",
+                description = "Some networks block or tamper with plain DNS lookups, so " +
+                    "sources stop loading even though the connection is fine. With this " +
+                    "on, Xreader asks Cloudflare (1.1.1.1) for source addresses over " +
+                    "an encrypted lookup instead of your network's resolver. Turn it " +
+                    "off and lookups go back to the device's own resolver, exactly " +
+                    "as before.",
+                checked = state.dohEnabled,
+                onChange = { viewModel.setDohEnabled(it) }
             )
             Text(
                 "When a book exists on several sources, “Best source” picks by:",

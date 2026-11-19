@@ -193,6 +193,45 @@ data class PdfDocSettings(
     val autoScrollSpeed: Double = 1.0
 )
 
+// ── EPUB positions index (v1.7 Patch 1, item 6a) ────────────────
+
+/** The persisted EPUB positions seam: per reading-order
+ * section, the 0-based global position where it starts and
+ * how many positions it holds — the same pair the
+ * ViewModel's F4 computation derives on every open from the
+ * publication's PositionsService. [sectionCount] rides
+ * along as the validity key: a stored index only counts
+ * for the publication it was computed from. */
+data class EpubPositionsIndex(
+    val sectionCount: Int,
+    val starts: List<Int>,
+    val counts: List<Int>
+)
+
+/** One string per book: "sections|start0,start1,…|count0,count1,…". */
+internal fun encodeEpubPositionsIndex(index: EpubPositionsIndex): String =
+    "${index.sectionCount}|" +
+        index.starts.joinToString(",") +
+        "|" + index.counts.joinToString(",")
+
+/** Strict decode — anything malformed, inconsistent, or
+ * empty reads as null (the caller recomputes, never trusts
+ * a half index). Pure, pinned by Patch1EpubPositionsTest. */
+internal fun decodeEpubPositionsIndex(raw: String?): EpubPositionsIndex? {
+    if (raw.isNullOrBlank()) return null
+    val parts = raw.split("|")
+    if (parts.size != 3) return null
+    val sections = parts[0].toIntOrNull() ?: return null
+    if (sections <= 0) return null
+    val starts = parts[1].split(",").map { it.toIntOrNull() ?: return null }
+    val counts = parts[2].split(",").map { it.toIntOrNull() ?: return null }
+    if (starts.size != sections || counts.size != sections) return null
+    if (starts.first() != 0) return null
+    if (starts.zipWithNext().any { (a, b) -> b < a }) return null
+    if (counts.any { it < 0 }) return null
+    return EpubPositionsIndex(sections, starts, counts)
+}
+
 // ── Store ────────────────────────────────────────────────────────
 
 class LocalReaderPrefs(private val store: DataStore<Preferences>) {
@@ -393,6 +432,27 @@ class LocalReaderPrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    // ── EPUB positions index (v1.7 Patch 1, item 6a) ─────────
+    //
+    // The F4 positions seam, persisted per book: a re-open
+    // reads this instead of walking the publication's
+    // PositionsService again. The ViewModel checks the
+    // section count against the opened publication before
+    // trusting it (see storedPositionsUsable); this store
+    // only persists and decodes, never judges.
+
+    suspend fun epubPositions(bookId: Long): EpubPositionsIndex? =
+        decodeEpubPositionsIndex(
+            store.data.first()[epubPositionsKey(bookId)]
+        )
+
+    suspend fun saveEpubPositions(bookId: Long, index: EpubPositionsIndex) {
+        store.edit { prefs ->
+            prefs[epubPositionsKey(bookId)] =
+                encodeEpubPositionsIndex(index)
+        }
+    }
+
     // EPUB keys
     private fun epubFontFamily(id: Long) = stringPreferencesKey("localreader.$id.epub.font_family")
     private fun epubFontSize(id: Long) = doublePreferencesKey("localreader.$id.epub.font_size")
@@ -420,6 +480,8 @@ class LocalReaderPrefs(private val store: DataStore<Preferences>) {
         "localreader.$id" +
             app.xreader.data.engine.ReadiumEpubSession.USER_FONT_FILE_KEY_SUFFIX
     )
+    private fun epubPositionsKey(id: Long) =
+        stringPreferencesKey("localreader.$id.epub.positions")
 
     // PDF keys
     private fun pdfZoom(id: Long) = floatPreferencesKey("localreader.$id.pdf.zoom")

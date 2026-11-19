@@ -207,7 +207,19 @@ object V158PlayerStacks {
     fun build(
         source: HttpSource,
         storageDir: File,
-        pageLoadTimeoutMs: Long = SourceBookSync.BOOK_PAGE_LOAD_TIMEOUT_MS
+        pageLoadTimeoutMs: Long = SourceBookSync.BOOK_PAGE_LOAD_TIMEOUT_MS,
+        /** v1.7 Patch 1 (item 0): the installed row's
+         * permissions JSON — lets a test open the cover
+         * host so the sync's cover fetch reaches the
+         * transport. Default keeps the shipped "{}" (no
+         * domains), so existing tests are untouched. */
+        permissionsJson: String? = null,
+        /** v1.7 Patch 1 (item 0): the sync's transport —
+         * lets a test script transport throws (e.g. a
+         * NetworkOnMainThreadException out of the cover
+         * fetch). Default keeps the shipped cover-ok
+         * handler, so existing tests are untouched. */
+        syncTransport: FakeTransport? = null
     ): V158PlayerStack {
         val books = FakeBookDao()
         val chapters = FakeChapterDao()
@@ -225,6 +237,7 @@ object V158PlayerStacks {
                     apiLevel = 16,
                     languages = "all",
                     sourceIds = "777",
+                    permissionsJson = permissionsJson ?: "{}",
                     trustState = TrustState.TRUSTED,
                     installedAt = 0,
                     updatedAt = 0
@@ -247,7 +260,7 @@ object V158PlayerStacks {
             extensionDao = exts,
             service = service,
             storage = BookStorage(storageDir),
-            transport = FakeTransport { request ->
+            transport = syncTransport ?: FakeTransport { request ->
                 if (request.url.contains("/covers/")) {
                     FakeTransport.ok("fake-cover-bytes")
                 } else {

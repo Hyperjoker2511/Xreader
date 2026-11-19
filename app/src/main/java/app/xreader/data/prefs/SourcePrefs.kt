@@ -140,6 +140,24 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    // ── DNS-over-HTTPS (v1.7 Patch 1, item 5) ───────────────
+    //
+    // The one toggle routing source lookups around ISP
+    // blocking: ON means source HTTP resolves hostnames
+    // through Cloudflare's DNS-over-HTTPS (1.1.1.1) instead
+    // of the device's resolver; OFF is the system resolver,
+    // exactly as before. Default OFF — a resolver change is
+    // the reader's choice, never a surprise. The switch is
+    // read per lookup (see SwitchableDns), so flipping it
+    // takes effect at once with no client rebuild.
+
+    val dohEnabled: Flow<Boolean> = store.data.map { prefs ->
+        prefs[KEY_DOH_ENABLED] ?: false
+    }
+
+    suspend fun setDohEnabled(enabled: Boolean) =
+        store.edit { it[KEY_DOH_ENABLED] = enabled }
+
     // ── Repositories (R14) ───────────────────────────────────────
 
     val pinnedRepoIds: Flow<Set<Long>> = store.data.map { prefs ->
@@ -533,6 +551,7 @@ class SourcePrefs(private val store: DataStore<Preferences>) {
         val KEY_HEAL_NOTE = stringPreferencesKey("heal.note")
         val KEY_BROWSER_VIEW = booleanPreferencesKey("sources.browser_view_enabled")
         val KEY_BROWSER_VIEW_NEEDED = stringPreferencesKey("sources.browser_view_needed")
+        val KEY_DOH_ENABLED = booleanPreferencesKey("sources.doh_enabled")
         const val MAX_RECENT_REPOS = 8
         const val MAX_RECENT_SEARCHES = 12
     }

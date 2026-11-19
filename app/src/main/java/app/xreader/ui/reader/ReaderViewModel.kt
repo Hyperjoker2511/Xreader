@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -580,6 +581,16 @@ class ReaderViewModel(
 
     init {
         viewModelScope.launch { container.sessionRecorder.warmUp() }
+        // v1.7 Patch 1 (item 6b): memory pressure flushes the
+        // coalesced progress write at once — the trim can
+        // arrive while this reader is still foreground, where
+        // no pause/stop flush would fire. The collection dies
+        // with the scope, so a cleared VM never flushes twice.
+        viewModelScope.launch {
+            container.memoryPressureEvents.collect {
+                flushProgressNow()
+            }
+        }
         viewModelScope.launch {
             container.appearancePrefs.state.collectLatest { appearance ->
                 reduceMotion = appearance.reduceMotion

@@ -37,13 +37,20 @@ class PlayerNetworkHelper(
     context: Context,
     preferences: NetworkPreferences,
     private val sessionCookieJar: SessionStoreCookieJar,
-    private val challengeBridge: PlayerChallengeBridge
+    private val challengeBridge: PlayerChallengeBridge,
+    /** v1.7 Patch 1 (item 5): the resolver source lookups
+     * resolve through — the system resolver by default, the
+     * app's switchable DoH resolver when the container
+     * builds the helper. Per-extension clients derive from
+     * this one the donor way, so they inherit it. */
+    private val dns: okhttp3.Dns = okhttp3.Dns.SYSTEM
 ) : NetworkHelper(context, preferences) {
 
     override val cookieJar = sessionCookieJar
 
     override val client: OkHttpClient by lazy {
         super.client.newBuilder()
+            .dns(dns)
             .addInterceptor(CloudflareInterceptor(sessionCookieJar, challengeBridge))
             .build()
     }

@@ -210,6 +210,32 @@ class AppUpdateViewModel(private val container: AppContainer) : ViewModel() {
         downloads.start(release)
     }
 
+    /** v1.7 Patch 1 (item 4): "Update now" — one tap, the
+     * whole journey. A release already known downloads at
+     * once; with none known yet, the SAME check the
+     * auto-checker runs ([runCheck] — same flow, same result
+     * handling) runs first, and a release it finds downloads
+     * at once. Up to date (or a failed check) lands in the
+     * status line exactly as a manual check does, and
+     * nothing downloads then. Never re-starts a download
+     * already running, verifying, or ready to install —
+     * those phases own their own doors. */
+    fun updateNow() {
+        if (_state.value.checking) return
+        viewModelScope.launch {
+            if (_state.value.release == null) {
+                runCheck(manual = true)
+            }
+            val phase = _state.value.download
+            if (_state.value.release != null &&
+                (phase is UpdateDownloadPhase.None ||
+                    phase is UpdateDownloadPhase.Failed)
+            ) {
+                startDownload()
+            }
+        }
+    }
+
     /** Cancel: the one explicit stop for a running download. */
     fun cancelDownload() {
         downloads.cancel()

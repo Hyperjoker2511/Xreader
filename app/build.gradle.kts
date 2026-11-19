@@ -27,8 +27,8 @@ android {
         applicationId = "app.xreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 87
-        versionName = "1.6.2"
+        versionCode = 88
+        versionName = "1.6.2-patch1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -179,6 +179,9 @@ dependencies {
     // makes R8 fail (its org.xmlpull.v1 API classes clash with the
     // framework's). JVM tests need the real implementation, hence here.
     implementation(libs.okhttp)
+    // v1.7 Patch 1 (item 5): DNS-over-HTTPS for source
+    // lookups — the resolver the DoH toggle switches in.
+    implementation(libs.okhttp.dnsoverhttps)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.coil.compose)
     implementation(libs.haze)

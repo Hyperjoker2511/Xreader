@@ -123,7 +123,7 @@ fun AiSheetContent(
             ActionRow(
                 icon = Icons.Filled.Summarize,
                 title = "Summarize this chapter",
-                subtitle = "Three bullets, saved for the Contents sheet",
+                subtitle = "Five bullets, saved for the Contents sheet",
                 busy = state.summarizing,
                 onClick = { viewModel.summarizeChapter() }
             )

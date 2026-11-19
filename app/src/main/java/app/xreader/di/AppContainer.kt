@@ -689,7 +689,30 @@ class AppContainer(
 
     val bookStorage: BookStorage = BookStorage(appContext.filesDir)
 
-    val httpTransport: HttpTransport = OkHttpTransport()
+    /** v1.7 Patch 1 (item 5): the ONE resolver for all source
+     * HTTP — the declarative transport, the extension
+     * transport, the Keiyoushi donor client and the cover
+     * client all resolve through this one [SwitchableDns].
+     * A PLAIN val, declared before the transports that read
+     * it (opdsClient reads httpTransport eagerly during
+     * construction — a lazy here would NPE). The persisted
+     * toggle is mirrored into its volatile flag by a
+     * collector on [appScope], started in the init block
+     * below [appScope]'s declaration — a lookup on an
+     * OkHttp thread reads a plain boolean and never blocks
+     * on a DataStore read; the flag starts OFF (the safe
+     * default — system DNS) until the first persisted value
+     * lands, which is immediate. */
+    val sourceDns: app.xreader.data.net.SwitchableDns =
+        app.xreader.data.net.SwitchableDns(
+            doh = app.xreader.data.net.DohDns.resolver()
+        )
+
+    val httpTransport: HttpTransport =
+        OkHttpTransport(
+            OkHttpTransport.defaultClient(sourceDns),
+            dns = sourceDns
+        )
 
     val pdfTextExtractor: PdfBoxTextExtractor = PdfBoxTextExtractor(appContext)
 
@@ -895,8 +918,9 @@ class AppContainer(
             // source can never starve a healthy source's
             // catalogue by exhausting the shared IO pool.
             OkHttpTransport(
-                OkHttpTransport.extensionClient(),
-                app.xreader.data.net.FetchLanes.static
+                OkHttpTransport.extensionClient(sourceDns),
+                app.xreader.data.net.FetchLanes.static,
+                sourceDns
             )
         }
     }
@@ -1230,6 +1254,28 @@ class AppContainer(
                 }
         )
 
+    /** v1.7 Patch 1 (item 6b): the memory-pressure flush
+     * signal. The Application's onTrimMemory / onLowMemory
+     * (see XreaderApp) emit here; the live readers collect
+     * it and commit their pending progress at once, so the
+     * exact place is on disk before the OS can kill the
+     * process — a trim can arrive while the reader is still
+     * FOREGROUND, where no pause/stop flush would fire.
+     * extraBufferCapacity 1: a burst of trims never drops
+     * the signal while no reader is collecting, and a
+     * collector that is slow never blocks the emitter
+     * (tryEmit). */
+    val memoryPressureEvents =
+        kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
+            extraBufferCapacity = 1
+        )
+
+    /** v1.7 Patch 1 (item 6b): emit the flush signal —
+     * best-effort, never blocking the caller. */
+    fun signalMemoryPressure() {
+        memoryPressureEvents.tryEmit(Unit)
+    }
+
     /** v1.3.3 (scope S4): the session-saved bus. When the user
      * completes the one-time sign-in / site-check screen, the
      * surfaces that were waiting on that session (catalogue,
@@ -1325,7 +1371,8 @@ class AppContainer(
             appContext,
             playerNetworkPreferences,
             playerCookieJar,
-            playerChallengeBridge
+            playerChallengeBridge,
+            sourceDns
         )
     }
 
@@ -1336,6 +1383,15 @@ class AppContainer(
     }
 
     init {
+        // v1.7 Patch 1 (item 5): mirror the persisted DoH
+        // toggle into the shared source resolver's flag, so
+        // flipping the toggle takes effect on the next
+        // lookup with no client rebuild. Started here (not
+        // at sourceDns's declaration) because appScope lives
+        // below the transports in declaration order.
+        appScope.launch {
+            sourcePrefs.dohEnabled.collect { sourceDns.enabled = it }
+        }
         // AppInfo first (an extension may read the host version from
         // its very first class load), then the Injekt registration.
         AppInfo.setVersionInfo(

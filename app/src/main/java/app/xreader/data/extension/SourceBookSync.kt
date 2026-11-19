@@ -444,6 +444,24 @@ class SourceBookSync(
         // view-model launch (V1538-CRASH-FORENSICS §4).
         // Cancellation is not an SQLException and still
         // propagates untouched.
+        // v1.7 Patch 1 (item 0 — Murim Login): the net
+        // widens to EVERY non-cancellation throw. The spec's
+        // stated mechanism (a runBlocking chapter-fetch
+        // bridge) does not match this tree — the Mihon fetch
+        // already runs on the IO bridge executor end to end
+        // (callMihon, guarded, HttpTransport) and the main
+        // thread only awaits it — but the owner's crash
+        // (NetworkOnMainThreadException, okio socket write
+        // on main, 2026-11-19) proves SOME leg on the
+        // book-open path can still throw a network exception
+        // on the caller thread, and this net caught only
+        // the two SQL classes, so that exception escaped
+        // both nets and killed the process. Whatever leg
+        // produces it, it now lands as the honest failed-
+        // refresh state with Retry instead of a crash, and
+        // the class is recorded so the leg can still be
+        // convicted from the diagnostic log. Cancellation
+        // still propagates untouched.
         val outcome: AppResult<Book> = try {
             if (resolvedHandle?.source is MihonSourceAdapter) {
                 refreshWithinBound(book, resolvedHandle)
@@ -465,6 +483,20 @@ class SourceBookSync(
         } catch (e: java.sql.SQLException) {
             AppResult.Err(
                 AppError.StorageFailed("saving the chapter list")
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            DiagnosticLog.record(
+                "sync",
+                "refresh-contained ${e::class.simpleName}",
+                "book=${book.id}"
+            )
+            AppResult.Err(
+                AppError.ExtensionFailed(
+                    "the source",
+                    "the chapter list couldn't be loaded — try again"
+                )
             )
         }
         // v1.5.10 (B1): chapters landing clears the wait —

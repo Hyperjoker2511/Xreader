@@ -167,6 +167,11 @@ fun BookDetailScreen(
     // choices (all / next 10 / latest unread) live there, beside
     // Start reading, never only in a long-press sheet.
     var downloadSheetOpen by remember { mutableStateOf(false) }
+    /** v1.7 Patch 1 (item 1): the remove-from-library
+     * confirm, hoisted to the screen so the visible
+     * action-area door opens the SAME dialog the buried
+     * cleanup button opened (BookCleanupActions below). */
+    var confirmRemove by remember { mutableStateOf(false) }
     /** v1.5.8 (J2/E3): the chapter-settings sheet's open state —
      * sort/display choices + the scanlator filter live there. */
     var chapterSettingsOpen by remember { mutableStateOf(false) }
@@ -938,24 +943,25 @@ fun BookDetailScreen(
                                             // by its OWN number (the
                                             // identity-first target),
                                             // never by stored position.
-                                            "Chapter " +
-                                                (app.xreader.domain.reader
+                                            continuePillSubLine(
+                                                chapterNumber = app.xreader.domain.reader
                                                     .ChapterDisplayOrder
                                                     .displayNumber(it)
-                                                    ?: "${it.index + 1}") +
-                                                " · ${it.title}"
+                                                    ?: "${it.index + 1}",
+                                                chapterTitle = it.title,
+                                                bookPercent = null
+                                            )
                                         } ?: "Begin at chapter 1"
                                     } else {
-                                        "Chapter " +
-                                            (continueChapter?.let {
+                                        continuePillSubLine(
+                                            chapterNumber = continueChapter?.let {
                                                 app.xreader.domain.reader
                                                     .ChapterDisplayOrder
                                                     .displayNumber(it)
-                                            } ?: "${state.continueChapterIndex + 1}") +
-                                            (continueChapter?.let {
-                                                " · ${it.title}"
-                                            } ?: "") +
-                                            " · $bookPercent%"
+                                            } ?: "${state.continueChapterIndex + 1}",
+                                            chapterTitle = continueChapter?.title,
+                                            bookPercent = bookPercent
+                                        )
                                     },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onPrimary
@@ -1117,6 +1123,52 @@ fun BookDetailScreen(
                                 Spacer(Modifier.weight(1f))
                                 Text(
                                     "Get new chapters from the source",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    // v1.7 Patch 1 (item 1): the visible
+                    // "Remove from library" door — in the
+                    // action area, in the Refresh tile's own
+                    // visual language (same tier-1 tile
+                    // surface, full width), for books in the
+                    // library. Preview rows (never members)
+                    // don't get it. It opens the same confirm
+                    // dialog the cleanup section's buried
+                    // button opened — nothing about the remove
+                    // itself changes.
+                    if (book.inLibrary) {
+                        Surface(
+                            onClick = { confirmRemove = true },
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme
+                                .surfaceContainerLow,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                Modifier.padding(
+                                    horizontal = 12.dp, vertical = 10.dp
+                                ),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Delete,
+                                    contentDescription = null,
+                                    tint = errorTextColor(),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    "Remove from library",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = errorTextColor()
+                                )
+                                Spacer(Modifier.weight(1f))
+                                Text(
+                                    "Also removes progress and bookmarks",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme
                                         .onSurfaceVariant
@@ -2260,6 +2312,13 @@ fun BookDetailScreen(
                         } else {
                             null
                         },
+                        // v1.7 Patch 1 (item 3c): the current
+                        // row's "≈N min left" rides only once
+                        // reading has begun.
+                        hasStartedReading = hasStartedReading(
+                            state.progress?.fraction,
+                            state.chapters.any { it.read }
+                        ),
                         onClick = { onReadChapter(chapter.index) },
                         onDownload = { viewModel.downloadChapter(chapter) }
                     )
@@ -2370,7 +2429,9 @@ fun BookDetailScreen(
                     bookTitle = book.title,
                     isLocalFile = book.sourceType ==
                         app.xreader.data.db.SourceType.LOCAL_FILE,
-                    onRemoved = onBack
+                    onRemoved = onBack,
+                    confirmRemove = confirmRemove,
+                    onConfirmRemoveChange = { confirmRemove = it }
                 )
             }
         }
@@ -2397,6 +2458,36 @@ fun BookDetailScreen(
             },
             confirmButton = {
                 TextButton(onClick = { viewModel.dismissStory() }) { Text("Done") }
+            }
+        )
+    }
+
+    // v1.7 Patch 1 (item 1): the un-favourite prompt —
+    // Favourites was this book's only claim on the library,
+    // so un-favouriting asks whether to also remove the
+    // book. Yes removes it (soft remove, downloads stay);
+    // No keeps it in the library.
+    if (state.askRemoveOnUnfavourite) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissUnfavouriteRemove() },
+            title = { Text("Also remove from library?") },
+            text = {
+                Text(
+                    "Favourites was this book's only claim on " +
+                        "your library. Remove the book as well?"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.confirmUnfavouriteRemove { onBack() }
+                    }
+                ) { Text("Yes, remove it") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { viewModel.dismissUnfavouriteRemove() }
+                ) { Text("No, keep it") }
             }
         )
     }
@@ -3141,7 +3232,12 @@ private fun ChapterRow(
      * takes the current chapter's container treatment while
      * the highlight lasts (the page clears it after a few
      * seconds). No other visual change. */
-    isJumpTarget: Boolean = false
+    isJumpTarget: Boolean = false,
+    /** v1.7 Patch 1 (item 3c): reading has begun (progress
+     * past zero, or some chapter read) — only then does the
+     * current row carry its "≈N min left". A progress row
+     * that merely exists at 0% is not started. */
+    hasStartedReading: Boolean = false
 ) {
     // v1.5.2 fix (FIX-8c/FIX-6a): the rendered count is the PROVEN
     // count (0 for stubs); the row mark is §12.10's: DOWNLOADED
@@ -3258,7 +3354,16 @@ private fun ChapterRow(
                             else -> ""
                         }
                     isCurrent -> "Continue here" +
-                        (minutesLeft?.let { " · ≈$it min left" } ?: "")
+                        // v1.7 Patch 1 (item 3c): the "≈N min
+                        // left" rides only once reading has
+                        // begun — a not-started book shows no
+                        // time-left, even though a progress row
+                        // may already exist at 0%.
+                        (if (hasStartedReading) {
+                            minutesLeft?.let { " · ≈$it min left" } ?: ""
+                        } else {
+                            ""
+                        })
                     provenWordCount > 0 -> "$provenWordCount words" +
                         (minutesLeft?.let { " · ≈$it min" } ?: "")
                     else -> ""
@@ -3664,10 +3769,14 @@ private fun BookCleanupActions(
     viewModel: BookDetailViewModel,
     bookTitle: String,
     isLocalFile: Boolean = false,
-    onRemoved: () -> Unit
+    onRemoved: () -> Unit,
+    /** v1.7 Patch 1 (item 1): the remove confirm is owned
+     * by the screen now — the action-area door opens this
+     * same dialog. */
+    confirmRemove: Boolean,
+    onConfirmRemoveChange: (Boolean) -> Unit
 ) {
     var confirmCleanup by remember { mutableStateOf(false) }
-    var confirmRemove by remember { mutableStateOf(false) }
     var confirmPermanent by remember { mutableStateOf(false) }
     val deleteContext = androidx.compose.ui.platform.LocalContext.current
     var sizeBytes by remember { mutableStateOf(0L) }
@@ -3680,7 +3789,7 @@ private fun BookCleanupActions(
         TextButton(onClick = { confirmCleanup = true }) {
             Text("Delete downloaded chapters")
         }
-        TextButton(onClick = { confirmRemove = true }) {
+        TextButton(onClick = { onConfirmRemoveChange(true) }) {
             Text(
                 "Remove from library",
                 color = errorTextColor()
@@ -3740,7 +3849,7 @@ private fun BookCleanupActions(
         // the BODY (DialogDangerOption) and "Keep the book" sits
         // alone in the button row.
         AlertDialog(
-            onDismissRequest = { confirmRemove = false },
+            onDismissRequest = { onConfirmRemoveChange(false) },
             title = { Text("Remove “$bookTitle”?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -3756,7 +3865,7 @@ private fun BookCleanupActions(
                         app.xreader.ui.common.DialogDangerOption(
                             label = "Delete book",
                             onClick = {
-                                confirmRemove = false
+                                onConfirmRemoveChange(false)
                                 viewModel.removeLocalBook(
                                     app.xreader.data.library.LocalBookDeleteMode.DELETE_BOOK,
                                     null
@@ -3766,7 +3875,7 @@ private fun BookCleanupActions(
                         app.xreader.ui.common.DialogDangerOption(
                             label = "Delete book and forget my reading",
                             onClick = {
-                                confirmRemove = false
+                                onConfirmRemoveChange(false)
                                 viewModel.removeLocalBook(
                                     app.xreader.data.library.LocalBookDeleteMode.FORGET,
                                     null
@@ -3776,7 +3885,7 @@ private fun BookCleanupActions(
                         app.xreader.ui.common.DialogDangerOption(
                             label = "Permanent delete from my device",
                             onClick = {
-                                confirmRemove = false
+                                onConfirmRemoveChange(false)
                                 confirmPermanent = true
                             }
                         )
@@ -3791,7 +3900,7 @@ private fun BookCleanupActions(
                         app.xreader.ui.common.DialogDangerOption(
                             label = "Remove book only",
                             onClick = {
-                                confirmRemove = false
+                                onConfirmRemoveChange(false)
                                 viewModel.removeFromLibrary(deleteFiles = false) {
                                     onRemoved()
                                 }
@@ -3801,7 +3910,7 @@ private fun BookCleanupActions(
                             label = "Remove book and downloaded chapters " +
                                 "(${formatMb(sizeBytes)})",
                             onClick = {
-                                confirmRemove = false
+                                onConfirmRemoveChange(false)
                                 viewModel.removeFromLibrary(deleteFiles = true) {
                                     onRemoved()
                                 }
@@ -3812,11 +3921,56 @@ private fun BookCleanupActions(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { confirmRemove = false }) { Text("Keep the book") }
+                TextButton(onClick = { onConfirmRemoveChange(false) }) { Text("Keep the book") }
             }
         )
     }
 }
+
+/** v1.7 Patch 1 (item 3b): the Continue pill's sub-line —
+ * the chapter is named ONCE. Source chapters are very
+ * often titled "Chapter N" themselves, so the old inline
+ * build ("Chapter N · <title>") doubled the chapter
+ * whenever the title already said it ("Chapter 11 ·
+ * Chapter 11"). When the title already carries the
+ * chapter's number — exactly, or as its head ("Chapter 11:
+ * The Return") — the title alone is the line; otherwise
+ * the number and the title stay ("Chapter 11 · The
+ * Awakening"). The book percent rides at the end only
+ * once reading has begun (null = not started). Pure so
+ * the dedupe is pinned by test (Patch1SmallLabelsTest).
+ * The number match is word-boundary safe: chapter 1 never
+ * matches a "Chapter 11…" title. */
+internal fun continuePillSubLine(
+    chapterNumber: String,
+    chapterTitle: String?,
+    bookPercent: Int?
+): String {
+    val title = chapterTitle?.trim().orEmpty()
+    val chapterLabel = "Chapter $chapterNumber"
+    val head = when {
+        title.isEmpty() -> chapterLabel
+        title.equals(chapterLabel, ignoreCase = true) -> title
+        title.startsWith("$chapterLabel ", ignoreCase = true) -> title
+        title.startsWith("$chapterLabel:", ignoreCase = true) -> title
+        title.startsWith("$chapterLabel — ", ignoreCase = true) -> title
+        title.startsWith("$chapterLabel - ", ignoreCase = true) -> title
+        else -> "$chapterLabel · $title"
+    }
+    return if (bookPercent != null) "$head · $bookPercent%" else head
+}
+
+/** v1.7 Patch 1 (item 3c): reading has begun exactly when
+ * the saved progress is past zero or some chapter is
+ * marked read. A progress row that merely exists (opened
+ * and closed at 0%) is NOT started — the old row gate
+ * (`progress != null`) showed "≈N min left" for a book
+ * never read. Pure so the gate is pinned by test
+ * (Patch1SmallLabelsTest). */
+internal fun hasStartedReading(
+    progressFraction: Float?,
+    anyChapterRead: Boolean
+): Boolean = (progressFraction ?: 0f) > 0f || anyChapterRead
 
 private fun formatMb(bytes: Long): String =
     if (bytes >= 1024L * 1024L) "${bytes / (1024L * 1024L)} MB"

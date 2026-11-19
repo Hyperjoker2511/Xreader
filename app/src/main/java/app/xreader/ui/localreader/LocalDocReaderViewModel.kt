@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.readium.r2.shared.publication.Locator
@@ -227,6 +228,17 @@ internal class SearchTextMemo(
         }
     }
 }
+
+/** v1.7 Patch 1 (item 6a): the stored positions index is
+ * usable only for the publication it was computed from —
+ * the section count is the validity key. A miss, or a
+ * count that moved (the file changed under the book),
+ * recomputes from the PositionsService instead of trusting
+ * stale starts. Pure, pinned by Patch1EpubPositionsTest. */
+internal fun storedPositionsUsable(
+    stored: EpubPositionsIndex?,
+    sectionCount: Int
+): Boolean = stored != null && stored.sectionCount == sectionCount
 
 class LocalDocReaderViewModel(
     private val container: AppContainer,
@@ -468,6 +480,16 @@ class LocalDocReaderViewModel(
                 globalVoiceSettings = settings
             }
         }
+        // v1.7 Patch 1 (item 6b): memory pressure flushes the
+        // pending progress save at once — the trim can arrive
+        // while this reader is still foreground, where no
+        // pause/stop flush would fire. The collection dies
+        // with the scope, so a cleared VM never flushes twice.
+        viewModelScope.launch {
+            container.memoryPressureEvents.collect {
+                flushPendingProgressSave()
+            }
+        }
         viewModelScope.launch {
             container.database.bookmarkDao().observeForBook(bookId)
                 .collect { rows -> _bookmarks.value = rows.filter { it.locatorJson != null } }
@@ -581,21 +603,50 @@ class LocalDocReaderViewModel(
                     // from the publication's own positions
                     // service. A book whose service yields
                     // nothing simply never gains the pair.
-                    viewModelScope.launch(container.ioDispatcher) {
-                        runCatching {
-                            val byResource = opened.publication
-                                .positionsByReadingOrder()
-                            if (byResource.isNotEmpty()) {
-                                val starts = IntArray(byResource.size)
-                                val counts = IntArray(byResource.size)
-                                var acc = 0
-                                byResource.forEachIndexed { i, positions ->
-                                    starts[i] = acc
-                                    counts[i] = positions.size
-                                    acc += positions.size
+                    // v1.7 Patch 1 (item 6a): the seam is
+                    // PERSISTED per book — a re-open whose
+                    // stored index matches this publication's
+                    // section count takes it as-is and skips
+                    // the walk entirely; a miss or a mismatch
+                    // recomputes and re-saves.
+                    val storedPositions = runCatching {
+                        localPrefs.epubPositions(bookId)
+                    }.getOrNull()
+                    if (storedPositionsUsable(
+                            storedPositions, opened.sectionCount
+                        )
+                    ) {
+                        epubPositionStarts =
+                            storedPositions!!.starts.toIntArray()
+                        epubPositionCounts =
+                            storedPositions.counts.toIntArray()
+                    } else {
+                        viewModelScope.launch(container.ioDispatcher) {
+                            runCatching {
+                                val byResource = opened.publication
+                                    .positionsByReadingOrder()
+                                if (byResource.isNotEmpty()) {
+                                    val starts = IntArray(byResource.size)
+                                    val counts = IntArray(byResource.size)
+                                    var acc = 0
+                                    byResource.forEachIndexed { i, positions ->
+                                        starts[i] = acc
+                                        counts[i] = positions.size
+                                        acc += positions.size
+                                    }
+                                    epubPositionStarts = starts
+                                    epubPositionCounts = counts
+                                    runCatching {
+                                        localPrefs.saveEpubPositions(
+                                            bookId,
+                                            EpubPositionsIndex(
+                                                sectionCount = opened.sectionCount,
+                                                starts = starts.toList(),
+                                                counts = counts.toList()
+                                            )
+                                        )
+                                    }
                                 }
-                                epubPositionStarts = starts
-                                epubPositionCounts = counts
                             }
                         }
                     }

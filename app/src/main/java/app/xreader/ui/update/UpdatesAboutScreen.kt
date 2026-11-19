@@ -120,19 +120,25 @@ fun UpdatesAboutScreen(
                 onClick = onOpenWhatsNew,
                 trailing = { Chevron() }
             )
-            // v1.5.42: the direct action lives HERE too —
-            // Update / Install per phase, on the same
-            // manager state as the card, not only a link
-            // onward to the What's New screen.
-            UpdateProgressBlock(state.download)
-            UpdatePrimaryButton(
-                phase = state.download,
-                onUpdateNow = onUpdateNow,
-                onInstall = onInstall,
-                onOpenInstallSettings = onOpenInstallSettings,
-                modifier = Modifier.fillMaxWidth()
-            )
         }
+        // v1.5.42: the direct action lives HERE too —
+        // Update / Install per phase, on the same
+        // manager state as the card, not only a link
+        // onward to the What's New screen.
+        // v1.7 Patch 1 (item 4): "Update now" is ALWAYS
+        // here, not only once a release is known — with
+        // none known yet it runs the same check the
+        // auto-checker runs and downloads what the check
+        // finds, so one tap is the whole journey. The
+        // progress block renders nothing while idle.
+        UpdateProgressBlock(state.download)
+        UpdatePrimaryButton(
+            phase = state.download,
+            onUpdateNow = onUpdateNow,
+            onInstall = onInstall,
+            onOpenInstallSettings = onOpenInstallSettings,
+            modifier = Modifier.fillMaxWidth()
+        )
         UpdateRow(
             icon = Icons.Filled.SystemUpdate,
             title = "Check automatically",

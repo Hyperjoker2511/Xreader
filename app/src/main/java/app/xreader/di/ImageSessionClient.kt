@@ -47,9 +47,17 @@ object ImageSessionClient {
     @Volatile
     private var userAgent: String? = null
 
-    fun create(context: Context): Call.Factory {
+    /** v1.7 Patch 1 (item 5): [dns] is the resolver cover
+     * lookups resolve through — the system resolver by
+     * default, the app's switchable DoH resolver when the
+     * app builds the loader. */
+    fun create(
+        context: Context,
+        dns: okhttp3.Dns = okhttp3.Dns.SYSTEM
+    ): Call.Factory {
         val appContext = context.applicationContext
         return OkHttpClient.Builder()
+            .dns(dns)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             // v1.5.0 (steer B3): burst-shaping for
