@@ -17,10 +17,13 @@ import org.readium.r2.shared.util.mediatype.MediaType
  */
 class Patch1EpubModeFlipTest {
 
+    // Readium 3.1.2: Url.invoke / MediaType.invoke return
+    // NULLABLE results, so the locators are built from the
+    // non-null factories instead (fromDecodedPath, XHTML).
     private fun locator(href: String, progression: Double): Locator =
         Locator(
-            href = Url(href),
-            mediaType = MediaType("application/xhtml+xml"),
+            href = Url.fromDecodedPath(href),
+            mediaType = MediaType.XHTML,
             title = href,
             locations = Locator.Locations(progression = progression)
         )
