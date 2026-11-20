@@ -27,9 +27,15 @@ jobs:
       # SDK with licences accepted; the setup-android@v3 action failed in
       # 8s on the first runs, 2026-10-29, so the step was removed.)
 
-            - name: Test gate (full unit suite, one clean run)
+      # The full suite is the default gate. A push whose commit
+      # message carries [skip-tests] builds only (owner's
+      # tests-deferred ruling for fix rounds, 2026-11-19/20);
+      # phone proof is that round's gate. Manual dispatch runs
+      # the suite (no head_commit message to match).
+      - name: Test gate (full unit suite, one clean run)
         if: ${{ !contains(github.event.head_commit.message, '[skip-tests]') }}
         run: bash gradlew clean :app:testDebugUnitTest
+
       - name: Restore signing key
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
@@ -51,4 +57,3 @@ jobs:
           path: |
             app/build/outputs/apk/release/*.apk
             app/build/reports/tests/
-            
