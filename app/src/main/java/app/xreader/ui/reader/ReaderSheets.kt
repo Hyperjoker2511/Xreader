@@ -416,6 +416,34 @@ fun ReaderSettingsSheet(
                             )
                         }
                     }
+                    // v1.7 Moon+ standard fix (Part 3): the
+                    // chapter-end wall's scope, riding directly
+                    // under the transition it belongs to (the
+                    // wall only exists in Chapter by chapter).
+                    Text(
+                        "Chapter-end wall",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            app.xreader.domain.reader.ChapterEndWall.FOR_EPUB_BOOKS to
+                                "For EPUB books",
+                            app.xreader.domain.reader.ChapterEndWall.EVERY_BOOK to
+                                "Every book",
+                            app.xreader.domain.reader.ChapterEndWall.OFF to "Off"
+                        ).forEach { (value, label) ->
+                            NocturneChip(
+                                label = label,
+                                selected = config.chapterEndWall == value,
+                                onClick = { onUpdate { it.copy(chapterEndWall = value) } },
+                                modifier = Modifier,
+                                dotColor = null,
+                            )
+                        }
+                    }
                     SheetSwitch(
                         label = "Clock on the page",
                         checked = config.showPageOverlay,
@@ -1600,6 +1628,13 @@ private fun formatClock(totalSeconds: Double): String {
 fun TocSheet(
     chapters: List<Chapter>,
     currentChapterIndex: Int,
+    /** Part 2: the book's own TOC, bridged to chapter
+     * positions — when non-empty, the Chapters tab lists
+     * THESE entries instead of the raw chapter rows. */
+    tocEntries: List<ReaderTocEntry> = emptyList(),
+    /** Part 2: the TOC entry the live position has reached
+     * (-1 before the first) — the rows' current highlight. */
+    currentTocEntryIndex: Int = -1,
     bookmarks: List<Bookmark>,
     highlights: List<Highlight>,
     onJumpChapter: (Int) -> Unit,
@@ -1673,6 +1708,80 @@ fun TocSheet(
                         }
                     }
                 }
+                if (tocEntries.isNotEmpty()) {
+                    // Part 2: the book's own Contents — the
+                    // TOC's entries in the book's order (the
+                    // summary item above is untouched). Each
+                    // row carries its target segment's state
+                    // (the read tick, the "saved" word) exactly
+                    // as chapter rows render it, is highlighted
+                    // at the entry the live position has
+                    // reached, and jumps to the entry's own
+                    // position — fragment offset included.
+                    itemsIndexed(
+                        tocEntries,
+                        key = { index, _ -> "toc-$index" }
+                    ) { index, entry ->
+                        val segment =
+                            chapters.getOrNull(entry.chapterIndex)
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onJumpToPosition(
+                                        entry.chapterIndex,
+                                        entry.charOffset
+                                    )
+                                }
+                                .padding(
+                                    horizontal = 8.dp, vertical = 12.dp
+                                ),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "${index + 1}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant,
+                                modifier = Modifier
+                                    .size(width = 40.dp, height = 20.dp)
+                            )
+                            Text(
+                                entry.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (
+                                    index == currentTocEntryIndex
+                                ) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (segment?.read == true) {
+                                Icon(
+                                    Icons.Filled.Check, "Read",
+                                    tint = MaterialTheme.colorScheme
+                                        .onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            if (segment?.contentPath != null) {
+                                Text(
+                                    "saved",
+                                    style = MaterialTheme.typography
+                                        .labelSmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant,
+                                    modifier = Modifier
+                                        .padding(start = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                } else {
                 itemsIndexed(chapters, key = { _, ch -> ch.id }) { index, chapter ->
                     Row(
                         Modifier
@@ -1718,6 +1827,7 @@ fun TocSheet(
                             )
                         }
                     }
+                }
                 }
             }
             1 -> LazyColumn(Modifier.heightIn(max = 480.dp)) {

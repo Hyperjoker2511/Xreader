@@ -85,8 +85,10 @@ import app.xreader.core.motion.sharedAxisYExit
 import app.xreader.data.db.Highlight
 import app.xreader.di.AppContainer
 import androidx.compose.ui.text.rememberTextMeasurer
+import app.xreader.domain.reader.ChapterEndWall
 import app.xreader.domain.reader.ChapterLayoutCache
 import app.xreader.domain.reader.ChapterLayoutService
+import app.xreader.domain.reader.ChapterTransition
 import app.xreader.domain.reader.EyeState
 import app.xreader.domain.reader.LayoutAheadPolicy
 import app.xreader.domain.reader.ReaderMode
@@ -168,6 +170,34 @@ fun ReaderScreen(
     val plateFilter by viewModel.plateFilter.collectAsStateWithLifecycle()
     val migrationNote by viewModel.migrationNote.collectAsStateWithLifecycle()
     val chapterSummary by viewModel.chapterSummary.collectAsStateWithLifecycle()
+
+    // v1.7 Moon+ standard fix: the display-local translations
+    // (Part 2, A8) and the chapter-end wall's gate (Part 3).
+    // state.chapterIndex stays the SEGMENT index everywhere
+    // else — the seek slider, Listen, marks and search are
+    // untouched; only the chrome counters, the Contents
+    // sheet and the document surface's wall read these.
+    val wallActive =
+        config.chapterTransition == ChapterTransition.CHAPTER_BY_CHAPTER &&
+            when (config.chapterEndWall) {
+                ChapterEndWall.EVERY_BOOK -> true
+                ChapterEndWall.OFF -> false
+                ChapterEndWall.FOR_EPUB_BOOKS -> state.isEpubBook
+            }
+    // The TOC entry the live position has reached: the last
+    // entry at or before (chapterIndex, positionOffset) —
+    // the ViewModel's live char offset is the position
+    // source. -1 before the first entry (front matter) and
+    // for every book without a TOC.
+    val currentTocIndex = if (state.tocEntries.isEmpty()) {
+        -1
+    } else {
+        state.tocEntries.indexOfLast { entry ->
+            entry.chapterIndex < state.chapterIndex ||
+                (entry.chapterIndex == state.chapterIndex &&
+                    entry.charOffset <= state.positionOffset)
+        }
+    }
 
     // Phase 5: the Ask AI sheet brain, bound to the chapter on screen.
     val aiViewModel: app.xreader.ui.ai.AiSheetViewModel =
@@ -910,6 +940,11 @@ fun ReaderScreen(
                     segmentStates = state.segmentStates,
                     segmentTexts = state.segmentTexts,
                     segmentFailedReasons = state.segmentFailedReasons,
+                    segmentsWithOwnTitle = state.segmentsWithOwnTitle,
+                    wallActive = wallActive,
+                    onWallCross = { next ->
+                        viewModel.crossChapterAtWall(next)
+                    },
                     config = config,
                     palette = palette,
                     fontFamily = fontFamily,
@@ -1065,10 +1100,29 @@ fun ReaderScreen(
                     app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
                 }
             ),
-            chapterIndex = state.chapterIndex,
-            chapterCount = state.chapters.size,
-            chapterOwnNumber = state.chapter?.let {
-                app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
+            // Part 2 (A8): for a TOC book the counters count
+            // TOC ENTRIES — the position is the current TOC
+            // entry, the count is the TOC's size, and there
+            // is no own number (the label must be the TOC
+            // position, never a spine number the reader never
+            // sees). Non-TOC books pass exactly today's
+            // values.
+            chapterIndex = if (state.tocEntries.isNotEmpty()) {
+                maxOf(0, currentTocIndex)
+            } else {
+                state.chapterIndex
+            },
+            chapterCount = if (state.tocEntries.isNotEmpty()) {
+                state.tocEntries.size
+            } else {
+                state.chapters.size
+            },
+            chapterOwnNumber = if (state.tocEntries.isNotEmpty()) {
+                null
+            } else {
+                state.chapter?.let {
+                    app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
+                }
             },
             bookFraction = state.bookFraction,
             minutesLeftInChapter = state.minutesLeftInChapter,
@@ -1298,6 +1352,8 @@ fun ReaderScreen(
                 ActiveSheet.TOC -> TocSheet(
                     chapters = state.chapters,
                     currentChapterIndex = state.chapterIndex,
+                    tocEntries = state.tocEntries,
+                    currentTocEntryIndex = currentTocIndex,
                     bookmarks = bookmarks,
                     highlights = allHighlights,
                     chapterSummary = chapterSummary,

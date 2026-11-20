@@ -38,6 +38,7 @@ object ReaderPrefsCodec {
         "tapZones" to config.tapZoneLayout.name,
         "pagedDirection" to config.pagedDirection.name,
         "chapterTransition" to config.chapterTransition.name,
+        "chapterEndWall" to config.chapterEndWall.name,
         "pageOverlay" to config.showPageOverlay.toString(),
         "customPage" to config.customPageArgb.toString(),
         "customText" to config.customTextArgb.toString(),
@@ -76,6 +77,11 @@ object ReaderPrefsCodec {
                     map["chapterTransition"],
                     app.xreader.domain.reader.ChapterTransition.entries.toTypedArray(),
                     current.chapterTransition
+                ),
+                chapterEndWall = ReaderValidation.parseEnum(
+                    map["chapterEndWall"],
+                    app.xreader.domain.reader.ChapterEndWall.entries.toTypedArray(),
+                    current.chapterEndWall
                 ),
                 showPageOverlay = bool("pageOverlay", current.showPageOverlay),
                 customPageArgb = map["customPage"]?.toLongOrNull()

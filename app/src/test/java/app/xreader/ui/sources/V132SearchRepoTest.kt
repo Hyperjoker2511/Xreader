@@ -219,11 +219,11 @@ class V132SearchRepoTest {
     // ── Typography (items 86/87) ──────────────────────────────
 
     @Test
-    fun `fresh reader config defaults to literata and normal spacing`() {
+    fun `fresh reader config defaults to literata and compact spacing`() {
         val config = ReaderConfig()
         assertEquals(ReaderFontChoice.LITERATA, config.fontChoice)
         assertEquals(
-            ParagraphSpacing.NORMAL,
+            ParagraphSpacing.COMPACT,
             ParagraphSpacing.of(config.paragraphSpacingDp)
         )
         // The full shelf exists.

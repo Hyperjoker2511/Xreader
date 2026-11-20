@@ -106,9 +106,11 @@ class V1541SheetAuditTest {
         assertEquals(4f, ParagraphSpacing.COMPACT.dp, 0f)
         assertEquals(10f, ParagraphSpacing.NORMAL.dp, 0f)
         assertEquals(18f, ParagraphSpacing.RELAXED.dp, 0f)
-        // The fresh-install default is the NORMAL stop itself.
+        // The fresh-install default is the COMPACT stop itself
+        // (v1.7 Moon+ standard fix, Part 4 — the owner's word
+        // moved the default; the preset pins above stand).
         assertEquals(
-            ParagraphSpacing.NORMAL.dp,
+            ParagraphSpacing.COMPACT.dp,
             ReaderConfig().paragraphSpacingDp,
             0f
         )

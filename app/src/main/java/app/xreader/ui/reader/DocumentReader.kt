@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -30,15 +32,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.Highlight
@@ -59,6 +69,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlin.math.abs
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Actions offered on a long-pressed paragraph (passage tools, §2.4 #7).
@@ -66,6 +78,27 @@ import kotlinx.coroutines.withContext
  * retired ScrollReader.kt; the document surface is its only
  * definition site now. */
 enum class ParagraphAction { HIGHLIGHT, NOTE, BOOKMARK }
+
+/**
+ * Part 3: the chapter-end wall's feel constants — ALL of
+ * them in this one object, so a feel fix round tunes the
+ * wall from a single place (the spec's named requirement).
+ * Distances are raw pixels unless the name says otherwise;
+ * the commit distance is a Dp converted at the use site.
+ */
+private object WallFeel {
+    /** How much of the accumulated overscroll the content
+     * visually gives — the wall's resistance. */
+    const val RESISTANCE = 0.45f
+    /** The overscroll ceiling (px): past this the drag is
+     * still consumed but the wall gives no more. */
+    const val MAX_OVERSCROLL_PX = 220f
+    /** The release distance that commits a crossing. */
+    val COMMIT_DISTANCE = 64.dp
+    /** A fling faster than this (px/s) thrown at an edge
+     * commits on the fling alone. */
+    const val FLING_VELOCITY = 800f
+}
 
 /**
  * The document surface (v1.7 Moon+ document engine, Item 1):
@@ -109,6 +142,21 @@ fun DocumentReader(
     segmentStates: Map<Long, SegmentState>,
     segmentTexts: Map<Long, ChapterText>,
     segmentFailedReasons: Map<Long, String>,
+    /** v1.7 Moon+ standard fix (Part 1): the segments whose
+     * own text opens with its own title (the ViewModel's
+     * fill-time decision on the original text) — they
+     * compose NO app header; the book's own heading stands
+     * alone. */
+    segmentsWithOwnTitle: Set<Long> = emptySet(),
+    /** Part 3: the chapter-end wall is live for this book
+     * (Chapter-by-chapter + the owner's wall scope, decided
+     * by ReaderScreen): the surface composes ONLY the anchor
+     * segment, and a committed pull past its end (or start)
+     * crosses via [onWallCross]. */
+    wallActive: Boolean = false,
+    /** Part 3: a committed wall crossing — true crosses to
+     * the next chapter, false to the previous. */
+    onWallCross: (next: Boolean) -> Unit = {},
     config: ReaderConfig,
     palette: ReaderPalette,
     fontFamily: FontFamily,
@@ -192,14 +240,31 @@ fun DocumentReader(
     fun textOf(segment: Int): ChapterText? =
         chapters.getOrNull(segment)?.let { segmentTexts[it.id] }
 
+    /** Part 1: whether [segment] composes the app's header
+     * item. The decision is the ViewModel's (made at fill
+     * time on the original text); this surface only applies
+     * it — and an UNDECIDED segment (its text not yet held)
+     * composes NO header, so no header can pop in or out
+     * when the fill lands: the header arrives WITH the
+     * segment's text, as one swap, or never (own title). */
+    fun headerFor(segment: Int): Boolean {
+        if (!showHeaders) return false
+        val chapter = chapters.getOrNull(segment) ?: return false
+        return segmentTexts.containsKey(chapter.id) &&
+            chapter.id !in segmentsWithOwnTitle
+    }
+
     // The segment index: prefix sums over per-segment item
     // counts — O(chapters), never O(total blocks), and no
     // flat list is ever materialised (Item 6).
-    val segmentIndex = remember(chapters, segmentStates, segmentTexts, showHeaders) {
+    val segmentIndex = remember(
+        chapters, segmentStates, segmentTexts, showHeaders,
+        segmentsWithOwnTitle
+    ) {
         SegmentIndex(
             chapters.indices.map { segment ->
                 SegmentIndex.Shape(
-                    hasHeader = showHeaders,
+                    hasHeader = headerFor(segment),
                     blockCount = if (stateOf(segment) == SegmentState.RESIDENT) {
                         textOf(segment)?.content?.blocks?.size
                             ?: SegmentIndex.STATE
@@ -211,25 +276,101 @@ fun DocumentReader(
         )
     }
 
+    // ── Wall mode: local index space (Part 3, A9) ─────────
+    //
+    // When the wall is active the surface composes ONLY the
+    // anchor segment, so a second SegmentIndex stands over
+    // that one segment alone (no header — pinned mode has
+    // none — and its block count or STATE, the same shape
+    // rule the book-wide index uses). Every consumer below
+    // reads through `index` and translates its segment
+    // argument through `indexSegment`:
+    //
+    // - initialFlat / restore stages 1+2: flatIndexOf(
+    //   indexSegment(anchor), …) — the anchor IS local
+    //   segment 0;
+    // - the reporter: locate() yields local segment 0,
+    //   translated ONCE into chapters-space before ANY use
+    //   (the position report, the STATE_ITEM boundary math,
+    //   StreamReadingPosition.resolve — the ViewModel never
+    //   sees a local index); the end-of-book branch's last
+    //   segment is the anchor, not segmentCount − 1;
+    // - Item 4's pinned block: the boundary prefetch (a)
+    //   fires as today; the finished report (b) NEVER fires
+    //   in wall mode — the wall commit is the only
+    //   finished-marking door (A10);
+    // - auto-scroll's halt check: form unchanged (locate →
+    //   STATE_ITEM), reading the local index; the drift's
+    //   wall meeting is A11's branch beside it;
+    // - spoken follow: flatIndexOf(indexSegment(anchor), …)
+    //   — the spoken range is anchor-space by contract;
+    // - overlay follow: only the anchor segment is eligible
+    //   in wall mode (nothing else is composed); other
+    //   segments are skipped, never translated.
+    //
+    // When the wall is off, `index` IS segmentIndex and
+    // `indexSegment` is the identity — every path below is
+    // then exactly the pre-wall code.
+    val wallIndex = remember(
+        chapters, anchorChapterIndex, segmentStates, segmentTexts
+    ) {
+        SegmentIndex(
+            listOf(
+                SegmentIndex.Shape(
+                    hasHeader = false,
+                    blockCount = if (
+                        stateOf(anchorChapterIndex) ==
+                        SegmentState.RESIDENT
+                    ) {
+                        textOf(anchorChapterIndex)
+                            ?.content?.blocks?.size
+                            ?: SegmentIndex.STATE
+                    } else {
+                        SegmentIndex.STATE
+                    }
+                )
+            )
+        )
+    }
+    val index = if (wallActive) wallIndex else segmentIndex
+    fun indexSegment(segment: Int): Int =
+        if (wallActive) 0 else segment
+
+    // The wall's live reads for the never-restarting
+    // callbacks (key turns, the overscroll connection): they
+    // must see the CURRENT composition's values, not the
+    // values of the composition that created them.
+    val anchorResidentNow by rememberUpdatedState(
+        stateOf(anchorChapterIndex) == SegmentState.RESIDENT
+    )
+    val wallActiveNow by rememberUpdatedState(wallActive)
+    val hasNextChapterNow by rememberUpdatedState(
+        anchorChapterIndex < chapters.lastIndex
+    )
+    val hasPreviousChapterNow by rememberUpdatedState(
+        anchorChapterIndex > 0
+    )
+
     // Open at the anchor segment: its saved block when it is
     // already resident (a warm re-entry), else its state item
     // (the restore effect asserts the block landing when the
     // fill lands). Stage 2 refines to the line (below).
     val anchorText = textOf(anchorChapterIndex)
-    val initialFlat = remember(segmentIndex, anchorChapterIndex) {
+    val initialFlat = remember(index, anchorChapterIndex) {
         val targetOffset = when (restoreHint) {
             PageHint.FIRST -> 0
             PageHint.LAST -> anchorText?.length ?: 0
             PageHint.OFFSET -> restoreOffset
         }
         val flat = if (anchorText != null) {
-            segmentIndex.flatIndexOf(
-                anchorChapterIndex,
+            index.flatIndexOf(
+                indexSegment(anchorChapterIndex),
                 anchorText.blockIndexAt(targetOffset)
             )
         } else {
-            segmentIndex.flatIndexOf(
-                anchorChapterIndex, SegmentIndex.STATE_ITEM
+            index.flatIndexOf(
+                indexSegment(anchorChapterIndex),
+                SegmentIndex.STATE_ITEM
             )
         }
         if (flat >= 0) flat else 0
@@ -272,8 +413,9 @@ fun DocumentReader(
             return@LaunchedEffect
         }
         if (anchorText == null) {
-            val flat = segmentIndex.flatIndexOf(
-                anchorChapterIndex, SegmentIndex.STATE_ITEM
+            val flat = index.flatIndexOf(
+                indexSegment(anchorChapterIndex),
+                SegmentIndex.STATE_ITEM
             )
             if (flat >= 0 &&
                 listState.layoutInfo.visibleItemsInfo
@@ -289,7 +431,9 @@ fun DocumentReader(
             PageHint.OFFSET -> restoreOffset
         }
         val blockIndex = anchorText.blockIndexAt(targetOffset)
-        val flat = segmentIndex.flatIndexOf(anchorChapterIndex, blockIndex)
+        val flat = index.flatIndexOf(
+            indexSegment(anchorChapterIndex), blockIndex
+        )
         if (flat >= 0) {
             listState.scrollToItem(flat)
         }
@@ -389,7 +533,9 @@ fun DocumentReader(
         } else {
             0f
         }
-        val flat = segmentIndex.flatIndexOf(anchorChapterIndex, blockIndex)
+        val flat = index.flatIndexOf(
+            indexSegment(anchorChapterIndex), blockIndex
+        )
         if (flat >= 0) {
             listState.scrollToItem(
                 flat,
@@ -416,7 +562,7 @@ fun DocumentReader(
 
     // Position reporting from the first visible item, plus
     // Item 4's last-visible end-detection (CHAPTER_BY_CHAPTER).
-    LaunchedEffect(segmentIndex, pinned) {
+    LaunchedEffect(index, pinned, wallActive) {
         snapshotFlow {
             val info = listState.layoutInfo
             val first = info.visibleItemsInfo.firstOrNull()
@@ -427,16 +573,32 @@ fun DocumentReader(
             // position is the last segment at its END when it
             // is resident (never its start — the windowed
             // reporter's header-branch wart is not carried).
-            if (first.index >= segmentIndex.itemCount) {
-                val lastSegment = segmentIndex.segmentCount - 1
+            if (first.index >= index.itemCount) {
+                // Wall mode: the anchor is the only composed
+                // segment — it IS the last segment here.
+                val lastSegment = if (wallActive) {
+                    anchorChapterIndex
+                } else {
+                    index.segmentCount - 1
+                }
                 if (lastSegment < 0) return@snapshotFlow null
                 val text = textOf(lastSegment) ?: return@snapshotFlow null
                 return@snapshotFlow DocumentReport.Position(
                     lastSegment, text.length, 1f, last.index
                 )
             }
-            val loc = segmentIndex.locate(first.index)
+            val rawLoc = index.locate(first.index)
                 ?: return@snapshotFlow null
+            // Wall mode: translate the local segment (0) into
+            // chapters-space ONCE — every use below (the
+            // position, the STATE_ITEM boundary math,
+            // StreamReadingPosition.resolve) reads
+            // chapters-space.
+            val loc = if (wallActive) {
+                rawLoc.copy(segment = anchorChapterIndex)
+            } else {
+                rawLoc
+            }
             when (loc.block) {
                 SegmentIndex.STATE_ITEM -> {
                     // B1's acceptance contract: a textless
@@ -528,15 +690,28 @@ fun DocumentReader(
                         // item BEYOND the current segment
                         // becoming the last visible item is the
                         // end report (the chapter counts as
-                        // finished).
+                        // finished). Part 3: in wall mode (a)
+                        // still fires — it is the prefetch
+                        // door — and (b) NEVER fires: the wall
+                        // commit is the only finished-marking
+                        // door there (A10).
                         if (pinned) {
-                            val lastLoc = if (
+                            val rawLastLoc = if (
                                 report.lastVisibleIndex <
-                                segmentIndex.itemCount
+                                index.itemCount
                             ) {
-                                segmentIndex.locate(report.lastVisibleIndex)
+                                index.locate(report.lastVisibleIndex)
                             } else {
                                 null
+                            }
+                            val lastLoc = if (
+                                wallActive && rawLastLoc != null
+                            ) {
+                                rawLastLoc.copy(
+                                    segment = anchorChapterIndex
+                                )
+                            } else {
+                                rawLastLoc
                             }
                             val currentText = textOf(report.chapterIndex)
                             val lastBlockIndex =
@@ -549,12 +724,18 @@ fun DocumentReader(
                             ) {
                                 onBoundaryEndVisible()
                             }
-                            val nextStart = segmentIndex
-                                .segmentStart(report.chapterIndex + 1)
-                            if (nextStart >= 0 &&
-                                report.lastVisibleIndex >= nextStart
-                            ) {
-                                onChapterEndReached()
+                            if (!wallActive) {
+                                val nextStart = index
+                                    .segmentStart(
+                                        indexSegment(
+                                            report.chapterIndex + 1
+                                        )
+                                    )
+                                if (nextStart >= 0 &&
+                                    report.lastVisibleIndex >= nextStart
+                                ) {
+                                    onChapterEndReached()
+                                }
                             }
                         }
                     }
@@ -583,6 +764,29 @@ fun DocumentReader(
     // Volume-key turns scroll a viewport, as in scroll mode.
     LaunchedEffect(Unit) {
         externalTurns.collectLatest { direction ->
+            // Part 3 (A11): a key turn AT the wall crosses
+            // it — the keypress is the deliberate pull,
+            // standing in for the drag. Only from a RESIDENT
+            // anchor (a turn onto an unfilled segment asserts
+            // nothing) and never past the book's ends; the
+            // wall inputs are read through their updated-state
+            // holders because this effect never restarts.
+            if (wallActiveNow && anchorResidentNow) {
+                if (direction > 0 &&
+                    !listState.canScrollForward &&
+                    hasNextChapterNow
+                ) {
+                    onWallCross(true)
+                    return@collectLatest
+                }
+                if (direction < 0 &&
+                    !listState.canScrollBackward &&
+                    hasPreviousChapterNow
+                ) {
+                    onWallCross(false)
+                    return@collectLatest
+                }
+            }
             val viewport = listState.layoutInfo.viewportSize.height
             if (viewport > 0) {
                 listState.animateScrollBy(direction * viewport.toFloat() * 0.92f)
@@ -598,7 +802,7 @@ fun DocumentReader(
     // is text again.
     LaunchedEffect(
         config.autoScrollEnabled, config.autoScrollSpeed, autoPaused,
-        segmentIndex
+        index, wallActive, anchorChapterIndex
     ) {
         if (!config.autoScrollEnabled || autoPaused) return@LaunchedEffect
         val velocity = AutoScrollController.velocityPxPerSecond(config.autoScrollSpeed)
@@ -609,12 +813,30 @@ fun DocumentReader(
                 info.visibleItemsInfo.firstOrNull(),
                 info.visibleItemsInfo.lastOrNull()
             ).any { item ->
-                item.index < segmentIndex.itemCount &&
-                    segmentIndex.locate(item.index)?.block ==
+                item.index < index.itemCount &&
+                    index.locate(item.index)?.block ==
                     SegmentIndex.STATE_ITEM
             }
             if (!halted) {
-                listState.animateScrollBy(velocity * 0.1f)
+                // Part 3 (A11): the drift meeting the wall —
+                // it can scroll no further, the anchor is
+                // resident and a next chapter exists: pause
+                // (autoPaused is per-anchor, so the landing
+                // chapter starts unpaused) and cross ONCE.
+                // Landing on an unfilled segment then halts
+                // by the state-item rule above, exactly as
+                // the spec orders.
+                if (wallActive &&
+                    !listState.canScrollForward &&
+                    stateOf(anchorChapterIndex) ==
+                    SegmentState.RESIDENT &&
+                    anchorChapterIndex < chapters.lastIndex
+                ) {
+                    autoPaused = true
+                    onWallCross(true)
+                } else {
+                    listState.animateScrollBy(velocity * 0.1f)
+                }
             }
         }
     }
@@ -623,26 +845,209 @@ fun DocumentReader(
     // The spoken range is in the ANCHOR segment's coordinates
     // (Listen reads the chapter the VM publishes as on
     // screen); the follow is gated to that segment.
-    LaunchedEffect(spokenRange, segmentIndex) {
+    LaunchedEffect(spokenRange, index) {
         if (spokenRange == null) return@LaunchedEffect
         val text = textOf(anchorChapterIndex) ?: return@LaunchedEffect
         val blockIndex = text.blockIndexAt(spokenRange.first)
         if (blockIndex < 0) return@LaunchedEffect
-        val flat = segmentIndex.flatIndexOf(anchorChapterIndex, blockIndex)
+        val flat = index.flatIndexOf(
+            indexSegment(anchorChapterIndex), blockIndex
+        )
         if (flat >= 0) listState.animateScrollToItem(flat)
     }
 
     // Media-overlay follow — keep the overlay's block visible,
     // whichever RESIDENT segment carries it.
-    LaunchedEffect(overlayBlockId, segmentIndex) {
+    LaunchedEffect(overlayBlockId, index) {
         if (overlayBlockId == null) return@LaunchedEffect
         for (segment in chapters.indices) {
+            // Wall mode: only the anchor segment is composed
+            // — other segments are skipped, never translated.
+            if (wallActive && segment != anchorChapterIndex) continue
             val text = textOf(segment) ?: continue
             val range = text.ranges.firstOrNull { it.blockId == overlayBlockId }
                 ?: continue
-            val flat = segmentIndex.flatIndexOf(segment, range.blockIndex)
+            val flat = index.flatIndexOf(
+                indexSegment(segment), range.blockIndex
+            )
             if (flat >= 0) listState.animateScrollToItem(flat)
             return@LaunchedEffect
+        }
+    }
+
+    // ── Part 3: the wall's overscroll machinery (A12) ─────
+    //
+    // Sign convention: the stretch is POSITIVE past the
+    // chapter's END (a forward pull) and NEGATIVE past its
+    // START. The column's visual give is translationY =
+    // −stretch × RESISTANCE — pulling past the end drags the
+    // content UP against the resistance; past the start,
+    // DOWN. The connection consumes only the deltas it
+    // accumulates (the child has already reported it cannot
+    // scroll them); dragging back unwinds the stretch in
+    // onPreScroll before the child scrolls again. Releasing
+    // past COMMIT_DISTANCE — slowly (onPreFling) or with a
+    // fling (onPostFling) — or throwing a hard fling AT the
+    // edge commits the crossing, and the stretch springs
+    // home either way (a plain default spring — the feel
+    // constants above are the tuning surface, not the
+    // spring).
+    //
+    // Fences: a pinch/pan zoom in progress (zoomLockedItems
+    // non-empty) freezes accumulation entirely — the drag
+    // belongs to the image. Text selection needs no gate:
+    // selection drags are consumed by the SelectionContainer
+    // and never enter the nested-scroll chain, and only
+    // Drag-source deltas are read at all — which also keeps
+    // the drift's, the restore's and the follows'
+    // programmatic scrolls out. Commits are gated on the
+    // anchor being RESIDENT (a pull from an unfilled anchor
+    // asserts nothing) and never cross the book's ends.
+    // Inert unless the wall is active: every callback checks
+    // wallActiveNow first, and the modifier below only
+    // attaches the connection in wall mode.
+    val wallScope = rememberCoroutineScope()
+    val wallStretch = remember(anchorChapterIndex) {
+        Animatable(0f)
+    }
+    val wallCommitPx = with(density) {
+        WallFeel.COMMIT_DISTANCE.toPx()
+    }
+    val wallConnection = remember(
+        wallActive, anchorChapterIndex, chapters, wallCommitPx
+    ) {
+        object : NestedScrollConnection {
+
+            /** Commit on the standing stretch when it passed
+             * the commit distance. Returns whether a commit
+             * fired. */
+            fun settleOrCommit(): Boolean {
+                val stretch = wallStretch.value
+                if (!anchorResidentNow) return false
+                if (stretch >= wallCommitPx &&
+                    hasNextChapterNow
+                ) {
+                    onWallCross(true)
+                    return true
+                }
+                if (stretch <= -wallCommitPx &&
+                    hasPreviousChapterNow
+                ) {
+                    onWallCross(false)
+                    return true
+                }
+                return false
+            }
+
+            fun springHome() {
+                wallScope.launch {
+                    wallStretch.animateTo(0f, spring())
+                }
+            }
+
+            override fun onPreScroll(
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (!wallActiveNow ||
+                    source != NestedScrollSource.Drag ||
+                    zoomLockedItems.isNotEmpty()
+                ) {
+                    return Offset.Zero
+                }
+                val current = wallStretch.value
+                if (current == 0f) return Offset.Zero
+                // Dragging back toward the chapter: unwind
+                // the stretch before the child scrolls.
+                return if (current > 0f && available.y > 0f) {
+                    val unwind = minOf(current, available.y)
+                    wallScope.launch {
+                        wallStretch.snapTo(current - unwind)
+                    }
+                    Offset(0f, unwind)
+                } else if (current < 0f && available.y < 0f) {
+                    val unwind = minOf(-current, -available.y)
+                    wallScope.launch {
+                        wallStretch.snapTo(current + unwind)
+                    }
+                    Offset(0f, -unwind)
+                } else {
+                    Offset.Zero
+                }
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (!wallActiveNow ||
+                    source != NestedScrollSource.Drag ||
+                    zoomLockedItems.isNotEmpty()
+                ) {
+                    return Offset.Zero
+                }
+                // One accumulation rule for both edges: the
+                // stretch moves by the leftover the child
+                // could not scroll, clamped to the ceiling —
+                // negative leftover (pulling forward) grows
+                // it, positive shrinks it past the start.
+                val atEdge = (available.y < 0f &&
+                    !listState.canScrollForward) ||
+                    (available.y > 0f &&
+                        !listState.canScrollBackward)
+                if (!atEdge || available.y == 0f) {
+                    return Offset.Zero
+                }
+                val next = (wallStretch.value - available.y)
+                    .coerceIn(
+                        -WallFeel.MAX_OVERSCROLL_PX,
+                        WallFeel.MAX_OVERSCROLL_PX
+                    )
+                wallScope.launch { wallStretch.snapTo(next) }
+                return Offset(0f, available.y)
+            }
+
+            override suspend fun onPreFling(
+                available: Velocity
+            ): Velocity {
+                if (!wallActiveNow) return Velocity.Zero
+                // The slow-drag-creeps case: the drag ended
+                // with ~no fling, but the stretch stands past
+                // the commit distance — the release itself
+                // commits.
+                if (abs(available.y) < WallFeel.FLING_VELOCITY) {
+                    settleOrCommit()
+                    springHome()
+                }
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(
+                consumed: Velocity,
+                available: Velocity
+            ): Velocity {
+                if (!wallActiveNow) return Velocity.Zero
+                if (!settleOrCommit() && anchorResidentNow) {
+                    // A hard fling thrown AT the edge commits
+                    // on the fling alone, even with little
+                    // accumulated stretch.
+                    if (available.y < -WallFeel.FLING_VELOCITY &&
+                        !listState.canScrollForward &&
+                        hasNextChapterNow
+                    ) {
+                        onWallCross(true)
+                    } else if (
+                        available.y > WallFeel.FLING_VELOCITY &&
+                        !listState.canScrollBackward &&
+                        hasPreviousChapterNow
+                    ) {
+                        onWallCross(false)
+                    }
+                }
+                springHome()
+                return Velocity.Zero
+            }
         }
     }
 
@@ -673,19 +1078,48 @@ fun DocumentReader(
                     top = config.marginVerticalDp.dp + topInset,
                     bottom = config.marginVerticalDp.dp + bottomInset
                 ),
-                modifier = Modifier.fillMaxSize()
+                // Part 3: wall mode attaches the overscroll
+                // connection and the resistance give. Non-wall
+                // the chain is exactly fillMaxSize, as before.
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (wallActive) {
+                            Modifier
+                                .nestedScroll(wallConnection)
+                                .graphicsLayer {
+                                    translationY =
+                                        -wallStretch.value *
+                                            WallFeel.RESISTANCE
+                                }
+                        } else {
+                            Modifier
+                        }
+                    )
             ) {
                 chapters.forEachIndexed { segment, chapter ->
-                    if (showHeaders) {
+                    // Part 3: the wall composes ONLY the anchor
+                    // segment — every other segment emits
+                    // nothing (no blocks, no state item, no
+                    // boundary door). The anchor's own state
+                    // item below still fires its B1 fill.
+                    if (wallActive && segment != anchorChapterIndex) {
+                        return@forEachIndexed
+                    }
+                    if (headerFor(segment)) {
                         item(key = "h-${chapter.id}") {
                             DocumentChapterHeader(
-                                // The same reconciliation as
-                                // the chrome header — a chapter
+                                // Part 1: ONE clean line —
+                                // the same reconciliation as
+                                // the chrome header (a chapter
                                 // name whose own number
-                                // contradicts its position yields
-                                // to the position line, so the
-                                // eyebrow and the title under it
-                                // can never disagree.
+                                // contradicts its position
+                                // yields to the position line),
+                                // set as a real chapter heading.
+                                // No eyebrow, no rule: where
+                                // the text carries its own
+                                // title, headerFor has already
+                                // kept this item out entirely.
                                 title = ReaderCounters.headerLine(
                                     chapterTitle = chapter.title,
                                     chapterIndex = segment,
@@ -695,11 +1129,8 @@ fun DocumentReader(
                                             .ChapterNumbers
                                             .parseAny(chapter.title, "")
                                 ),
-                                chapterNumber =
-                                    app.xreader.data.extension.ChapterNumbers
-                                        .parseAny(chapter.title, "")
-                                        ?.toInt() ?: (segment + 1),
-                                palette = palette
+                                palette = palette,
+                                fontFamily = fontFamily
                             )
                         }
                     }
@@ -780,8 +1211,17 @@ fun DocumentReader(
                 // shown once the LAST segment is resident (its
                 // text is the book's end; before that the last
                 // segment's own state item stands there).
-                val lastSegment = chapters.lastIndex
+                // Part 3: in wall mode the item belongs to the
+                // ANCHOR when the anchor is the book's last
+                // segment — the only composed one.
+                val lastSegment = if (wallActive) {
+                    anchorChapterIndex
+                } else {
+                    chapters.lastIndex
+                }
                 if (lastSegment >= 0 &&
+                    (!wallActive ||
+                        anchorChapterIndex == chapters.lastIndex) &&
                     stateOf(lastSegment) == SegmentState.RESIDENT
                 ) {
                     item(key = "end-of-book") {
@@ -935,34 +1375,32 @@ private fun SegmentStateItem(
     }
 }
 
+/**
+ * Part 1: the app's chapter header — ONE clean line in the
+ * QuickNovel / Moon+ shape: the reconciled title set as a
+ * real chapter heading (titleLarge in the reading font),
+ * generous space above, modest space below. The eyebrow
+ * ("Chapter N"), the second title line and the rule that
+ * used to stack over the book's own heading are gone; a
+ * segment whose text opens with its own title composes no
+ * header at all (see headerFor), so a chapter's name is
+ * printed exactly once, by the book or by the app.
+ */
 @Composable
 private fun DocumentChapterHeader(
     title: String,
-    chapterNumber: Int,
-    palette: ReaderPalette
+    palette: ReaderPalette,
+    fontFamily: FontFamily
 ) {
-    Column(
-        Modifier
+    Text(
+        title,
+        style = MaterialTheme.typography.titleLarge
+            .copy(fontFamily = fontFamily),
+        color = palette.text,
+        modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 28.dp, bottom = 10.dp)
-    ) {
-        Text(
-            "Chapter $chapterNumber",
-            style = MaterialTheme.typography.labelLarge,
-            color = palette.accent
-        )
-        Text(
-            title,
-            style = MaterialTheme.typography.titleMedium,
-            color = palette.text
-        )
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(palette.muted.copy(alpha = 0.35f))
-        )
-    }
+            .padding(top = 28.dp, bottom = 12.dp)
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)

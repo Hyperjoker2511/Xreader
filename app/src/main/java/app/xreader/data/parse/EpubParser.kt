@@ -169,6 +169,33 @@ data class EpubSkeleton(
     val chapterTitles: List<String>
 )
 
+/**
+ * v1.7 Moon+ standard fix (Part 2): one entry of the book's
+ * own table of contents, in document order: the label as
+ * the book prints it, the target's path (resolved against
+ * the TOC file's own directory, with the fragment split
+ * off), and the fragment (the in-file anchor id) when the
+ * entry carries one.
+ */
+data class EpubTocEntry(
+    val label: String,
+    val href: String,
+    val fragment: String?
+)
+
+/**
+ * Part 2: [EpubParser.tocMap]'s yield — the ordered TOC
+ * entries plus every spine item's href (resolved
+ * OPF-relative) in spine order. The reader bridges entries
+ * to landed chapters by matching hrefs against this list:
+ * chapter rows store no href (Room stays v12), so the
+ * spine is the only shared index space.
+ */
+data class TocMapResult(
+    val entries: List<EpubTocEntry>,
+    val spineHrefs: List<String>
+)
+
 class EpubParser : BookParser {
 
     override val format: BookFormat = BookFormat.EPUB
@@ -276,6 +303,103 @@ class EpubParser : BookParser {
                 chapterTitles = chapterTitles
             )
         )
+    }
+
+    /**
+     * Part 2: the book's own table of contents — ONE
+     * probe-shaped pass (unzip, container → OPF, TOC source)
+     * returning the ordered entries WITH fragments plus the
+     * spine href list, for the reader's open-time bridge to
+     * landed chapters. NCX-first precedence, exactly as the
+     * title harvest above; the entry parses (below) emit
+     * document order where [parseNcx]/[parseNav] collapse to
+     * a fragment-stripped map. No chapter is converted.
+     * Null on any failure — a book whose TOC can't be read
+     * simply has no TOC furniture; it is never an open
+     * failure.
+     */
+    fun tocMap(staged: File, workDir: File): TocMapResult? = try {
+        val unzipped = File(workDir, "unzipped-toc")
+        if (extractZip(staged, unzipped) != null) {
+            null
+        } else {
+            val container = File(unzipped, "META-INF/container.xml")
+            val opfPath = if (container.isFile) {
+                parseContainer(container)
+            } else {
+                null
+            }
+            val entryIndex = buildEntryIndex(unzipped)
+            val opf = opfPath?.let {
+                entryFile(unzipped, entryIndex, it)
+            }?.let { parseOpf(it) }
+            if (opf == null || opfPath == null) {
+                null
+            } else {
+                val opfDir = opfPath.substringBeforeLast('/', "")
+                val spineHrefs = opf.spine.mapNotNull { idref ->
+                    opf.manifest[idref]?.let { item ->
+                        ZipPaths.resolve(opfDir, item.href)
+                    }
+                }
+                TocMapResult(
+                    entries = tocEntries(
+                        unzipped, entryIndex, opf, opfDir
+                    ),
+                    spineHrefs = spineHrefs
+                )
+            }
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Part 2: the TOC source walk — the NCX when the OPF
+     * declares one and the file is there (its entries, even
+     * an empty list, settle the matter: a broken NCX earns
+     * no nav rescue, the title harvest's own property);
+     * otherwise the nav document. Hrefs resolve against the
+     * TOC file's directory — ZipPaths.resolve strips the
+     * fragment itself, and the fragment is read off the raw
+     * source string, so resolution happens BEFORE the split
+     * in effect. */
+    private fun tocEntries(
+        unzipped: File,
+        entryIndex: Map<String, String>,
+        opf: Opf,
+        opfDir: String
+    ): List<EpubTocEntry> {
+        val ncxItem = opf.tocId?.let { opf.manifest[it] }
+        if (ncxItem != null) {
+            val ncxPath = ZipPaths.resolve(opfDir, ncxItem.href)
+            val ncxFile = entryFile(unzipped, entryIndex, ncxPath)
+            if (ncxFile != null) {
+                val ncxDir = ncxPath.substringBeforeLast('/', "")
+                return parseNcxEntries(ncxFile).map { (label, src) ->
+                    EpubTocEntry(
+                        label = label,
+                        href = ZipPaths.resolve(ncxDir, src),
+                        fragment = src.substringAfter('#', "")
+                            .ifEmpty { null }
+                    )
+                }
+            }
+        }
+        val navItem = opf.manifest.values
+            .firstOrNull { "nav" in it.properties }
+            ?: return emptyList()
+        val navPath = ZipPaths.resolve(opfDir, navItem.href)
+        val navFile = entryFile(unzipped, entryIndex, navPath)
+            ?: return emptyList()
+        val navDir = navPath.substringBeforeLast('/', "")
+        return parseNavEntries(navFile).map { (label, href) ->
+            EpubTocEntry(
+                label = label,
+                href = ZipPaths.resolve(navDir, href),
+                fragment = href.substringAfter('#', "")
+                    .ifEmpty { null }
+            )
+        }
     }
 
     /**
@@ -985,6 +1109,158 @@ class EpubParser : BookParser {
         result
     } catch (e: Exception) {
         emptyMap()
+    }
+
+    /**
+     * Part 2 (A4): the NCX as an ordered entry list —
+     * PRE-ORDER, where [parseNcx] inserts at END_TAG and so
+     * emits children before their parent into its map. A
+     * navPoint's document order is navLabel, then content,
+     * then child navPoints, so an entry is emitted the
+     * moment both its label and its content src are known —
+     * at the content tag in the well-formed shape — which
+     * places every parent before its children. Labels get
+     * [parseNcx]'s cleaning (trimmed); srcs stay RAW
+     * (fragment kept, duplicates kept — an entry list is
+     * not a map); playOrder is never read, as today.
+     */
+    private fun parseNcxEntries(
+        file: File
+    ): List<Pair<String, String>> = try {
+        val parser = newParser(file)
+        val result = mutableListOf<Pair<String, String>>()
+
+        class NavPoint {
+            var src: String? = null
+            var label: String? = null
+            var inLabel = false
+            var emitted = false
+        }
+        val stack = mutableListOf<NavPoint>()
+        fun emit(point: NavPoint) {
+            val src = point.src
+            val label = point.label
+            if (!point.emitted && src != null &&
+                !label.isNullOrEmpty()
+            ) {
+                result += label to src
+                point.emitted = true
+            }
+        }
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> when (parser.name) {
+                    "navPoint" -> stack += NavPoint()
+                    "content" -> {
+                        val point = stack.lastOrNull()
+                        if (point != null) {
+                            point.src =
+                                parser.getAttributeValue(null, "src")
+                            emit(point)
+                        }
+                    }
+                    "navLabel" -> stack.lastOrNull()?.inLabel = true
+                    "text" -> {
+                        val point = stack.lastOrNull()
+                        if (point != null && point.inLabel) {
+                            point.label = parser.nextText()?.trim()
+                            emit(point)
+                        }
+                    }
+                }
+                XmlPullParser.END_TAG -> when (parser.name) {
+                    "navLabel" -> stack.lastOrNull()?.inLabel = false
+                    "navPoint" -> {
+                        val point = stack.removeAt(stack.lastIndex)
+                        emit(point)
+                    }
+                }
+            }
+            event = parser.next()
+        }
+        result
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    /**
+     * Part 2 (A5): the EPUB 3 nav document as an ordered
+     * entry list, preferring the <nav> whose epub:type
+     * contains "toc" — [parseNav] takes the first <nav>
+     * regardless of type, which an entry list cannot
+     * survive (a landmarks nav listed first would become
+     * the book's Contents). Falls back to the first nav
+     * when none is typed. Labels get [parseNav]'s cleaning
+     * (whitespace collapsed, trimmed); hrefs stay RAW
+     * (fragment kept, duplicates kept).
+     */
+    private fun parseNavEntries(
+        file: File
+    ): List<Pair<String, String>> = try {
+        val parser = newParser(file)
+        // One entry list per <nav>, in document order, each
+        // with its nav's epub:type ("" when untyped).
+        val navs = mutableListOf<
+            Pair<String, MutableList<Pair<String, String>>>
+            >()
+        var depth = 0
+        var currentNav: MutableList<Pair<String, String>>? = null
+        var currentNavDepth = -1
+        var currentHref: String? = null
+        val text = StringBuilder()
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> {
+                    depth++
+                    if (parser.name == "nav" && currentNav == null) {
+                        val type = (0 until parser.attributeCount)
+                            .firstOrNull {
+                                parser.getAttributeName(it) == "type"
+                            }
+                            ?.let { parser.getAttributeValue(it) }
+                            ?: ""
+                        val list = mutableListOf<Pair<String, String>>()
+                        navs += type to list
+                        currentNav = list
+                        currentNavDepth = depth
+                    }
+                    if (currentNav != null && parser.name == "a") {
+                        currentHref =
+                            parser.getAttributeValue(null, "href")
+                        text.setLength(0)
+                    }
+                }
+                XmlPullParser.TEXT -> if (currentHref != null) {
+                    text.append(parser.text)
+                }
+                XmlPullParser.END_TAG -> {
+                    if (parser.name == "a" && currentHref != null) {
+                        val label = text.toString()
+                            .replace(Regex("\\s+"), " ").trim()
+                        if (label.isNotEmpty()) {
+                            currentNav?.add(label to currentHref!!)
+                        }
+                        currentHref = null
+                    }
+                    if (parser.name == "nav" &&
+                        depth == currentNavDepth
+                    ) {
+                        currentNav = null
+                        currentNavDepth = -1
+                    }
+                    depth--
+                }
+            }
+            event = parser.next()
+        }
+        val chosen = navs.firstOrNull { (type, _) ->
+            type.contains("toc")
+        } ?: navs.firstOrNull()
+        chosen?.second ?: emptyList()
+    } catch (e: Exception) {
+        emptyList()
     }
 
     companion object {

@@ -123,7 +123,13 @@ data class ReaderConfig(
     val userFontName: String? = null,
     val fontSizeSp: Float = 19f,
     val lineHeightMultiplier: Float = 1.55f,
-    val paragraphSpacingDp: Float = 10f,
+    /** v1.7 Moon+ standard fix (Part 4): the fresh-install
+     * default is the COMPACT stop — tight, book-like spacing
+     * (the Moon+ pages' shape), not the old 10 dp air. The
+     * slider range is unchanged; stored values are untouched
+     * except the one-time migration of an untouched old
+     * default (see ReaderPrefs). */
+    val paragraphSpacingDp: Float = ParagraphSpacing.COMPACT.dp,
     val marginHorizontalDp: Float = 24f,
     val marginVerticalDp: Float = 20f,
     val alignment: ReaderAlignment = ReaderAlignment.LEFT,
@@ -221,7 +227,16 @@ data class ReaderConfig(
     /** Paged pages' fit. */
     val mangaScaleType: MangaScaleType = MangaScaleType.FIT,
     /** Orientation while reading image chapters. */
-    val mangaOrientation: MangaOrientation = MangaOrientation.FREE
+    val mangaOrientation: MangaOrientation = MangaOrientation.FREE,
+    /** v1.7 Moon+ standard fix (Part 3): the chapter-end
+     * wall's scope in Chapter-by-chapter mode — the scroll
+     * stops at a small wall at each chapter's end (and
+     * start), and a deliberate pull past it crosses. EPUB
+     * books take the wall by default (the Moon+ model);
+     * novels keep the flowing crossing unless the owner
+     * widens the scope. Appended LAST: positional
+     * constructor callers must not shift. */
+    val chapterEndWall: ChapterEndWall = ChapterEndWall.FOR_EPUB_BOOKS
 )
 
 /** How the reader moves between chapters (v1.0.1).
@@ -231,6 +246,16 @@ data class ReaderConfig(
  * to CHAPTER_BY_CHAPTER through [ReaderValidation.parseEnum]
  * (ReaderPrefs) — migration is automatic, no format change. */
 enum class ChapterTransition { CONTINUOUS, CHAPTER_BY_CHAPTER }
+
+/** Part 3: where the chapter-end wall stands in
+ * Chapter-by-chapter mode. FOR_EPUB_BOOKS is the default —
+ * imported EPUBs read the full Moon+ way out of the box;
+ * novels keep today's flowing crossing until the owner
+ * picks EVERY_BOOK. OFF restores the flowing crossing
+ * everywhere. Meaningless in CONTINUOUS (no wall exists
+ * there), exactly as ChapterTransition is meaningless to
+ * the paged surface. */
+enum class ChapterEndWall { FOR_EPUB_BOOKS, EVERY_BOOK, OFF }
 
 /** Hardware-keyboard control presets (v1.0.2, R18/G18). */
 enum class KeyboardPreset { STANDARD, PAGE_KEYS, OFF }

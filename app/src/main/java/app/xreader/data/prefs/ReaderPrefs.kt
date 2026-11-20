@@ -8,9 +8,11 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.xreader.domain.reader.PageTurnOverride
+import app.xreader.domain.reader.ParagraphSpacing
 import app.xreader.domain.reader.ReaderAlignment
 import app.xreader.domain.reader.ReaderConfig
 import app.xreader.domain.reader.ReaderFontChoice
+import app.xreader.domain.reader.ChapterEndWall
 import app.xreader.domain.reader.ChapterTransition
 import app.xreader.domain.reader.PagedDirection
 import app.xreader.domain.reader.ReaderMode
@@ -33,6 +35,35 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
      * through the same single-writer path (update writes every
      * field, and removes the optional ones at their defaults). */
     suspend fun resetToDefaults() = update { ReaderConfig() }
+
+    /**
+     * v1.7 Moon+ standard fix (Part 4): the one-time paragraph-
+     * spacing default migration. The shipped default was the
+     * NORMAL stop (10 dp of air between paragraphs); the
+     * owner's ruling is that the default itself was wrong, so
+     * a stored value that is EXACTLY the old default — and
+     * only that value — is rewritten to the COMPACT stop on
+     * this build's first run. A deliberately chosen 10 dp is
+     * indistinguishable from the untouched default; the owner
+     * accepts the one-time move. Any other stored value is
+     * never touched. The flag is written in the SAME edit as
+     * the value (DataStore edits are serialised, so the pair
+     * is atomic — a crash between them can never re-migrate),
+     * and once the flag stands the migration never runs again.
+     */
+    suspend fun migrateParagraphSpacingDefaultOnce() {
+        store.edit { prefs ->
+            if (prefs[KEY_PARA_SPACING_MIGRATED] != true) {
+                if (prefs[KEY_PARA_SPACING] ==
+                    ParagraphSpacing.NORMAL.dp
+                ) {
+                    prefs[KEY_PARA_SPACING] =
+                        ParagraphSpacing.COMPACT.dp
+                }
+                prefs[KEY_PARA_SPACING_MIGRATED] = true
+            }
+        }
+    }
 
     suspend fun update(transform: (ReaderConfig) -> ReaderConfig) {
         store.edit { prefs ->
@@ -68,6 +99,7 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
             prefs[KEY_DOUBLE_TAP_ZOOM] = next.doubleTapToZoom
             prefs[KEY_DISABLE_ZOOM_OUT] = next.disableZoomOut
             prefs[KEY_TRANSITION] = next.chapterTransition.name
+            prefs[KEY_END_WALL] = next.chapterEndWall.name
             prefs[KEY_PAGE_OVERLAY] = next.showPageOverlay
             prefs[KEY_READING_LINE] = next.readingLine
             prefs[KEY_KEYBOARD_PRESET] = next.keyboardPreset.name
@@ -111,7 +143,8 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
             userFontName = this[KEY_USER_FONT],
             fontSizeSp = this[KEY_FONT_SIZE] ?: 19f,
             lineHeightMultiplier = this[KEY_LINE_HEIGHT] ?: 1.55f,
-            paragraphSpacingDp = this[KEY_PARA_SPACING] ?: 10f,
+            paragraphSpacingDp = this[KEY_PARA_SPACING]
+                ?: ParagraphSpacing.COMPACT.dp,
             marginHorizontalDp = this[KEY_MARGIN_H] ?: 24f,
             marginVerticalDp = this[KEY_MARGIN_V] ?: 20f,
             alignment = ReaderValidation.parseEnum(
@@ -146,6 +179,10 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
             chapterTransition = ReaderValidation.parseEnum(
                 this[KEY_TRANSITION], ChapterTransition.entries.toTypedArray(),
                 ChapterTransition.CHAPTER_BY_CHAPTER
+            ),
+            chapterEndWall = ReaderValidation.parseEnum(
+                this[KEY_END_WALL], ChapterEndWall.entries.toTypedArray(),
+                ChapterEndWall.FOR_EPUB_BOOKS
             ),
             showPageOverlay = this[KEY_PAGE_OVERLAY] ?: false,
             readingLine = this[KEY_READING_LINE] ?: false,
@@ -200,6 +237,10 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
         val KEY_FONT_SIZE = floatPreferencesKey("reader.font_size")
         val KEY_LINE_HEIGHT = floatPreferencesKey("reader.line_height")
         val KEY_PARA_SPACING = floatPreferencesKey("reader.paragraph_spacing")
+        // Part 4's one-time default-migration flag (absent in
+        // every pre-fix store by construction).
+        val KEY_PARA_SPACING_MIGRATED =
+            booleanPreferencesKey("reader.paragraph_spacing_default_migrated")
         val KEY_MARGIN_H = floatPreferencesKey("reader.margin_h")
         val KEY_MARGIN_V = floatPreferencesKey("reader.margin_v")
         val KEY_ALIGNMENT = stringPreferencesKey("reader.alignment")
@@ -220,6 +261,10 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
         val KEY_DOUBLE_TAP_ZOOM = booleanPreferencesKey("reader.double_tap_zoom")
         val KEY_DISABLE_ZOOM_OUT = booleanPreferencesKey("reader.disable_zoom_out")
         val KEY_TRANSITION = stringPreferencesKey("reader.chapter_transition")
+        // Part 3's wall scope (absent in every pre-fix store
+        // by construction — the parse falls back to the
+        // FOR_EPUB_BOOKS default).
+        val KEY_END_WALL = stringPreferencesKey("reader.chapter_end_wall")
         val KEY_PAGE_OVERLAY = booleanPreferencesKey("reader.page_overlay")
         val KEY_READING_LINE = booleanPreferencesKey("reader.reading_line")
         val KEY_KEYBOARD_PRESET = stringPreferencesKey("reader.keyboard_preset")

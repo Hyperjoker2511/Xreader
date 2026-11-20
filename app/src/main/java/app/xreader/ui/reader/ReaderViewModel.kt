@@ -16,7 +16,11 @@ import app.xreader.data.reader.MlKitEyeTracker
 import app.xreader.data.reader.OverlayPlayer
 import app.xreader.data.reader.ReadAloudController
 import app.xreader.data.reader.SoundscapePlayer
+import app.xreader.data.engine.canonicalHrefKey
+import app.xreader.data.parse.EpubParser
 import app.xreader.di.AppContainer
+import app.xreader.ui.localreader.EpubTocData
+import app.xreader.ui.localreader.EpubTocEntryData
 import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.reader.BookDocument
@@ -53,6 +57,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Where a freshly loaded chapter should open. */
 enum class PageHint { FIRST, LAST, OFFSET }
@@ -66,6 +71,21 @@ data class CoreSearchHit(
     val chapterTitle: String,
     val charOffset: Int,
     val snippet: String
+)
+
+/** v1.7 Moon+ standard fix (Part 2): one entry of the
+ * book's own table of contents, bridged to the landed
+ * chapter list — the label as the book prints it, the
+ * chapter (segment) index it opens, and the char offset
+ * inside that chapter (its fragment anchor's position, or
+ * 0 when the entry carries no fragment). Published with
+ * the open, atomically with the chapters themselves, so
+ * the Contents sheet and the chrome counters never flip
+ * mid-session. */
+data class ReaderTocEntry(
+    val label: String,
+    val chapterIndex: Int,
+    val charOffset: Int
 )
 
 data class ReaderUiState(
@@ -134,6 +154,26 @@ data class ReaderUiState(
     val segmentTexts: Map<Long, ChapterText> = emptyMap(),
     /** FAILED segments' honest reasons, keyed by chapter id. */
     val segmentFailedReasons: Map<Long, String> = emptyMap(),
+    /** v1.7 Moon+ standard fix (Part 1): the segments whose
+     * own text opens with its own title (decided by the
+     * ViewModel at fill time from the ORIGINAL text — A2),
+     * keyed by chapter id. The surface composes NO app
+     * header for these: the book's own heading stands
+     * alone, as the book made it. An undecided (unfilled)
+     * segment is never in this set AND composes no header
+     * either, so no header can pop at fill landing. */
+    val segmentsWithOwnTitle: Set<Long> = emptySet(),
+    /** Part 2: the book's own TOC, bridged to the landed
+     * chapters — empty for every book without a prepared-
+     * EPUB TOC (novels, unprepared books, TOC-less EPUBs),
+     * which is exactly the signal the Contents sheet and
+     * the counters use to stay on today's behaviour. */
+    val tocEntries: List<ReaderTocEntry> = emptyList(),
+    /** Part 3: the open book is a local EPUB (prepared or
+     * not — the document surface only ever serves the
+     * prepared ones, and the chapter-end wall's FOR_EPUB
+     * scope reads this flag through that surface). */
+    val isEpubBook: Boolean = false,
     /** The resident run's chapter ids (Item 7) — the UI-side
      * layout worker evicts a segment's records when its id
      * leaves this set (Item 2, A4). */
@@ -896,6 +936,27 @@ class ReaderViewModel(
                 }
             }
             val saved = container.database.readingProgressDao().getForBook(bookId)
+            // Part 2 + Part 3: the open book's EPUB-ness and
+            // its own table of contents, computed BEFORE the
+            // publish below and carried in the SAME copy — the
+            // Contents sheet and the chrome counters read
+            // tocEntries from state, so the TOC must land
+            // atomically with the chapters or the counters
+            // would flip mid-session. Only a PREPARED EPUB
+            // gets the parse (the document surface serves
+            // nothing else); a failure anywhere in the pass
+            // yields no TOC, never a failed open.
+            val epubBook = book != null &&
+                book.sourceType ==
+                    app.xreader.data.db.SourceType.LOCAL_FILE &&
+                book.localFormat == app.xreader.data.db.BookFormat.EPUB
+            val tocForPublish: List<ReaderTocEntry> = book
+                ?.takeIf { epubBook && _preparedEpub.value }
+                ?.let { epub ->
+                    runCatching { computeEpubToc(epub, chapters) }
+                        .getOrDefault(emptyList())
+                }
+                ?: emptyList()
             // v1.0.6 (W3.4): a browser-view source gets ONE plain
             // note per source per session, so slower chapter turns
             // never read as the app hanging.
@@ -903,6 +964,8 @@ class ReaderViewModel(
             _state.value = _state.value.copy(
                 bookTitle = book?.title ?: "",
                 chapters = chaptersUpdated(chapters),
+                tocEntries = tocForPublish,
+                isEpubBook = epubBook,
                 pageTurnTier = computeTier(_config.value),
                 browserViewNotice = sourceNotice ?: _state.value.browserViewNotice
             )
@@ -1296,6 +1359,42 @@ class ReaderViewModel(
             moveAnchor(target, 0, PageHint.FIRST)
         } else {
             launchLoad { loadChapter(target, 0, 0f) }
+        }
+    }
+
+    /**
+     * Part 3 (A10): a committed pull past the chapter-end
+     * wall. Forward: the chapter being left is marked
+     * finished FIRST (markCurrentChapterFinished acts on
+     * the CURRENT index — it must run before the anchor
+     * moves), then the anchor moves to the next chapter's
+     * top, exactly as a chrome Next does in scroll mode.
+     * Backward: the anchor moves to the previous chapter's
+     * end (the LAST hint), with NO finished marking —
+     * re-entering a chapter backwards never completes the
+     * one being left. In wall mode this commit is the ONLY
+     * finished-marking door: the surface never fires
+     * onChapterEndReached there, so nothing is marked twice
+     * and nothing is marked by mere visibility. (The
+     * non-wall pinned mode keeps its own door.)
+     */
+    fun crossChapterAtWall(next: Boolean) {
+        val stateNow = _state.value
+        if (next) {
+            if (stateNow.chapterIndex >=
+                stateNow.chapters.lastIndex
+            ) {
+                return
+            }
+            markCurrentChapterFinished()
+            moveAnchor(
+                stateNow.chapterIndex + 1, 0, PageHint.FIRST
+            )
+        } else {
+            if (stateNow.chapterIndex <= 0) return
+            moveAnchor(
+                stateNow.chapterIndex - 1, 0, PageHint.LAST
+            )
         }
     }
 
@@ -2352,6 +2451,12 @@ class ReaderViewModel(
      * (their display rides the translated road). */
     private val segmentTranslatedIds = mutableSetOf<Long>()
 
+    /** Part 1: the own-title decisions, keyed by chapter id —
+     * computed by [detectOwnTitle] when a segment's original
+     * is first held, evicted with the segment, published by
+     * [publishDocumentState]. */
+    private val segmentsWithOwnTitle = mutableSetOf<Long>()
+
     /** FAILED segments' honest reasons, keyed by chapter id. */
     private val segmentFailedReasonsMap = mutableMapOf<Long, String>()
 
@@ -2440,6 +2545,7 @@ class ReaderViewModel(
                 continue
             }
             segmentOriginals[chapter.id] = original
+            detectOwnTitle(chapter, original)
             if (useTranslation) {
                 segmentTranslatedIds += chapter.id
             } else {
@@ -2450,6 +2556,186 @@ class ReaderViewModel(
             bookDocument.setExactLength(chapter.id, display.length)
             return display
         }
+    }
+
+    /**
+     * Part 1 (A2): the own-title decision for one segment,
+     * computed from its ORIGINAL text at the moment the
+     * original is first held — never from the display copy,
+     * so a translated title line can never resurrect the
+     * doubled header in translated reading. The reconciled
+     * header line is the surface's own (ReaderCounters,
+     * unchanged logic), computed against the chapter's
+     * position in the CURRENT list.
+     */
+    private fun detectOwnTitle(chapter: Chapter, original: ChapterText) {
+        val chapters = _state.value.chapters
+        val index = chapters.indexOfFirst { it.id == chapter.id }
+        if (index < 0) return
+        val ownNumberFloat = app.xreader.data.extension.ChapterNumbers
+            .parseAny(chapter.title, "")
+        val headerLine = ReaderCounters.headerLine(
+            chapterTitle = chapter.title,
+            chapterIndex = index,
+            chapterCount = chapters.size,
+            ownNumber = ownNumberFloat
+        )
+        val ownNumber = ownNumberFloat?.toInt() ?: (index + 1)
+        if (ChapterTitleDetection.opensWithOwnTitle(
+                original.content.blocks, chapter.title, headerLine, ownNumber
+            )
+        ) {
+            segmentsWithOwnTitle += chapter.id
+        } else {
+            segmentsWithOwnTitle -= chapter.id
+        }
+    }
+
+    /**
+     * Part 2: bridge the book's own TOC to the landed
+     * chapters. Runs at most once per book across opens —
+     * the bridged result (or the no-TOC marker) is cached
+     * in LocalReaderPrefs under its own key (A7: the
+     * prepare record is never extended), so a re-open reads
+     * the cache and never re-parses. Cached entries are
+     * re-bounded against the CURRENT chapter list (a
+     * re-imported book can carry fewer chapters than the
+     * cache was bridged against).
+     */
+    private suspend fun computeEpubToc(
+        book: app.xreader.data.db.Book,
+        chapters: List<Chapter>
+    ): List<ReaderTocEntry> {
+        val cached = runCatching {
+            localReaderPrefs.epubToc(book.id)
+        }.getOrNull()
+        if (cached != null) {
+            return cached.entries
+                .filter { it.chapterIndex in chapters.indices }
+                .map {
+                    ReaderTocEntry(
+                        it.label, it.chapterIndex, it.charOffset
+                    )
+                }
+        }
+        val bridged = withContext(container.ioDispatcher) {
+            runCatching { bridgeEpubToc(book, chapters) }
+                .getOrNull()
+        }
+        val data = if (bridged.isNullOrEmpty()) {
+            EpubTocData(emptyList(), hasToc = false)
+        } else {
+            EpubTocData(
+                bridged.map {
+                    EpubTocEntryData(
+                        it.label, it.chapterIndex, it.charOffset
+                    )
+                },
+                hasToc = true
+            )
+        }
+        runCatching { localReaderPrefs.saveEpubToc(book.id, data) }
+        return bridged ?: emptyList()
+    }
+
+    /**
+     * Part 2: the parse + bridge itself (blocking file
+     * work — the caller runs it on the IO dispatcher). Null
+     * when the book's file can't be resolved or read; an
+     * empty list when the book parses but carries no usable
+     * TOC.
+     *
+     * THE BRIDGE: [EpubParser.tocMap] yields the entries
+     * and every spine item's resolved href in spine order;
+     * an entry's segment is its href's index in that list.
+     * The evidence for spine index == chapter index:
+     * prepare converts EpubParser.parse's chapters IN ORDER
+     * (EpubPrepareService lands parsed.chapters by list
+     * position) and parse emits exactly one chapter per
+     * convertible spine item in spine order, so for a
+     * prepared book the landed list and the spine list walk
+     * together; the record's only map is keyed in SESSION
+     * reading-order space, not spine space, so no record
+     * bridge exists to prefer. The match is bounded by the
+     * loaded list — an entry past the end (a spine item
+     * conversion skipped, which can only push indices UP,
+     * never down) drops rather than pointing at the wrong
+     * chapter. Hrefs match in tocMap's own resolved form
+     * first, then by canonicalHrefKey — the two-key
+     * discipline of the prepare bridge (EpubHrefBridge).
+     */
+    private suspend fun bridgeEpubToc(
+        book: app.xreader.data.db.Book,
+        chapters: List<Chapter>
+    ): List<ReaderTocEntry>? {
+        // The book's file, resolved exactly as the prepare
+        // service resolves it: an absolute filePath stands
+        // as-is; anything else resolves against book
+        // storage (BookStorage.resolve is relative-only —
+        // File(parent, absoluteChild) would concatenate).
+        // A documentUri-only book has no plain file to
+        // parse: null, and the caller caches the marker.
+        val storedPath = book.filePath ?: return null
+        val file = if (storedPath.startsWith("/")) {
+            File(storedPath)
+        } else {
+            container.bookStorage.resolve(storedPath)
+        }
+        if (!file.isFile) return null
+        val workDir = File(
+            container.bookStorage
+                .importStagingDir("epub-toc-${book.id}"),
+            "work"
+        )
+        val map = EpubParser().tocMap(file, workDir) ?: return null
+        if (map.entries.isEmpty() || map.spineHrefs.isEmpty()) {
+            return emptyList()
+        }
+        val spineIndex = HashMap<String, Int>()
+        map.spineHrefs.forEachIndexed { index, href ->
+            spineIndex.putIfAbsent(href, index)
+            spineIndex.putIfAbsent(canonicalHrefKey(href), index)
+        }
+        val result = ArrayList<ReaderTocEntry>(map.entries.size)
+        for (entry in map.entries) {
+            val index = spineIndex[entry.href]
+                ?: spineIndex[canonicalHrefKey(entry.href)]
+                ?: continue
+            if (index !in chapters.indices) continue
+            val offset = entry.fragment?.let { fragment ->
+                fragmentOffset(chapters[index], fragment)
+            } ?: 0
+            result += ReaderTocEntry(entry.label, index, offset)
+        }
+        return result
+    }
+
+    /** Part 2: a fragment's char offset inside one landed
+     * chapter — the stored text read DIRECTLY (the same
+     * read loadSegmentText makes, without its cache
+     * publishing), the block carrying the fragment as its
+     * id (Heading or Paragraph — the block types that have
+     * ids), that block's range start. No match, or an
+     * unreadable chapter, → 0: the entry still opens the
+     * right chapter. */
+    private suspend fun fragmentOffset(
+        chapter: Chapter,
+        fragment: String
+    ): Int {
+        val result = container.bookStorage.readChapterContent(
+            chapter.bookId, chapter.id
+        )
+        if (result !is AppResult.Ok) return 0
+        val text = ChapterText(result.value)
+        val blockIndex = text.content.blocks.indexOfFirst { block ->
+            when (block) {
+                is ChapterBlock.Heading -> block.id == fragment
+                is ChapterBlock.Paragraph -> block.id == fragment
+                else -> false
+            }
+        }
+        if (blockIndex < 0) return 0
+        return text.rangeOf(blockIndex)?.start ?: 0
     }
 
     /** v1.7 Patch 2 (item 1d): the residency planner's
@@ -2509,6 +2795,7 @@ class ReaderViewModel(
             segmentStates = states,
             segmentTexts = segmentDisplay.toMap(),
             segmentFailedReasons = segmentFailedReasonsMap.toMap(),
+            segmentsWithOwnTitle = segmentsWithOwnTitle.toSet(),
             residentSegmentIds = residentRunIndices
                 .mapNotNull { chapters.getOrNull(it)?.id }
                 .toSet(),
@@ -2613,6 +2900,7 @@ class ReaderViewModel(
             segmentOriginals.remove(id)
             segmentDisplay.remove(id)
             segmentTranslatedIds.remove(id)
+            segmentsWithOwnTitle.remove(id)
         }
         publishDocumentState()
     }

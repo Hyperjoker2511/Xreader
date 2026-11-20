@@ -1392,6 +1392,17 @@ class AppContainer(
         appScope.launch {
             sourcePrefs.dohEnabled.collect { sourceDns.enabled = it }
         }
+        // v1.7 Moon+ standard fix (Part 4): the one-time
+        // paragraph-spacing default migration, on the app
+        // scope at startup — before any reader surface can
+        // collect the config in practice, idempotent and
+        // flag-gated inside ReaderPrefs, so the exact call
+        // site can never double-apply it.
+        appScope.launch(ioDispatcher) {
+            runCatching {
+                readerPrefs.migrateParagraphSpacingDefaultOnce()
+            }
+        }
         // AppInfo first (an extension may read the host version from
         // its very first class load), then the Injekt registration.
         AppInfo.setVersionInfo(
