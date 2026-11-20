@@ -1097,12 +1097,16 @@ class MihonSourceAdapter(
     // ── v1.5.11 (transplant): the donor HttpSource seam ─────
     // The transplanted HttpPageLoader (komikku/loader) binds
     // to this adapter exactly where the donor's binds to its
-    // HttpSource: getPageList / getImageUrl / getImage, as
-    // plain suspend calls on the caller's IO context — the
-    // donor has no bridge executor, and neither does this
-    // road. Each call is namespace-bracketed via [bracketed]
-    // (the same bracket [pageBytes] has always used); the
-    // facade's blocking bridge (callMihon) is NOT crossed.
+    // HttpSource: getPageList / getImageUrl / getImage. The
+    // donor has no bridge executor; this road ENFORCES the
+    // thread itself (v1.7 Fix Round G, Part C): each call is
+    // namespace-bracketed via [bracketed] (the same bracket
+    // [pageBytes] has always used), and INSIDE the bracket the
+    // extension call hops to Dispatchers.IO — the namespace
+    // element rides the hop (withContext swaps only the
+    // dispatcher), so no caller is trusted to be on IO and
+    // extension code can never run on the main thread here.
+    // The facade's blocking bridge (callMihon) is NOT crossed.
 
     /**
      * v1.5.17 (F1): the chapter's EFFECTIVE memo verdict —
@@ -1124,14 +1128,18 @@ class MihonSourceAdapter(
         schapterOf(chapter).memo.isEmpty()
 
     /** Donor `Source.getPageList`: the chapter's Mihon pages,
-     * from the fully-restored SChapter ([schapterOf]). */
+     * from the fully-restored SChapter ([schapterOf]). Part C:
+     * the extension call runs on Dispatchers.IO, inside the
+     * namespace bracket (see the seam note above). */
     suspend fun getPageList(chapter: SourceChapter): List<Page> =
         bracketed {
-            val pages = mihon.getPageList(schapterOf(chapter))
-            if (pages.isEmpty()) {
-                throw SourceException("the chapter pages weren't found")
+            withContext(Dispatchers.IO) {
+                val pages = mihon.getPageList(schapterOf(chapter))
+                if (pages.isEmpty()) {
+                    throw SourceException("the chapter pages weren't found")
+                }
+                pages
             }
-            pages
         }
 
     /** Donor `HttpSource.getImageUrl`: resolve [page]'s image
@@ -1142,8 +1150,10 @@ class MihonSourceAdapter(
         val http = mihon as? HttpSource
             ?: throw SourceException("the source has no page images")
         val resolved = bracketed {
-            http.getImageUrl(page).takeIf { it.isNotBlank() }
-                ?: page.url
+            withContext(Dispatchers.IO) {
+                http.getImageUrl(page).takeIf { it.isNotBlank() }
+                    ?: page.url
+            }
         }
         val absolute = absolutise(resolved)
         page.imageUrl = absolute
@@ -1177,11 +1187,13 @@ class MihonSourceAdapter(
         val http = mihon as? HttpSource
             ?: throw SourceException("the source has no page images")
         val bytes = bracketed {
-            http.getImage(page).use { response ->
-                response.body?.bytes()
-                    ?: throw SourceException(
-                        "the page image came back empty"
-                    )
+            withContext(Dispatchers.IO) {
+                http.getImage(page).use { response ->
+                    response.body?.bytes()
+                        ?: throw SourceException(
+                            "the page image came back empty"
+                        )
+                }
             }
         }
         if (bytes.isEmpty()) {

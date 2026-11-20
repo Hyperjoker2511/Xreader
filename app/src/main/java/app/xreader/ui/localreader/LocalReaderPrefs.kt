@@ -244,7 +244,10 @@ internal fun decodeEpubPositionsIndex(raw: String?): EpubPositionsIndex? {
  * the TOC never rides it; this value follows the
  * [EpubPositionsIndex] separate-value precedent instead.
  * [hasToc] false is the cached "this book has no TOC"
- * marker — a book is parsed for its TOC at most once.
+ * marker. Fix Round G (Part A1): only a SETTLED
+ * computation is ever cached — entries, or a genuine
+ * no-source verdict; a failed computation writes nothing
+ * here and is retried on the next open.
  * Labels are display text only; targets are plain
  * positions, so a stale cache can mislabel a Contents row
  * but can never move a saved place.
@@ -262,15 +265,23 @@ data class EpubTocEntryData(
     val charOffset: Int
 )
 
-/** One string per book: a first line of "v1" (entries
- * follow) or "none" (the no-TOC marker); then one line per
- * entry — chapterIndex, charOffset, label, tab-separated,
- * the label's own tabs/newlines flattened to spaces (a
- * label is display text; its whitespace shape is not
- * load-bearing). */
+/** One string per book: a first line of "v2" (entries
+ * follow) or "none-v2" (the no-TOC marker); then one line
+ * per entry — chapterIndex, charOffset, label,
+ * tab-separated, the label's own tabs/newlines flattened
+ * to spaces (a label is display text; its whitespace
+ * shape is not load-bearing).
+ *
+ * Fix Round G (Part A3): the v1 writer cached a FAILED
+ * computation as its bare "none" marker, permanently —
+ * so v2 writes a distinguishable marker, and the decode
+ * below treats a bare v1 "none" as NO cache (the caller
+ * recomputes), which heals books the v1 write poisoned on
+ * their next open with no manual step. v1 entry lists
+ * decode identically: a good v1 cache stays good. */
 internal fun encodeEpubTocData(data: EpubTocData): String {
-    if (!data.hasToc) return "none"
-    val builder = StringBuilder("v1")
+    if (!data.hasToc) return "none-v2"
+    val builder = StringBuilder("v2")
     for (entry in data.entries) {
         builder.append('\n')
             .append(entry.chapterIndex).append('\t')
@@ -281,17 +292,22 @@ internal fun encodeEpubTocData(data: EpubTocData): String {
 }
 
 /** Strict decode — anything malformed reads as null (no
- * cache: the caller recomputes), never a half TOC. */
+ * cache: the caller recomputes), never a half TOC. A bare
+ * "none" is a v1 write and reads as null too (Fix Round
+ * G, Part A3): v1 cached failures as "none", so its
+ * markers are exactly the poisoned ones and are ignored,
+ * never trusted. Only the v2 marker settles a book as
+ * TOC-less. */
 internal fun decodeEpubTocData(raw: String?): EpubTocData? {
     if (raw.isNullOrBlank()) return null
     val lines = raw.split('\n')
     return when (lines.first()) {
-        "none" -> if (lines.size == 1) {
+        "none-v2" -> if (lines.size == 1) {
             EpubTocData(emptyList(), hasToc = false)
         } else {
             null
         }
-        "v1" -> {
+        "v1", "v2" -> {
             val entries =
                 ArrayList<EpubTocEntryData>(lines.size - 1)
             for (line in lines.drop(1)) {

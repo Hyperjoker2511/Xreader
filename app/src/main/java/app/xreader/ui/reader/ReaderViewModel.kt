@@ -1363,39 +1363,25 @@ class ReaderViewModel(
     }
 
     /**
-     * Part 3 (A10): a committed pull past the chapter-end
-     * wall. Forward: the chapter being left is marked
-     * finished FIRST (markCurrentChapterFinished acts on
-     * the CURRENT index — it must run before the anchor
-     * moves), then the anchor moves to the next chapter's
-     * top, exactly as a chrome Next does in scroll mode.
-     * Backward: the anchor moves to the previous chapter's
-     * end (the LAST hint), with NO finished marking —
-     * re-entering a chapter backwards never completes the
-     * one being left. In wall mode this commit is the ONLY
-     * finished-marking door: the surface never fires
-     * onChapterEndReached there, so nothing is marked twice
-     * and nothing is marked by mere visibility. (The
-     * non-wall pinned mode keeps its own door.)
+     * Fix Round G (B7): the wall surface appended past a
+     * chapter's end — that chapter counts as finished. In
+     * wall mode the append is the ONLY finished-marking
+     * door: the surface never fires onChapterEndReached
+     * there, position reports never mark (the
+     * CHAPTER_BY_CHAPTER ≥90% rule is CONTINUOUS-only), and
+     * scrolling on into an appended chapter marks nothing
+     * more — so nothing is marked twice and nothing is
+     * marked by mere visibility. (The non-wall pinned mode
+     * keeps its own door.) The anchor is NOT moved here:
+     * the Fix F hard swap is gone (B5) — the surface's
+     * position reports move the anchor as the stream
+     * follows the reader across the gap, and the surface
+     * names the crossed chapter itself, so the marking
+     * lands on the right chapter even when the anchor has
+     * already followed an earlier crossing.
      */
-    fun crossChapterAtWall(next: Boolean) {
-        val stateNow = _state.value
-        if (next) {
-            if (stateNow.chapterIndex >=
-                stateNow.chapters.lastIndex
-            ) {
-                return
-            }
-            markCurrentChapterFinished()
-            moveAnchor(
-                stateNow.chapterIndex + 1, 0, PageHint.FIRST
-            )
-        } else {
-            if (stateNow.chapterIndex <= 0) return
-            moveAnchor(
-                stateNow.chapterIndex - 1, 0, PageHint.LAST
-            )
-        }
+    fun markFinishedAtWall(chapterIndex: Int) {
+        markCurrentChapterFinishedFor(chapterIndex)
     }
 
     fun previousChapter() {
@@ -2593,14 +2579,24 @@ class ReaderViewModel(
 
     /**
      * Part 2: bridge the book's own TOC to the landed
-     * chapters. Runs at most once per book across opens —
-     * the bridged result (or the no-TOC marker) is cached
-     * in LocalReaderPrefs under its own key (A7: the
-     * prepare record is never extended), so a re-open reads
-     * the cache and never re-parses. Cached entries are
+     * chapters. A SETTLED result — bridged entries, or a
+     * genuine no-TOC-source verdict — is cached in
+     * LocalReaderPrefs under its own key (A7: the prepare
+     * record is never extended), so a re-open reads the
+     * cache and never re-parses. Cached entries are
      * re-bounded against the CURRENT chapter list (a
      * re-imported book can carry fewer chapters than the
      * cache was bridged against).
+     *
+     * Fix Round G (Part A1): a FAILED computation is never
+     * cached. The first Fix F build cached a null/empty
+     * bridge result as the permanent no-TOC marker, so any
+     * first-open failure — transient or real — locked the
+     * book out of its own Contents forever (the owner's
+     * 'Grieving Soul' shipped exactly that). Now the bridge
+     * answers a tri-state and only the two settled states
+     * reach the cache; a failure publishes no TOC for this
+     * session and the next open retries.
      */
     private suspend fun computeEpubToc(
         book: app.xreader.data.db.Book,
@@ -2618,32 +2614,70 @@ class ReaderViewModel(
                     )
                 }
         }
-        val bridged = withContext(container.ioDispatcher) {
+        val outcome = withContext(container.ioDispatcher) {
             runCatching { bridgeEpubToc(book, chapters) }
-                .getOrNull()
+                .getOrDefault(EpubTocOutcome.Failed)
         }
-        val data = if (bridged.isNullOrEmpty()) {
-            EpubTocData(emptyList(), hasToc = false)
-        } else {
-            EpubTocData(
-                bridged.map {
-                    EpubTocEntryData(
-                        it.label, it.chapterIndex, it.charOffset
+        return when (outcome) {
+            is EpubTocOutcome.Entries -> {
+                runCatching {
+                    localReaderPrefs.saveEpubToc(
+                        book.id,
+                        EpubTocData(
+                            outcome.entries.map {
+                                EpubTocEntryData(
+                                    it.label, it.chapterIndex,
+                                    it.charOffset
+                                )
+                            },
+                            hasToc = true
+                        )
                     )
-                },
-                hasToc = true
-            )
+                }
+                outcome.entries
+            }
+            EpubTocOutcome.NoTocSource -> {
+                runCatching {
+                    localReaderPrefs.saveEpubToc(
+                        book.id,
+                        EpubTocData(emptyList(), hasToc = false)
+                    )
+                }
+                emptyList()
+            }
+            // NOT cached — the next open retries.
+            EpubTocOutcome.Failed -> emptyList()
         }
-        runCatching { localReaderPrefs.saveEpubToc(book.id, data) }
-        return bridged ?: emptyList()
+    }
+
+    /** Fix Round G (Part A1): the TOC bridge's tri-state
+     * answer. Only [Entries] and [NoTocSource] are settled
+     * enough to cache; [Failed] means the computation
+     * itself broke (or the book's file couldn't be read)
+     * and must never be remembered as an absence. */
+    private sealed interface EpubTocOutcome {
+        data class Entries(
+            val entries: List<ReaderTocEntry>
+        ) : EpubTocOutcome
+
+        data object NoTocSource : EpubTocOutcome
+        data object Failed : EpubTocOutcome
     }
 
     /**
      * Part 2: the parse + bridge itself (blocking file
-     * work — the caller runs it on the IO dispatcher). Null
-     * when the book's file can't be resolved or read; an
-     * empty list when the book parses but carries no usable
-     * TOC.
+     * work — the caller runs it on the IO dispatcher),
+     * answering the Fix Round G tri-state (A1):
+     * [EpubTocOutcome.Failed] when the book's file can't be
+     * resolved or read, when the parse itself fails, when
+     * the spine comes back empty, or when entries existed
+     * but NONE of them bridged (the bridge broke — never an
+     * absence); [EpubTocOutcome.NoTocSource] when the parse
+     * ran clean and the book declares no NCX and no nav
+     * TOC; [EpubTocOutcome.Entries] with at least one
+     * bridged entry otherwise. tocMap's harvest fallback
+     * (A2) has already had its say by the time entries are
+     * counted here.
      *
      * THE BRIDGE: [EpubParser.tocMap] yields the entries
      * and every spine item's resolved href in spine order;
@@ -2667,29 +2701,42 @@ class ReaderViewModel(
     private suspend fun bridgeEpubToc(
         book: app.xreader.data.db.Book,
         chapters: List<Chapter>
-    ): List<ReaderTocEntry>? {
+    ): EpubTocOutcome {
         // The book's file, resolved exactly as the prepare
         // service resolves it: an absolute filePath stands
         // as-is; anything else resolves against book
         // storage (BookStorage.resolve is relative-only —
         // File(parent, absoluteChild) would concatenate).
         // A documentUri-only book has no plain file to
-        // parse: null, and the caller caches the marker.
-        val storedPath = book.filePath ?: return null
+        // parse: Failed (never cached — if a plain file
+        // ever appears, a later open can still succeed).
+        val storedPath = book.filePath
+            ?: return EpubTocOutcome.Failed
         val file = if (storedPath.startsWith("/")) {
             File(storedPath)
         } else {
             container.bookStorage.resolve(storedPath)
         }
-        if (!file.isFile) return null
+        if (!file.isFile) return EpubTocOutcome.Failed
         val workDir = File(
             container.bookStorage
                 .importStagingDir("epub-toc-${book.id}"),
             "work"
         )
-        val map = EpubParser().tocMap(file, workDir) ?: return null
-        if (map.entries.isEmpty() || map.spineHrefs.isEmpty()) {
-            return emptyList()
+        val map = EpubParser().tocMap(file, workDir)
+            ?: return EpubTocOutcome.Failed
+        if (map.spineHrefs.isEmpty()) {
+            return EpubTocOutcome.Failed
+        }
+        if (map.entries.isEmpty()) {
+            return if (map.hasTocSource) {
+                // A source is declared but neither the entry
+                // parse nor the harvest produced an entry:
+                // the parse broke, it did not find an absence.
+                EpubTocOutcome.Failed
+            } else {
+                EpubTocOutcome.NoTocSource
+            }
         }
         val spineIndex = HashMap<String, Int>()
         map.spineHrefs.forEachIndexed { index, href ->
@@ -2707,7 +2754,11 @@ class ReaderViewModel(
             } ?: 0
             result += ReaderTocEntry(entry.label, index, offset)
         }
-        return result
+        return if (result.isEmpty()) {
+            EpubTocOutcome.Failed
+        } else {
+            EpubTocOutcome.Entries(result)
+        }
     }
 
     /** Part 2: a fragment's char offset inside one landed

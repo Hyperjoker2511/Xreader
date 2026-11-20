@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,8 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -39,7 +38,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -69,7 +67,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlin.math.abs
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -80,24 +77,27 @@ import kotlinx.coroutines.withContext
 enum class ParagraphAction { HIGHLIGHT, NOTE, BOOKMARK }
 
 /**
- * Part 3: the chapter-end wall's feel constants — ALL of
- * them in this one object, so a feel fix round tunes the
- * wall from a single place (the spec's named requirement).
- * Distances are raw pixels unless the name says otherwise;
- * the commit distance is a Dp converted at the use site.
+ * Fix Round G (Part B): the Moon+ wall's constants — ALL
+ * of them in this one object, so a feel fix round tunes
+ * the wall from a single place. The wall has no resistance
+ * and no commit threshold (B2/B3): the scroll simply stops
+ * at the composed range's end, and any further push
+ * appends the next segment below ONE blank gap.
  */
-private object WallFeel {
-    /** How much of the accumulated overscroll the content
-     * visually gives — the wall's resistance. */
-    const val RESISTANCE = 0.45f
-    /** The overscroll ceiling (px): past this the drag is
-     * still consumed but the wall gives no more. */
-    const val MAX_OVERSCROLL_PX = 220f
-    /** The release distance that commits a crossing. */
-    val COMMIT_DISTANCE = 64.dp
-    /** A fling faster than this (px/s) thrown at an edge
-     * commits on the fling alone. */
-    const val FLING_VELOCITY = 800f
+private object WallGap {
+    /** The one blank gap between two composed segments —
+     * Moon+'s separation between one chapter's last line
+     * and the next chapter's heading (≈1/6 of the proof
+     * phone's screen, inside the study's 100–150 dp band).
+     */
+    val GAP = 120.dp
+
+    /** A fling that reaches the composed end and appends
+     * re-kicks the list with this fraction of its leftover
+     * velocity (px/s) as a scroll distance (px), so the
+     * gesture's momentum carries into the appended segment
+     * instead of dying at the old end. */
+    const val FLING_CARRY_FRACTION = 0.22f
 }
 
 /**
@@ -148,15 +148,23 @@ fun DocumentReader(
      * compose NO app header; the book's own heading stands
      * alone. */
     segmentsWithOwnTitle: Set<Long> = emptySet(),
-    /** Part 3: the chapter-end wall is live for this book
-     * (Chapter-by-chapter + the owner's wall scope, decided
-     * by ReaderScreen): the surface composes ONLY the anchor
-     * segment, and a committed pull past its end (or start)
-     * crosses via [onWallCross]. */
+    /** Fix Round G (Part B): the chapter-end wall is live
+     * for this book (Chapter-by-chapter + the owner's wall
+     * scope, decided by ReaderScreen): the surface composes
+     * a RANGE of segments starting at the anchor, and a push
+     * past the composed end (or start) appends the next (or
+     * prepends the previous) segment Moon+-style — the
+     * scroll stops at a real end, the neighbour joins below
+     * one blank gap, and the reading chapter follows the
+     * last visible item. */
     wallActive: Boolean = false,
-    /** Part 3: a committed wall crossing — true crosses to
-     * the next chapter, false to the previous. */
-    onWallCross: (next: Boolean) -> Unit = {},
+    /** Fix Round G (B7): the surface appended past a
+     * chapter's end — that chapter counts as FINISHED. The
+     * append is the only finished-marking door in wall
+     * mode: position reports never mark there, and
+     * scrolling on into an appended chapter marks nothing
+     * more. Carries the crossed chapter's index. */
+    onWallAppend: (finishedChapterIndex: Int) -> Unit = {},
     config: ReaderConfig,
     palette: ReaderPalette,
     fontFamily: FontFamily,
@@ -276,80 +284,204 @@ fun DocumentReader(
         )
     }
 
-    // ── Wall mode: local index space (Part 3, A9) ─────────
+    // ── Wall mode: composed range + local index space ────
+    // (Fix Round G, Part B — replaces Fix F Part 3's
+    // single-segment wall.)
     //
-    // When the wall is active the surface composes ONLY the
-    // anchor segment, so a second SegmentIndex stands over
-    // that one segment alone (no header — pinned mode has
-    // none — and its block count or STATE, the same shape
-    // rule the book-wide index uses). Every consumer below
-    // reads through `index` and translates its segment
-    // argument through `indexSegment`:
+    // When the wall is active the surface composes a RANGE
+    // of segments [rangeStart..rangeEnd] that starts as the
+    // anchor alone and grows by Moon+ appends/prepends (B1).
+    // A second SegmentIndex stands over the range; each
+    // segment past the range's first carries its blank GAP
+    // in its header slot (pinned mode composes no headers,
+    // so the slot is free — the gap is ONE item, counted by
+    // the index exactly like a header). Every consumer
+    // below reads through `index` and translates its
+    // segment argument through `indexSegment` (chapters-
+    // space minus rangeStart):
     //
-    // - initialFlat / restore stages 1+2: flatIndexOf(
-    //   indexSegment(anchor), …) — the anchor IS local
-    //   segment 0;
-    // - the reporter: locate() yields local segment 0,
-    //   translated ONCE into chapters-space before ANY use
-    //   (the position report, the STATE_ITEM boundary math,
-    //   StreamReadingPosition.resolve — the ViewModel never
-    //   sees a local index); the end-of-book branch's last
-    //   segment is the anchor, not segmentCount − 1;
+    // - initialFlat / restore stages 1+2: the anchor's
+    //   local index is anchorChapterIndex − rangeStart;
+    // - the reporter: locate() yields a local segment,
+    //   translated ONCE into chapters-space (+ rangeStart)
+    //   before ANY use (the position report, the STATE_ITEM
+    //   boundary math, StreamReadingPosition.resolve — the
+    //   ViewModel never sees a local index); a HEADER
+    //   location in wall mode is the GAP item — the
+    //   following segment at its start, the same answer the
+    //   header branch gives everywhere; the end-of-book
+    //   branch's last segment is rangeEnd;
     // - Item 4's pinned block: the boundary prefetch (a)
     //   fires as today; the finished report (b) NEVER fires
-    //   in wall mode — the wall commit is the only
-    //   finished-marking door (A10);
+    //   in wall mode — the append is the only
+    //   finished-marking door (B7);
     // - auto-scroll's halt check: form unchanged (locate →
-    //   STATE_ITEM), reading the local index; the drift's
-    //   wall meeting is A11's branch beside it;
+    //   STATE_ITEM), reading the local index; at the wall
+    //   the drift simply stops (B9 — it never appends and
+    //   never crosses);
     // - spoken follow: flatIndexOf(indexSegment(anchor), …)
     //   — the spoken range is anchor-space by contract;
-    // - overlay follow: only the anchor segment is eligible
-    //   in wall mode (nothing else is composed); other
-    //   segments are skipped, never translated.
+    // - overlay follow: segments inside the composed range
+    //   are eligible; segments outside it are skipped,
+    //   never translated.
     //
-    // When the wall is off, `index` IS segmentIndex and
-    // `indexSegment` is the identity — every path below is
-    // then exactly the pre-wall code.
+    // When the wall is off, `index` IS segmentIndex,
+    // `indexSegment` is the identity and the range is
+    // unused — every path below is then exactly the
+    // pre-wall code.
+    val rangeStartState = remember {
+        mutableIntStateOf(anchorChapterIndex)
+    }
+    val rangeEndState = remember {
+        mutableIntStateOf(anchorChapterIndex)
+    }
+    // B3's wait states (the append doors below own their
+    // meaning): a push past an end whose neighbour has not
+    // landed stands pending until the fill lands.
+    var pendingAppend by remember { mutableStateOf(false) }
+    var pendingPrepend by remember { mutableStateOf(false) }
+
+    // B8: the range collapses back to the anchor on every
+    // DELIBERATE move — a restore generation is consumed
+    // exactly for opens, Contents jumps and the prev/next
+    // chapter buttons — and when the wall or the transition
+    // mode is switched mid-session. The collapse is a
+    // composition-time adjustment, NOT an effect: the
+    // restore stages read `index` from the composition that
+    // first sees the new generation, so the range (and with
+    // it the index) must already be the anchor's in THAT
+    // composition — an effect would let stage 1 consume the
+    // generation against the pre-collapse index and the
+    // landing would be lost. Position-report chapter flips
+    // (crossings) consume no generation, so a crossing's
+    // composed neighbours survive them.
+    var collapsedGeneration by remember {
+        mutableIntStateOf(restoreGeneration)
+    }
+    var collapsedWall by remember { mutableStateOf(wallActive) }
+    var collapsedPinned by remember { mutableStateOf(pinned) }
+    if (collapsedGeneration != restoreGeneration ||
+        collapsedWall != wallActive ||
+        collapsedPinned != pinned
+    ) {
+        collapsedGeneration = restoreGeneration
+        collapsedWall = wallActive
+        collapsedPinned = pinned
+        rangeStartState.intValue = anchorChapterIndex
+        rangeEndState.intValue = anchorChapterIndex
+        pendingAppend = false
+        pendingPrepend = false
+    }
+
+    // Read AFTER the collapse adjustment above, so this
+    // composition's index and item range already speak for
+    // the collapsed range on a deliberate move.
+    val rangeStart = rangeStartState.intValue
+    val rangeEnd = rangeEndState.intValue
+
+    // B8's eviction discipline: when the anchor moves (a
+    // crossing), range edges the residency planner has
+    // since evicted fall out of the range; the anchor
+    // itself and resident edges always stay.
+    LaunchedEffect(anchorChapterIndex, segmentStates, segmentTexts) {
+        while (rangeStartState.intValue < anchorChapterIndex &&
+            stateOf(rangeStartState.intValue) != SegmentState.RESIDENT
+        ) {
+            rangeStartState.intValue += 1
+        }
+        while (rangeEndState.intValue > anchorChapterIndex &&
+            stateOf(rangeEndState.intValue) != SegmentState.RESIDENT
+        ) {
+            rangeEndState.intValue -= 1
+        }
+    }
+
     val wallIndex = remember(
-        chapters, anchorChapterIndex, segmentStates, segmentTexts
+        chapters, rangeStart, rangeEnd, segmentStates, segmentTexts
     ) {
         SegmentIndex(
-            listOf(
+            (rangeStart..rangeEnd).map { segment ->
                 SegmentIndex.Shape(
-                    hasHeader = false,
+                    // The header slot carries the GAP for
+                    // every segment past the range's first.
+                    hasHeader = segment > rangeStart,
                     blockCount = if (
-                        stateOf(anchorChapterIndex) ==
-                        SegmentState.RESIDENT
+                        stateOf(segment) == SegmentState.RESIDENT
                     ) {
-                        textOf(anchorChapterIndex)
-                            ?.content?.blocks?.size
+                        textOf(segment)?.content?.blocks?.size
                             ?: SegmentIndex.STATE
                     } else {
                         SegmentIndex.STATE
                     }
                 )
-            )
+            }
         )
     }
     val index = if (wallActive) wallIndex else segmentIndex
     fun indexSegment(segment: Int): Int =
-        if (wallActive) 0 else segment
+        if (wallActive) segment - rangeStart else segment
 
     // The wall's live reads for the never-restarting
-    // callbacks (key turns, the overscroll connection): they
+    // callbacks (key turns, the append connection): they
     // must see the CURRENT composition's values, not the
     // values of the composition that created them.
-    val anchorResidentNow by rememberUpdatedState(
-        stateOf(anchorChapterIndex) == SegmentState.RESIDENT
-    )
     val wallActiveNow by rememberUpdatedState(wallActive)
     val hasNextChapterNow by rememberUpdatedState(
-        anchorChapterIndex < chapters.lastIndex
+        rangeEnd < chapters.lastIndex
     )
     val hasPreviousChapterNow by rememberUpdatedState(
-        anchorChapterIndex > 0
+        rangeStart > 0
     )
+    val nextResidentNow by rememberUpdatedState(
+        rangeEnd < chapters.lastIndex &&
+            stateOf(rangeEnd + 1) == SegmentState.RESIDENT
+    )
+    val prevResidentNow by rememberUpdatedState(
+        rangeStart > 0 &&
+            stateOf(rangeStart - 1) == SegmentState.RESIDENT
+    )
+    val nextChapterIdNow by rememberUpdatedState(
+        chapters.getOrNull(rangeEnd + 1)?.id
+    )
+    val prevChapterIdNow by rememberUpdatedState(
+        chapters.getOrNull(rangeStart - 1)?.id
+    )
+
+    // ── Fix Round G (Part B): the Moon+ append doors ──────
+    //
+    // Appending is the ONLY way the composed range grows,
+    // and only onto a RESIDENT neighbour (B3): a push past
+    // an end whose neighbour has not landed does not
+    // stretch or teleport — it requests the neighbour's
+    // fill through the one B1 door (the caller sets the
+    // matching pending flag and calls onSegmentVisible) and
+    // the append completes when the fill lands, via the
+    // pending effects below. The doors read only the
+    // updated-state holders and the range states, so the
+    // never-restarting callbacks can call them safely.
+
+    /** Append the next segment below the composed end and
+     * report the crossed chapter finished (B7). False when
+     * no append happened (the book's end, or the neighbour
+     * is not resident — the caller then stands pending). */
+    fun appendNextSegment(): Boolean {
+        if (!hasNextChapterNow || !nextResidentNow) return false
+        val crossed = rangeEndState.intValue
+        rangeEndState.intValue = crossed + 1
+        pendingAppend = false
+        onWallAppend(crossed)
+        return true
+    }
+
+    /** Prepend the previous segment above the composed
+     * start. No chapter is marked by an upward crossing —
+     * the reader is going back, not finishing. */
+    fun prependPreviousSegment(): Boolean {
+        if (!hasPreviousChapterNow || !prevResidentNow) return false
+        rangeStartState.intValue -= 1
+        pendingPrepend = false
+        return true
+    }
 
     // Open at the anchor segment: its saved block when it is
     // already resident (a warm re-entry), else its state item
@@ -399,6 +531,29 @@ fun DocumentReader(
     // it). Reset per anchor chapter, as the retired surfaces
     // reset it per chapter.
     var autoPaused by remember(anchorChapterIndex) { mutableStateOf(false) }
+
+    // B3's wait: a pending append completes when its
+    // segment lands — but only while the list still stands
+    // at that end. If the reader scrolled away meanwhile,
+    // the wait is over (their next push re-asks). The door
+    // itself re-checks residency, so an effect that fires
+    // early simply leaves the flag standing.
+    LaunchedEffect(pendingAppend, segmentStates, segmentTexts) {
+        if (!pendingAppend) return@LaunchedEffect
+        if (!listState.canScrollForward) {
+            appendNextSegment()
+        } else {
+            pendingAppend = false
+        }
+    }
+    LaunchedEffect(pendingPrepend, segmentStates, segmentTexts) {
+        if (!pendingPrepend) return@LaunchedEffect
+        if (!listState.canScrollBackward) {
+            prependPreviousSegment()
+        } else {
+            pendingPrepend = false
+        }
+    }
 
     // Restore, stage 1 (block granularity): assert once per
     // generation, when the anchor segment has text. While it
@@ -574,10 +729,12 @@ fun DocumentReader(
             // is resident (never its start — the windowed
             // reporter's header-branch wart is not carried).
             if (first.index >= index.itemCount) {
-                // Wall mode: the anchor is the only composed
-                // segment — it IS the last segment here.
+                // Wall mode: the composed range's end is the
+                // last segment here (the end-of-book item
+                // only composes once the range reaches the
+                // book's end).
                 val lastSegment = if (wallActive) {
-                    anchorChapterIndex
+                    rangeEnd
                 } else {
                     index.segmentCount - 1
                 }
@@ -589,17 +746,17 @@ fun DocumentReader(
             }
             val rawLoc = index.locate(first.index)
                 ?: return@snapshotFlow null
-            // Wall mode: translate the local segment (0) into
-            // chapters-space ONCE — every use below (the
-            // position, the STATE_ITEM boundary math,
-            // StreamReadingPosition.resolve) reads
+            // Wall mode: translate the local segment into
+            // chapters-space ONCE (+ rangeStart) — every use
+            // below (the position, the STATE_ITEM boundary
+            // math, StreamReadingPosition.resolve) reads
             // chapters-space.
             val loc = if (wallActive) {
-                rawLoc.copy(segment = anchorChapterIndex)
+                rawLoc.copy(segment = rawLoc.segment + rangeStart)
             } else {
                 rawLoc
             }
-            when (loc.block) {
+            val baseReport = when (loc.block) {
                 SegmentIndex.STATE_ITEM -> {
                     // B1's acceptance contract: a textless
                     // first-visible segment is NEVER named as
@@ -671,6 +828,46 @@ fun DocumentReader(
                     }
                 }
             }
+            // Fix Round G (B4): in wall mode the reading
+            // chapter is the segment of the LAST VISIBLE item
+            // — Moon+'s footer flips the moment the next
+            // chapter's content reaches the screen's lower
+            // part, and on the way up the previous chapter's
+            // name stands until the current chapter's heading
+            // has left the screen. So when the last visible
+            // item sits in a LATER resident segment than the
+            // reported one, the report names that segment at
+            // its start: the reader has just crossed into it.
+            // Within one segment the report stays the
+            // first-visible computation above, unchanged — the
+            // saved place never drifts to the screen's bottom.
+            // A textless last segment never names the position
+            // (the residency check), exactly as B1's contract
+            // demands of the first.
+            if (wallActive &&
+                baseReport is DocumentReport.Position
+            ) {
+                val rawLast = if (last.index < index.itemCount) {
+                    index.locate(last.index)
+                } else {
+                    null
+                }
+                val lastSegment = rawLast?.let {
+                    it.segment + rangeStart
+                }
+                if (lastSegment != null &&
+                    lastSegment > baseReport.chapterIndex &&
+                    stateOf(lastSegment) == SegmentState.RESIDENT
+                ) {
+                    DocumentReport.Position(
+                        lastSegment, 0, 0f, last.index
+                    )
+                } else {
+                    baseReport
+                }
+            } else {
+                baseReport
+            }
         }
             .distinctUntilChanged()
             .debounce(180L)
@@ -690,11 +887,11 @@ fun DocumentReader(
                         // item BEYOND the current segment
                         // becoming the last visible item is the
                         // end report (the chapter counts as
-                        // finished). Part 3: in wall mode (a)
-                        // still fires — it is the prefetch
-                        // door — and (b) NEVER fires: the wall
-                        // commit is the only finished-marking
-                        // door there (A10).
+                        // finished). Fix Round G: in wall mode
+                        // (a) still fires — it is the prefetch
+                        // door — and (b) NEVER fires: the
+                        // append is the only finished-marking
+                        // door there (B7).
                         if (pinned) {
                             val rawLastLoc = if (
                                 report.lastVisibleIndex <
@@ -708,7 +905,8 @@ fun DocumentReader(
                                 wallActive && rawLastLoc != null
                             ) {
                                 rawLastLoc.copy(
-                                    segment = anchorChapterIndex
+                                    segment = rawLastLoc.segment +
+                                        rangeStart
                                 )
                             } else {
                                 rawLastLoc
@@ -764,27 +962,42 @@ fun DocumentReader(
     // Volume-key turns scroll a viewport, as in scroll mode.
     LaunchedEffect(Unit) {
         externalTurns.collectLatest { direction ->
-            // Part 3 (A11): a key turn AT the wall crosses
-            // it — the keypress is the deliberate pull,
-            // standing in for the drag. Only from a RESIDENT
-            // anchor (a turn onto an unfilled segment asserts
-            // nothing) and never past the book's ends; the
-            // wall inputs are read through their updated-state
-            // holders because this effect never restarts.
-            if (wallActiveNow && anchorResidentNow) {
+            // Fix Round G (B3): a key turn AT the wall crosses
+            // it the Moon+ way — the keypress is the
+            // deliberate pull, standing in for the nudge: it
+            // appends (or prepends) the neighbour segment,
+            // and the turn's own viewport scroll then lands
+            // the reader inside the crossed chapter (its top
+            // going down; its end region coming up, B6). A
+            // turn whose neighbour has not landed stands
+            // pending and asks for its fill instead — the
+            // turn itself is spent, there is nothing to
+            // scroll yet. The wall inputs are read through
+            // their updated-state holders because this effect
+            // never restarts. (Auto-scroll never does this —
+            // B9; keys are the reader's hand only.)
+            if (wallActiveNow) {
                 if (direction > 0 &&
-                    !listState.canScrollForward &&
-                    hasNextChapterNow
+                    !listState.canScrollForward
                 ) {
-                    onWallCross(true)
-                    return@collectLatest
+                    if (!appendNextSegment()) {
+                        if (hasNextChapterNow) {
+                            pendingAppend = true
+                            nextChapterIdNow?.let(onSegmentVisible)
+                        }
+                        return@collectLatest
+                    }
                 }
                 if (direction < 0 &&
-                    !listState.canScrollBackward &&
-                    hasPreviousChapterNow
+                    !listState.canScrollBackward
                 ) {
-                    onWallCross(false)
-                    return@collectLatest
+                    if (!prependPreviousSegment()) {
+                        if (hasPreviousChapterNow) {
+                            pendingPrepend = true
+                            prevChapterIdNow?.let(onSegmentVisible)
+                        }
+                        return@collectLatest
+                    }
                 }
             }
             val viewport = listState.layoutInfo.viewportSize.height
@@ -818,22 +1031,17 @@ fun DocumentReader(
                     SegmentIndex.STATE_ITEM
             }
             if (!halted) {
-                // Part 3 (A11): the drift meeting the wall —
-                // it can scroll no further, the anchor is
-                // resident and a next chapter exists: pause
-                // (autoPaused is per-anchor, so the landing
-                // chapter starts unpaused) and cross ONCE.
-                // Landing on an unfilled segment then halts
-                // by the state-item rule above, exactly as
-                // the spec orders.
-                if (wallActive &&
-                    !listState.canScrollForward &&
-                    stateOf(anchorChapterIndex) ==
-                    SegmentState.RESIDENT &&
-                    anchorChapterIndex < chapters.lastIndex
-                ) {
+                // Fix Round G (B9): the drift meeting the
+                // wall PAUSES — auto-scroll never appends and
+                // never crosses; the wall waits for the
+                // reader's own nudge, fling or key turn
+                // (Moon+'s own auto-scroll likewise stops at
+                // a chapter end). The pause is per-anchor, so
+                // after a manual crossing the landing chapter
+                // starts unpaused and the drift may resume
+                // there by the existing tap contract.
+                if (wallActive && !listState.canScrollForward) {
                     autoPaused = true
-                    onWallCross(true)
                 } else {
                     listState.animateScrollBy(velocity * 0.1f)
                 }
@@ -861,9 +1069,12 @@ fun DocumentReader(
     LaunchedEffect(overlayBlockId, index) {
         if (overlayBlockId == null) return@LaunchedEffect
         for (segment in chapters.indices) {
-            // Wall mode: only the anchor segment is composed
-            // — other segments are skipped, never translated.
-            if (wallActive && segment != anchorChapterIndex) continue
+            // Wall mode: only segments inside the composed
+            // range are eligible — others are skipped, never
+            // translated.
+            if (wallActive && segment !in rangeStart..rangeEnd) {
+                continue
+            }
             val text = textOf(segment) ?: continue
             val range = text.ranges.firstOrNull { it.blockId == overlayBlockId }
                 ?: continue
@@ -875,107 +1086,51 @@ fun DocumentReader(
         }
     }
 
-    // ── Part 3: the wall's overscroll machinery (A12) ─────
+    // ── Fix Round G (Part B): the Moon+ wall connection ──
     //
-    // Sign convention: the stretch is POSITIVE past the
-    // chapter's END (a forward pull) and NEGATIVE past its
-    // START. The column's visual give is translationY =
-    // −stretch × RESISTANCE — pulling past the end drags the
-    // content UP against the resistance; past the start,
-    // DOWN. The connection consumes only the deltas it
-    // accumulates (the child has already reported it cannot
-    // scroll them); dragging back unwinds the stretch in
-    // onPreScroll before the child scrolls again. Releasing
-    // past COMMIT_DISTANCE — slowly (onPreFling) or with a
-    // fling (onPostFling) — or throwing a hard fling AT the
-    // edge commits the crossing, and the stretch springs
-    // home either way (a plain default spring — the feel
-    // constants above are the tuning surface, not the
-    // spring).
+    // The wall has NO overscroll machinery (B2): the column
+    // ends at the composed range's end — a REAL end, blank
+    // below the last line, no stretch, no give, no commit
+    // threshold (Fix F's WallFeel connection is deleted, not
+    // retuned). This connection only listens for a genuine
+    // push PAST an end — Drag-source deltas the child could
+    // not scroll, while the list stands at that end — and
+    // answers with the Moon+ append/prepend (B3/B6):
     //
-    // Fences: a pinch/pan zoom in progress (zoomLockedItems
-    // non-empty) freezes accumulation entirely — the drag
-    // belongs to the image. Text selection needs no gate:
-    // selection drags are consumed by the SelectionContainer
-    // and never enter the nested-scroll chain, and only
-    // Drag-source deltas are read at all — which also keeps
-    // the drift's, the restore's and the follows'
-    // programmatic scrolls out. Commits are gated on the
-    // anchor being RESIDENT (a pull from an unfilled anchor
-    // asserts nothing) and never cross the book's ends.
-    // Inert unless the wall is active: every callback checks
-    // wallActiveNow first, and the modifier below only
-    // attaches the connection in wall mode.
+    // - the neighbour segment joins the composed range:
+    //   below ONE blank gap going down; above going up,
+    //   where LazyColumn's key anchoring holds the reader's
+    //   place exactly — no position jump;
+    // - nothing is consumed and nothing is stretched: the
+    //   same drag simply continues into the new segment,
+    //   and a fling that arrives at the end appends and
+    //   re-kicks the list with a fraction of its leftover
+    //   velocity, so the momentum carries in instead of
+    //   dying at the old end;
+    // - an append requires the neighbour RESIDENT (B3): if
+    //   it has not landed, the push requests its fill
+    //   through the one B1 door and stands pending (the
+    //   pending effects complete the append when the fill
+    //   lands, while the list still stands at the end);
+    // - one append per boundary: after an append the list
+    //   can scroll again, so the next push-past-the-end is
+    //   a new boundary by construction.
+    //
+    // Fences (B10): a pinch/pan zoom in progress
+    // (zoomLockedItems non-empty) freezes the doors — the
+    // drag belongs to the image. Text selection needs no
+    // gate: selection drags are consumed by the
+    // SelectionContainer and never enter the nested-scroll
+    // chain, and only Drag-source deltas are read at all —
+    // which also keeps the drift's, the restore's and the
+    // follows' programmatic scrolls out, so auto-scroll can
+    // never append (B9). Inert unless the wall is active:
+    // every callback checks wallActiveNow first, and the
+    // modifier below only attaches the connection in wall
+    // mode.
     val wallScope = rememberCoroutineScope()
-    val wallStretch = remember(anchorChapterIndex) {
-        Animatable(0f)
-    }
-    val wallCommitPx = with(density) {
-        WallFeel.COMMIT_DISTANCE.toPx()
-    }
-    val wallConnection = remember(
-        wallActive, anchorChapterIndex, chapters, wallCommitPx
-    ) {
+    val wallConnection = remember(wallActive) {
         object : NestedScrollConnection {
-
-            /** Commit on the standing stretch when it passed
-             * the commit distance. Returns whether a commit
-             * fired. */
-            fun settleOrCommit(): Boolean {
-                val stretch = wallStretch.value
-                if (!anchorResidentNow) return false
-                if (stretch >= wallCommitPx &&
-                    hasNextChapterNow
-                ) {
-                    onWallCross(true)
-                    return true
-                }
-                if (stretch <= -wallCommitPx &&
-                    hasPreviousChapterNow
-                ) {
-                    onWallCross(false)
-                    return true
-                }
-                return false
-            }
-
-            fun springHome() {
-                wallScope.launch {
-                    wallStretch.animateTo(0f, spring())
-                }
-            }
-
-            override fun onPreScroll(
-                available: Offset,
-                source: NestedScrollSource
-            ): Offset {
-                if (!wallActiveNow ||
-                    source != NestedScrollSource.Drag ||
-                    zoomLockedItems.isNotEmpty()
-                ) {
-                    return Offset.Zero
-                }
-                val current = wallStretch.value
-                if (current == 0f) return Offset.Zero
-                // Dragging back toward the chapter: unwind
-                // the stretch before the child scrolls.
-                return if (current > 0f && available.y > 0f) {
-                    val unwind = minOf(current, available.y)
-                    wallScope.launch {
-                        wallStretch.snapTo(current - unwind)
-                    }
-                    Offset(0f, unwind)
-                } else if (current < 0f && available.y < 0f) {
-                    val unwind = minOf(-current, -available.y)
-                    wallScope.launch {
-                        wallStretch.snapTo(current + unwind)
-                    }
-                    Offset(0f, -unwind)
-                } else {
-                    Offset.Zero
-                }
-            }
-
             override fun onPostScroll(
                 consumed: Offset,
                 available: Offset,
@@ -987,65 +1142,74 @@ fun DocumentReader(
                 ) {
                     return Offset.Zero
                 }
-                // One accumulation rule for both edges: the
-                // stretch moves by the leftover the child
-                // could not scroll, clamped to the ceiling —
-                // negative leftover (pulling forward) grows
-                // it, positive shrinks it past the start.
-                val atEdge = (available.y < 0f &&
-                    !listState.canScrollForward) ||
-                    (available.y > 0f &&
-                        !listState.canScrollBackward)
-                if (!atEdge || available.y == 0f) {
-                    return Offset.Zero
+                if (available.y < 0f &&
+                    !listState.canScrollForward
+                ) {
+                    if (!appendNextSegment() && hasNextChapterNow) {
+                        pendingAppend = true
+                        nextChapterIdNow?.let(onSegmentVisible)
+                    }
+                } else if (available.y > 0f &&
+                    !listState.canScrollBackward
+                ) {
+                    if (!prependPreviousSegment() &&
+                        hasPreviousChapterNow
+                    ) {
+                        pendingPrepend = true
+                        prevChapterIdNow?.let(onSegmentVisible)
+                    }
                 }
-                val next = (wallStretch.value - available.y)
-                    .coerceIn(
-                        -WallFeel.MAX_OVERSCROLL_PX,
-                        WallFeel.MAX_OVERSCROLL_PX
-                    )
-                wallScope.launch { wallStretch.snapTo(next) }
-                return Offset(0f, available.y)
-            }
-
-            override suspend fun onPreFling(
-                available: Velocity
-            ): Velocity {
-                if (!wallActiveNow) return Velocity.Zero
-                // The slow-drag-creeps case: the drag ended
-                // with ~no fling, but the stretch stands past
-                // the commit distance — the release itself
-                // commits.
-                if (abs(available.y) < WallFeel.FLING_VELOCITY) {
-                    settleOrCommit()
-                    springHome()
-                }
-                return Velocity.Zero
+                return Offset.Zero
             }
 
             override suspend fun onPostFling(
                 consumed: Velocity,
                 available: Velocity
             ): Velocity {
-                if (!wallActiveNow) return Velocity.Zero
-                if (!settleOrCommit() && anchorResidentNow) {
-                    // A hard fling thrown AT the edge commits
-                    // on the fling alone, even with little
-                    // accumulated stretch.
-                    if (available.y < -WallFeel.FLING_VELOCITY &&
+                if (!wallActiveNow ||
+                    zoomLockedItems.isNotEmpty()
+                ) {
+                    return Velocity.Zero
+                }
+                val crossed = when {
+                    available.y < 0f &&
+                        !listState.canScrollForward ->
+                        appendNextSegment()
+                    available.y > 0f &&
+                        !listState.canScrollBackward ->
+                        prependPreviousSegment()
+                    else -> false
+                }
+                if (!crossed) {
+                    // The neighbour has not landed: stand
+                    // pending and ask for its fill, as a
+                    // drag would.
+                    if (available.y < 0f &&
                         !listState.canScrollForward &&
                         hasNextChapterNow
                     ) {
-                        onWallCross(true)
-                    } else if (
-                        available.y > WallFeel.FLING_VELOCITY &&
+                        pendingAppend = true
+                        nextChapterIdNow?.let(onSegmentVisible)
+                    } else if (available.y > 0f &&
                         !listState.canScrollBackward &&
                         hasPreviousChapterNow
                     ) {
-                        onWallCross(false)
+                        pendingPrepend = true
+                        prevChapterIdNow?.let(onSegmentVisible)
+                    }
+                    return Velocity.Zero
+                }
+                // The append landed: re-kick the list with a
+                // fraction of the fling's leftover velocity
+                // so the gesture carries into the new
+                // segment (B3).
+                val carry = -available.y *
+                    WallGap.FLING_CARRY_FRACTION
+                if (carry != 0f) {
+                    wallScope.launch {
+                        listState.animateScrollBy(carry)
                     }
                 }
-                springHome()
                 return Velocity.Zero
             }
         }
@@ -1078,33 +1242,46 @@ fun DocumentReader(
                     top = config.marginVerticalDp.dp + topInset,
                     bottom = config.marginVerticalDp.dp + bottomInset
                 ),
-                // Part 3: wall mode attaches the overscroll
-                // connection and the resistance give. Non-wall
-                // the chain is exactly fillMaxSize, as before.
+                // Fix Round G: wall mode attaches the append
+                // connection only — there is no visual give
+                // to apply (B2: the end is real). Non-wall the
+                // chain is exactly fillMaxSize, as before.
                 modifier = Modifier
                     .fillMaxSize()
                     .then(
                         if (wallActive) {
-                            Modifier
-                                .nestedScroll(wallConnection)
-                                .graphicsLayer {
-                                    translationY =
-                                        -wallStretch.value *
-                                            WallFeel.RESISTANCE
-                                }
+                            Modifier.nestedScroll(wallConnection)
                         } else {
                             Modifier
                         }
                     )
             ) {
                 chapters.forEachIndexed { segment, chapter ->
-                    // Part 3: the wall composes ONLY the anchor
-                    // segment — every other segment emits
-                    // nothing (no blocks, no state item, no
-                    // boundary door). The anchor's own state
+                    // Fix Round G (B1): the wall composes the
+                    // RANGE [rangeStart..rangeEnd] — every
+                    // segment outside it emits nothing (no
+                    // blocks, no state item, no boundary
+                    // door). A composed segment's own state
                     // item below still fires its B1 fill.
-                    if (wallActive && segment != anchorChapterIndex) {
+                    if (wallActive &&
+                        segment !in rangeStart..rangeEnd
+                    ) {
                         return@forEachIndexed
+                    }
+                    // B1: ONE blank gap item between two
+                    // composed segments — it rides the
+                    // FOLLOWING segment's header slot in the
+                    // wall index (see the index construction),
+                    // so the emitted items and the index stay
+                    // in lockstep.
+                    if (wallActive && segment > rangeStart) {
+                        item(key = "g-${chapter.id}") {
+                            Spacer(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(WallGap.GAP)
+                            )
+                        }
                     }
                     if (headerFor(segment)) {
                         item(key = "h-${chapter.id}") {
@@ -1211,17 +1388,18 @@ fun DocumentReader(
                 // shown once the LAST segment is resident (its
                 // text is the book's end; before that the last
                 // segment's own state item stands there).
-                // Part 3: in wall mode the item belongs to the
-                // ANCHOR when the anchor is the book's last
-                // segment — the only composed one.
+                // Fix Round G: in wall mode the item stands
+                // only once the composed range REACHES the
+                // book's last segment — mid-book the composed
+                // end is a wall, not the book's end.
                 val lastSegment = if (wallActive) {
-                    anchorChapterIndex
+                    rangeEnd
                 } else {
                     chapters.lastIndex
                 }
                 if (lastSegment >= 0 &&
                     (!wallActive ||
-                        anchorChapterIndex == chapters.lastIndex) &&
+                        rangeEnd == chapters.lastIndex) &&
                     stateOf(lastSegment) == SegmentState.RESIDENT
                 ) {
                     item(key = "end-of-book") {

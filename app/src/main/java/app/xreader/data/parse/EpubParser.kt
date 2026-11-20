@@ -190,10 +190,19 @@ data class EpubTocEntry(
  * to landed chapters by matching hrefs against this list:
  * chapter rows store no href (Room stays v12), so the
  * spine is the only shared index space.
+ *
+ * Fix Round G (Part A1): [hasTocSource] records whether
+ * the book's package DECLARES a TOC source at all (an NCX
+ * manifest item via the spine's toc id, or a nav document)
+ * — the reader's tri-state bridge may only conclude "this
+ * book has no TOC" when no source is declared; a declared
+ * source that yields nothing is a failure, never a
+ * cacheable absence.
  */
 data class TocMapResult(
     val entries: List<EpubTocEntry>,
-    val spineHrefs: List<String>
+    val spineHrefs: List<String>,
+    val hasTocSource: Boolean
 )
 
 class EpubParser : BookParser {
@@ -316,7 +325,9 @@ class EpubParser : BookParser {
      * a fragment-stripped map. No chapter is converted.
      * Null on any failure — a book whose TOC can't be read
      * simply has no TOC furniture; it is never an open
-     * failure.
+     * failure. Fix Round G: an empty entry parse falls back
+     * to harvest-derived entries (A2), and the result
+     * declares whether a TOC source exists at all (A1).
      */
     fun tocMap(staged: File, workDir: File): TocMapResult? = try {
         val unzipped = File(workDir, "unzipped-toc")
@@ -342,11 +353,33 @@ class EpubParser : BookParser {
                         ZipPaths.resolve(opfDir, item.href)
                     }
                 }
+                val parsed = tocEntries(
+                    unzipped, entryIndex, opf, opfDir
+                )
                 TocMapResult(
-                    entries = tocEntries(
-                        unzipped, entryIndex, opf, opfDir
-                    ),
-                    spineHrefs = spineHrefs
+                    entries = if (parsed.isNotEmpty()) {
+                        parsed
+                    } else {
+                        // Fix Round G (Part A2): the entry
+                        // parse came back empty — before the
+                        // book may be called TOC-less, derive
+                        // the entries from the title harvest
+                        // (the proven road: the same walk
+                        // parse() titles chapters by). Spine
+                        // order, harvested labels, no
+                        // fragments. A working entry parse is
+                        // never overridden by this fallback.
+                        harvestEntries(
+                            unzipped, entryIndex, opf, opfDir,
+                            spineHrefs
+                        )
+                    },
+                    spineHrefs = spineHrefs,
+                    hasTocSource =
+                        opf.tocId?.let { opf.manifest[it] } != null ||
+                            opf.manifest.values.any {
+                                "nav" in it.properties
+                            }
                 )
             }
         }
@@ -399,6 +432,76 @@ class EpubParser : BookParser {
                 fragment = href.substringAfter('#', "")
                     .ifEmpty { null }
             )
+        }
+    }
+
+    /**
+     * Fix Round G (Part A2): the title harvest, exactly as
+     * [parse] and [probe] run it — NCX titles resolved
+     * against the NCX's directory (putAll: the NCX wins),
+     * then nav titles for the hrefs the NCX didn't name
+     * (putIfAbsent). Keys are fragment-stripped resolved
+     * hrefs; values are the book's own labels.
+     */
+    private fun titleHarvest(
+        unzipped: File,
+        entryIndex: Map<String, String>,
+        opf: Opf,
+        opfDir: String
+    ): Map<String, String> {
+        val titles = mutableMapOf<String, String>()
+        opf.tocId?.let { tocId ->
+            opf.manifest[tocId]?.let { tocItem ->
+                val ncxPath = ZipPaths.resolve(opfDir, tocItem.href)
+                val ncxFile = entryFile(unzipped, entryIndex, ncxPath)
+                if (ncxFile != null) {
+                    val ncxDir = ncxPath.substringBeforeLast('/', "")
+                    titles.putAll(
+                        parseNcx(ncxFile).mapKeys { (src, _) ->
+                            ZipPaths.resolve(ncxDir, src)
+                        }
+                    )
+                }
+            }
+        }
+        opf.manifest.values.firstOrNull { "nav" in it.properties }
+            ?.let { navItem ->
+                val navPath = ZipPaths.resolve(opfDir, navItem.href)
+                val navFile = entryFile(unzipped, entryIndex, navPath)
+                if (navFile != null) {
+                    val navDir = navPath.substringBeforeLast('/', "")
+                    for ((href, label) in parseNav(navFile)) {
+                        titles.putIfAbsent(
+                            ZipPaths.resolve(navDir, href), label
+                        )
+                    }
+                }
+            }
+        return titles
+    }
+
+    /**
+     * Fix Round G (Part A2): TOC entries derived from the
+     * title harvest — the harvested hrefs that appear in
+     * the spine, in SPINE order, each with its harvested
+     * label and no fragment (the harvest's keys are
+     * fragment-stripped, so a derived entry opens its
+     * chapter's top, exactly as an entry without an anchor
+     * does on the primary road).
+     */
+    private fun harvestEntries(
+        unzipped: File,
+        entryIndex: Map<String, String>,
+        opf: Opf,
+        opfDir: String,
+        spineHrefs: List<String>
+    ): List<EpubTocEntry> {
+        val titles = titleHarvest(unzipped, entryIndex, opf, opfDir)
+        if (titles.isEmpty()) return emptyList()
+        return spineHrefs.mapNotNull { href ->
+            titles[href]?.let { label ->
+                EpubTocEntry(label = label, href = href, fragment = null)
+            }
         }
     }
 
