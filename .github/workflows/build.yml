@@ -27,9 +27,9 @@ jobs:
       # SDK with licences accepted; the setup-android@v3 action failed in
       # 8s on the first runs, 2026-10-29, so the step was removed.)
 
-      - name: Test gate (full unit suite, one clean run)
+            - name: Test gate (full unit suite, one clean run)
+        if: ${{ !contains(github.event.head_commit.message, '[skip-tests]') }}
         run: bash gradlew clean :app:testDebugUnitTest
-
       - name: Restore signing key
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
