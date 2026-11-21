@@ -43,7 +43,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -78,6 +77,8 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 /** Actions offered on a long-pressed paragraph (passage tools, §2.4 #7).
  * v1.7 one-engine (C1): relocated to the unified scroll core from the
@@ -1112,28 +1113,30 @@ fun DocumentReader(
     //   pressed, accumulation stops for the gesture; the
     //   swap check still runs on the all-released
     //   transition, exactly as before.
-    // - A gesture whose FIRST movement comes at or after
-    //   the platform long-press timeout from its press is
-    //   SELECTION-OWNED (A1's long-press fence — the
-    //   Compose 1.7 selection manager is not exposed, so
-    //   no selection-state holder exists to gate on) and
-    //   accumulates nothing for its whole duration: a
-    //   selection drag can never fill the wheel.
+    // - There is NO timing fence and no gesture
+    //   disqualification of any kind (MR-2 fix round 1 —
+    //   Moon+ has none, REA §(b)): how a gesture BEGAN
+    //   never gates what it accumulates. The observer
+    //   consumes nothing, so selection keeps its own
+    //   handlers in the text layer, untouched by this
+    //   stream.
     // - Accumulation counts only while the list stands
-    //   PINNED at the matching end (Moon+'s 2 dp
-    //   tolerance, in px): `dy > 0` pinned at the start
-    //   (with a previous chapter) fills toward PREVIOUS
-    //   (positive); `dy < 0` pinned at the end (with a
-    //   next chapter) fills toward NEXT (negative); a
-    //   drag that switches ends restarts from its own
-    //   delta (the shipped opposite-sign rule). Pinned at
-    //   NEITHER end the gesture has left the boundary and
-    //   the wheel empties — the unwind: as the content
-    //   scrolls back into the chapter the pin breaks and
-    //   the fill resets, so the fill always tracks the
-    //   finger. A chapter shorter than the viewport pins
-    //   at BOTH ends at once; the dy sign decides, and
-    //   the book's own ends still suppress their side.
+    //   PINNED at an end (Moon+'s 2 dp tolerance, in
+    //   px), and it is the CURRENT overscroll amount,
+    //   signed (Moon+'s `noScrollDist`): pinned at the
+    //   end (with a next chapter) every delta moves the
+    //   fill — `dy < 0` deepens it toward NEXT
+    //   (negative), `dy > 0` relieves it back toward
+    //   zero, clamped at zero; pinned at the start
+    //   (with a previous chapter) the mirror image
+    //   toward PREVIOUS (positive). Pinned at NEITHER
+    //   end the list scrolls again and the fill is
+    //   zero — the accumulation never survives into
+    //   scrolling, so the fill always tracks the
+    //   finger. A chapter shorter than the viewport
+    //   pins at BOTH ends at once; the dy sign decides,
+    //   and the book's own ends still suppress their
+    //   side.
     // - Programmatic scrolls (the auto-scroll drift,
     //   restores, follows) produce NO pointer events, so
     //   they can never fill the wheel (B9 by
@@ -1167,15 +1170,12 @@ fun DocumentReader(
     val wallReleaseObserver = Modifier.pointerInput(Unit) {
         awaitPointerEventScope {
             var anyPressed = false
-            // Part S gesture tracking (A1/A2/A3): the ONE
-            // tracked pointer, its press time, and whether
-            // the long-press fence has claimed the gesture
-            // for selection. All three reset on the
-            // all-released transition, after the swap check.
+            // Part S gesture tracking (A2/A3 bookkeeping
+            // only — never a gate): the ONE tracked
+            // pointer, by id. It resets on the
+            // all-released transition, after the swap
+            // check.
             var trackedId: PointerId? = null
-            var pressUptimeMs = 0L
-            var firstMovementSeen = false
-            var selectionOwned = false
             while (true) {
                 val event = awaitPointerEvent(
                     PointerEventPass.Initial
@@ -1184,11 +1184,8 @@ fun DocumentReader(
                 if (!anyPressed && pressedNow) {
                     // Gesture start: acquire the first
                     // pressed change as the tracked pointer.
-                    val first = event.changes.firstOrNull { it.pressed }
-                    trackedId = first?.id
-                    pressUptimeMs = first?.uptimeMillis ?: 0L
-                    firstMovementSeen = false
-                    selectionOwned = false
+                    trackedId = event.changes
+                        .firstOrNull { it.pressed }?.id
                 }
                 // Accumulation (Part S): the tracked
                 // pointer's own movement delta, counted
@@ -1204,21 +1201,8 @@ fun DocumentReader(
                     // the last pointer lifts).
                     trackedId = null
                 } else if (tracked != null) {
-                    val delta = tracked.positionChange()
-                    if (!firstMovementSeen && delta != Offset.Zero) {
-                        firstMovementSeen = true
-                        // A1: the long-press fence — a
-                        // first movement at or after the
-                        // platform long-press timeout means
-                        // selection owns this gesture.
-                        if (tracked.uptimeMillis - pressUptimeMs >=
-                            viewConfiguration.longPressTimeoutMillis
-                        ) {
-                            selectionOwned = true
-                        }
-                    }
-                    val dy = delta.y
-                    if (dy != 0f && !selectionOwned &&
+                    val dy = tracked.positionChange().y
+                    if (dy != 0f &&
                         wallActiveNow && zoomLockedItems.isEmpty()
                     ) {
                         val layout = listState.layoutInfo
@@ -1235,16 +1219,44 @@ fun DocumentReader(
                             layout.viewportEndOffset -
                                 (lastVisible.offset + lastVisible.size) <=
                                 wallPinPx
+                        // Moon+'s `noScrollDist` (REA §(b),
+                        // MR-2 fix round 1): the SIGNED
+                        // current overscroll — while a pin
+                        // holds, every delta moves the fill
+                        // (dragging back relieves it toward
+                        // zero, clamped at zero); while
+                        // neither pin holds the list scrolls
+                        // again and the fill is zero.
                         val current = wheelState.dragPx
                         wheelState.dragPx = when {
-                            dy > 0f && pinnedAtStart &&
-                                hasPreviousChapterNow ->
-                                if (current < 0f) dy else current + dy
-                            dy < 0f && pinnedAtEnd &&
-                                hasNextChapterNow ->
-                                if (current > 0f) dy else current + dy
-                            !pinnedAtStart && !pinnedAtEnd -> 0f
-                            else -> current
+                            pinnedAtEnd && pinnedAtStart ->
+                                when {
+                                    // A chapter shorter
+                                    // than the viewport
+                                    // holds BOTH pins; the
+                                    // drag's own sign picks
+                                    // the side, as before.
+                                    dy < 0f &&
+                                        hasNextChapterNow ->
+                                        min(0f, current + dy)
+                                    dy > 0f &&
+                                        hasPreviousChapterNow ->
+                                        max(0f, current + dy)
+                                    else -> current
+                                }
+                            pinnedAtEnd ->
+                                if (hasNextChapterNow) {
+                                    min(0f, current + dy)
+                                } else {
+                                    current
+                                }
+                            pinnedAtStart ->
+                                if (hasPreviousChapterNow) {
+                                    max(0f, current + dy)
+                                } else {
+                                    current
+                                }
+                            else -> 0f
                         }
                     }
                 }
@@ -1252,8 +1264,6 @@ fun DocumentReader(
                     val drag = wheelState.dragPx
                     wheelState.dragPx = 0f
                     trackedId = null
-                    firstMovementSeen = false
-                    selectionOwned = false
                     val armedDistancePx =
                         WallWheel.FULL_CIRCLE_DEGREES /
                             WallWheel.ARC_DEGREES_PER_DP *

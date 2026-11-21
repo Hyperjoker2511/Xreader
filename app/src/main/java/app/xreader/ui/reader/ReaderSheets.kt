@@ -196,6 +196,43 @@ fun ReaderSettingsSheet(
 
                 )
 
+                // MR-2 fix round 1 (F1): the way back from
+                // the Reflow face stands at the TOP of the
+                // index — one sheet-open, no door-hunting.
+                // Same section as the Reading page's (which
+                // stays), same params and actions.
+                if (pdfFaceVisible) {
+                    SheetSection("Reading face") {
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            NocturneChip(
+                                label = "As printed",
+                                selected = false,
+                                onClick = { onPdfFaceSelected(false) },
+                                modifier = Modifier,
+                                dotColor = null
+                            )
+                            NocturneChip(
+                                label = "Reflow (text)",
+                                selected = true,
+                                onClick = { onPdfFaceSelected(true) },
+                                modifier = Modifier,
+                                dotColor = null
+                            )
+                        }
+                        Text(
+                            "You're reading this PDF as flowing " +
+                                "text. Switch to As printed to see " +
+                                "the pages as they were printed — " +
+                                "your place is kept.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
                 // R18 scope: at the TOP of the index, as before.
                 SheetSection("Apply colours & text size to") {
                     androidx.compose.foundation.layout.FlowRow(
