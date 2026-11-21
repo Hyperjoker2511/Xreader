@@ -185,7 +185,7 @@ fun ReaderScreen(
     val pdfPageLabel = convertedPdf?.let { pdf ->
         val place = app.xreader.data.prepare.PdfPlaceBridge(pdf.table)
             .corePlaceToPage(state.chapterIndex, state.positionOffset)
-        "p. ${place.pageIndex + 1} / ${pdf.table.pageCount}"
+        "p. ${place.page + 1} / ${pdf.table.pageCount}"
     }
     // Micro-build M: the chapter summary no longer shows
     // in the Contents sheet, so the screen no longer
