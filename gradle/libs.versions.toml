@@ -38,9 +38,6 @@ profileinstaller = "1.4.1"
 injekt = "91edab2317"
 androidxPreference = "1.2.1"
 logcat = "0.4"
-# v1.5.6 (§3): Readium Kotlin EPUB carrier, pinned 3.1.2 — the newest
-# line whose AARs fit compileSdk 36 + Kotlin 2.2.21 unchanged (3.4.0
-# demands compileSdk 37; see build-logs/V156-CARRIER-VERIFICATION.md).
 # v1.7 OE-2 (R24/R25): the readium and desugarJdkLibs versions
 # are deleted with the carrier they served.
 # v1.5.6: pin the real Guava (android flavour) — ML Kit/CameraX
