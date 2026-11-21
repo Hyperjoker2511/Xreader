@@ -2211,54 +2211,27 @@ private fun XreaderNavHost(
                             } else {
                                 null
                             }
-                            // v1.7 MR-2 (A9): a converted PDF's
-                            // Contents door — the outline
-                            // target names a PAGE; the bridge
-                            // translates it into the reflow
-                            // chapter that owns the page, so
-                            // the door opens the text face at
-                            // the tapped entry.
-                            val pdfTable = if (
+                            val chapterIndex = if (
                                 book.localFormat ==
                                     app.xreader.data.db.BookFormat.PDF
                             ) {
-                                val pdfRecord = runCatching {
-                                    localReaderPrefsFor(container)
-                                        .pdfPrepareRecord(id)
-                                }.getOrNull()
-                                if (
-                                    app.xreader.data.prepare
-                                        .PdfPrepareAccess
-                                        .isConverted(pdfRecord, book)
-                                ) {
-                                    app.xreader.data.prepare
-                                        .PdfAnchorTable.load(
-                                            java.io.File(
-                                                container.applicationContext
-                                                    .cacheDir,
-                                                "local-pdf/$id"
-                                            )
-                                        )
-                                } else {
-                                    null
-                                }
-                            } else {
-                                null
-                            }
-                            val chapterIndex = if (pdfTable != null) {
-                                val page =
-                                    app.xreader.data.engine.LocatorJson
-                                        .targetIndex(targetJson)
-                                val bridged = page?.let {
-                                    app.xreader.data.prepare
-                                        .PdfPlaceBridge(pdfTable)
-                                        .pagePlaceToCore(it, 0f)
-                                        .chapterIndex
-                                }
-                                (bridged ?: continueIndex).coerceIn(
-                                    0,
-                                    maxOf(0, landedChapters.lastIndex)
-                                )
+                                // v1.7 OE-1 (fix round 1): a
+                                // PDF's outline target is a
+                                // PAGE number, and an in-place
+                                // PDF has no chapter rows — the
+                                // landed-chapters gate below is
+                                // chapter-space and could never
+                                // honour it. The target rides
+                                // the route's chapter index
+                                // straight through; the reader's
+                                // PDF branch treats it as a page
+                                // and coerces it to the page
+                                // count. A targetless JSON falls
+                                // back to the saved place.
+                                (app.xreader.data.engine.LocatorJson
+                                    .targetIndex(targetJson)
+                                    ?: continueIndex)
+                                    .coerceAtLeast(0)
                             } else if (
                                 record != null &&
                                 app.xreader.data.prepare.EpubPrepareAccess
@@ -2460,18 +2433,6 @@ private fun XreaderNavHost(
                 assetFile = assetFile,
                 bookId = bookId,
                 onBack = { navController.popBackStack() },
-                // v1.7 MR-2 (P2): the reflow face's way back —
-                // the "As printed" tap emits the hop after
-                // the PDF-form progress row is written;
-                // land on the local reader and close the
-                // text face behind it.
-                onOpenLocalDoc = {
-                    navController.navigate("local/$bookId") {
-                        popUpTo("reader/{bookId}/{chapterIndex}") {
-                            inclusive = true
-                        }
-                    }
-                },
                 onOpenCustomise = { navController.navigate("customise") },
                 onOpenBookTerms = {
                     navController.navigate("bookTerms/$bookId")
@@ -2734,23 +2695,6 @@ private fun readerRouteResolverFor(
         localContentLanded = { book ->
             container.database.chapterDao().forBook(book.id)
                 .any { it.contentPath != null }
-        },
-        // v1.7 MR-2 (P2/A8): the reflow face — the PDF
-        // conversion landed (current record + landed
-        // content, the same conjunction as the EPUB road
-        // above) AND the book's face is REFLOW. Absent
-        // either half the book keeps the LocalDoc verdict,
-        // whose open flow runs the conversion.
-        pdfReflowReady = { book ->
-            val record = runCatching {
-                localPrefs.pdfPrepareRecord(book.id)
-            }.getOrNull()
-            app.xreader.data.prepare.PdfPrepareAccess
-                .isConverted(record, book) &&
-                container.database.chapterDao().forBook(book.id)
-                    .any { it.contentPath != null } &&
-                localPrefs.pdfFace(book.id).first() ==
-                app.xreader.ui.localreader.PdfFace.REFLOW
         }
     )
 }

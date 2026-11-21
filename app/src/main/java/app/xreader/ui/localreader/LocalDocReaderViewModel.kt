@@ -15,16 +15,8 @@ import app.xreader.data.engine.LocalFileMissingException
 import app.xreader.data.engine.LocalPasswordRequiredException
 import app.xreader.data.engine.LocatorJson
 import app.xreader.data.engine.OutlineEntry
-import app.xreader.data.engine.PdfProbeState
 import app.xreader.data.engine.PdfSession
-import app.xreader.data.engine.PdfStripState
 import app.xreader.data.engine.ReadiumEpubSession
-import app.xreader.data.parse.PdfStripResult
-import app.xreader.data.prepare.PdfAnchorTable
-import app.xreader.data.prepare.PdfConversionOutcome
-import app.xreader.data.prepare.PdfConversionService
-import app.xreader.data.prepare.PdfPlaceBridge
-import app.xreader.data.prepare.PdfPrepareAccess
 import app.xreader.data.extension.DiagnosticLog
 import app.xreader.data.importer.ImportCompletionState
 import app.xreader.data.prefs.settingsDataStore
@@ -35,7 +27,6 @@ import app.xreader.di.AppContainer
 import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.reader.ChapterText
-import java.io.File
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -46,7 +37,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.readium.r2.shared.publication.Locator
@@ -81,27 +71,6 @@ data class PdfProgress(
     val page: Int,
     val pageCount: Int
 )
-
-/**
- * v1.7 MR-2 (P1/P2, A8/A10): a PDF's conversion state on
- * the local surface — the face toggle's whole truth.
- * [Ready] carries the anchor table + the conversion's
- * chapter row ids (the A11 bookmark test); [NoText] is
- * P5's scanned verdict (the strip settled with no usable
- * text layer, or could not be read at all); [Failed] is a
- * conversion that ran and could not land — the toggle
- * stays disabled and says so, and the next open retries.
- */
-sealed interface PdfConversionState {
-    data object NotPdf : PdfConversionState
-    data object Preparing : PdfConversionState
-    data class Ready(
-        val table: app.xreader.data.prepare.PdfAnchorTable,
-        val chapterIds: List<Long>
-    ) : PdfConversionState
-    data object NoText : PdfConversionState
-    data object Failed : PdfConversionState
-}
 
 sealed interface LocalReaderState {
     /** v1.5.8 (F4): the loading state NAMES ITS PHASE — a long
@@ -410,24 +379,6 @@ class LocalDocReaderViewModel(
     private val _pdfProgress = MutableStateFlow<PdfProgress?>(null)
     val pdfProgress: StateFlow<PdfProgress?> = _pdfProgress
 
-    // ── v1.7 MR-2 (P2): the PDF reading face + conversion ──
-    /** This book's stored reading face, loaded at open
-     * (PDF sessions only). The page face is where this
-     * state is consumed; routing reads the pref itself. */
-    private val _pdfFace = MutableStateFlow(PdfFace.AS_PRINTED)
-    val pdfFace: StateFlow<PdfFace> = _pdfFace
-
-    private val _pdfConversion =
-        MutableStateFlow<PdfConversionState>(PdfConversionState.NotPdf)
-    val pdfConversion: StateFlow<PdfConversionState> = _pdfConversion
-
-    private var pdfConversionJob: Job? = null
-
-    /** Set the moment a face hop writes the OTHER face's
-     * progress form: this surface's own saver must never
-     * overwrite the hop's row with its page-form position
-     * on the way out (the onCleared backstop included). */
-    @Volatile private var pdfHopInFlight: Boolean = false
 
     /** The navigator's latest EPUB locator (drives "is this
      * contents entry current" highlighting). */
@@ -590,21 +541,14 @@ class LocalDocReaderViewModel(
             container.database.bookmarkDao().observeForBook(bookId)
                 .collect { rows -> _bookmarksRaw.value = rows }
         }
-        // MR-2 (A11): the published list — the shipped
-        // locator-only filter, plus a converted PDF's
-        // core-shaped rows (they belong to this book and
-        // the local surface lists them, translated through
-        // the bridge at display + jump time).
+        // The published list — the shipped locator-only
+        // filter (a mark with no locator belongs to a
+        // surface this reader is not).
         viewModelScope.launch {
-            combine(_bookmarksRaw, _pdfConversion) { rows, conversion ->
-                val chapterIds =
-                    (conversion as? PdfConversionState.Ready)?.chapterIds
-                rows.filter { bookmark ->
-                    bookmark.locatorJson != null ||
-                        (chapterIds != null &&
-                            bookmark.chapterId in chapterIds)
-                }
-            }.collect { _bookmarks.value = it }
+            _bookmarksRaw.collect { rows ->
+                _bookmarks.value =
+                    rows.filter { it.locatorJson != null }
+            }
         }
         viewModelScope.launch {
             container.bookMetaPrefs.favourites.collect { favourites ->
@@ -787,15 +731,6 @@ class LocalDocReaderViewModel(
                     _pdfProgress.value = PdfProgress(
                         page = initialIndex, pageCount = opened.sectionCount
                     )
-                    // MR-2 (P1/A8): the conversion watch —
-                    // once the strip lands (and the outline
-                    // probe has settled, so segmentation
-                    // sees the book's own outline), the
-                    // conversion runs in the background or
-                    // the landed state is adopted. Never on
-                    // the open path: Ready is already set
-                    // below and first paint never waits.
-                    startPdfConversionWatch(opened, loaded)
                 }
                 if (opened is ReadiumEpubSession) {
                     _epubProgress.value = EpubProgress(
@@ -1017,193 +952,8 @@ class LocalDocReaderViewModel(
         (opened as? ReadiumEpubSession)?.sectionIndexOfLocator(
             targetJson ?: saved?.locatorJson
         )?.let { return it }
-        // MR-2 (P3): a CORE-shaped saved row meeting the
-        // page face — the A8 re-conversion case (downloads
-        // deleted while the book stood in Reflow; the hop
-        // contract means a hop always converts first, so
-        // this is the one road a core row can arrive by).
-        // The previous conversion's anchor table still sits
-        // beside the strip: translate through the bridge
-        // instead of reading a chapter index as a page.
-        if (opened is PdfSession && saved != null &&
-            saved.locatorJson == null && saved.chapterId != 0L
-        ) {
-            val table = runCatching {
-                PdfAnchorTable.load(pdfStripDir())
-            }.getOrNull()
-            if (table != null) {
-                return PdfPlaceBridge(table)
-                    .corePlaceToPage(saved.chapterIndex, saved.charOffset)
-                    .page
-                    .coerceIn(0, (opened.sectionCount - 1).coerceAtLeast(0))
-            }
-        }
         return (saved?.chapterIndex ?: 0)
             .coerceIn(0, (opened.sectionCount - 1).coerceAtLeast(0))
-    }
-
-    // ── MR-2 (P1/P2): conversion watch + the face hop ────
-
-    /** The book's `local-pdf` directory — the strip's
-     * home (PdfSession's own construction), and the
-     * anchor table's. */
-    private fun pdfStripDir(): File =
-        File(container.applicationContext.cacheDir, "local-pdf/$bookId")
-
-    /**
-     * A8's landed test, adopted as state: a current
-     * record (PdfPrepareAccess) + landed content in the
-     * rows + a readable anchor table. True when the state
-     * was set to Ready as a side effect.
-     */
-    private suspend fun markPdfConversionReadyIfLanded(book: Book): Boolean {
-        val record = runCatching { localPrefs.pdfPrepareRecord(bookId) }
-            .getOrNull()
-        if (!PdfPrepareAccess.isConverted(record, book)) return false
-        val rows = runCatching {
-            container.database.chapterDao().forBook(bookId)
-        }.getOrDefault(emptyList())
-        if (rows.none { it.contentPath != null }) return false
-        val table = runCatching { PdfAnchorTable.load(pdfStripDir()) }
-            .getOrNull() ?: return false
-        _pdfConversion.value = PdfConversionState.Ready(
-            table = table,
-            chapterIds = rows.map { it.id }
-        )
-        return true
-    }
-
-    private fun startPdfConversionWatch(pdf: PdfSession, book: Book) {
-        pdfConversionJob?.cancel()
-        pdfHopInFlight = false
-        _pdfConversion.value = PdfConversionState.Preparing
-        pdfConversionJob = viewModelScope.launch(container.ioDispatcher) {
-            _pdfFace.value = runCatching {
-                localPrefs.pdfFace(bookId).first()
-            }.getOrDefault(PdfFace.AS_PRINTED)
-            if (markPdfConversionReadyIfLanded(book)) return@launch
-            combine(pdf.stripState, pdf.probeState) { strip, probe ->
-                strip to probe
-            }.collect { (strip, probe) ->
-                when (strip) {
-                    is PdfStripState.Ready -> {
-                        // Segmentation reads the session's
-                        // outline, which lands with the
-                        // deferred probe — converting before
-                        // it settles would chunk a book whose
-                        // outline was still in flight.
-                        if (probe == PdfProbeState.Pending) {
-                            return@collect
-                        }
-                        if (_pdfConversion.value is
-                                PdfConversionState.Ready
-                        ) {
-                            return@collect
-                        }
-                        runPdfConversion(book, strip.result, pdf.outline)
-                    }
-                    PdfStripState.Unavailable ->
-                        _pdfConversion.value = PdfConversionState.NoText
-                    PdfStripState.Pending -> Unit
-                }
-            }
-        }
-    }
-
-    private suspend fun runPdfConversion(
-        book: Book,
-        strip: PdfStripResult,
-        outline: List<OutlineEntry>
-    ) {
-        if (_pdfConversion.value is PdfConversionState.Ready) return
-        _pdfConversion.value = PdfConversionState.Preparing
-        val service = PdfConversionService(
-            chapterDao = container.database.chapterDao(),
-            storage = container.bookStorage,
-            prefs = localPrefs,
-            stripDir = pdfStripDir(),
-            inTransaction = { block ->
-                container.database.withTransaction(block)
-            }
-        )
-        when (val outcome = service.convert(book, strip, outline)) {
-            is PdfConversionOutcome.Converted -> {
-                if (!markPdfConversionReadyIfLanded(book)) {
-                    _pdfConversion.value = PdfConversionState.Failed
-                }
-            }
-            PdfConversionOutcome.ScannedNoText ->
-                _pdfConversion.value = PdfConversionState.NoText
-            is PdfConversionOutcome.Failed -> {
-                DiagnosticLog.record(
-                    "pdf-convert",
-                    "book $bookId conversion failed: ${outcome.reason}"
-                )
-                _pdfConversion.value = PdfConversionState.Failed
-            }
-        }
-    }
-
-    /**
-     * MR-2 (P2/P3): the face hop, page face → text face.
-     * The saved place is converted through the bridge and
-     * written in the CORE form (chapterId + chapterIndex +
-     * charOffset, locatorJson = null — the core reader's
-     * own shape) BEFORE the redirect fires, and the hop
-     * flag stops this surface's saver from overwriting it
-     * with the page form on the way out.
-     */
-    fun switchPdfFaceToReflow() {
-        val conversion =
-            _pdfConversion.value as? PdfConversionState.Ready ?: return
-        if (session !is PdfSession) return
-        val current = position ?: bookmarkSeedPosition() ?: return
-        pdfHopInFlight = true
-        viewModelScope.launch(container.ioDispatcher) {
-            val bridge = PdfPlaceBridge(conversion.table)
-            val core = bridge.pagePlaceToCore(
-                current.index, current.inSectionFraction
-            )
-            val rows = runCatching {
-                container.database.chapterDao().forBook(bookId)
-            }.getOrDefault(emptyList())
-            val row = rows.getOrNull(core.chapterIndex) ?: run {
-                pdfHopInFlight = false
-                return@launch
-            }
-            runCatching { localPrefs.savePdfFace(bookId, PdfFace.REFLOW) }
-            _pdfFace.value = PdfFace.REFLOW
-            val chapterLength =
-                conversion.table.chapterLength(core.chapterIndex)
-            val total = conversion.table.totalCharCount
-            runCatching {
-                container.database.readingProgressDao().upsert(
-                    ReadingProgress(
-                        bookId = bookId,
-                        chapterId = row.id,
-                        chapterIndex = core.chapterIndex,
-                        charOffset = core.charOffset,
-                        fraction = if (total > 0) {
-                            (conversion.table.bookCharOffset(
-                                core.chapterIndex, core.charOffset
-                            ).toFloat() / total).coerceIn(0f, 1f)
-                        } else {
-                            0f
-                        },
-                        scrollFraction = if (chapterLength > 0) {
-                            (core.charOffset.toFloat() / chapterLength)
-                                .coerceIn(0f, 1f)
-                        } else {
-                            0f
-                        },
-                        updatedAt = System.currentTimeMillis(),
-                        locatorJson = null,
-                        anchorText = row.title
-                    )
-                )
-            }
-            _coreRedirect.tryEmit(core.chapterIndex)
-        }
     }
 
     fun retryWithPassword(candidate: String) {
@@ -1479,10 +1229,6 @@ class LocalDocReaderViewModel(
     }
 
     private suspend fun saveProgressNow() {
-        // MR-2 (P3): a face hop has already written the
-        // other face's form of the place — this surface's
-        // saver never overwrites it on the way out.
-        if (pdfHopInFlight) return
         val current = position ?: return
         val currentBook = book ?: return
         // The snapshot being written is no longer dirty; a
@@ -1524,50 +1270,18 @@ class LocalDocReaderViewModel(
     }
 
     /**
-     * MR-2 (A11): the page a bookmark names on THIS
-     * surface — its PDF locator's page when it carries
-     * one; through the bridge when it is a core-shaped
-     * row of this book's conversion; its raw chapterIndex
-     * otherwise (the shipped fallback).
+     * The page a bookmark names on THIS surface — its PDF
+     * locator's page when it carries one; its raw
+     * chapterIndex otherwise (the shipped fallback).
      */
     fun pdfBookmarkPage(bookmark: Bookmark): Int {
         LocatorJson.parsePdfLocator(bookmark.locatorJson)?.let {
             return it.first
         }
-        val conversion =
-            _pdfConversion.value as? PdfConversionState.Ready
-        if (bookmark.locatorJson == null && conversion != null &&
-            bookmark.chapterId in conversion.chapterIds
-        ) {
-            return PdfPlaceBridge(conversion.table)
-                .corePlaceToPage(bookmark.chapterIndex, bookmark.charOffset)
-                .page
-        }
         return bookmark.chapterIndex
     }
 
     fun goToBookmark(bookmark: Bookmark) {
-        // MR-2 (A11): a core-shaped bookmark of a converted
-        // PDF crosses through the bridge — without this
-        // branch its chapterIndex would be read as a page
-        // index (or, before MR-2, the tap simply died).
-        // Anything else with no locator falls through to
-        // the shipped tail below, exactly as before.
-        if (bookmark.locatorJson == null) {
-            val conversion =
-                _pdfConversion.value as? PdfConversionState.Ready
-            if (conversion != null &&
-                bookmark.chapterId in conversion.chapterIds &&
-                session is PdfSession
-            ) {
-                val place = PdfPlaceBridge(conversion.table)
-                    .corePlaceToPage(
-                        bookmark.chapterIndex, bookmark.charOffset
-                    )
-                _jumps.tryEmit(LocalJump(place.page))
-                return
-            }
-        }
         val locatorJson = bookmark.locatorJson
         LocatorJson.parsePdfLocator(locatorJson)?.let {
             _jumps.tryEmit(LocalJump(it.first, locatorJson))

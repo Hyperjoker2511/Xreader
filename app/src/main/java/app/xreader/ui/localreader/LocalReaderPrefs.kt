@@ -214,14 +214,6 @@ data class PdfDocSettings(
     val autoContrast: Boolean = false
 )
 
-/** v1.7 MR-2 (P2): which face of a PDF the reader opens —
- * the printed pages (the default, the shipped behaviour)
- * or the converted flowing text on the shared core
- * reader. Per book, beside [PdfDocSettings]; a book whose
- * conversion never landed always opens AS_PRINTED (the
- * resolver's landed test governs, never this pref alone). */
-enum class PdfFace { AS_PRINTED, REFLOW }
-
 // ── EPUB positions index (v1.7 Patch 1, item 6a) ────────────────
 
 /** The persisted EPUB positions seam: per reading-order
@@ -303,44 +295,6 @@ internal fun encodeEpubPrepareRecord(record: EpubPrepareRecord): String =
         record.sectionMap.entries
             .sortedBy { it.key }
             .joinToString(",") { "${it.key}:${it.value}" }
-
-/**
- * v1.7 MR-2 (P1): the record that a PDF's text layer has
- * been CONVERTED onto the shared reader core — core
- * Chapter rows + content files written from the strip
- * (see PdfConversionService), with a per-page anchor
- * table beside the strip for the place bridge. The
- * [EpubPrepareRecord] shape, deliberately: written LAST
- * in conversion, only after every landed row and content
- * file verifies, so routing keys on this record, never
- * on row existence — a half-landed conversion simply
- * converts again on the next open.
- *
- * [fingerprint] is the converted file's SHA-256 hex (the
- * sha segment of the book's `Book.fileFingerprint` form),
- * judged by the one rule in PdfPrepareAccess.
- */
-data class PdfPrepareRecord(
-    val fingerprint: String,
-    val loaderVersion: Int
-)
-
-/** One string per book: "loaderVersion|sha256hex". */
-internal fun encodePdfPrepareRecord(record: PdfPrepareRecord): String =
-    "${record.loaderVersion}|${record.fingerprint}"
-
-/** Strict decode — anything malformed reads as null (no
- * record: the book converts again), never a half record. */
-internal fun decodePdfPrepareRecord(raw: String?): PdfPrepareRecord? {
-    if (raw.isNullOrBlank()) return null
-    val parts = raw.split("|")
-    if (parts.size != 2) return null
-    val version = parts[0].toIntOrNull() ?: return null
-    if (version <= 0) return null
-    val fingerprint = parts[1]
-    if (fingerprint.isBlank()) return null
-    return PdfPrepareRecord(fingerprint, version)
-}
 
 /** Strict decode — anything malformed reads as null (no
  * record: the book prepares again), never a half record. */
@@ -579,43 +533,6 @@ class LocalReaderPrefs(private val store: DataStore<Preferences>) {
         }
     }
 
-    // ── PDF conversion record + reading face (MR-2) ──────
-
-    suspend fun pdfPrepareRecord(bookId: Long): PdfPrepareRecord? =
-        decodePdfPrepareRecord(store.data.first()[pdfPrepareKey(bookId)])
-
-    /** The record as a flow — surfaces that gate on the
-     * conversion (the resolver's shell wiring reads it
-     * one-shot; the local reader follows its own state)
-     * share the one decode. */
-    fun pdfPrepareRecordFlow(bookId: Long): Flow<PdfPrepareRecord?> =
-        store.data.map { prefs ->
-            decodePdfPrepareRecord(prefs[pdfPrepareKey(bookId)])
-        }
-
-    suspend fun savePdfPrepareRecord(bookId: Long, record: PdfPrepareRecord) {
-        store.edit { prefs ->
-            prefs[pdfPrepareKey(bookId)] = encodePdfPrepareRecord(record)
-        }
-    }
-
-    /** This book's reading face (MR-2 P2): AS_PRINTED
-     * unless the owner switched this book to the text
-     * face. Routing additionally requires the conversion
-     * to be landed (PdfPrepareAccess) — the pref alone
-     * never routes. */
-    fun pdfFace(bookId: Long): Flow<PdfFace> = store.data.map { prefs ->
-        prefs[pdfFaceKey(bookId)]?.let { name ->
-            PdfFace.entries.firstOrNull { it.name == name }
-        } ?: PdfFace.AS_PRINTED
-    }
-
-    suspend fun savePdfFace(bookId: Long, face: PdfFace) {
-        store.edit { prefs ->
-            prefs[pdfFaceKey(bookId)] = face.name
-        }
-    }
-
     // ── EPUB positions index (v1.7 Patch 1, item 6a) ─────────
     //
     // The F4 positions seam, persisted per book: a re-open
@@ -708,11 +625,6 @@ class LocalReaderPrefs(private val store: DataStore<Preferences>) {
     private fun pdfRtlPaging(id: Long) = booleanPreferencesKey("localreader.$id.pdf.rtl_paging")
     private fun pdfEdgeTrim(id: Long) = floatPreferencesKey("localreader.$id.pdf.edge_trim")
     private fun pdfAutoContrast(id: Long) = booleanPreferencesKey("localreader.$id.pdf.auto_contrast")
-    private fun pdfPrepareKey(id: Long) =
-        stringPreferencesKey("localreader.$id.pdf.prepare")
-    private fun pdfFaceKey(id: Long) =
-        stringPreferencesKey("localreader.$id.pdf.face")
-
     companion object {
         /** G1's one-time upgrade marker (absent in pre-1.5.8
          * stores by construction). */

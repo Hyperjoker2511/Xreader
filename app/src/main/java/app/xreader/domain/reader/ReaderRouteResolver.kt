@@ -114,22 +114,6 @@ class ReaderRouteResolver(
      * registration count, set before anything lands.
      */
     private val localContentLanded: (suspend (Book) -> Boolean)? = null,
-    /**
-     * v1.7 MR-2 (P2/A8): the reflow-face check for
-     * LOCAL_FILE PDF books — true when the book's
-     * conversion has landed (current prepare record +
-     * landed content, the A8 conjunction) AND its
-     * per-book reading face is REFLOW, in which case it
-     * routes to the novel reader like any converted
-     * book. As-printed stays the default: every other
-     * PDF — unconverted, record stale, content deleted,
-     * face untouched — keeps the LocalDoc verdict, and
-     * the local open flow re-runs a missing conversion
-     * there. The shell wires the real check; absent
-     * (every pre-MR-2 construction), PDFs keep the
-     * LocalDoc verdict exactly as before.
-     */
-    private val pdfReflowReady: (suspend (Book) -> Boolean)? = null
 ) {
 
     /** Resolve by book id (the entry-point shape: most surfaces
@@ -151,22 +135,23 @@ class ReaderRouteResolver(
             // one-time conversion landed + recorded) is a
             // converted book and routes to the core reader;
             // every other local book — unprepared EPUBs (whose
-            // prepare runs inside the local open flow), FXL/RTL
-            // EPUBs, and PDFs, whose verdict is byte-identical
-            // — keeps the LocalDoc verdict.
+            // prepare runs inside the local open flow) and
+            // FXL/RTL EPUBs — keeps the LocalDoc verdict.
             if (book.localFormat == BookFormat.EPUB &&
                 epubPrepared?.invoke(book) == true
             ) {
                 return ReaderRoute.NovelReader(book.id, chapterIndex)
             }
-            // v1.7 MR-2 (P2): a converted PDF whose reading
-            // face is REFLOW opens in the novel reader — the
-            // progress row there is core-shaped, so the usual
-            // position read names the chapter. As-printed
-            // (the default) falls through to LocalDoc
-            // unchanged.
+            // v1.7 OE-1 (R1, R25): a local PDF with its
+            // file present opens in the CORE reader — the
+            // one reader, Pages and Reflow as its modes.
+            // A local PDF with no file to open (the legacy
+            // lane: converted chapters and no
+            // documentUri/filePath) is not this verdict —
+            // it falls through to LocalDoc below, exactly
+            // as before.
             if (book.localFormat == BookFormat.PDF &&
-                pdfReflowReady?.invoke(book) == true
+                BookEngine.isInPlaceBook(book)
             ) {
                 return ReaderRoute.NovelReader(book.id, chapterIndex)
             }

@@ -62,6 +62,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.xreader.ui.localreader.toggledNight
+import app.xreader.ui.localreader.withFilter
 import app.xreader.data.db.Bookmark
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.Highlight
@@ -142,12 +144,21 @@ fun ReaderSettingsSheet(
     onMangaCropChange: (Boolean?) -> Unit = {},
     mangaHasOverrides: Boolean = false,
     onResetMangaOverrides: () -> Unit = {},
-    /** v1.7 MR-2 (P2): the reading-face switch — visible
-     * only for a converted PDF being read on its reflow
-     * face. "Reflow (text)" is the current face here;
-     * "As printed" hops back through the place bridge. */
-    pdfFaceVisible: Boolean = false,
-    onPdfFaceSelected: (Boolean) -> Unit = {}
+    /** v1.7 OE-1 (R21): a PDF's page settings — present
+     * only for a PDF read in this reader. The retired
+     * printed surface's display sheet, re-homed: Pages-mode
+     * controls on the one reader's own settings sheet. The
+     * mode switch itself rides the reader's bar (OQ4),
+     * never this sheet. */
+    pdfPagesSettings: app.xreader.ui.localreader.PdfDocSettings? = null,
+    onPdfSettingsChange: (
+        (app.xreader.ui.localreader.PdfDocSettings) ->
+            app.xreader.ui.localreader.PdfDocSettings
+    ) -> Unit = {},
+    pdfAutoResolvedFilter: app.xreader.data.engine.PdfPageFilter =
+        app.xreader.data.engine.PdfPageFilter.NONE,
+    pdfAutoScrollOn: Boolean = false,
+    onPdfAutoScrollToggle: (Boolean) -> Unit = {}
 ) {
     // v1.0.6.2 (F8c): the sheet is a short INDEX of plainly-named
     // groups now — not one long scroll. Each group is its own
@@ -196,40 +207,267 @@ fun ReaderSettingsSheet(
 
                 )
 
-                // MR-2 fix round 1 (F1): the way back from
-                // the Reflow face stands at the TOP of the
-                // index — one sheet-open, no door-hunting.
-                // Same section as the Reading page's (which
-                // stays), same params and actions.
-                if (pdfFaceVisible) {
-                    SheetSection("Reading face") {
+                // v1.7 OE-1 (R21): a PDF's page settings
+                // stand at the TOP of the index — one
+                // sheet-open, no door-hunting (the F1
+                // principle, kept).
+                val pdfSettings = pdfPagesSettings
+                if (pdfSettings != null) {
+                    SheetSection("PDF pages") {
                         androidx.compose.foundation.layout.FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             NocturneChip(
-                                label = "As printed",
-                                selected = false,
-                                onClick = { onPdfFaceSelected(false) },
+                                label = "Page by page",
+                                selected = pdfSettings.scrollModel ==
+                                    app.xreader.ui.localreader
+                                        .PdfScrollModel.PAGED,
+                                onClick = {
+                                    onPdfSettingsChange {
+                                        it.copy(
+                                            scrollModel =
+                                                app.xreader.ui.localreader
+                                                    .PdfScrollModel.PAGED
+                                        )
+                                    }
+                                },
                                 modifier = Modifier,
                                 dotColor = null
                             )
                             NocturneChip(
-                                label = "Reflow (text)",
-                                selected = true,
-                                onClick = { onPdfFaceSelected(true) },
+                                label = "Scroll down",
+                                selected = pdfSettings.scrollModel ==
+                                    app.xreader.ui.localreader
+                                        .PdfScrollModel.CONTINUOUS,
+                                onClick = {
+                                    onPdfSettingsChange {
+                                        it.copy(
+                                            scrollModel =
+                                                app.xreader.ui.localreader
+                                                    .PdfScrollModel.CONTINUOUS
+                                        )
+                                    }
+                                },
                                 modifier = Modifier,
                                 dotColor = null
                             )
                         }
-                        Text(
-                            "You're reading this PDF as flowing " +
-                                "text. Switch to As printed to see " +
-                                "the pages as they were printed — " +
-                                "your place is kept.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        if (pdfSettings.scrollModel ==
+                            app.xreader.ui.localreader
+                                .PdfScrollModel.PAGED
+                        ) {
+                            androidx.compose.foundation.layout.FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                NocturneChip(
+                                    label = "Fit page",
+                                    selected = pdfSettings.fitMode ==
+                                        app.xreader.ui.localreader
+                                            .PdfFitMode.FIT_PAGE,
+                                    onClick = {
+                                        onPdfSettingsChange {
+                                            it.copy(
+                                                fitMode =
+                                                    app.xreader.ui.localreader
+                                                        .PdfFitMode.FIT_PAGE
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier,
+                                    dotColor = null
+                                )
+                                NocturneChip(
+                                    label = "Fit width",
+                                    selected = pdfSettings.fitMode ==
+                                        app.xreader.ui.localreader
+                                            .PdfFitMode.FIT_WIDTH,
+                                    onClick = {
+                                        onPdfSettingsChange {
+                                            it.copy(
+                                                fitMode =
+                                                    app.xreader.ui.localreader
+                                                        .PdfFitMode.FIT_WIDTH
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier,
+                                    dotColor = null
+                                )
+                            }
+                            SheetSwitch(
+                                label = "Two-page spread in landscape",
+                                checked = pdfSettings.spread,
+                                onChange = { value ->
+                                    onPdfSettingsChange {
+                                        it.copy(spread = value)
+                                    }
+                                }
+                            )
+                            SheetSwitch(
+                                label = "Right-to-left paging",
+                                checked = pdfSettings.rtlPaging,
+                                onChange = { value ->
+                                    onPdfSettingsChange {
+                                        it.copy(rtlPaging = value)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    SheetSection("Page edges & colour") {
+                        SheetSlider(
+                            label = "Trim page edges",
+                            valueText = "${(pdfSettings.edgeTrim * 100).toInt()}%",
+                            value = pdfSettings.edgeTrim,
+                            range = 0f..0.20f,
+                            onChange = { value ->
+                                onPdfSettingsChange {
+                                    it.copy(edgeTrim = value)
+                                }
+                            }
                         )
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val filterLabels = listOf(
+                                app.xreader.data.engine.PdfPageFilter.NONE
+                                    to "As printed",
+                                app.xreader.data.engine.PdfPageFilter.INVERT
+                                    to "Invert",
+                                app.xreader.data.engine.PdfPageFilter
+                                    .BLACK_AND_WHITE to "Black & white",
+                                app.xreader.data.engine.PdfPageFilter
+                                    .INVERT_BLACK_AND_WHITE to "Invert B&W",
+                                app.xreader.data.engine.PdfPageFilter
+                                    .SEPIA_PAGE to "Sepia page",
+                                app.xreader.data.engine.PdfPageFilter
+                                    .SOFT_GREY to "Soft grey"
+                            )
+                            filterLabels.forEach { (filter, label) ->
+                                NocturneChip(
+                                    label = label,
+                                    selected = pdfSettings.filter == filter &&
+                                        !pdfSettings.autoContrast,
+                                    onClick = {
+                                        onPdfSettingsChange {
+                                            it.withFilter(filter)
+                                        }
+                                    },
+                                    modifier = Modifier,
+                                    dotColor = null
+                                )
+                            }
+                            NocturneChip(
+                                label = "Auto (smart contrast)",
+                                selected = pdfSettings.autoContrast,
+                                onClick = {
+                                    onPdfSettingsChange {
+                                        it.copy(autoContrast = true)
+                                    }
+                                },
+                                modifier = Modifier,
+                                dotColor = null
+                            )
+                        }
+                        SheetSwitch(
+                            label = "Night pages",
+                            checked = !pdfSettings.autoContrast &&
+                                (pdfSettings.filter ==
+                                    app.xreader.data.engine.PdfPageFilter
+                                        .INVERT ||
+                                    pdfSettings.filter ==
+                                    app.xreader.data.engine.PdfPageFilter
+                                        .INVERT_BLACK_AND_WHITE),
+                            onChange = {
+                                onPdfSettingsChange {
+                                    it.toggledNight(pdfAutoResolvedFilter)
+                                }
+                            }
+                        )
+                    }
+                    SheetSection("Comfort") {
+                        SheetSwitch(
+                            label = "Volume keys turn pages",
+                            checked = pdfSettings.volumeKeyTurn,
+                            onChange = { value ->
+                                onPdfSettingsChange {
+                                    it.copy(volumeKeyTurn = value)
+                                }
+                            }
+                        )
+                        SheetSwitch(
+                            label = "Keep screen on",
+                            checked = pdfSettings.keepScreenOn,
+                            onChange = { value ->
+                                onPdfSettingsChange {
+                                    it.copy(keepScreenOn = value)
+                                }
+                            }
+                        )
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val orientations = listOf(
+                                app.xreader.ui.localreader
+                                    .ReaderOrientation.FREE to "Free",
+                                app.xreader.ui.localreader
+                                    .ReaderOrientation.PORTRAIT to "Portrait",
+                                app.xreader.ui.localreader
+                                    .ReaderOrientation.LANDSCAPE to "Landscape"
+                            )
+                            orientations.forEach { (orientation, label) ->
+                                NocturneChip(
+                                    label = label,
+                                    selected =
+                                        pdfSettings.orientation == orientation,
+                                    onClick = {
+                                        onPdfSettingsChange {
+                                            it.copy(orientation = orientation)
+                                        }
+                                    },
+                                    modifier = Modifier,
+                                    dotColor = null
+                                )
+                            }
+                        }
+                        SheetSwitch(
+                            label = "Auto-scroll",
+                            checked = pdfAutoScrollOn,
+                            onChange = onPdfAutoScrollToggle
+                        )
+                        if (pdfAutoScrollOn) {
+                            SheetSlider(
+                                label = "Auto-scroll speed",
+                                valueText = String.format(
+                                    "%.1f×", pdfSettings.autoScrollSpeed
+                                ),
+                                value = pdfSettings.autoScrollSpeed.toFloat(),
+                                range = 0.25f..4f,
+                                onChange = { value ->
+                                    onPdfSettingsChange {
+                                        it.copy(
+                                            autoScrollSpeed =
+                                                value.toDouble()
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                        if (pdfSettings.zoom > 1.01f) {
+                            TextButton(
+                                onClick = {
+                                    onPdfSettingsChange {
+                                        it.copy(zoom = 1f)
+                                    }
+                                }
+                            ) {
+                                Text("Reset zoom")
+                            }
+                        }
                     }
                 }
 
@@ -415,41 +653,6 @@ fun ReaderSettingsSheet(
             }
 
             "reading" -> {
-                // MR-2 (P2): the face this book is being read
-                // on — a converted PDF's reflow face offers
-                // the way back to the printed pages.
-                if (pdfFaceVisible) {
-                    SheetSection("Reading face") {
-                        androidx.compose.foundation.layout.FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            NocturneChip(
-                                label = "As printed",
-                                selected = false,
-                                onClick = { onPdfFaceSelected(false) },
-                                modifier = Modifier,
-                                dotColor = null
-                            )
-                            NocturneChip(
-                                label = "Reflow (text)",
-                                selected = true,
-                                onClick = { onPdfFaceSelected(true) },
-                                modifier = Modifier,
-                                dotColor = null
-                            )
-                        }
-                        Text(
-                            "You're reading this PDF as flowing " +
-                                "text. Switch to As printed to see " +
-                                "the pages as they were printed — " +
-                                "your place is kept.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
                 SheetSection("Reading mode") {
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),

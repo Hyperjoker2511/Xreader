@@ -36,6 +36,16 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Search
@@ -149,11 +159,6 @@ fun ReaderScreen(
     onSessionHandoff: (
         app.xreader.data.extension.SessionNeed.Kind, String?
     ) -> Unit = { _, _ -> },
-    /** v1.7 MR-2 (P2): the converted-PDF face hop back to
-     * the printed face — the VM emits it after the hop's
-     * progress write lands; the shell navigates to the
-     * local reader and closes this face. */
-    onOpenLocalDoc: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val config by viewModel.config.collectAsStateWithLifecycle()
@@ -174,18 +179,45 @@ fun ReaderScreen(
     val searchBusy by viewModel.searchBusy.collectAsStateWithLifecycle()
     val plateFilter by viewModel.plateFilter.collectAsStateWithLifecycle()
     val migrationNote by viewModel.migrationNote.collectAsStateWithLifecycle()
-    // v1.7 MR-2 (P2/P3): a converted PDF on its reflow face —
-    // the face section in Settings, the printed-page label
-    // in the chrome, and the hop back to the printed face.
-    val convertedPdf by viewModel.convertedPdf
+    // v1.7 OE-1: a local PDF read in this one reader — its
+    // page-shaped state rides beside the chapter state
+    // (the surfaces, the chrome's page label and mode
+    // switch, the PDF sheets all read it here).
+    val pdfState by viewModel.pdfReader.collectAsStateWithLifecycle()
+    val pdfSearchHits by viewModel.pdfSearchHits
         .collectAsStateWithLifecycle()
-    LaunchedEffect(viewModel) {
-        viewModel.localDocHop.collect { onOpenLocalDoc() }
+    val pdfSearchBusy by viewModel.pdfSearchBusy
+        .collectAsStateWithLifecycle()
+    val pdfSearchMark by viewModel.pdfSearchMark
+        .collectAsStateWithLifecycle()
+    val pdfPageHighlights by viewModel.pdfPageHighlights
+        .collectAsStateWithLifecycle()
+    val pdfReflowHighlights by viewModel.pdfReflowHighlights
+        .collectAsStateWithLifecycle()
+    val pdfReady = pdfState as? PdfReaderState.Ready
+    val pdfPageLabel = pdfReady?.let {
+        "p. ${it.page + 1} / ${it.pageCount}"
     }
-    val pdfPageLabel = convertedPdf?.let { pdf ->
-        val place = app.xreader.data.prepare.PdfPlaceBridge(pdf.table)
-            .corePlaceToPage(state.chapterIndex, state.positionOffset)
-        "p. ${place.page + 1} / ${pdf.table.pageCount}"
+    // The PDF's auto-scroll engine (the local reader's
+    // own), hoisted here: the Pages surface's bodies
+    // register with it; the settings section drives it.
+    val pdfAutoScroll = remember {
+        app.xreader.ui.localreader.AutoScrollController()
+    }
+    var pdfAutoScrollOn by remember {
+        mutableStateOf(pdfAutoScroll.engine.running)
+    }
+    val pdfHandlers = remember(viewModel) {
+        PdfPagesHandlers(
+            jumps = viewModel.pdfJumps,
+            onPosition = { page, fraction ->
+                viewModel.onPdfPosition(page, fraction)
+            },
+            onGoToPage = { page -> viewModel.pdfGoToPage(page) },
+            onUpdateSettings = { transform ->
+                viewModel.updatePdfSettings(transform)
+            }
+        )
     }
     // Micro-build M: the chapter summary no longer shows
     // in the Contents sheet, so the screen no longer
@@ -771,6 +803,27 @@ fun ReaderScreen(
             }
 
         when {
+            // v1.7 OE-1 (R1): a PDF's host stands FIRST —
+            // its own states (loading, password, failed,
+            // pages/reflow) never fall through to the
+            // chapter branches below.
+            pdfState != null -> PdfReaderHost(
+                state = pdfState!!,
+                viewModel = viewModel,
+                palette = palette,
+                config = config,
+                fontFamily = fontFamily,
+                handlers = pdfHandlers,
+                autoScroll = pdfAutoScroll,
+                chromeVisible = chromeVisible,
+                bottomInset = readerBottomInset,
+                spokenRange = spokenRange,
+                reflowHighlights = pdfReflowHighlights,
+                searchMark = pdfSearchMark,
+                onToggleControls = { chromeVisible = !chromeVisible },
+                onBack = onBack
+            )
+
             // v1.2.0 (Wave 3): the full-screen spinner shows ONLY
             // when there is no previous chapter to keep on screen
             // (first open). While a chapter turn fetches, the
@@ -1112,17 +1165,24 @@ fun ReaderScreen(
             // both derive from the chapter's POSITION through
             // ReaderCounters — the source-given name is shown
             // only when it does not contradict that position.
-            chapterTitle = ReaderCounters.headerLine(
-                chapterTitle = state.chapter?.title ?: "",
-                chapterIndex = state.chapterIndex,
-                chapterCount = state.chapters.size,
-                // v1.3.2 (item 79): the chapter's OWN number —
-                // the header agrees with the chapter that was
-                // actually opened, never with list position.
-                ownNumber = state.chapter?.let {
-                    app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
-                }
-            ),
+            chapterTitle = if (pdfReady != null) {
+                // OE-1: a PDF's header second line is the
+                // outline section the page sits in (or
+                // nothing) — never a chapter line.
+                pdfReady.anchorTitle ?: ""
+            } else {
+                ReaderCounters.headerLine(
+                    chapterTitle = state.chapter?.title ?: "",
+                    chapterIndex = state.chapterIndex,
+                    chapterCount = state.chapters.size,
+                    // v1.3.2 (item 79): the chapter's OWN number —
+                    // the header agrees with the chapter that was
+                    // actually opened, never with list position.
+                    ownNumber = state.chapter?.let {
+                        app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
+                    }
+                )
+            },
             // Part 2 (A8): for a TOC book the counters count
             // TOC ENTRIES — the position is the current TOC
             // entry, the count is the TOC's size, and there
@@ -1147,19 +1207,42 @@ fun ReaderScreen(
                     app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
                 }
             },
-            bookFraction = state.bookFraction,
+            bookFraction = pdfReady?.bookFraction ?: state.bookFraction,
             minutesLeftInChapter = state.minutesLeftInChapter,
             minutesLeftInBook = state.minutesLeftInBook,
-            showTimeEstimates = ReaderCounters.showTimeEstimates(
-                state.chapterText?.content
-            ),
+            showTimeEstimates = pdfReady == null &&
+                ReaderCounters.showTimeEstimates(
+                    state.chapterText?.content
+                ),
             reduceMotion = reduceMotion,
-            bookmarked = state.currentPositionBookmarked,
-            hasPrevious = state.hasPrevious,
-            hasNext = state.hasNext,
+            bookmarked = if (pdfReady != null) {
+                viewModel.pdfBookmarkedHere(bookmarks)
+            } else {
+                state.currentPositionBookmarked
+            },
+            hasPrevious = if (pdfReady != null) {
+                pdfReady.page > 0
+            } else {
+                state.hasPrevious
+            },
+            hasNext = if (pdfReady != null) {
+                pdfReady.page < pdfReady.pageCount - 1
+            } else {
+                state.hasNext
+            },
             onBack = onBack,
             onToggleBookmark = {
-                if (state.currentPositionBookmarked) {
+                if (pdfReady != null) {
+                    // OE-1 (R19): the bookmark is the page.
+                    val wasBookmarked =
+                        viewModel.pdfBookmarkedHere(bookmarks)
+                    viewModel.togglePdfBookmark()
+                    notice = if (wasBookmarked) {
+                        "Bookmark removed"
+                    } else {
+                        "Bookmarked"
+                    }
+                } else if (state.currentPositionBookmarked) {
                     viewModel.removeBookmarkAtCurrentPosition()
                     notice = "Bookmark removed"
                 } else {
@@ -1167,12 +1250,30 @@ fun ReaderScreen(
                     notice = "Bookmarked"
                 }
             },
-            onPreviousChapter = { viewModel.previousChapter() },
-            onNextChapter = { viewModel.nextChapter() },
+            onPreviousChapter = {
+                if (pdfReady != null) {
+                    viewModel.pdfGoToPage(pdfReady.page - 1)
+                } else {
+                    viewModel.previousChapter()
+                }
+            },
+            onNextChapter = {
+                if (pdfReady != null) {
+                    viewModel.pdfGoToPage(pdfReady.page + 1)
+                } else {
+                    viewModel.nextChapter()
+                }
+            },
             onSeekFraction = { fraction ->
-                val target = (fraction * state.chapters.size).toInt()
-                    .coerceIn(0, maxOf(0, state.chapters.lastIndex))
-                viewModel.openChapter(target)
+                if (pdfReady != null) {
+                    val target = (fraction * pdfReady.pageCount).toInt()
+                        .coerceIn(0, maxOf(0, pdfReady.pageCount - 1))
+                    viewModel.pdfGoToPage(target)
+                } else {
+                    val target = (fraction * state.chapters.size).toInt()
+                        .coerceIn(0, maxOf(0, state.chapters.lastIndex))
+                    viewModel.openChapter(target)
+                }
             },
             onOpenToc = { activeSheet = ActiveSheet.TOC },
             onOpenSearch = { activeSheet = ActiveSheet.SEARCH },
@@ -1184,6 +1285,30 @@ fun ReaderScreen(
             },
             onOpenAi = { onOpenAiPage() },
             pdfPageLabel = pdfPageLabel,
+            // OE-1 (R13, OQ4): the mode switch on the bar —
+            // the label names the mode a tap enters; a book
+            // with no text layer carries the honest line
+            // instead, and its tap explains (R22).
+            pdfModeLabel = when {
+                pdfReady == null -> null
+                pdfReady.textAvailable == false -> "No text layer"
+                pdfReady.mode == PdfReadMode.PAGES -> "Text reflow"
+                else -> "Pages"
+            },
+            onTogglePdfMode = {
+                val ready = pdfReady
+                if (ready != null) {
+                    if (ready.textAvailable == false) {
+                        notice = "This book has no text layer, so " +
+                            "there's no text view — the pages " +
+                            "are all there is."
+                    } else {
+                        viewModel.setPdfMode(
+                            ready.mode == PdfReadMode.PAGES
+                        )
+                    }
+                }
+            },
             onTopBarHeight = { px -> if (px > 0) topChromePx = px },
             onBottomBarHeight = { px -> if (px > 0) bottomChromePx = px }
         )
@@ -1349,14 +1474,22 @@ fun ReaderScreen(
                     onMangaCropChange = { viewModel.setMangaCropBorders(it) },
                     mangaHasOverrides = state.mangaHasOverrides,
                     onResetMangaOverrides = { viewModel.resetMangaOverrides() },
-                    // v1.7 MR-2 (P2): the face switch — only
-                    // a converted PDF on its reflow face
-                    // shows it; "As printed" hops back
-                    // through the bridge.
-                    pdfFaceVisible = convertedPdf != null,
-                    onPdfFaceSelected = { reflow ->
-                        if (!reflow) {
-                            viewModel.switchPdfFaceToPrinted()
+                    // v1.7 OE-1 (R21): a PDF's page settings
+                    // ride this sheet (Pages-mode controls);
+                    // the mode switch itself is on the bar.
+                    pdfPagesSettings = pdfReady?.settings,
+                    onPdfSettingsChange = { transform ->
+                        viewModel.updatePdfSettings(transform)
+                    },
+                    pdfAutoResolvedFilter = pdfReady?.autoResolvedFilter
+                        ?: app.xreader.data.engine.PdfPageFilter.NONE,
+                    pdfAutoScrollOn = pdfAutoScrollOn,
+                    onPdfAutoScrollToggle = { on ->
+                        pdfAutoScrollOn = on
+                        if (on) {
+                            pdfAutoScroll.start()
+                        } else {
+                            pdfAutoScroll.stop()
                         }
                     }
                 )
@@ -1383,7 +1516,35 @@ fun ReaderScreen(
                     onVoicePick = { viewModel.setEdgeVoice(it) },
                     onVoiceReset = { viewModel.clearVoiceOverrides() }
                 )
-                ActiveSheet.TOC -> TocSheet(
+                ActiveSheet.TOC -> if (pdfReady != null) {
+                    PdfContentsSheet(
+                        session = pdfReady.session,
+                        currentPage = pdfReady.page,
+                        bookmarks = bookmarks,
+                        pageHighlights = pdfPageHighlights,
+                        reflowHighlights = pdfReflowHighlights,
+                        bookmarkPageOf = { viewModel.pdfBookmarkPage(it) },
+                        onJumpPagesForm = { page ->
+                            activeSheet = null
+                            viewModel.setPdfMode(false)
+                            viewModel.pdfGoToPage(page)
+                        },
+                        onJumpReflowForm = { page ->
+                            activeSheet = null
+                            viewModel.setPdfMode(true)
+                            viewModel.pdfGoToPage(page)
+                        },
+                        onJumpBookmark = { page ->
+                            activeSheet = null
+                            viewModel.pdfGoToPage(page)
+                        },
+                        onDeleteBookmark = { viewModel.deleteBookmark(it) },
+                        onRemoveReflowHighlight = {
+                            viewModel.removePdfReflowHighlight(it)
+                        }
+                    )
+                } else {
+                    TocSheet(
                     chapters = state.chapters,
                     currentChapterIndex = state.chapterIndex,
                     tocEntries = state.tocEntries,
@@ -1457,16 +1618,32 @@ fun ReaderScreen(
                         }
                     }
                 )
-                ActiveSheet.SEARCH -> BookSearchSheet(
-                    hits = searchHits,
-                    busy = searchBusy,
-                    onSearch = { query -> viewModel.searchBook(query) },
-                    onJump = { hit ->
-                        viewModel.clearBookSearch()
-                        activeSheet = null
-                        viewModel.openChapterAt(hit.chapterIndex, hit.charOffset)
-                    }
-                )
+                }
+                ActiveSheet.SEARCH -> if (pdfReady != null) {
+                    PdfSearchSheet(
+                        hits = pdfSearchHits,
+                        busy = pdfSearchBusy,
+                        onSearch = { query -> viewModel.searchBook(query) },
+                        onJump = { hit ->
+                            viewModel.clearBookSearch()
+                            activeSheet = null
+                            viewModel.goToPdfSearchHit(hit)
+                        }
+                    )
+                } else {
+                    BookSearchSheet(
+                        hits = searchHits,
+                        busy = searchBusy,
+                        onSearch = { query -> viewModel.searchBook(query) },
+                        onJump = { hit ->
+                            viewModel.clearBookSearch()
+                            activeSheet = null
+                            viewModel.openChapterAt(
+                                hit.chapterIndex, hit.charOffset
+                            )
+                        }
+                    )
+                }
                 ActiveSheet.FOCUS -> FocusSheet(
                     focus = focus,
                     onStart = { minutes, soundscape ->
@@ -1618,12 +1795,21 @@ private fun ReaderChrome(
     onOpenAi: () -> Unit,
     /** v1.7 Patch 3 (Item 4b): the in-book search sheet door. */
     onOpenSearch: () -> Unit = {},
-    /** v1.7 MR-2 (P3): for a converted PDF on its reflow
-     * face, the printed-page label ("p. 41 / 212") the
-     * footer line carries beside the book percentage —
-     * the reader always knows which printed page the
-     * flowing text sits on. Null for every other book. */
+    /** v1.7 OE-1 (R7): for a PDF in this reader, the page
+     * label ("p. 41 / 212") — when present, the footer
+     * speaks in pages beside the book percentage, in both
+     * modes, and never in chapters. Null for every other
+     * book. */
     pdfPageLabel: String? = null,
+    /** v1.7 OE-1 (R13, OQ4): the PDF mode switch rides
+     * this bar in the Ask AI tile's seat (a PDF has no
+     * chapters for Ask AI to read). The label names the
+     * mode a tap ENTERS — "Text reflow" in Pages mode,
+     * "Pages" in Reflow; for a book with no text layer it
+     * reads "No text layer" (R22) and the tap explains.
+     * Null for every non-PDF book. */
+    pdfModeLabel: String? = null,
+    onTogglePdfMode: () -> Unit = {},
     /** v1.0.6.2 (F7): the bars' measured heights (px), so the
      * text insets match the real chrome, never a guess. */
     onTopBarHeight: (Int) -> Unit = {},
@@ -1761,16 +1947,21 @@ private fun ReaderChrome(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    ReaderCounters.footerLine(
-                                        chapterIndex, chapterCount,
-                                        chapterOwnNumber
-                                    ) + " · ${(bookFraction * 100).toInt()}%" +
-                                        // MR-2 (P3): the printed
-                                        // page this reflow place
-                                        // sits on, when the book
-                                        // is a converted PDF.
-                                        (pdfPageLabel?.let { " · $it" }
-                                            ?: ""),
+                                    if (pdfPageLabel != null) {
+                                        // OE-1 (R7): a PDF's
+                                        // status speaks in
+                                        // pages, in both
+                                        // modes — never a
+                                        // fabricated chapter
+                                        // count.
+                                        "$pdfPageLabel · " +
+                                            "${(bookFraction * 100).toInt()}%"
+                                    } else {
+                                        ReaderCounters.footerLine(
+                                            chapterIndex, chapterCount,
+                                            chapterOwnNumber
+                                        ) + " · ${(bookFraction * 100).toInt()}%"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = palette.muted,
                                     maxLines = 1
@@ -1842,13 +2033,25 @@ private fun ReaderChrome(
                             Icons.Filled.Headphones, "Listen", palette, onOpenListen,
                             modifier = Modifier.weight(1f)
                         )
-                        ChromeAction(
-                            Icons.Filled.AutoAwesome, "Ask AI",
-                            palette,
-                            onOpenAi,
-                            tint = aiAccentColor(),
-                            modifier = Modifier.weight(1f)
-                        )
+                        if (pdfModeLabel != null) {
+                            // OE-1 (R13, OQ4): the mode
+                            // switch, one tap on the bar —
+                            // never buried in a sheet.
+                            ChromeAction(
+                                Icons.Filled.Description, pdfModeLabel,
+                                palette,
+                                onTogglePdfMode,
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            ChromeAction(
+                                Icons.Filled.AutoAwesome, "Ask AI",
+                                palette,
+                                onOpenAi,
+                                tint = aiAccentColor(),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                         ChromeAction(
                             Icons.Filled.Timer, "Focus", palette, onOpenFocus,
                             modifier = Modifier.weight(1f)
@@ -1973,5 +2176,486 @@ object VolumeKeyTurn {
             }
             else -> false
         }
+    }
+}
+
+// ── v1.7 OE-1: the PDF host + sheets ─────────────────────
+
+/**
+ * A local PDF inside the one reader (R1): the session's
+ * own states — loading, the locked-PDF password prompt
+ * (K5, the shipped path on its new seat), a plain failure,
+ * or the ready book in its Pages / Reflow modes (R4, R8)
+ * under the PDF comforts. The chapter surfaces never see
+ * a PDF; this host never sees a chapter.
+ */
+@Composable
+private fun PdfReaderHost(
+    state: PdfReaderState,
+    viewModel: ReaderViewModel,
+    palette: ReaderPalette,
+    config: ReaderConfig,
+    fontFamily: androidx.compose.ui.text.font.FontFamily,
+    handlers: PdfPagesHandlers,
+    autoScroll: app.xreader.ui.localreader.AutoScrollController,
+    chromeVisible: Boolean,
+    bottomInset: androidx.compose.ui.unit.Dp,
+    spokenRange: IntRange?,
+    reflowHighlights: List<
+        app.xreader.ui.localreader.StoredSelectionHighlight>,
+    searchMark: PdfSearchMark?,
+    onToggleControls: () -> Unit,
+    onBack: () -> Unit
+) {
+    when (val s = state) {
+        PdfReaderState.Loading -> Column(
+            Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            CircularProgressIndicator(color = palette.accent)
+            androidx.compose.material3.Text(
+                text = "Opening…",
+                modifier = Modifier.padding(top = 16.dp)
+            )
+        }
+
+        PdfReaderState.PasswordRequired -> {
+            Column(
+                Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                androidx.compose.material3.Text(
+                    text = "This PDF asks for a password",
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                )
+            }
+            var password by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = onBack,
+                title = { Text("Password needed") },
+                text = {
+                    Column {
+                        Text(
+                            "This PDF is locked. Enter its password " +
+                                "to read it — the password is used " +
+                                "for this session only and is never " +
+                                "saved."
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("Password") },
+                            singleLine = true,
+                            visualTransformation =
+                                PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.retryPdfWithPassword(password)
+                        },
+                        enabled = password.isNotEmpty()
+                    ) { Text("Unlock") }
+                },
+                dismissButton = {
+                    TextButton(onClick = onBack) { Text("Back") }
+                }
+            )
+        }
+
+        is PdfReaderState.Failed -> Column(
+            Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            androidx.compose.material3.Text(
+                text = s.message,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
+        }
+
+        is PdfReaderState.Ready -> {
+            app.xreader.ui.localreader.LocalReaderComfortHost(
+                volumeKeyTurn = s.settings.volumeKeyTurn,
+                keepScreenOn = s.settings.keepScreenOn,
+                orientation = s.settings.orientation,
+                onVolumeTurn = { direction ->
+                    viewModel.requestExternalTurn(direction)
+                },
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Box(Modifier.fillMaxSize()) {
+                    when (s.mode) {
+                        PdfReadMode.PAGES -> PdfPagesSurface(
+                            session = s.session,
+                            settings = s.settings,
+                            initialPage = s.initialPage,
+                            currentPage = s.page,
+                            handlers = handlers,
+                            autoScroll = autoScroll,
+                            onToggleControls = onToggleControls,
+                            onResolvedFilter = { page, filter ->
+                                viewModel.onPdfResolvedFilter(page, filter)
+                            }
+                        )
+                        PdfReadMode.REFLOW -> when {
+                            s.reflowContent != null -> PdfReflowSurface(
+                                content = s.reflowContent,
+                                config = config,
+                                fontFamily = fontFamily,
+                                textColor = palette.text,
+                                page = s.page,
+                                highlights = reflowHighlights,
+                                searchMark = searchMark,
+                                spokenRange = spokenRange,
+                                onBoundaryCross = { direction ->
+                                    viewModel.pdfGoToPage(
+                                        s.page + direction
+                                    )
+                                },
+                                onToggleControls = onToggleControls,
+                                onAddHighlight = { highlight ->
+                                    viewModel.addPdfReflowHighlight(
+                                        highlight
+                                    )
+                                }
+                            )
+                            s.textAvailable == false -> Column(
+                                Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment =
+                                    Alignment.CenterHorizontally
+                            ) {
+                                androidx.compose.material3.Text(
+                                    text = "This book has no text " +
+                                        "layer, so there's no text " +
+                                        "view — the pages are all " +
+                                        "there is.",
+                                    modifier = Modifier
+                                        .padding(horizontal = 24.dp)
+                                )
+                            }
+                            else -> Column(
+                                Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment =
+                                    Alignment.CenterHorizontally
+                            ) {
+                                CircularProgressIndicator(
+                                    color = palette.accent
+                                )
+                                androidx.compose.material3.Text(
+                                    text = "Preparing text…",
+                                    modifier = Modifier
+                                        .padding(top = 16.dp)
+                                )
+                            }
+                        }
+                    }
+                    // R7: the filmstrip is Pages-only — it
+                    // never appears over Reflow text.
+                    if (s.mode == PdfReadMode.PAGES &&
+                        chromeVisible && s.pageCount > 1
+                    ) {
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(
+                                    bottom = bottomInset + 8.dp,
+                                    start = 12.dp,
+                                    end = 12.dp
+                                )
+                        ) {
+                            PdfFilmstripRow(
+                                session = s.session,
+                                currentPage = s.page,
+                                pageCount = s.pageCount,
+                                rtlPaging = s.settings.rtlPaging,
+                                onSeek = { page ->
+                                    viewModel.pdfGoToPage(page)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * OE-1 (R16, R19, R20): a PDF's Contents sheet — the
+ * book's own outline (both modes; a tap shows the
+ * destination page in the mode in force), the one shared
+ * page-anchored bookmark list, and the two highlight
+ * forms, each listed apart: a Pages-form tap reads the
+ * page as printed, a Reflow-form tap reads its text.
+ */
+@Composable
+private fun PdfContentsSheet(
+    session: app.xreader.data.engine.PdfSession,
+    currentPage: Int,
+    bookmarks: List<app.xreader.data.db.Bookmark>,
+    pageHighlights: List<
+        app.xreader.ui.localreader.StoredSelectionHighlight>,
+    reflowHighlights: List<
+        app.xreader.ui.localreader.StoredSelectionHighlight>,
+    bookmarkPageOf: (app.xreader.data.db.Bookmark) -> Int,
+    onJumpPagesForm: (Int) -> Unit,
+    onJumpReflowForm: (Int) -> Unit,
+    onJumpBookmark: (Int) -> Unit,
+    onDeleteBookmark: (app.xreader.data.db.Bookmark) -> Unit,
+    onRemoveReflowHighlight: (
+        app.xreader.ui.localreader.StoredSelectionHighlight
+    ) -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(
+            "Contents",
+            style = MaterialTheme.typography.titleMedium
+        )
+        Spacer(Modifier.height(8.dp))
+        if (session.outline.isEmpty()) {
+            Text(
+                "This PDF has no contents list.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            session.outline.forEach { entry ->
+                val target =
+                    app.xreader.data.engine.LocatorJson
+                        .targetIndex(entry.targetJson) ?: 0
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onJumpBookmark(target) }
+                        .padding(vertical = 8.dp)
+                ) {
+                    Text(
+                        entry.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (target == currentPage) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "p. ${target + 1}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        if (bookmarks.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Bookmarks",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(8.dp))
+            bookmarks.forEach { bookmark ->
+                val page = bookmarkPageOf(bookmark)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onJumpBookmark(page) }
+                        .padding(vertical = 6.dp)
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            bookmark.label.ifBlank { "Bookmark" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1
+                        )
+                        Text(
+                            "p. ${page + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme
+                                .colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(
+                        onClick = { onDeleteBookmark(bookmark) }
+                    ) { Text("Remove") }
+                }
+            }
+        }
+        val pagesForm = pageHighlights.filter { it.page != null }
+        if (pagesForm.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Highlights — pages",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(8.dp))
+            pagesForm.forEach { highlight ->
+                val page = highlight.page ?: 0
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onJumpPagesForm(page) }
+                        .padding(vertical = 6.dp)
+                ) {
+                    Text(
+                        highlight.selectedText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2
+                    )
+                    Text(
+                        "p. ${page + 1}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme
+                            .colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        val reflowForm = reflowHighlights.filter { it.page != null }
+        if (reflowForm.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Highlights — text",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(8.dp))
+            reflowForm.forEach { highlight ->
+                val page = highlight.page ?: 0
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onJumpReflowForm(page) }
+                        .padding(vertical = 6.dp)
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            highlight.selectedText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2
+                        )
+                        Text(
+                            "p. ${page + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme
+                                .colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(
+                        onClick = { onRemoveReflowHighlight(highlight) }
+                    ) { Text("Remove") }
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+/**
+ * OE-1 (R18): a PDF's search sheet — the chapter sheet's
+ * shape, with page hits: a tap shows the hit's page (in
+ * Reflow, its text with the hit marked).
+ */
+@Composable
+private fun PdfSearchSheet(
+    hits: List<PdfSearchHit>?,
+    busy: Boolean,
+    onSearch: (String) -> Unit,
+    onJump: (PdfSearchHit) -> Unit
+) {
+    var query by remember { mutableStateOf("") }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(
+            "Search",
+            style = MaterialTheme.typography.titleMedium
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("Word or phrase") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    imeAction = ImeAction.Search
+                ),
+                keyboardActions = KeyboardActions(
+                    onSearch = { onSearch(query) }
+                ),
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                onClick = { onSearch(query) },
+                enabled = query.isNotBlank() && !busy
+            ) { Text("Search") }
+        }
+        Spacer(Modifier.height(8.dp))
+        when {
+            busy -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(vertical = 12.dp)
+            ) {
+                CircularProgressIndicator(
+                    Modifier.padding(end = 12.dp)
+                )
+                Text("Searching page by page…")
+            }
+            hits == null -> Text(
+                "Search the whole book, page by page.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            hits.isEmpty() -> Text(
+                "No matches in this book.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            else -> Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                hits.forEach { hit ->
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onJump(hit) }
+                            .padding(vertical = 8.dp)
+                    ) {
+                        Text(
+                            "p. ${hit.page + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            hit.snippet,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }

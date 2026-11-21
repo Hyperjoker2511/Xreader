@@ -42,7 +42,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.xreader.data.db.BookFormat
-import app.xreader.data.engine.PdfSession
 import app.xreader.data.engine.ReadiumEpubSession
 import app.xreader.di.AppContainer
 
@@ -54,9 +53,8 @@ import app.xreader.di.AppContainer
  *
  *  - EPUB → [EpubBookReader]: a BOOK reader (flowing text,
  *    Readium book-mode settings, percent + chapter progress).
- *  - PDF → [PdfDocumentReader]: a DOCUMENT reader (the file's
- *    own fixed pages, page N-of-Total progress, zoom + render
- *    filter).
+ *  - PDF → the CORE reader (v1.7 OE-1): a local PDF opens in
+ *    the one reader now; the route never sends one here.
  *
  * What stays shared is only what the split allows: the open /
  * missing-file / password / failure states below, the library
@@ -135,14 +133,11 @@ fun LocalDocReaderScreen(
                 onClose = onClose,
                 onOpenBookPage = onOpenBookPage
             )
-            BookFormat.PDF -> PdfDocumentReader(
-                viewModel = viewModel,
-                ready = current,
-                session = current.session as PdfSession,
-                snackbar = snackbar,
-                onClose = onClose,
-                onOpenBookPage = onOpenBookPage
-            )
+            // v1.7 OE-1 (R2): PDFs no longer arrive here —
+            // the route sends a local PDF to the core
+            // reader. A PDF reaching this branch falls to
+            // the honest else below, exactly like the other
+            // formats this surface does not render.
             else -> StateScaffold(
                 title = current.book.title,
                 snackbar = snackbar,

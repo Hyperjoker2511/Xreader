@@ -9,7 +9,15 @@ import app.xreader.data.db.Bookmark
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.Highlight
 import app.xreader.data.db.ReadingProgress
+import app.xreader.data.engine.BookEngine
+import app.xreader.data.engine.LocalFileMissingException
+import app.xreader.data.engine.LocalPasswordRequiredException
+import app.xreader.data.engine.LocatorJson
+import app.xreader.data.engine.PdfPageFilter
+import app.xreader.data.engine.PdfSession
+import app.xreader.data.engine.PdfStripState
 import app.xreader.data.prefs.VoiceEngine
+import androidx.datastore.preferences.core.edit
 import app.xreader.data.prefs.settingsDataStore
 import app.xreader.data.reader.EdgeVoiceTable
 import app.xreader.data.reader.MlKitEyeTracker
@@ -37,6 +45,11 @@ import app.xreader.domain.reader.StreamWindowPlanner
 import app.xreader.domain.reader.Soundscape
 import app.xreader.domain.reader.TermPair
 import app.xreader.domain.reader.TermReplacer
+import app.xreader.ui.localreader.PdfDocSettings
+import app.xreader.ui.localreader.PdfStripSpeech
+import app.xreader.ui.localreader.SelectionHighlightStore
+import app.xreader.ui.localreader.SpeechSink
+import app.xreader.ui.localreader.StoredSelectionHighlight
 import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -67,6 +80,87 @@ data class CoreSearchHit(
     val charOffset: Int,
     val snippet: String
 )
+
+/** v1.7 OE-1: a PDF's reading mode inside the one reader —
+ * the printed pages, or one page's Reflow text (R8). The
+ * mode is per-session only: a PDF opens in PAGES every
+ * time (R6) and nothing stores the choice. */
+enum class PdfReadMode { PAGES, REFLOW }
+
+/** v1.7 OE-1 (R18): one in-book search hit in a PDF — the
+ * page it lives on and its char offset within the
+ * representation that was searched ([reflow] says which:
+ * the page's Reflow text in Reflow mode, the page's strip
+ * text in Pages mode). */
+data class PdfSearchHit(
+    val page: Int,
+    val charOffset: Int,
+    val snippet: String,
+    val query: String,
+    val reflow: Boolean
+)
+
+/** v1.7 OE-1 (R18): a search hit's mark on the current
+ * page — page + [start, end) char range in the searched
+ * representation. The Reflow surface renders it on its
+ * page; Pages mode carries it unrendered (on-page
+ * selection is MR-2b, not this build). */
+data class PdfSearchMark(
+    val page: Int,
+    val start: Int,
+    val end: Int
+)
+
+/** v1.7 OE-1: the core reader's PDF state — one open
+ * [PdfSession], one current-page variable serving both
+ * modes (R15), and the mode's own state. Published only
+ * for a local in-place PDF; null for every other book. */
+sealed interface PdfReaderState {
+    data object Loading : PdfReaderState
+
+    /** The book asks for a password (K5): the screen
+     * prompts and retries through the ViewModel. */
+    data object PasswordRequired : PdfReaderState
+
+    data class Failed(val message: String) : PdfReaderState
+
+    data class Ready(
+        val session: PdfSession,
+        /** The page the book opened on (the surfaces'
+         * first-composition seat). */
+        val initialPage: Int,
+        /** THE current page — both modes read and write
+         * this one variable (R15). */
+        val page: Int,
+        val pageCount: Int,
+        val mode: PdfReadMode,
+        /** The PDF page settings (PrefPdf analogue),
+         * per book — Pages mode's own set (R21). */
+        val settings: PdfDocSettings,
+        val stripState: PdfStripState,
+        /** Whether the book has a usable text layer:
+         * null while the strip is still landing; false
+         * is R22's scanned verdict (Pages only, the
+         * honest line at the switch). */
+        val textAvailable: Boolean?,
+        /** The outline title at-or-before [page]. */
+        val anchorTitle: String?,
+        /** (page + in-page fraction) / pageCount. */
+        val bookFraction: Float,
+        /** The current page's Reflow content, prepared
+         * when Reflow shows it (R9); null outside Reflow
+         * or before preparation lands. */
+        val reflowContent: ChapterContent?,
+        /** Reflow is waiting on the strip or on this
+         * page's preparation. */
+        val reflowPreparing: Boolean,
+        /** AUTO contrast's resolved filter for the page
+         * on screen, reported by the page cells (the
+         * settings section's night toggle lands opposite
+         * it). */
+        val autoResolvedFilter: PdfPageFilter
+    ) : PdfReaderState
+}
 
 /** v1.7 Moon+ standard fix (Part 2): one entry of the
  * book's own table of contents, bridged to the landed
@@ -499,43 +593,78 @@ class ReaderViewModel(
     private val _preparedEpub = MutableStateFlow(false)
     val preparedEpub: StateFlow<Boolean> = _preparedEpub
 
-    /** v1.7 MR-2 (P2): a converted PDF read on its reflow
-     * face — the anchor table + the landed chapter ids.
-     * Non-null only for a LOCAL_FILE PDF whose conversion
-     * landed (prepare record current + content present,
-     * A8) with its table persisted; it drives the face
-     * switch in Settings, the printed-page label in the
-     * chrome, and the A11 marks filter (only core-shaped
-     * rows of the landed chapters are this face's marks —
-     * the printed face's locator rows stay stored for the
-     * other face). */
-    data class ConvertedPdfState(
-        val table: app.xreader.data.prepare.PdfAnchorTable,
-        val chapterIds: List<Long>
+    // ── v1.7 OE-1: PDF in the one reader ─────────────────
+    /** The PDF state (null for every non-PDF book — the
+     * chapter machinery below is then the whole reader). */
+    private val _pdfReader = MutableStateFlow<PdfReaderState?>(null)
+    val pdfReader: StateFlow<PdfReaderState?> = _pdfReader
+
+    private var pdfSession: PdfSession? = null
+    private var pdfBook: app.xreader.data.db.Book? = null
+    private var pdfPassword: String? = null
+
+    /** The one current-page variable (R15) + the in-page
+     * fraction the surfaces report with it. */
+    @Volatile private var pdfPage: Int = 0
+    @Volatile private var pdfInPageFraction: Float = 0f
+
+    /** Page jumps for the Pages bodies (Contents,
+     * bookmarks, search, chrome seeks) — the shipped
+     * LocalDoc jumps seam, re-homed. Emitted only in
+     * Pages mode: the bodies are its only consumers, and
+     * a jump buffered while Reflow is up would land
+     * stale when Pages returns. */
+    private val _pdfJumps =
+        MutableSharedFlow<Int>(extraBufferCapacity = 4)
+    val pdfJumps: SharedFlow<Int> = _pdfJumps.asSharedFlow()
+
+    private var pdfSaveJob: Job? = null
+    private var pdfSettingsSaveJob: Job? = null
+
+    /** The strip's cleaned page texts (R9's one
+     * whole-strip pass), computed once per strip landing
+     * and cached; per-page Reflow content is prepared
+     * from it on demand. */
+    @Volatile private var pdfCleanedTexts: List<String>? = null
+
+    /** R20's two highlight forms: the Pages form is the
+     * existing selection store's list (page + strip-text
+     * range); the Reflow form lives under its own key
+     * (page + Reflow-text range) — the forms never mix,
+     * so each mode lists exactly its own. */
+    private val _pdfPageHighlights =
+        MutableStateFlow<List<StoredSelectionHighlight>>(emptyList())
+    val pdfPageHighlights: StateFlow<List<StoredSelectionHighlight>> =
+        _pdfPageHighlights
+    private val _pdfReflowHighlights =
+        MutableStateFlow<List<StoredSelectionHighlight>>(emptyList())
+    val pdfReflowHighlights: StateFlow<List<StoredSelectionHighlight>> =
+        _pdfReflowHighlights
+
+    // ── v1.7 OE-1: PDF in-book search ────────────────────
+    private val _pdfSearchHits =
+        MutableStateFlow<List<PdfSearchHit>?>(null)
+    val pdfSearchHits: StateFlow<List<PdfSearchHit>?> = _pdfSearchHits
+    private val _pdfSearchBusy = MutableStateFlow(false)
+    val pdfSearchBusy: StateFlow<Boolean> = _pdfSearchBusy
+    private var pdfSearchJob: Job? = null
+    private val _pdfSearchMark = MutableStateFlow<PdfSearchMark?>(null)
+    val pdfSearchMark: StateFlow<PdfSearchMark?> = _pdfSearchMark
+
+    /** The PDF strip feeder over this reader's own
+     * ReadAloudController (OQ5: page-as-unit — the
+     * shipped PdfStripSpeech, unaltered). */
+    private var pdfSpeech: PdfStripSpeech? = null
+    @Volatile private var ttsPdfActive: Boolean = false
+
+    /** A PDF place captured synchronously at clear time
+     * for the final progress write (onCleared's shape). */
+    private data class PdfPlaceSnapshot(
+        val page: Int,
+        val inPageFraction: Float,
+        val pageCount: Int,
+        val anchorTitle: String?
     )
-
-    private val _convertedPdf =
-        MutableStateFlow<ConvertedPdfState?>(null)
-    val convertedPdf: StateFlow<ConvertedPdfState?> = _convertedPdf
-
-    /** MR-2 (P3): set while a face hop is writing the other
-     * face's progress form — this VM's own savers (the
-     * debounced writer and the onCleared backstop) stand
-     * down so they cannot overwrite the hop's row with
-     * this face's shape. */
-    @Volatile
-    private var pdfHopInFlight = false
-
-    private val _localDocHop =
-        kotlinx.coroutines.flow.MutableSharedFlow<Long>(
-            extraBufferCapacity = 1
-        )
-
-    /** MR-2 (P2): emitted (the book id) once the hop back
-     * to the printed face has written its progress row —
-     * the shell navigates to the local reader. */
-    val localDocHop: kotlinx.coroutines.flow.SharedFlow<Long> =
-        _localDocHop
 
     /** Item 4f: the book's stored EPUB plate filter, applied
      * by the core plate viewer. ORIGINAL for every book that
@@ -599,7 +728,11 @@ class ReaderViewModel(
             )
         ).also { controller ->
             controller.onChapterFinished = {
-                if (_state.value.hasNext) {
+                if (ttsPdfActive) {
+                    // v1.7 OE-1 (R17): the PDF feeder advances
+                    // itself — page-as-unit, never the wall.
+                    pdfSpeech?.onChapterFinished()
+                } else if (_state.value.hasNext) {
                     pendingAutoplayTts = true
                     // v1.7 document engine (B2): the advance is
                     // the NARRATION LANDING, not a chapter open —
@@ -866,42 +999,46 @@ class ReaderViewModel(
             // Every other book keeps the unfiltered list.
             combine(
                 container.database.bookmarkDao().observeForBook(bookId),
-                _preparedEpub,
-                _convertedPdf
-            ) { rows, prepared, pdf ->
-                // MR-2 (A11): on a converted PDF's reflow
-                // face only the landed chapters' core-shaped
-                // rows are this face's marks — the printed
-                // face's locator rows belong to the other
-                // face and stay stored, unlisted here.
-                when {
-                    pdf != null -> rows.filter {
-                        it.locatorJson == null &&
-                            it.chapterId in pdf.chapterIds
-                    }
-                    prepared -> rows.filter { it.locatorJson == null }
-                    else -> rows
+                _preparedEpub
+            ) { rows, prepared ->
+                if (prepared) {
+                    rows.filter { it.locatorJson == null }
+                } else {
+                    rows
                 }
             }.collectLatest { _bookmarks.value = it }
         }
         viewModelScope.launch {
             combine(
                 container.database.highlightDao().observeForBook(bookId),
-                _preparedEpub,
-                _convertedPdf
-            ) { rows, prepared, pdf ->
-                when {
-                    pdf != null -> rows.filter {
-                        it.locatorJson == null &&
-                            it.chapterId in pdf.chapterIds
-                    }
-                    prepared -> rows.filter { it.locatorJson == null }
-                    else -> rows
+                _preparedEpub
+            ) { rows, prepared ->
+                if (prepared) {
+                    rows.filter { it.locatorJson == null }
+                } else {
+                    rows
                 }
             }.collectLatest { _highlights.value = it }
         }
         viewModelScope.launch {
             val book = container.database.bookDao().getById(bookId)
+            // v1.7 OE-1 (R1, R3): a local in-place PDF opens
+            // HERE, in the one reader — its own branch
+            // (cleanup, then the PdfSession, then
+            // page-shaped state). The chapter machinery
+            // below never runs for it. A local PDF with no
+            // file to open (the legacy lane) is not this
+            // branch: it keeps the converted-chapter road
+            // below, exactly as before.
+            if (book != null &&
+                book.sourceType ==
+                    app.xreader.data.db.SourceType.LOCAL_FILE &&
+                book.localFormat == app.xreader.data.db.BookFormat.PDF &&
+                BookEngine.isInPlaceBook(book)
+            ) {
+                openPdfBook(book, initialChapterIndex)
+                return@launch
+            }
             // v1.7 Patch 3: a prepared EPUB's per-book state —
             // the mark filter above, the plate filter (4f) and
             // the one-time migration note (3e) — resolves from
@@ -972,39 +1109,6 @@ class ReaderViewModel(
                     container.database.bookDao().update(
                         row.copy(totalChapters = chapters.size)
                     )
-                }
-            }
-            // v1.7 MR-2 (P2): a converted PDF's reflow-face
-            // state — the conversion landed (record current
-            // + content present, A8) and its anchor table
-            // persisted. Anything less and this book is an
-            // ordinary core book here: no face switch, no
-            // page label, no marks filtering.
-            if (book != null &&
-                book.sourceType ==
-                    app.xreader.data.db.SourceType.LOCAL_FILE &&
-                book.localFormat == app.xreader.data.db.BookFormat.PDF
-            ) {
-                val record = runCatching {
-                    localReaderPrefs.pdfPrepareRecord(bookId)
-                }.getOrNull()
-                if (app.xreader.data.prepare.PdfPrepareAccess
-                        .isConverted(record, book) &&
-                    chapters.any { it.contentPath != null }
-                ) {
-                    val table = app.xreader.data.prepare
-                        .PdfAnchorTable.load(
-                            java.io.File(
-                                container.applicationContext.cacheDir,
-                                "local-pdf/$bookId"
-                            )
-                        )
-                    if (table != null) {
-                        _convertedPdf.value = ConvertedPdfState(
-                            table = table,
-                            chapterIds = chapters.map { it.id }
-                        )
-                    }
                 }
             }
             // v1.3.3 (scope S6): the reader opened on an EMPTY
@@ -1396,6 +1500,12 @@ class ReaderViewModel(
      * highlighting is Patch 5's find work, not this patch's.
      */
     fun searchBook(query: String) {
+        // v1.7 OE-1 (R18): a PDF searches page by page,
+        // not chapter by chapter.
+        if (pdfSession != null) {
+            searchPdfBook(query.trim())
+            return
+        }
         val needle = query.trim()
         searchJob?.cancel()
         if (needle.isEmpty()) {
@@ -1445,6 +1555,14 @@ class ReaderViewModel(
         searchJob?.cancel()
         _searchHits.value = null
         _searchBusy.value = false
+        // v1.7 OE-1: the PDF sweep clears the same way.
+        // The search MARK is not cleared here: a hit tap
+        // closes the sheet (which calls this) on its way
+        // to showing the mark on the page — the next
+        // search replaces it instead.
+        pdfSearchJob?.cancel()
+        _pdfSearchHits.value = null
+        _pdfSearchBusy.value = false
     }
 
     fun nextChapter() {
@@ -3292,74 +3410,18 @@ class ReaderViewModel(
      * persist the CURRENT position immediately and exactly. */
     private suspend fun flushProgressNow() {
         saveJob?.cancel()
+        pdfSaveJob?.cancel()
         saveProgressNow()
     }
 
-    /**
-     * v1.7 MR-2 (P2/P3): hop back to the printed face. The
-     * current core place translates through the anchor
-     * bridge to a printed page; the face pref flips and
-     * the single progress row is rewritten in the PDF
-     * surface's own form (locator row) — both BEFORE
-     * [localDocHop] fires, so the local reader opens on
-     * the same page. This VM's savers stand down for the
-     * whole hop ([pdfHopInFlight]) so the row cannot be
-     * overwritten with the core shape on the way out.
-     */
-    fun switchPdfFaceToPrinted() {
-        val pdf = _convertedPdf.value ?: return
-        if (pdfHopInFlight) return
-        pdfHopInFlight = true
-        val stateNow = _state.value
-        val chapter = stateNow.chapter ?: run {
-            pdfHopInFlight = false
+    private suspend fun saveProgressNow() {
+        // v1.7 OE-1: a PDF's progress is page-shaped and
+        // has its own writer; the chapter writer below
+        // never runs for one.
+        if (pdfSession != null) {
+            savePdfProgressNow()
             return
         }
-        viewModelScope.launch(container.ioDispatcher) {
-            runCatching {
-                val place = app.xreader.data.prepare
-                    .PdfPlaceBridge(pdf.table)
-                    .corePlaceToPage(
-                        chapterIndex = stateNow.chapterIndex,
-                        charOffset = stateNow.positionOffset
-                    )
-                runCatching {
-                    localReaderPrefs.savePdfFace(
-                        bookId,
-                        app.xreader.ui.localreader.PdfFace.AS_PRINTED
-                    )
-                }
-                container.database.readingProgressDao().upsert(
-                    app.xreader.data.db.ReadingProgress(
-                        bookId = bookId,
-                        chapterId = 0,
-                        chapterIndex = place.page,
-                        charOffset = 0,
-                        fraction = if (pdf.table.pageCount > 0) {
-                            (place.page + place.inPageFraction) /
-                                pdf.table.pageCount
-                        } else {
-                            0f
-                        },
-                        scrollFraction = place.inPageFraction,
-                        updatedAt = System.currentTimeMillis(),
-                        locatorJson = app.xreader.data.engine
-                            .LocatorJson.pdfLocator(
-                                place.page, place.inPageFraction
-                            ),
-                        anchorText = chapter.title
-                    )
-                )
-            }
-            _localDocHop.tryEmit(bookId)
-        }
-    }
-
-    private suspend fun saveProgressNow() {
-        // MR-2 (P3): a face hop owns the progress row until
-        // its write lands — never overwrite it with this
-        // face's shape mid-hop.
-        if (pdfHopInFlight) return
         val stateNow = _state.value
         val chapter = stateNow.chapter ?: return
         // Keep-previous guard: while a chapter load is in flight
@@ -3419,6 +3481,553 @@ class ReaderViewModel(
             }
         }
         progressCoalescer.markPersisted(now)
+    }
+
+    // ── v1.7 OE-1: the PDF branch ────────────────────────
+
+    /**
+     * Opens a local in-place PDF in this reader (R1, R3):
+     * the session through the engine door first, then
+     * the MR-2 legacy cleanup (R31 — it rewrites the
+     * saved place to page form, so the place read below
+     * is already the reader's own), then page-shaped
+     * state. A PDF opens in Pages mode, every time (R6).
+     * The locked-PDF password path rides the same door
+     * (K5): a password-required open publishes
+     * [PdfReaderState.PasswordRequired] and
+     * [retryPdfWithPassword] reopens with the candidate.
+     */
+    private fun openPdfBook(
+        book: app.xreader.data.db.Book,
+        initialChapterIndex: Int
+    ) {
+        pdfBook = book
+        _pdfReader.value = PdfReaderState.Loading
+        viewModelScope.launch(container.ioDispatcher) {
+            val opened = try {
+                BookEngine.open(
+                    context = container.applicationContext,
+                    book = book,
+                    filesRoot = container.bookStorage.filesDir,
+                    cacheDir = container.applicationContext.cacheDir,
+                    password = pdfPassword
+                ) as PdfSession
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: LocalPasswordRequiredException) {
+                _pdfReader.value = PdfReaderState.PasswordRequired
+                return@launch
+            } catch (e: LocalFileMissingException) {
+                _pdfReader.value = PdfReaderState.Failed(
+                    if (e.message == "file not found") {
+                        "File not found — the file isn't where it " +
+                            "was. Your place and bookmarks are kept."
+                    } else {
+                        e.message ?: "That book couldn't be opened."
+                    }
+                )
+                return@launch
+            } catch (e: Exception) {
+                _pdfReader.value = PdfReaderState.Failed(
+                    "That book couldn't be opened. " +
+                        "(${e.javaClass.simpleName})"
+                )
+                return@launch
+            }
+            pdfSession?.close()
+            pdfSession = opened
+            runCatching { container.recordHistoryStart(bookId) }
+            tracker.begin()
+            // R31: the one-time MR-2 cleanup, before the
+            // place is read — it must see the conversion
+            // era's rows exactly as they stand.
+            app.xreader.data.prepare.PdfLegacyCleanup.runIfNeeded(
+                book = book,
+                pageCount = opened.sectionCount,
+                chapterDao = container.database.chapterDao(),
+                readingProgressDao =
+                    container.database.readingProgressDao(),
+                bookmarkDao = container.database.bookmarkDao(),
+                storage = container.bookStorage,
+                stripDir = java.io.File(
+                    container.applicationContext.cacheDir,
+                    "local-pdf/$bookId"
+                ),
+                settingsStore =
+                    container.applicationContext.settingsDataStore
+            )
+            val settings = runCatching {
+                localReaderPrefs.pdfSettings(bookId).first()
+            }.getOrDefault(PdfDocSettings())
+            val saved = runCatching {
+                container.database.readingProgressDao().getForBook(bookId)
+            }.getOrNull()
+            val savedLocator = LocatorJson.parsePdfLocator(saved?.locatorJson)
+            // A deliberate door (a Contents page tap rides
+            // the route's chapter index) outranks the saved
+            // place; an ordinary open resumes it.
+            val startPage = when {
+                saved == null -> initialChapterIndex
+                initialChapterIndex != saved.chapterIndex ->
+                    initialChapterIndex
+                else -> savedLocator?.first ?: saved.chapterIndex
+            }.coerceIn(0, (opened.sectionCount - 1).coerceAtLeast(0))
+            pdfPage = startPage
+            pdfInPageFraction = savedLocator?.second
+                ?: saved?.scrollFraction ?: 0f
+            _pdfReader.value = PdfReaderState.Ready(
+                session = opened,
+                initialPage = startPage,
+                page = startPage,
+                pageCount = opened.sectionCount,
+                mode = PdfReadMode.PAGES,
+                settings = settings,
+                stripState = opened.stripState.value,
+                textAvailable = null,
+                anchorTitle = opened.anchorTitleFor(startPage),
+                bookFraction = if (opened.sectionCount > 0) {
+                    (startPage + pdfInPageFraction) / opened.sectionCount
+                } else {
+                    0f
+                },
+                reflowContent = null,
+                reflowPreparing = false,
+                autoResolvedFilter = PdfPageFilter.NONE
+            )
+            _state.value = _state.value.copy(
+                bookTitle = book.title,
+                loading = false
+            )
+            // The strip's landing drives Reflow availability
+            // (R22, R32) and, while Reflow is up, its text.
+            viewModelScope.launch {
+                opened.stripState.collect { strip ->
+                    onPdfStripState(strip)
+                }
+            }
+            // R20's two forms, each from its own store.
+            viewModelScope.launch {
+                SelectionHighlightStore(
+                    container.applicationContext.settingsDataStore
+                ).highlights(bookId).collect { rows ->
+                    _pdfPageHighlights.value = rows
+                }
+            }
+            viewModelScope.launch {
+                container.applicationContext.settingsDataStore.data
+                    .map { prefs ->
+                        app.xreader.ui.localreader
+                            .decodeSelectionHighlights(
+                                prefs[pdfReflowHighlightsKey(bookId)]
+                            )
+                    }
+                    .collect { rows -> _pdfReflowHighlights.value = rows }
+            }
+        }
+    }
+
+    /** K5: the password prompt's retry — the candidate is
+     * used for this session only and never saved (the
+     * shipped LocalDoc rule). */
+    fun retryPdfWithPassword(candidate: String) {
+        val book = pdfBook ?: return
+        pdfPassword = candidate.takeIf { it.isNotEmpty() }
+        openPdfBook(book, pdfPage)
+    }
+
+    private fun onPdfStripState(strip: PdfStripState) {
+        val ready = _pdfReader.value as? PdfReaderState.Ready ?: return
+        val available = when (strip) {
+            is PdfStripState.Pending -> null
+            is PdfStripState.Unavailable -> false
+            is PdfStripState.Ready ->
+                app.xreader.data.prepare.PdfReflowText
+                    .hasUsableText(strip.result.texts)
+        }
+        if (strip is PdfStripState.Ready) {
+            // A fresh strip invalidates the cleaned cache;
+            // it is recomputed lazily on next need.
+            pdfCleanedTexts = null
+        }
+        _pdfReader.value = ready.copy(
+            stripState = strip,
+            textAvailable = available
+        )
+        if (ready.mode == PdfReadMode.REFLOW) {
+            preparePdfReflowPage(pdfPage)
+        }
+    }
+
+    /** The strip's cleaned page texts (R9), computed once
+     * per landing on a background dispatcher; suspends
+     * until the strip settles, null when it never lands. */
+    private suspend fun pdfCleanedTexts(): List<String>? {
+        pdfCleanedTexts?.let { return it }
+        val session = pdfSession ?: return null
+        val strip = session.stripState.first {
+            it is PdfStripState.Ready || it is PdfStripState.Unavailable
+        }
+        val result = (strip as? PdfStripState.Ready)?.result
+            ?: return null
+        val cleaned = kotlinx.coroutines.withContext(
+            kotlinx.coroutines.Dispatchers.Default
+        ) {
+            app.xreader.data.prepare.PdfReflowText
+                .cleanedPageTexts(result.texts)
+        }
+        pdfCleanedTexts = cleaned
+        return cleaned
+    }
+
+    /** R13/R14: the mode toggle — one page variable, no
+     * finer place carried in either direction. Entering
+     * Reflow shows the current page's text from its top;
+     * leaving returns to the page Reflow had reached. */
+    fun setPdfMode(reflow: Boolean) {
+        val ready = _pdfReader.value as? PdfReaderState.Ready ?: return
+        val target = if (reflow) PdfReadMode.REFLOW else PdfReadMode.PAGES
+        if (target == ready.mode) return
+        // R22: a book with no text layer has no Reflow to
+        // enter (the switch itself carries the line).
+        if (reflow && ready.textAvailable == false) return
+        _pdfReader.value = if (target == PdfReadMode.PAGES) {
+            ready.copy(
+                mode = target,
+                reflowContent = null,
+                reflowPreparing = false
+            )
+        } else {
+            ready.copy(mode = target)
+        }
+        if (target == PdfReadMode.REFLOW) {
+            preparePdfReflowPage(pdfPage)
+        }
+    }
+
+    /** Prepares the current page's Reflow content (R9):
+     * strip page text → A5 cleanup → PdfReflow blocks. */
+    private fun preparePdfReflowPage(page: Int) {
+        val ready = _pdfReader.value as? PdfReaderState.Ready ?: return
+        if (ready.mode != PdfReadMode.REFLOW) return
+        _pdfReader.value = ready.copy(reflowPreparing = true)
+        viewModelScope.launch {
+            val cleaned = pdfCleanedTexts()
+            val current =
+                _pdfReader.value as? PdfReaderState.Ready
+                    ?: return@launch
+            if (current.mode != PdfReadMode.REFLOW ||
+                pdfPage != page
+            ) {
+                return@launch
+            }
+            val content = cleaned?.getOrNull(page)?.let { text ->
+                app.xreader.data.prepare.PdfReflowText
+                    .pageContent(text)
+            }
+            _pdfReader.value = current.copy(
+                reflowContent = content,
+                reflowPreparing = false
+            )
+        }
+    }
+
+    /** The surfaces' position report (the shipped
+     * LocalDoc onPdfPosition, re-homed): the one page
+     * variable moves, the status follows, the save is
+     * debounced exactly as the local surface's was. */
+    fun onPdfPosition(page: Int, inPageFraction: Float) {
+        val session = pdfSession ?: return
+        val ready = _pdfReader.value as? PdfReaderState.Ready ?: return
+        val clamped = page.coerceIn(
+            0, (session.sectionCount - 1).coerceAtLeast(0)
+        )
+        pdfPage = clamped
+        pdfInPageFraction = inPageFraction
+        _pdfReader.value = ready.copy(
+            page = clamped,
+            anchorTitle = session.anchorTitleFor(clamped),
+            bookFraction = if (session.sectionCount > 0) {
+                ((clamped + inPageFraction) / session.sectionCount)
+                    .coerceIn(0f, 1f)
+            } else {
+                0f
+            }
+        )
+        schedulePdfProgressSave()
+    }
+
+    /** Every explicit page door (Contents, bookmarks,
+     * search, chrome turns, filmstrip) lands here: Pages
+     * bodies consume the jump; Reflow swaps its text. */
+    fun pdfGoToPage(page: Int) {
+        val session = pdfSession ?: return
+        val ready = _pdfReader.value as? PdfReaderState.Ready ?: return
+        val target = page.coerceIn(
+            0, (session.sectionCount - 1).coerceAtLeast(0)
+        )
+        if (ready.mode == PdfReadMode.PAGES) {
+            _pdfJumps.tryEmit(target)
+        }
+        onPdfPosition(target, 0f)
+        if (ready.mode == PdfReadMode.REFLOW) {
+            preparePdfReflowPage(target)
+        }
+    }
+
+    /** A PDF settings change (R21): state first, then
+     * persisted for this book — the shipped debounced
+     * shape (zoom rides this path on every pinch move). */
+    fun updatePdfSettings(transform: (PdfDocSettings) -> PdfDocSettings) {
+        val ready = _pdfReader.value as? PdfReaderState.Ready ?: return
+        val next = transform(ready.settings)
+        _pdfReader.value = ready.copy(settings = next)
+        pdfSettingsSaveJob?.cancel()
+        pdfSettingsSaveJob = viewModelScope.launch(container.ioDispatcher) {
+            delay(500)
+            runCatching { localReaderPrefs.savePdf(bookId, next) }
+        }
+    }
+
+    /** AUTO contrast's per-page resolution, reported by
+     * the page cells (the settings section's night
+     * toggle reads it). */
+    fun onPdfResolvedFilter(page: Int, filter: PdfPageFilter) {
+        if (page != pdfPage) return
+        val ready = _pdfReader.value as? PdfReaderState.Ready ?: return
+        if (ready.autoResolvedFilter == filter) return
+        _pdfReader.value = ready.copy(autoResolvedFilter = filter)
+    }
+
+    // ── PDF bookmarks (R19: page-anchored, one list) ─────
+
+    /** The page a bookmark names in a PDF: its locator's
+     * page when it carries one, else its stored index
+     * (a pre-locator row's honest reading). */
+    fun pdfBookmarkPage(bookmark: Bookmark): Int =
+        LocatorJson.parsePdfLocator(bookmark.locatorJson)?.first
+            ?: bookmark.chapterIndex
+
+    fun pdfBookmarkedHere(bookmarks: List<Bookmark>): Boolean =
+        bookmarks.any { pdfBookmarkPage(it) == pdfPage }
+
+    fun togglePdfBookmark() {
+        val session = pdfSession ?: return
+        val existing = _bookmarks.value.firstOrNull {
+            pdfBookmarkPage(it) == pdfPage
+        }
+        if (existing != null) {
+            deleteBookmark(existing)
+            return
+        }
+        val now = System.currentTimeMillis()
+        viewModelScope.launch(container.ioDispatcher) {
+            container.database.bookmarkDao().insert(
+                Bookmark(
+                    bookId = bookId,
+                    chapterId = 0,
+                    chapterIndex = pdfPage,
+                    charOffset = 0,
+                    label = session.anchorTitleFor(pdfPage)
+                        ?: "Page ${pdfPage + 1}",
+                    createdAt = now,
+                    updatedAt = now,
+                    locatorJson = LocatorJson.pdfLocator(
+                        pdfPage, pdfInPageFraction
+                    )
+                )
+            )
+        }
+    }
+
+    // ── PDF highlights, Reflow form (R20) ────────────────
+
+    private fun pdfReflowHighlightsKey(id: Long) =
+        androidx.datastore.preferences.core.stringPreferencesKey(
+            "localreader.$id.pdfreflow.highlights_json"
+        )
+
+    fun addPdfReflowHighlight(highlight: StoredSelectionHighlight) {
+        val next = _pdfReflowHighlights.value + highlight
+        _pdfReflowHighlights.value = next
+        viewModelScope.launch(container.ioDispatcher) {
+            runCatching {
+                container.applicationContext.settingsDataStore.edit {
+                    prefs ->
+                    prefs[pdfReflowHighlightsKey(bookId)] =
+                        app.xreader.ui.localreader
+                            .encodeSelectionHighlights(next)
+                }
+            }
+        }
+    }
+
+    fun removePdfReflowHighlight(highlight: StoredSelectionHighlight) {
+        val next = _pdfReflowHighlights.value
+            .filterNot { it.id == highlight.id }
+        _pdfReflowHighlights.value = next
+        viewModelScope.launch(container.ioDispatcher) {
+            runCatching {
+                container.applicationContext.settingsDataStore.edit {
+                    prefs ->
+                    prefs[pdfReflowHighlightsKey(bookId)] =
+                        app.xreader.ui.localreader
+                            .encodeSelectionHighlights(next)
+                }
+            }
+        }
+    }
+
+    // ── PDF Listen (R17, OQ5: page-as-unit) ──────────────
+
+    private fun togglePdfListen() {
+        val session = pdfSession ?: return
+        if (readAloud.state.value.playing) {
+            readAloud.pause()
+            return
+        }
+        ttsPdfActive = true
+        pdfSpeechFor(session).startAt(pdfPage)
+    }
+
+    private fun pdfSpeechFor(session: PdfSession): PdfStripSpeech =
+        pdfSpeech ?: PdfStripSpeech(
+            textAt = { page -> pdfListenText(page) },
+            pageCount = session.sectionCount,
+            sink = object : SpeechSink {
+                override fun loadChapter(text: ChapterText) =
+                    readAloud.loadChapter(text)
+                override fun play() = readAloud.play()
+            },
+            scope = viewModelScope
+        ).also { pdfSpeech = it }
+
+    /** The text Listen speaks for [page]: in Reflow, the
+     * page's Reflow text (R17 — and page changes during
+     * speech requeue through the feeder, so the new
+     * page's text follows in the mode in force); in
+     * Pages, the page's strip text, as the shipped
+     * surface spoke it. */
+    private suspend fun pdfListenText(page: Int): String {
+        val session = pdfSession ?: return ""
+        val ready = _pdfReader.value as? PdfReaderState.Ready
+        return if (ready?.mode == PdfReadMode.REFLOW) {
+            val cleaned = pdfCleanedTexts() ?: return ""
+            cleaned.getOrNull(page)?.let { text ->
+                app.xreader.data.prepare.PdfReflowText.pageText(text)
+            } ?: ""
+        } else {
+            session.textAt(page)
+        }
+    }
+
+    // ── PDF search (R18) ─────────────────────────────────
+
+    /** The PDF sweep: page by page through the searched
+     * representation — in Reflow, each page's Reflow text
+     * prepared as the sweep reaches it (OQ6); in Pages,
+     * the page's strip text. */
+    private fun searchPdfBook(needle: String) {
+        val session = pdfSession ?: return
+        pdfSearchJob?.cancel()
+        _pdfSearchMark.value = null
+        _pdfSearchBusy.value = true
+        pdfSearchJob = viewModelScope.launch(container.ioDispatcher) {
+            val hits = ArrayList<PdfSearchHit>()
+            try {
+                val reflow = (_pdfReader.value as? PdfReaderState.Ready)
+                    ?.mode == PdfReadMode.REFLOW
+                val cleaned = if (reflow) pdfCleanedTexts() else null
+                for (page in 0 until session.sectionCount) {
+                    if (hits.size >= SEARCH_HIT_CAP) break
+                    val text = if (reflow) {
+                        cleaned?.getOrNull(page)?.let { pageText ->
+                            app.xreader.data.prepare.PdfReflowText
+                                .pageText(pageText)
+                        } ?: ""
+                    } else {
+                        runCatching { session.textAt(page) }
+                            .getOrDefault("")
+                    }
+                    if (text.isBlank()) continue
+                    var from = 0
+                    while (hits.size < SEARCH_HIT_CAP) {
+                        val found = text.indexOf(
+                            needle, from, ignoreCase = true
+                        )
+                        if (found < 0) break
+                        val start = (found - 40).coerceAtLeast(0)
+                        val end = (found + needle.length + 60)
+                            .coerceAtMost(text.length)
+                        hits += PdfSearchHit(
+                            page = page,
+                            charOffset = found,
+                            snippet = (if (start > 0) "…" else "") +
+                                text.substring(start, end)
+                                    .replace('\n', ' ') +
+                                (if (end < text.length) "…" else ""),
+                            query = needle,
+                            reflow = reflow
+                        )
+                        from = found + needle.length
+                    }
+                }
+                _pdfSearchHits.value = hits
+            } finally {
+                _pdfSearchBusy.value = false
+            }
+        }
+    }
+
+    /** A hit tap: the page is shown; in Reflow its text
+     * carries the hit's mark (R18). */
+    fun goToPdfSearchHit(hit: PdfSearchHit) {
+        _pdfSearchMark.value = PdfSearchMark(
+            page = hit.page,
+            start = hit.charOffset,
+            end = hit.charOffset + hit.query.length
+        )
+        pdfGoToPage(hit.page)
+    }
+
+    // ── PDF progress (page form, R15) ────────────────────
+
+    private fun schedulePdfProgressSave() {
+        pdfSaveJob?.cancel()
+        pdfSaveJob = viewModelScope.launch {
+            delay(800)
+            savePdfProgressNow()
+        }
+    }
+
+    /** The page-form progress write — the shipped
+     * LocalDoc saver's row shape, re-homed: chapterId 0,
+     * the page as the index, the pdfLocator carrying the
+     * in-page fraction. */
+    private suspend fun savePdfProgressNow() {
+        val session = pdfSession ?: return
+        val book = pdfBook ?: return
+        val count = session.sectionCount.coerceAtLeast(1)
+        container.database.readingProgressDao().upsert(
+            ReadingProgress(
+                bookId = bookId,
+                chapterId = 0,
+                chapterIndex = pdfPage,
+                charOffset = 0,
+                fraction = ((pdfPage + pdfInPageFraction) / count)
+                    .coerceIn(0f, 1f),
+                scrollFraction = pdfInPageFraction,
+                updatedAt = System.currentTimeMillis(),
+                locatorJson = LocatorJson.pdfLocator(
+                    pdfPage, pdfInPageFraction
+                ),
+                anchorText = session.anchorTitleFor(pdfPage)
+            )
+        )
+        runCatching {
+            container.database.bookDao().update(
+                book.copy(lastOpenedAt = System.currentTimeMillis())
+            )
+        }
     }
 
     /** Scroll-mode end-of-chapter detection + explicit paged turns. */
@@ -3505,16 +4114,51 @@ class ReaderViewModel(
         // Same keep-previous guard as saveProgressNow: a clear
         // mid-load must not write the visible text's position
         // against the incoming chapter's row.
-        // MR-2 (P3): a face hop in flight owns the progress
-        // row — this backstop stands down rather than
-        // overwrite the hop's PDF-form row with the core
-        // shape as the text face closes.
         val chapterAtClear = stateAtClear.chapter
             ?.takeIf { visibleTextChapterIndex == stateAtClear.chapterIndex }
-            ?.takeUnless { pdfHopInFlight }
+        // v1.7 OE-1: a PDF's final place, captured the same
+        // synchronous way (page + in-page fraction + the
+        // session's page count and anchor for the row).
+        val pdfPlaceAtClear = pdfSession?.let { session ->
+            PdfPlaceSnapshot(
+                page = pdfPage,
+                inPageFraction = pdfInPageFraction,
+                pageCount = session.sectionCount,
+                anchorTitle = session.anchorTitleFor(pdfPage)
+            )
+        }
         val snapshot = if (tracker.isRunning) tracker.end() else null
-        if (snapshot != null || chapterAtClear != null) {
+        if (snapshot != null || chapterAtClear != null ||
+            pdfPlaceAtClear != null
+        ) {
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                if (pdfPlaceAtClear != null) {
+                    runCatching {
+                        val count = pdfPlaceAtClear.pageCount
+                            .coerceAtLeast(1)
+                        container.database.readingProgressDao().upsert(
+                            ReadingProgress(
+                                bookId = bookId,
+                                chapterId = 0,
+                                chapterIndex = pdfPlaceAtClear.page,
+                                charOffset = 0,
+                                fraction = (
+                                    (pdfPlaceAtClear.page +
+                                        pdfPlaceAtClear.inPageFraction) /
+                                        count
+                                    ).coerceIn(0f, 1f),
+                                scrollFraction =
+                                    pdfPlaceAtClear.inPageFraction,
+                                updatedAt = System.currentTimeMillis(),
+                                locatorJson = LocatorJson.pdfLocator(
+                                    pdfPlaceAtClear.page,
+                                    pdfPlaceAtClear.inPageFraction
+                                ),
+                                anchorText = pdfPlaceAtClear.anchorTitle
+                            )
+                        )
+                    }
+                }
                 if (chapterAtClear != null) {
                     runCatching {
                         // v1.7 Patch 2 (item 1b): the final upsert
@@ -3565,12 +4209,24 @@ class ReaderViewModel(
         runCatching {
             container.renderedPageFetcher.cancelInFlightBridge()
         }
+        // v1.7 OE-1: the PDF session is this VM's to close
+        // (the LocalDoc VM closed its own the same way).
+        pdfSpeech?.stop()
+        runCatching { pdfSession?.close() }
+        pdfSession = null
         super.onCleared()
     }
 
     // -- Read-aloud controls ---------------------------------------------------------
 
     fun listenPlayPause() {
+        // v1.7 OE-1 (R17): a PDF listens page by page
+        // through the strip feeder, not the chapter
+        // controller path below.
+        if (pdfSession != null) {
+            togglePdfListen()
+            return
+        }
         val display = _state.value.chapterText ?: return
         if (readAloud.state.value.playing) {
             readAloud.pause()
@@ -4109,6 +4765,11 @@ class ReaderViewModel(
         // own the keys while they're listening.
         if (readAloudLazy.isInitialized() && ttsState.value.playing) {
             if (direction > 0) readAloud.skipNext() else readAloud.skipPrevious()
+            return
+        }
+        // v1.7 OE-1: volume-key turns page a PDF.
+        if (pdfSession != null) {
+            pdfGoToPage(pdfPage + direction)
             return
         }
         _externalTurns.tryEmit(direction)

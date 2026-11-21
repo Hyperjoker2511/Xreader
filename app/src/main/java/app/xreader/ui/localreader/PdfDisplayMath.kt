@@ -853,3 +853,30 @@ object PdfSpreadMath {
     fun unitForPage(page: Int, spread: Boolean): Int =
         if (spread) page / 2 else page
 }
+
+// ── Render constants (v1.7 OE-1: moved from the retired
+// PdfDocumentReader.kt — same package, so every existing
+// reference, tests included, keeps its meaning) ─────────
+
+/** The PDF base render scale: 1.0× fit — A-2's two-pass
+ * model (preview + refine) rides on this base. */
+const val PDF_BASE_SCALE = 1.0f
+
+/** v1.5.28: the paged zoom layer's base slot is rendered at
+ * this multiple of the fit width (pixel-capped at the
+ * session's refine budget — see pdfCellSlotWidthPx in the
+ * core reader's Pages surface), so the layer transforms
+ * ONE texture that stays crisp through the common zoom
+ * range. */
+const val PDF_ZOOM_SUPERSAMPLE = 2
+
+/** v1.5.28: the double-tap glide's duration (Komikku's zoom
+ * duration class: SSIV's configured duration, the webtoon's
+ * 200 ms AnimatorSet). */
+const val PDF_DOUBLE_TAP_ANIM_MS = 250
+
+/** v1.5.28: the settle refine's clip is requested grown by
+ * this page-fraction per side (clamped to the page), so the
+ * refined slot image over-covers the visible region and no
+ * hairline seam can open at its edges. */
+const val PDF_REFINE_CLIP_MARGIN = 0.02f

@@ -997,3 +997,30 @@ fun epubSheetSections(): List<EpubSheetSection> = listOf(
     EpubSheetSection.COMFORTS,
     EpubSheetSection.RESET
 )
+
+// ── v1.5.8 (U-2): the PDF bar model ─────────────────────
+// Moved verbatim from the retired PdfDocumentReader.kt in
+// OE-1: the model is pinned by its gate test and stays the
+// PDF twin of epubQuickActions above, even though the
+// LocalDoc surface that rendered it is retired — the core
+// reader's chrome carries the actions now.
+
+/** The PDF chrome's pre-existing handlers, gathered once.
+ * Every lambda is the SAME handler the top bar invoked —
+ * U-2 is placement, not new machinery. */
+class PdfChromeHandlers(
+    val onBookmarkHere: () -> Unit,
+    val onBookmarks: () -> Unit,
+    val onTextView: () -> Unit,
+    val onDisplay: () -> Unit
+)
+
+/** The PDF bottom quick row (U-2): Bookmark · Bookmarks ·
+ * Text view · Page display, bound through this model so each
+ * tile fires its shipped handler. */
+fun pdfQuickActions(handlers: PdfChromeHandlers): List<QuickAction> = listOf(
+    QuickAction("bookmarkHere", "Bookmark", handlers.onBookmarkHere),
+    QuickAction("bookmarks", "Bookmarks", handlers.onBookmarks),
+    QuickAction("textView", "Text view", handlers.onTextView),
+    QuickAction("display", "Page display", handlers.onDisplay)
+)
