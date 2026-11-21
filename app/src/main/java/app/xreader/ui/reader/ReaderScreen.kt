@@ -101,6 +101,7 @@ import app.xreader.domain.reader.ChapterLayoutService
 import app.xreader.domain.reader.ChapterTransition
 import app.xreader.domain.reader.EyeState
 import app.xreader.domain.reader.LayoutAheadPolicy
+import app.xreader.domain.reader.ReaderConfig
 import app.xreader.domain.reader.ReaderMode
 import app.xreader.domain.reader.WpmEstimator
 import app.xreader.ui.common.ElasticSlider

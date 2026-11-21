@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.reader.ChapterText
+import app.xreader.domain.reader.ReaderConfig
 import app.xreader.ui.localreader.HIGHLIGHT_TINT_ARGB
 import app.xreader.ui.localreader.PdfTextSelection
 import app.xreader.ui.localreader.SelectionActionRow

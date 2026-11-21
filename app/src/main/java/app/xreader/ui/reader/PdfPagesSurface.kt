@@ -100,8 +100,11 @@ import app.xreader.data.engine.PdfRenderSlot
 import app.xreader.data.engine.PdfSession
 import app.xreader.data.engine.PdfStripState
 import app.xreader.ui.localreader.AutoScrollController
+import app.xreader.ui.localreader.AutoScrollEngine
+import app.xreader.ui.localreader.NormalizedRect
 import app.xreader.ui.localreader.PDF_BASE_SCALE
 import app.xreader.ui.localreader.PDF_DOUBLE_TAP_ANIM_MS
+import app.xreader.ui.localreader.PDF_PLACEHOLDER_SPINNER_DELAY_MS
 import app.xreader.ui.localreader.PDF_REFINE_CLIP_MARGIN
 import app.xreader.ui.localreader.PDF_ZOOM_SUPERSAMPLE
 import app.xreader.ui.localreader.PdfDocSettings
@@ -114,12 +117,17 @@ import app.xreader.ui.localreader.PdfSpreadMath
 import app.xreader.ui.localreader.PdfSurfaceZoomState
 import app.xreader.ui.localreader.ReaderViolet
 import app.xreader.ui.localreader.TapLayoutPreset
+import app.xreader.ui.localreader.TapZoneAction
 import app.xreader.ui.localreader.pdfBaseSlotWidthPx
+import app.xreader.ui.localreader.pdfDisplayedSizePx
 import app.xreader.ui.localreader.pdfPagerUserScrollEnabled
 import app.xreader.ui.localreader.pdfPlaceholderSpec
 import app.xreader.ui.localreader.pdfRenderViewportPx
+import app.xreader.ui.localreader.pdfTapCentredPan
 import app.xreader.ui.localreader.pdfTapObserver
+import app.xreader.ui.localreader.pdfVisibleClip
 import app.xreader.ui.localreader.resolvedForDisplay
+import app.xreader.ui.localreader.smartScrollLockConsumesHorizontal
 import app.xreader.ui.localreader.tapActionFor
 import app.xreader.ui.localreader.withFilter
 import kotlinx.coroutines.delay
@@ -550,17 +558,17 @@ private fun PdfPagedBody(
                     val settledFirst = PdfSpreadMath
                         .pagesForUnit(pagerState.currentPage, pageCount, spreadActive)
                         .firstOrNull() ?: 0
-                    val isJump = kotlin.math.abs(jump.index - settledFirst) > 1
+                    val isJump = kotlin.math.abs(jump - settledFirst) > 1
                     if (isJump) {
                         session.flushQueuedPrefetch()
                     }
                     boostPage = if (isJump) {
-                        jump.index
+                        jump
                     } else {
                         null
                     }
                     val target = PdfSpreadMath.unitForPage(
-                        jump.index.coerceIn(0, pageCount - 1), spreadActive
+                        jump.coerceIn(0, pageCount - 1), spreadActive
                     )
                     if (target != pagerState.currentPage) {
                         pagerState.scrollToPage(target)
@@ -1786,7 +1794,7 @@ private fun PdfContinuousBody(
     LaunchedEffect(session, handlers) {
         handlers.jumps.collect { jump ->
             listState.scrollToItem(
-                jump.index.coerceIn(0, (session.sectionCount - 1).coerceAtLeast(0))
+                jump.coerceIn(0, (session.sectionCount - 1).coerceAtLeast(0))
             )
         }
     }
