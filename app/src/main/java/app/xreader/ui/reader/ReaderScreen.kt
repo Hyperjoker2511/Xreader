@@ -148,7 +148,12 @@ fun ReaderScreen(
      * chapter) when the config declares one, else null. */
     onSessionHandoff: (
         app.xreader.data.extension.SessionNeed.Kind, String?
-    ) -> Unit = { _, _ -> }
+    ) -> Unit = { _, _ -> },
+    /** v1.7 MR-2 (P2): the converted-PDF face hop back to
+     * the printed face — the VM emits it after the hop's
+     * progress write lands; the shell navigates to the
+     * local reader and closes this face. */
+    onOpenLocalDoc: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val config by viewModel.config.collectAsStateWithLifecycle()
@@ -169,6 +174,19 @@ fun ReaderScreen(
     val searchBusy by viewModel.searchBusy.collectAsStateWithLifecycle()
     val plateFilter by viewModel.plateFilter.collectAsStateWithLifecycle()
     val migrationNote by viewModel.migrationNote.collectAsStateWithLifecycle()
+    // v1.7 MR-2 (P2/P3): a converted PDF on its reflow face —
+    // the face section in Settings, the printed-page label
+    // in the chrome, and the hop back to the printed face.
+    val convertedPdf by viewModel.convertedPdf
+        .collectAsStateWithLifecycle()
+    LaunchedEffect(viewModel) {
+        viewModel.localDocHop.collect { onOpenLocalDoc() }
+    }
+    val pdfPageLabel = convertedPdf?.let { pdf ->
+        val place = app.xreader.data.prepare.PdfPlaceBridge(pdf.table)
+            .corePlaceToPage(state.chapterIndex, state.positionOffset)
+        "p. ${place.pageIndex + 1} / ${pdf.table.pageCount}"
+    }
     // Micro-build M: the chapter summary no longer shows
     // in the Contents sheet, so the screen no longer
     // collects it (the ViewModel flow itself stays — the
@@ -1165,6 +1183,7 @@ fun ReaderScreen(
                 activeSheet = ActiveSheet.SETTINGS
             },
             onOpenAi = { onOpenAiPage() },
+            pdfPageLabel = pdfPageLabel,
             onTopBarHeight = { px -> if (px > 0) topChromePx = px },
             onBottomBarHeight = { px -> if (px > 0) bottomChromePx = px }
         )
@@ -1329,7 +1348,17 @@ fun ReaderScreen(
                     },
                     onMangaCropChange = { viewModel.setMangaCropBorders(it) },
                     mangaHasOverrides = state.mangaHasOverrides,
-                    onResetMangaOverrides = { viewModel.resetMangaOverrides() }
+                    onResetMangaOverrides = { viewModel.resetMangaOverrides() },
+                    // v1.7 MR-2 (P2): the face switch — only
+                    // a converted PDF on its reflow face
+                    // shows it; "As printed" hops back
+                    // through the bridge.
+                    pdfFaceVisible = convertedPdf != null,
+                    onPdfFaceSelected = { reflow ->
+                        if (!reflow) {
+                            viewModel.switchPdfFaceToPrinted()
+                        }
+                    }
                 )
                 ActiveSheet.LISTEN -> ListenSheet(
                     ttsState = ttsState ?: app.xreader.data.reader.ReadAloudController.State(),
@@ -1589,6 +1618,12 @@ private fun ReaderChrome(
     onOpenAi: () -> Unit,
     /** v1.7 Patch 3 (Item 4b): the in-book search sheet door. */
     onOpenSearch: () -> Unit = {},
+    /** v1.7 MR-2 (P3): for a converted PDF on its reflow
+     * face, the printed-page label ("p. 41 / 212") the
+     * footer line carries beside the book percentage —
+     * the reader always knows which printed page the
+     * flowing text sits on. Null for every other book. */
+    pdfPageLabel: String? = null,
     /** v1.0.6.2 (F7): the bars' measured heights (px), so the
      * text insets match the real chrome, never a guess. */
     onTopBarHeight: (Int) -> Unit = {},
@@ -1729,7 +1764,13 @@ private fun ReaderChrome(
                                     ReaderCounters.footerLine(
                                         chapterIndex, chapterCount,
                                         chapterOwnNumber
-                                    ) + " · ${(bookFraction * 100).toInt()}%",
+                                    ) + " · ${(bookFraction * 100).toInt()}%" +
+                                        // MR-2 (P3): the printed
+                                        // page this reflow place
+                                        // sits on, when the book
+                                        // is a converted PDF.
+                                        (pdfPageLabel?.let { " · $it" }
+                                            ?: ""),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = palette.muted,
                                     maxLines = 1

@@ -24,11 +24,109 @@ import app.xreader.data.engine.PdfPageFilter
  */
 fun app.xreader.data.engine.PdfPageFilter.toggledNight():
     app.xreader.data.engine.PdfPageFilter =
-    if (this == app.xreader.data.engine.PdfPageFilter.INVERT_BLACK_AND_WHITE) {
-        app.xreader.data.engine.PdfPageFilter.NONE
-    } else {
-        app.xreader.data.engine.PdfPageFilter.INVERT_BLACK_AND_WHITE
+    when {
+        this == app.xreader.data.engine.PdfPageFilter.INVERT_BLACK_AND_WHITE ->
+            app.xreader.data.engine.PdfPageFilter.NONE
+        else -> app.xreader.data.engine.PdfPageFilter.INVERT_BLACK_AND_WHITE
     }
+
+/**
+ * v1.7 MR-2 (A12): the settings-level night toggle. With
+ * smart contrast (autoContrast) ON, the toggle turns it OFF
+ * and lands on the manual value opposite the one AUTO
+ * currently resolves to for the page on screen —
+ * [resolvedUnderAuto] is that page's resolved filter,
+ * reported by the cell that resolved it: a page AUTO
+ * inverted toggles to As printed; anything else toggles
+ * to plain Invert (the inversion AUTO would have made,
+ * now held manually). With smart contrast off this is
+ * exactly the shipped [toggledNight] over the stored
+ * filter.
+ */
+fun PdfDocSettings.toggledNight(
+    resolvedUnderAuto: app.xreader.data.engine.PdfPageFilter =
+        app.xreader.data.engine.PdfPageFilter.NONE
+): PdfDocSettings =
+    if (autoContrast) {
+        copy(
+            autoContrast = false,
+            filter = if (resolvedUnderAuto ==
+                app.xreader.data.engine.PdfPageFilter.INVERT
+            ) {
+                app.xreader.data.engine.PdfPageFilter.NONE
+            } else {
+                app.xreader.data.engine.PdfPageFilter.INVERT
+            }
+        )
+    } else {
+        withFilter(filter.toggledNight())
+    }
+
+// ── MR-2 (P5/A12): smart contrast resolution ─────────────────────
+
+/** A printed page counts as BRIGHT at or above this sampled
+ * average luminance (0..1) — a white page with ordinary text
+ * samples ~0.9; a mid-grey scan ~0.5 stays as printed. */
+const val PDF_AUTO_BRIGHT_LUMINANCE = 0.60f
+
+/**
+ * The average luminance (0..1) of [bitmap], sampled from an
+ * 8×8 downscale — a page-level statistic, never a pixel
+ * decision, so the downscale loses nothing the rule needs.
+ * A bitmap that cannot be sampled reads 0f (dark), which
+ * resolves AUTO to As printed: the failure direction is
+ * always the honest page.
+ */
+fun sampledAverageLuminance(bitmap: android.graphics.Bitmap): Float {
+    if (bitmap.width <= 0 || bitmap.height <= 0) return 0f
+    val small = runCatching {
+        android.graphics.Bitmap.createScaledBitmap(bitmap, 8, 8, true)
+    }.getOrNull() ?: return 0f
+    val pixels = IntArray(64)
+    runCatching { small.getPixels(pixels, 0, 8, 0, 0, 8, 8) }
+        .onFailure { return 0f }
+    var total = 0.0
+    for (pixel in pixels) {
+        val r = android.graphics.Color.red(pixel)
+        val g = android.graphics.Color.green(pixel)
+        val b = android.graphics.Color.blue(pixel)
+        total += (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+    }
+    if (small !== bitmap) runCatching { small.recycle() }
+    return (total / pixels.size).toFloat()
+}
+
+/**
+ * A12: the filter a page is actually DRAWN with. Smart
+ * contrast is a MODE over the stored filter, not a seventh
+ * filter value — the shipped enum stays exactly the six
+ * values its tests pin ("six colour themes ship and are
+ * untouched", V1510PdfZoomMemoryTest), so AUTO lives in
+ * [PdfDocSettings.autoContrast] and resolves here, at draw
+ * time, per page: with the mode off the stored filter
+ * draws as itself (the shipped behaviour, bit-identical);
+ * with it on, a page draws INVERT when the reader is in
+ * its dark state and the displayed page is bright
+ * (sampled luminance at or above
+ * [PDF_AUTO_BRIGHT_LUMINANCE]), NONE otherwise — including
+ * while no bitmap has landed yet, so a page never flashes
+ * inverted on its way in.
+ */
+fun app.xreader.data.engine.PdfPageFilter.resolvedForDisplay(
+    autoContrast: Boolean,
+    darkReader: Boolean,
+    bitmap: android.graphics.Bitmap?
+): app.xreader.data.engine.PdfPageFilter {
+    if (!autoContrast) return this
+    if (!darkReader || bitmap == null) {
+        return app.xreader.data.engine.PdfPageFilter.NONE
+    }
+    return if (sampledAverageLuminance(bitmap) >= PDF_AUTO_BRIGHT_LUMINANCE) {
+        app.xreader.data.engine.PdfPageFilter.INVERT
+    } else {
+        app.xreader.data.engine.PdfPageFilter.NONE
+    }
+}
 
 // ── H1: fit-page / fit-width ─────────────────────────────────────
 
@@ -710,9 +808,13 @@ fun pdfPlaceholderSpec(page: Int, points: Pair<Int, Int>?): PdfPlaceholderSpec {
 // ── v1.5.9 (§8.6): one transform per mirrored control ────────────
 
 /** The filter write BOTH the bottom Night chip and the display
- * sheet's filter row perform — one transform, two controls. */
+ * sheet's filter row perform — one transform, two controls.
+ * MR-2 (A12): picking a manual filter also leaves smart
+ * contrast — the mode and a manual value never fight over
+ * the page. (A settings set with the mode already off is
+ * transformed exactly as before.) */
 fun PdfDocSettings.withFilter(filter: PdfPageFilter): PdfDocSettings =
-    copy(filter = filter)
+    copy(filter = filter, autoContrast = false)
 
 /** A sub-rectangle of a page, normalised to 0..1 per axis. */
 data class NormalizedRect(

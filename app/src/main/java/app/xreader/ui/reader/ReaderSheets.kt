@@ -141,7 +141,13 @@ fun ReaderSettingsSheet(
     onMangaOrientationChange: (app.xreader.domain.reader.MangaOrientation?) -> Unit = {},
     onMangaCropChange: (Boolean?) -> Unit = {},
     mangaHasOverrides: Boolean = false,
-    onResetMangaOverrides: () -> Unit = {}
+    onResetMangaOverrides: () -> Unit = {},
+    /** v1.7 MR-2 (P2): the reading-face switch — visible
+     * only for a converted PDF being read on its reflow
+     * face. "Reflow (text)" is the current face here;
+     * "As printed" hops back through the place bridge. */
+    pdfFaceVisible: Boolean = false,
+    onPdfFaceSelected: (Boolean) -> Unit = {}
 ) {
     // v1.0.6.2 (F8c): the sheet is a short INDEX of plainly-named
     // groups now — not one long scroll. Each group is its own
@@ -372,6 +378,41 @@ fun ReaderSettingsSheet(
             }
 
             "reading" -> {
+                // MR-2 (P2): the face this book is being read
+                // on — a converted PDF's reflow face offers
+                // the way back to the printed pages.
+                if (pdfFaceVisible) {
+                    SheetSection("Reading face") {
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            NocturneChip(
+                                label = "As printed",
+                                selected = false,
+                                onClick = { onPdfFaceSelected(false) },
+                                modifier = Modifier,
+                                dotColor = null
+                            )
+                            NocturneChip(
+                                label = "Reflow (text)",
+                                selected = true,
+                                onClick = { onPdfFaceSelected(true) },
+                                modifier = Modifier,
+                                dotColor = null
+                            )
+                        }
+                        Text(
+                            "You're reading this PDF as flowing " +
+                                "text. Switch to As printed to see " +
+                                "the pages as they were printed — " +
+                                "your place is kept.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
                 SheetSection("Reading mode") {
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),

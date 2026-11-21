@@ -35,7 +35,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -91,6 +93,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
@@ -102,9 +105,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -366,6 +372,22 @@ internal fun PdfDocumentReader(
         )
     }
     val currentPageState = rememberUpdatedState(currentPage)
+    // ── v1.7 MR-2 (A12): smart contrast (AUTO) currently
+    // resolves to for the page on screen — reported by
+    // the page cells as they resolve it (the night toggle
+    // lands on the manual value opposite the resolved
+    // one). The conversion state itself is collected by
+    // the display sheet, its only consumer here.
+    var autoResolvedFilter by remember {
+        mutableStateOf(PdfPageFilter.NONE)
+    }
+    val onResolvedFilter: (Int, PdfPageFilter) -> Unit = remember {
+        { page, resolved ->
+            if (page == currentPageState.value) {
+                autoResolvedFilter = resolved
+            }
+        }
+    }
     // F6: tilt turns through the reader's own page advance.
     ReaderTiltTurnEffect(enabled = tiltEnabled) { delta ->
         viewModel.goToPdfPage(currentPageState.value + delta)
@@ -476,7 +498,8 @@ internal fun PdfDocumentReader(
                         settings = settings,
                         autoScroll = autoScroll,
                         tapPreset = tapPreset,
-                        onToggleControls = { controlsVisible = !controlsVisible }
+                        onToggleControls = { controlsVisible = !controlsVisible },
+                        onResolvedFilter = onResolvedFilter
                     )
                     PdfScrollModel.CONTINUOUS -> PdfContinuousBody(
                         viewModel = viewModel,
@@ -486,7 +509,8 @@ internal fun PdfDocumentReader(
                         autoScroll = autoScroll,
                         tapPreset = tapPreset,
                         smartScrollLock = smartScrollLock,
-                        onToggleControls = { controlsVisible = !controlsVisible }
+                        onToggleControls = { controlsVisible = !controlsVisible },
+                        onResolvedFilter = onResolvedFilter
                     )
                 }
                 // H5: the Text view overlays the pages.
@@ -602,7 +626,7 @@ internal fun PdfDocumentReader(
                         },
                         ReaderBarActionId.DAY_NIGHT to {
                             viewModel.updatePdfSettings {
-                                it.withFilter(it.filter.toggledNight())
+                                it.toggledNight(autoResolvedFilter)
                             }
                         },
                         ReaderBarActionId.SPEAK to { viewModel.toggleReadAloud() },
@@ -657,7 +681,7 @@ internal fun PdfDocumentReader(
                     ),
                     onToggleNight = {
                         viewModel.updatePdfSettings {
-                            it.withFilter(it.filter.toggledNight())
+                            it.toggledNight(autoResolvedFilter)
                         }
                     },
                     onToggleAutoScroll = {
@@ -993,6 +1017,23 @@ private fun PdfBottomChrome(
                         clock
                     )
                 }
+                // v1.7 MR-2 (P4): the filmstrip seek row —
+                // page thumbnails inside the seek capsule
+                // (the permanent chrome does not grow: the
+                // row exists only while the bar is open,
+                // like everything else in this capsule).
+                // Thumbs ride the session's PREVIEW pass at
+                // the P2 slot (see PdfFilmstripRow), so
+                // seeking never delays the page on screen.
+                if (pageCount > 1) {
+                    PdfFilmstripRow(
+                        session = session,
+                        currentPage = currentPage,
+                        pageCount = pageCount,
+                        rtlPaging = settings.rtlPaging,
+                        onSeek = onSeek
+                    )
+                }
                 // Seek row: page indicator and slider on ONE
                 // line. The indicator is a button — tapping it
                 // opens Go to page (the same handler the old
@@ -1024,6 +1065,17 @@ private fun PdfBottomChrome(
                         )
                     }
                     if (pageCount > 1) {
+                        // MR-2 (P5): under RTL paging the
+                        // seek slider mirrors with the book —
+                        // page 1 stands at the right.
+                        CompositionLocalProvider(
+                            LocalLayoutDirection provides
+                                if (settings.rtlPaging) {
+                                    LayoutDirection.Rtl
+                                } else {
+                                    LocalLayoutDirection.current
+                                }
+                        ) {
                         Slider(
                             value = shownPage.toFloat(),
                             onValueChange = { scrub = it },
@@ -1045,6 +1097,7 @@ private fun PdfBottomChrome(
                                     ReaderViolet.copy(alpha = 0.25f)
                             )
                         )
+                        }
                     }
                 }
                 // Toggle row: the shipped stadium chips (U-3,
@@ -1129,6 +1182,110 @@ private fun PdfBottomChrome(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/** The base width a filmstrip thumbnail's preview pass is
+ * requested at: the preview renders at 0.35× of it, so
+ * thumbs land at ~130 px wide — crisp at their 46 dp
+ * display size on any density in the fleet. */
+private const val FILMSTRIP_PREVIEW_BASE_WIDTH_PX = 384
+
+/**
+ * v1.7 MR-2 (P4): the filmstrip seek row — one thumbnail
+ * per page, horizontally scrolling, the current page
+ * outlined in the accent. Tapping a thumb seeks through
+ * the same door the slider uses ([onSeek] →
+ * `goToPdfPage`); when the page changes by any other
+ * door, the strip follows and re-centres on it.
+ *
+ * Render-slot discipline (the P4 checkpoint): thumbs are
+ * the session's PREVIEW pass requested at
+ * [PdfRenderSlot.P2] — the speculative class. A strip
+ * full of thumbs can therefore never delay the visible
+ * page's P0 render or a landing's P1; the scheduler
+ * serves them only with otherwise-idle capacity.
+ */
+@Composable
+private fun PdfFilmstripRow(
+    session: PdfSession,
+    currentPage: Int,
+    pageCount: Int,
+    rtlPaging: Boolean,
+    onSeek: (Int) -> Unit
+) {
+    val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    val thumbWidthPx = with(density) { 46.dp.toPx() }
+    // Follow: when the page changes elsewhere (turns,
+    // contents, go-to), bring its thumb to the middle of
+    // the strip. The offset is computed from the strip's
+    // own laid-out viewport, so it holds at any width.
+    LaunchedEffect(currentPage) {
+        val viewport = listState.layoutInfo.viewportEndOffset -
+            listState.layoutInfo.viewportStartOffset
+        val offset = if (viewport > 0) {
+            -(viewport / 2 - thumbWidthPx.toInt() / 2)
+        } else {
+            0
+        }
+        listState.animateScrollToItem(currentPage, offset)
+    }
+    LazyRow(
+        state = listState,
+        reverseLayout = rtlPaging,
+        modifier = Modifier.fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        items(pageCount, key = { page -> page }) { page ->
+            var thumb by remember(page) { mutableStateOf<Bitmap?>(null) }
+            LaunchedEffect(page) {
+                thumb = session.renderPreview(
+                    page,
+                    FILMSTRIP_PREVIEW_BASE_WIDTH_PX,
+                    slot = PdfRenderSlot.P2
+                )
+            }
+            val aspect = pdfPlaceholderSpec(
+                page, session.pagePointsSizePeek(page)
+            ).aspect
+            Box(
+                Modifier
+                    .width(46.dp)
+                    .aspectRatio(aspect)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFF161822))
+                    .then(
+                        if (page == currentPage) {
+                            Modifier.border(
+                                2.dp, ReaderViolet,
+                                RoundedCornerShape(4.dp)
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .clickable { onSeek(page) },
+                contentAlignment = Alignment.Center
+            ) {
+                val bitmap = thumb
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = session.displayLabelFor(page),
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Text(
+                        "${page + 1}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -1284,7 +1441,10 @@ private fun PdfPagedBody(
     settings: PdfDocSettings,
     autoScroll: AutoScrollController,
     onToggleControls: () -> Unit,
-    tapPreset: TapLayoutPreset = TapLayoutPreset.MOON_DEFAULT
+    tapPreset: TapLayoutPreset = TapLayoutPreset.MOON_DEFAULT,
+    // MR-2 (A12): the cells report the filter they
+    // resolved smart contrast to, per page (see PdfDocumentReader).
+    onResolvedFilter: (Int, PdfPageFilter) -> Unit = { _, _ -> }
 ) {
     val pageCount = session.sectionCount.coerceAtLeast(1)
     val scope = rememberCoroutineScope()
@@ -1555,6 +1715,14 @@ private fun PdfPagedBody(
 
             HorizontalPager(
                 state = pagerState,
+                // v1.7 MR-2 (P5): RTL paging — the pager
+                // lays its units out right-to-left, so the
+                // next page sits to the LEFT and a rightward
+                // drag brings it in (the RTL book's own
+                // direction). pagerState stays logical:
+                // publications, jumps and prefetch read the
+                // same page indices either way.
+                reverseLayout = settings.rtlPaging,
                 // v1.5.12 (P3): derived from the settled unit's
                 // pages' ACTUAL current zoom (see zoomReports
                 // above) — never a sticky latch.
@@ -1589,7 +1757,15 @@ private fun PdfPagedBody(
             ) { unit ->
                 val pages = PdfSpreadMath.pagesForUnit(unit, pageCount, spreadActive)
                 Row(Modifier.fillMaxSize()) {
-                    pages.forEach { page ->
+                    // MR-2 (P5): in RTL paging a spread's
+                    // pair also reads right-to-left — the
+                    // earlier page stands on the right.
+                    val orderedPages = if (settings.rtlPaging) {
+                        pages.reversed()
+                    } else {
+                        pages
+                    }
+                    orderedPages.forEach { page ->
                         PdfPageCell(
                             session = session,
                             page = page,
@@ -1621,6 +1797,7 @@ private fun PdfPagedBody(
                             },
                             onToggleControls = onToggleControls,
                             tapPreset = tapPreset,
+                            onResolvedFilter = onResolvedFilter,
                             onTurnPage = { direction ->
                                 val target = (unit + direction)
                                     .coerceIn(0, (unitCount - 1).coerceAtLeast(0))
@@ -1695,7 +1872,12 @@ private fun PdfPageCell(
     onToggleControls: () -> Unit,
     onTurnPage: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    tapPreset: TapLayoutPreset = TapLayoutPreset.MOON_DEFAULT
+    tapPreset: TapLayoutPreset = TapLayoutPreset.MOON_DEFAULT,
+    /** MR-2 (A12): reports the filter this cell resolved
+     * smart contrast to for its page (the stored filter itself when the mode is off, or for every
+     * filter) — the reader's night toggle reads the
+     * current page's value. */
+    onResolvedFilter: (Int, PdfPageFilter) -> Unit = { _, _ -> }
 ) {
     val cellScope = rememberCoroutineScope()
     // F-1 + G1: per-page view state. remember(page) — a cell
@@ -1903,11 +2085,29 @@ private fun PdfPageCell(
     // lands because this composition already reads
     // sizeTableVersion (the renderWidthPx remember key above).
     val placeholder = pdfPlaceholderSpec(page, session.pagePointsSizePeek(page))
-    val surround = settings.filter.surroundArgb()
+    // MR-2 (A12): the filter this page is DRAWN with. Smart
+    // contrast resolves here, at draw time, per page — from
+    // the reader's dark state (the applied theme's background)
+    // and the displayed bitmap's sampled luminance; the
+    // renders and the render cache never learn the answer
+    // (filters are draw-time colour filters, never keyed).
+    // Every other filter resolves to itself, so the shipped
+    // behaviour is bit-identical with the mode off.
+    val themeBackground = MaterialTheme.colorScheme.background
+    val readerDark = 0.299f * themeBackground.red +
+        0.587f * themeBackground.green +
+        0.114f * themeBackground.blue < 0.5f
+    val resolvedFilter = settings.filter.resolvedForDisplay(
+        settings.autoContrast, readerDark, bitmap ?: previewBitmap
+    )
+    LaunchedEffect(resolvedFilter) {
+        onResolvedFilter(page, resolvedFilter)
+    }
+    val surround = resolvedFilter.surroundArgb()
     // F-6: the display filter as a draw-time colour filter over
     // the RAW cached render.
-    val drawFilter = remember(settings.filter) {
-        settings.filter.colorMatrix()?.let { matrix ->
+    val drawFilter = remember(resolvedFilter) {
+        resolvedFilter.colorMatrix()?.let { matrix ->
             ColorFilter.colorMatrix(
                 androidx.compose.ui.graphics.ColorMatrix(matrix.array.copyOf())
             )
@@ -1935,6 +2135,13 @@ private fun PdfPageCell(
         // below also refuses; this guard covers any other
         // road in).
         if (zoomGlideActive) return
+        // MR-2 (A13): refine rects are computed in
+        // UNTRIMMED page fractions — under an edge trim
+        // they would land displaced, so the refine gate
+        // stays closed while trim ≠ 0 (the supersampled
+        // slot alone carries the zoom, exactly as it does
+        // below the refine threshold).
+        if (settings.edgeTrim > 0f) return
         val state = zoomStateRef.value
         if (state.zoom <= PdfSession.REFINE_ZOOM_THRESHOLD) return
         if (cellSizePx == IntSize.Zero) return
@@ -2003,10 +2210,16 @@ private fun PdfPageCell(
     // pinch settle does.
     LaunchedEffect(zoomState.zoom, zoomState.pan, zoomGlideActive) {
         if (zoomGlideActive) return@LaunchedEffect
-        if (zoomState.zoom > PdfSession.REFINE_ZOOM_THRESHOLD) {
+        // MR-2 (A13): the trim gate (see refineNow) is a
+        // key of this effect too — raising the trim with a
+        // refine installed evicts it below instead of
+        // letting it ride displaced.
+        if (zoomState.zoom > PdfSession.REFINE_ZOOM_THRESHOLD &&
+            settings.edgeTrim == 0f
+        ) {
             delay(150)
             refineNow()
-        } else if (!zoomState.isZoomed) {
+        } else if (!zoomState.isZoomed || settings.edgeTrim > 0f) {
             // Zoom left: the refine is evicted (A-2).
             refinedBitmap = null
             refinedClip = null
@@ -2032,6 +2245,12 @@ private fun PdfPageCell(
         }
     }
 
+    // MR-2 (P5): in RTL paging the tap thirds trade
+    // meaning — the left third turns FORWARD (the next
+    // page stands to the left), the right third back.
+    // Multiplied into the shipped deltas, so LTR is
+    // bit-identical.
+    val turnSign = if (settings.rtlPaging) -1 else 1
     Box(
         modifier
             .onSizeChanged { cellSizePx = it }
@@ -2063,9 +2282,11 @@ private fun PdfPageCell(
                                     zoomState.reset()
                                 // Edge thirds turn pages while
                                 // unzoomed; the centre toggles
-                                // the chrome.
-                                xFraction < 0.33f -> onTurnPage(-1)
-                                xFraction > 0.67f -> onTurnPage(1)
+                                // the chrome. (MR-2: turnSign
+                                // flips the thirds under RTL
+                                // paging.)
+                                xFraction < 0.33f -> onTurnPage(-turnSign)
+                                xFraction > 0.67f -> onTurnPage(turnSign)
                                 else -> onToggleControls()
                             }
                             }
@@ -2083,13 +2304,13 @@ private fun PdfPageCell(
                                 if (zoomState.isZoomed) {
                                     zoomState.reset()
                                 } else {
-                                    onTurnPage(-1)
+                                    onTurnPage(-turnSign)
                                 }
                             TapZoneAction.TURN_NEXT ->
                                 if (zoomState.isZoomed) {
                                     zoomState.reset()
                                 } else {
-                                    onTurnPage(1)
+                                    onTurnPage(turnSign)
                                 }
                             TapZoneAction.TOGGLE_CHROME -> onToggleControls()
                             TapZoneAction.NONE -> Unit
@@ -2344,6 +2565,9 @@ private fun PdfPageCell(
             val showRefined = current != null && refined != null &&
                 clipRect != null && cellSizePx != IntSize.Zero &&
                 !zoomGlideActive &&
+                // MR-2 (A13): never under an edge trim —
+                // refine rects are untrimmed fractions.
+                settings.edgeTrim == 0f &&
                 refinedForZoom == zoomState.zoom &&
                 refinedForPan == zoomState.pan
             Box(
@@ -2394,7 +2618,51 @@ private fun PdfPageCell(
                 } else {
                     val slot = current ?: preview
                     if (slot != null) {
-                        if (settings.fitMode == PdfFitMode.FIT_PAGE) {
+                        if (settings.edgeTrim > 0f &&
+                            cellSizePx != IntSize.Zero
+                        ) {
+                            // MR-2 (P5/A13): cut-the-edges as
+                            // a page-geometry inset. The page
+                            // is drawn at its displayed size
+                            // grown by 1/(1 − 2·trim) and
+                            // centred in the cell; the slot
+                            // layer's own clip (above) cuts
+                            // the overflow, so the visible
+                            // page is the centre (1 − 2·trim)
+                            // of the printed page, its
+                            // margins pushed out of view. No
+                            // re-render, no cache change: the
+                            // same RAW bitmap, a different
+                            // draw size. The zoom state never
+                            // learns about the trim (its pan
+                            // clamp stays on the untrimmed
+                            // geometry — conservative by the
+                            // trim's own width), and the
+                            // refine stays gated off (above).
+                            val (dispW, dispH) = pdfDisplayedSizePx(
+                                slot.width, slot.height,
+                                cellSizePx.width, cellSizePx.height,
+                                settings.fitMode
+                            )
+                            val grow = 1f / (1f - 2f * settings.edgeTrim)
+                            Image(
+                                bitmap = slot.asImageBitmap(),
+                                contentDescription = session.displayLabelFor(page),
+                                modifier = Modifier
+                                    .width(
+                                        with(density) {
+                                            (dispW * grow).toDp()
+                                        }
+                                    )
+                                    .height(
+                                        with(density) {
+                                            (dispH * grow).toDp()
+                                        }
+                                    ),
+                                contentScale = ContentScale.FillBounds,
+                                colorFilter = drawFilter
+                            )
+                        } else if (settings.fitMode == PdfFitMode.FIT_PAGE) {
                             Image(
                                 bitmap = slot.asImageBitmap(),
                                 contentDescription = session.displayLabelFor(page),
@@ -2462,7 +2730,10 @@ private fun PdfContinuousBody(
     autoScroll: AutoScrollController,
     onToggleControls: () -> Unit,
     tapPreset: TapLayoutPreset = TapLayoutPreset.MOON_DEFAULT,
-    smartScrollLock: Boolean = true
+    smartScrollLock: Boolean = true,
+    // MR-2 (A12): items report the filter they resolved
+    // AUTO to, per page (see PdfDocumentReader).
+    onResolvedFilter: (Int, PdfPageFilter) -> Unit = { _, _ -> }
 ) {
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialPage.coerceAtLeast(0)
@@ -2810,6 +3081,10 @@ private fun PdfContinuousBody(
         }
         // F-6: the display filter as a draw-time colour filter
         // over the RAW cached renders.
+        // MR-2 (A12): smart contrast resolves PER ITEM from
+        // the item's own bitmap (see the item body below), so
+        // the body-level filter survives only as the non-AUTO
+        // shortcut — identical for every manual filter.
         val drawFilter = remember(settings.filter) {
             settings.filter.colorMatrix()?.let { matrix ->
                 ColorFilter.colorMatrix(
@@ -2817,6 +3092,10 @@ private fun PdfContinuousBody(
                 )
             }
         }
+        val themeBackground = MaterialTheme.colorScheme.background
+        val readerDark = 0.299f * themeBackground.red +
+            0.587f * themeBackground.green +
+            0.114f * themeBackground.blue < 0.5f
         // v1.5.10 (G2): the Smart scroll lock — on a
         // predominantly vertical drag, the stray horizontal
         // component is consumed before it can drift the
@@ -2893,6 +3172,30 @@ private fun PdfContinuousBody(
                     page, session.pagePointsSizePeek(page)
                 )
                 val current = bitmap
+                // MR-2 (A12): this item's resolved filter —
+                // Smart contrast reads the item's own bitmap; a manual
+                // filter resolves to itself and the item
+                // draws with the body's filter, unchanged.
+                val itemResolved = settings.filter.resolvedForDisplay(
+                    settings.autoContrast, readerDark, current
+                )
+                LaunchedEffect(itemResolved) {
+                    onResolvedFilter(page, itemResolved)
+                }
+                val itemAutoFilter = remember(itemResolved) {
+                    itemResolved.colorMatrix()?.let { matrix ->
+                        ColorFilter.colorMatrix(
+                            androidx.compose.ui.graphics.ColorMatrix(
+                                matrix.array.copyOf()
+                            )
+                        )
+                    }
+                }
+                val itemDrawFilter = if (settings.autoContrast) {
+                    itemAutoFilter
+                } else {
+                    drawFilter
+                }
                 if (current == null) {
                     // F-7: pending items get the page-shaped
                     // placeholder, not a blank reserved box.
@@ -2903,7 +3206,7 @@ private fun PdfContinuousBody(
                         contentDescription = session.displayLabelFor(page),
                         modifier = Modifier.fillMaxWidth(),
                         contentScale = ContentScale.FillWidth,
-                        colorFilter = drawFilter
+                        colorFilter = itemDrawFilter
                     )
                 }
             }
@@ -3031,8 +3334,11 @@ private fun PdfContentsPanelSheet(
                 "is part of the pages — use Go to page to reach it."
         },
         bookmarkRows = bookmarks.map { bookmark ->
-            val page = LocatorJson.parsePdfLocator(bookmark.locatorJson)?.first
-                ?: bookmark.chapterIndex
+            // MR-2 (A11): the ViewModel names the page —
+            // a converted PDF's core-shaped bookmarks are
+            // translated through the bridge there, never
+            // read as raw chapter indices here.
+            val page = viewModel.pdfBookmarkPage(bookmark)
             ContentsBookmarkRow(
                 label = bookmark.label.ifBlank { "Bookmark" },
                 detail = "Page ${page + 1}"
@@ -3154,10 +3460,67 @@ private fun PdfDisplaySheet(
         Text(
             "A PDF's pages are fixed as printed — there are no text " +
                 "settings to change. What you can change is how the " +
-                "pages are shown.",
+                "pages are shown, or read the book as flowing text.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(Modifier.height(8.dp))
+
+        // ── MR-2 (P2/A10): the reading face ──────────────
+        // As printed is this surface itself; Reflow hops
+        // through the place bridge to the text face. Until
+        // the conversion lands, Reflow stands disabled
+        // with its reason in plain words (A10a) — and a
+        // book with no text layer shows P5's honest line
+        // instead of any door.
+        val conversion by viewModel.pdfConversion
+            .collectAsStateWithLifecycle()
+        val face by viewModel.pdfFace.collectAsStateWithLifecycle()
+        Text("Reading face", style = MaterialTheme.typography.titleSmall)
+        if (conversion == PdfConversionState.NoText) {
+            Text(
+                "This PDF has no text layer — it can only be " +
+                    "read as printed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            val reflowReady = conversion is PdfConversionState.Ready
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ReaderStadiumChip(
+                    selected = face == PdfFace.AS_PRINTED,
+                    onClick = { },
+                    text = "As printed"
+                )
+                ReaderStadiumChip(
+                    selected = face == PdfFace.REFLOW,
+                    onClick = {
+                        if (reflowReady) {
+                            viewModel.switchPdfFaceToReflow()
+                        }
+                    },
+                    text = "Reflow (text)",
+                    modifier = if (reflowReady) {
+                        Modifier
+                    } else {
+                        Modifier.alpha(0.45f)
+                    }
+                )
+            }
+            Text(
+                when (conversion) {
+                    is PdfConversionState.Ready ->
+                        "Reflow reads the same book as flowing " +
+                            "text — your place is kept."
+                    PdfConversionState.Failed ->
+                        "The text view couldn't be prepared " +
+                            "for this book."
+                    else -> "Preparing the text view…"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Spacer(Modifier.height(8.dp))
 
         Text("Reading", style = MaterialTheme.typography.titleSmall)
@@ -3226,7 +3589,54 @@ private fun PdfDisplaySheet(
                     viewModel.updatePdfSettings { it.copy(spread = on) }
                 }
             )
+
+            // MR-2 (P5): right-to-left paging.
+            PdfSwitchRow(
+                label = "Right-to-left paging",
+                subtitle = "Pages turn right-to-left, for books " +
+                    "bound that way.",
+                checked = settings.rtlPaging,
+                onCheckedChange = { on ->
+                    viewModel.updatePdfSettings { it.copy(rtlPaging = on) }
+                }
+            )
         }
+
+        // MR-2 (P5/A13): cut-the-edges — one uniform trim,
+        // drawn live in the paged model (see the page
+        // cell's geometry inset); 0 restores the page
+        // exactly as printed.
+        Spacer(Modifier.height(8.dp))
+        Text("Page edges", style = MaterialTheme.typography.titleSmall)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Trim page edges",
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.labelLarge
+            )
+            Text(
+                "${(settings.edgeTrim * 100).toInt()}%",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Slider(
+            value = settings.edgeTrim,
+            onValueChange = { v ->
+                viewModel.updatePdfSettings { it.copy(edgeTrim = v) }
+            },
+            valueRange = 0f..0.20f,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            "Cuts the printed margins off every page's edges, " +
+                "in Page by page mode.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         Spacer(Modifier.height(8.dp))
         Text("Night display filter", style = MaterialTheme.typography.titleSmall)
@@ -3238,7 +3648,11 @@ private fun PdfDisplaySheet(
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PdfPageFilter.entries.forEach { filter ->
                 ReaderStadiumChip(
-                    selected = settings.filter == filter,
+                    // MR-2 (A12): while smart contrast is
+                    // on, no manual chip reads selected —
+                    // the mode owns the page.
+                    selected = settings.filter == filter &&
+                        !settings.autoContrast,
                     onClick = {
                         viewModel.updatePdfSettings { it.withFilter(filter) }
                     },
@@ -3252,6 +3666,19 @@ private fun PdfDisplaySheet(
                     }
                 )
             }
+            // MR-2 (P5/A12): smart contrast — a mode over
+            // the stored filter, not a seventh filter
+            // value: bright pages invert under the dark
+            // theme, page by page, resolved at draw time.
+            ReaderStadiumChip(
+                selected = settings.autoContrast,
+                onClick = {
+                    viewModel.updatePdfSettings {
+                        it.copy(autoContrast = true)
+                    }
+                },
+                text = "Auto (smart contrast)"
+            )
         }
 
         // G8: the shared comforts' settings.

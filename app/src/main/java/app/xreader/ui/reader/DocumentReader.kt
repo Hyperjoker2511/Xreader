@@ -47,17 +47,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.Highlight
@@ -80,7 +78,6 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
-import kotlin.math.sign
 
 /** Actions offered on a long-pressed paragraph (passage tools, §2.4 #7).
  * v1.7 one-engine (C1): relocated to the unified scroll core from the
@@ -120,9 +117,10 @@ private object WallWheel {
  * The wall wheel's live drag state: SIGNED accumulated
  * un-scrollable drag in px — negative pushes past the
  * chapter's END (toward NEXT), positive pulls past its
- * START (toward PREVIOUS). Written by the wall connection
- * (accumulation + unwind) and by the release observer
- * (the reset); read ONLY by the wheel overlay, so a drag
+ * START (toward PREVIOUS). Written by the release
+ * observer's pointer stream (accumulation + the reset —
+ * MR-2 Part S: the raw finger stream, never the scroll
+ * pipeline); read ONLY by the wheel overlay, so a drag
  * delta recomposes the wheel alone, never the list.
  */
 private class WallWheelState {
@@ -407,10 +405,9 @@ fun DocumentReader(
         if (wallActive) segment - rangeStart else segment
 
     // The wall's live reads for the never-restarting
-    // callbacks (key turns, the wall connection, the
-    // release observer): they must see the CURRENT
-    // composition's values, not the values of the
-    // composition that created them. The chapter gates are
+    // callbacks (key turns, the release observer): they
+    // must see the CURRENT composition's values, not the
+    // values of the composition that created them. The chapter gates are
     // the wheel's book-start/end suppression (the REA's):
     // no wheel stands past the book's own ends.
     val wallActiveNow by rememberUpdatedState(wallActive)
@@ -428,9 +425,8 @@ fun DocumentReader(
     )
 
     /** The wheel's live drag state (see [WallWheelState]):
-     * the connection accumulates into it, the release
-     * observer reads and resets it, the overlay renders
-     * it. */
+     * the release observer accumulates into it, reads and
+     * resets it; the overlay renders it. */
     val wheelState = remember { WallWheelState() }
 
     /** The anchor whose NEXT chapter the ⅓ trigger (in the
@@ -1087,159 +1083,177 @@ fun DocumentReader(
         }
     }
 
-    // ── Seam patch: the wall connection + the release ────
+    // ── Seam patch + MR-2 Part S: the wall counts the ──
+    // finger, not the pipeline.
     //
     // The wall has NO overscroll machinery and no visual
     // give (B2 stands): the column ends at the anchor
     // chapter's end — a REAL end, blank below the last
-    // line, no stretch. This connection only ACCUMULATES
-    // the un-scrollable part of a genuine drag at that end
-    // — Drag-source deltas the child could not scroll,
-    // while the list stands at the end — into the wheel
-    // state the overlay renders:
+    // line, no stretch.
     //
-    // - pushing past the end accumulates toward NEXT
-    //   (negative), pulling past the start toward PREVIOUS
-    //   (positive); a drag that switches ends starts over
-    //   from its own delta;
-    // - content scrolling back toward the chapter un-fills
-    //   the wheel by the same distance (the unwind, clamped
-    //   at zero), so the fill always tracks the finger;
-    // - nothing is consumed and nothing is stretched: the
-    //   deltas are OBSERVED, not eaten — the list's own
-    //   behaviour is untouched — and only Drag sources are
-    //   read at all, which keeps the drift's, the restore's
-    //   and the follows' programmatic scrolls out, so
-    //   auto-scroll can never fill the wheel (B9);
-    // - a FLING never crosses: Moon+ arms the change by
-    //   drag alone, so onPostFling is a deliberate no-op —
-    //   momentum that merely arrives at the end stops
-    //   there, and the crossing waits for the drag and the
-    //   release below.
+    // The seam build accumulated the wheel's drag from a
+    // NestedScrollConnection's post-scroll `available` —
+    // the LazyColumn pipeline's leftovers. The owner's
+    // seam proof convicted it: in real pulls the arc
+    // filled only ~⅓ of what the same pull fills in
+    // Moon+, and no release crossed. Moon+ counts
+    // `noScrollDist` from the RAW TOUCH STREAM while its
+    // ScrollView stands pinned (REA §(b)); MR-2 moves the
+    // accumulation into the release observer's Initial-
+    // pass pointer stream (below), and the connection is
+    // deleted entirely:
     //
-    // THE RELEASE comes from the pointer observer on the
-    // Box (wallReleaseObserver, below), NOT from this
-    // connection: a NestedScrollConnection has no finger-up
-    // callback for a slow, zero-velocity release (its only
-    // release-shaped callback, onPostFling, is a fling
-    // path). The observer watches the raw pointer stream
-    // in the Initial pass and fires on the release itself,
-    // so a release at any speed — including a dead stop —
-    // is seen. That is the release proof (A6).
+    // - ONE pointer is tracked by id (A2) — the first
+    //   pressed change of the gesture; only its
+    //   `positionChange().y` counts (A3: no stored
+    //   positions — the change's own delta, never a
+    //   difference of two remembered points). If the
+    //   tracked pointer lifts while another remains
+    //   pressed, accumulation stops for the gesture; the
+    //   swap check still runs on the all-released
+    //   transition, exactly as before.
+    // - A gesture whose FIRST movement comes at or after
+    //   the platform long-press timeout from its press is
+    //   SELECTION-OWNED (A1's long-press fence — the
+    //   Compose 1.7 selection manager is not exposed, so
+    //   no selection-state holder exists to gate on) and
+    //   accumulates nothing for its whole duration: a
+    //   selection drag can never fill the wheel.
+    // - Accumulation counts only while the list stands
+    //   PINNED at the matching end (Moon+'s 2 dp
+    //   tolerance, in px): `dy > 0` pinned at the start
+    //   (with a previous chapter) fills toward PREVIOUS
+    //   (positive); `dy < 0` pinned at the end (with a
+    //   next chapter) fills toward NEXT (negative); a
+    //   drag that switches ends restarts from its own
+    //   delta (the shipped opposite-sign rule). Pinned at
+    //   NEITHER end the gesture has left the boundary and
+    //   the wheel empties — the unwind: as the content
+    //   scrolls back into the chapter the pin breaks and
+    //   the fill resets, so the fill always tracks the
+    //   finger. A chapter shorter than the viewport pins
+    //   at BOTH ends at once; the dy sign decides, and
+    //   the book's own ends still suppress their side.
+    // - Programmatic scrolls (the auto-scroll drift,
+    //   restores, follows) produce NO pointer events, so
+    //   they can never fill the wheel (B9 by
+    //   construction); a FLING never crosses either —
+    //   momentum after the release moves no pointer, and
+    //   the crossing waits for the release below.
+    //
+    // THE RELEASE is the same observer's other half (the
+    // seam build's A6): it notices the moment the LAST
+    // pressed pointer lifts — an event that exists for
+    // every release, fast, slow, or a dead stop at zero
+    // velocity. On a release the wheel state is ALWAYS
+    // reset (an un-armed release just hides the wheel;
+    // nothing changes); the swap fires only when the
+    // wheel stands ARMED — a full circle of accumulated
+    // drag (60 dp at the REA's 6°/dp) — the wall is
+    // active, and no image zoom owns the gesture.
     //
     // Fences (B10): a pinch/pan zoom in progress
     // (zoomLockedItems non-empty) freezes accumulation —
-    // the drag belongs to the image. Text selection needs
-    // no gate: selection drags are consumed by the
-    // SelectionContainer and never enter the nested-scroll
-    // chain. Inert unless the wall is active: every
-    // callback checks wallActiveNow first, and the
-    // modifier below only attaches the connection in wall
-    // mode.
-    val wallConnection = remember(wallActive) {
-        object : NestedScrollConnection {
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource
-            ): Offset {
-                if (!wallActiveNow ||
-                    source != NestedScrollSource.Drag ||
-                    zoomLockedItems.isNotEmpty()
-                ) {
-                    return Offset.Zero
-                }
-                // The unwind: content scrolling back toward
-                // the chapter un-fills the wheel by the same
-                // distance, clamped at zero — the fill
-                // tracks the finger in both directions.
-                val drag = wheelState.dragPx
-                if (drag != 0f && consumed.y != 0f &&
-                    sign(consumed.y) != sign(drag)
-                ) {
-                    val unwound = drag + consumed.y
-                    wheelState.dragPx =
-                        if (sign(unwound) == sign(drag)) {
-                            unwound
-                        } else {
-                            0f
-                        }
-                }
-                if (available.y < 0f &&
-                    !listState.canScrollForward
-                ) {
-                    // Pushing past the chapter's end: NEXT.
-                    // Suppressed at the book's own end.
-                    if (hasNextChapterNow) {
-                        val current = wheelState.dragPx
-                        wheelState.dragPx =
-                            if (current > 0f) {
-                                available.y
-                            } else {
-                                current + available.y
-                            }
-                    }
-                } else if (available.y > 0f &&
-                    !listState.canScrollBackward
-                ) {
-                    // Pulling past the chapter's start:
-                    // PREVIOUS. Suppressed at the book's
-                    // own start.
-                    if (hasPreviousChapterNow) {
-                        val current = wheelState.dragPx
-                        wheelState.dragPx =
-                            if (current < 0f) {
-                                available.y
-                            } else {
-                                current + available.y
-                            }
-                    }
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPostFling(
-                consumed: Velocity,
-                available: Velocity
-            ): Velocity {
-                // Deliberate no-op (see the block comment):
-                // a fling never arms and never crosses — the
-                // release observer owns every crossing.
-                return Velocity.Zero
-            }
-        }
-    }
-
-    // Seam patch: THE RELEASE OBSERVER (A6) — the swap's
-    // trigger. A pointerInput watching the raw pointer
-    // stream in the Initial pass (the readerTapToggle
-    // precedent, on this same Box): it consumes NOTHING, so
-    // taps, scrolls, selection and image zooms flow through
-    // untouched; it only notices the moment the LAST
-    // pressed pointer lifts. That event exists for every
-    // release — fast, slow, or a dead stop at zero
-    // velocity — which is exactly the guarantee
-    // NestedScrollConnection cannot give. On a release the
-    // wheel state is ALWAYS reset (an un-armed release just
-    // hides the wheel; nothing changes); the swap fires
-    // only when the wheel stands ARMED — a full circle of
-    // accumulated drag (60 dp at the REA's 6°/dp) — the
-    // wall is active, and no image zoom owns the gesture.
+    // the drag belongs to the image. The observer
+    // consumes NOTHING, so taps, scrolls, selection and
+    // image zooms flow through untouched, and it is
+    // inert unless the wall is active (the accumulation
+    // checks wallActiveNow per event).
     // (The density is read into a local first: inside
     // pointerInput the scope IS a Density, whose own
     // `density` property would shadow the composition's.)
     val wallDensity = density
+    val wallPinPx = 2f * wallDensity.density
     val wallReleaseObserver = Modifier.pointerInput(Unit) {
         awaitPointerEventScope {
             var anyPressed = false
+            // Part S gesture tracking (A1/A2/A3): the ONE
+            // tracked pointer, its press time, and whether
+            // the long-press fence has claimed the gesture
+            // for selection. All three reset on the
+            // all-released transition, after the swap check.
+            var trackedId: PointerId? = null
+            var pressUptimeMs = 0L
+            var firstMovementSeen = false
+            var selectionOwned = false
             while (true) {
                 val event = awaitPointerEvent(
                     PointerEventPass.Initial
                 )
                 val pressedNow = event.changes.any { it.pressed }
+                if (!anyPressed && pressedNow) {
+                    // Gesture start: acquire the first
+                    // pressed change as the tracked pointer.
+                    val first = event.changes.firstOrNull { it.pressed }
+                    trackedId = first?.id
+                    pressUptimeMs = first?.uptimeMillis ?: 0L
+                    firstMovementSeen = false
+                    selectionOwned = false
+                }
+                // Accumulation (Part S): the tracked
+                // pointer's own movement delta, counted
+                // only while the wall owns the gesture.
+                val tracked = trackedId?.let { id ->
+                    event.changes.firstOrNull { it.id == id }
+                }
+                if (tracked != null && !tracked.pressed && pressedNow) {
+                    // A2: the tracked pointer lifted while
+                    // another remains pressed — accumulation
+                    // stops for the rest of the gesture (the
+                    // release check below still runs when
+                    // the last pointer lifts).
+                    trackedId = null
+                } else if (tracked != null) {
+                    val delta = tracked.positionChange()
+                    if (!firstMovementSeen && delta != Offset.Zero) {
+                        firstMovementSeen = true
+                        // A1: the long-press fence — a
+                        // first movement at or after the
+                        // platform long-press timeout means
+                        // selection owns this gesture.
+                        if (tracked.uptimeMillis - pressUptimeMs >=
+                            viewConfiguration.longPressTimeoutMillis
+                        ) {
+                            selectionOwned = true
+                        }
+                    }
+                    val dy = delta.y
+                    if (dy != 0f && !selectionOwned &&
+                        wallActiveNow && zoomLockedItems.isEmpty()
+                    ) {
+                        val layout = listState.layoutInfo
+                        val pinnedAtStart =
+                            layout.totalItemsCount > 0 &&
+                                listState.firstVisibleItemIndex == 0 &&
+                                listState.firstVisibleItemScrollOffset <=
+                                    wallPinPx
+                        val lastVisible = layout.visibleItemsInfo.lastOrNull()
+                        val pinnedAtEnd = lastVisible != null &&
+                            layout.totalItemsCount > 0 &&
+                            lastVisible.index ==
+                                layout.totalItemsCount - 1 &&
+                            layout.viewportEndOffset -
+                                (lastVisible.offset + lastVisible.size) <=
+                                wallPinPx
+                        val current = wheelState.dragPx
+                        wheelState.dragPx = when {
+                            dy > 0f && pinnedAtStart &&
+                                hasPreviousChapterNow ->
+                                if (current < 0f) dy else current + dy
+                            dy < 0f && pinnedAtEnd &&
+                                hasNextChapterNow ->
+                                if (current > 0f) dy else current + dy
+                            !pinnedAtStart && !pinnedAtEnd -> 0f
+                            else -> current
+                        }
+                    }
+                }
                 if (anyPressed && !pressedNow) {
                     val drag = wheelState.dragPx
                     wheelState.dragPx = 0f
+                    trackedId = null
+                    firstMovementSeen = false
+                    selectionOwned = false
                     val armedDistancePx =
                         WallWheel.FULL_CIRCLE_DEGREES /
                             WallWheel.ARC_DEGREES_PER_DP *
@@ -1293,20 +1307,14 @@ fun DocumentReader(
                     top = config.marginVerticalDp.dp + topInset,
                     bottom = config.marginVerticalDp.dp + bottomInset
                 ),
-                // Seam patch: wall mode attaches the
-                // accumulation connection only — there is no
-                // visual give to apply (B2: the end is real).
-                // Non-wall the chain is exactly fillMaxSize,
-                // as before.
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(
-                        if (wallActive) {
-                            Modifier.nestedScroll(wallConnection)
-                        } else {
-                            Modifier
-                        }
-                    )
+                // MR-2 Part S: no nested-scroll connection
+                // in ANY mode — the wall's accumulation lives
+                // in the release observer's raw pointer
+                // stream (above), and there is no visual give
+                // to apply (B2: the end is real). The chain
+                // is exactly fillMaxSize, as non-wall always
+                // was.
+                modifier = Modifier.fillMaxSize()
             ) {
                 chapters.forEachIndexed { segment, chapter ->
                     // Seam patch: the wall composes ONLY the

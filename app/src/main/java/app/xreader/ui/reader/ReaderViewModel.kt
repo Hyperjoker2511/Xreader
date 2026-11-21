@@ -499,6 +499,44 @@ class ReaderViewModel(
     private val _preparedEpub = MutableStateFlow(false)
     val preparedEpub: StateFlow<Boolean> = _preparedEpub
 
+    /** v1.7 MR-2 (P2): a converted PDF read on its reflow
+     * face — the anchor table + the landed chapter ids.
+     * Non-null only for a LOCAL_FILE PDF whose conversion
+     * landed (prepare record current + content present,
+     * A8) with its table persisted; it drives the face
+     * switch in Settings, the printed-page label in the
+     * chrome, and the A11 marks filter (only core-shaped
+     * rows of the landed chapters are this face's marks —
+     * the printed face's locator rows stay stored for the
+     * other face). */
+    data class ConvertedPdfState(
+        val table: app.xreader.data.prepare.PdfAnchorTable,
+        val chapterIds: List<Long>
+    )
+
+    private val _convertedPdf =
+        MutableStateFlow<ConvertedPdfState?>(null)
+    val convertedPdf: StateFlow<ConvertedPdfState?> = _convertedPdf
+
+    /** MR-2 (P3): set while a face hop is writing the other
+     * face's progress form — this VM's own savers (the
+     * debounced writer and the onCleared backstop) stand
+     * down so they cannot overwrite the hop's row with
+     * this face's shape. */
+    @Volatile
+    private var pdfHopInFlight = false
+
+    private val _localDocHop =
+        kotlinx.coroutines.flow.MutableSharedFlow<Long>(
+            extraBufferCapacity = 1
+        )
+
+    /** MR-2 (P2): emitted (the book id) once the hop back
+     * to the printed face has written its progress row —
+     * the shell navigates to the local reader. */
+    val localDocHop: kotlinx.coroutines.flow.SharedFlow<Long> =
+        _localDocHop
+
     /** Item 4f: the book's stored EPUB plate filter, applied
      * by the core plate viewer. ORIGINAL for every book that
      * never carried one. */
@@ -828,17 +866,38 @@ class ReaderViewModel(
             // Every other book keeps the unfiltered list.
             combine(
                 container.database.bookmarkDao().observeForBook(bookId),
-                _preparedEpub
-            ) { rows, prepared ->
-                if (prepared) rows.filter { it.locatorJson == null } else rows
+                _preparedEpub,
+                _convertedPdf
+            ) { rows, prepared, pdf ->
+                // MR-2 (A11): on a converted PDF's reflow
+                // face only the landed chapters' core-shaped
+                // rows are this face's marks — the printed
+                // face's locator rows belong to the other
+                // face and stay stored, unlisted here.
+                when {
+                    pdf != null -> rows.filter {
+                        it.locatorJson == null &&
+                            it.chapterId in pdf.chapterIds
+                    }
+                    prepared -> rows.filter { it.locatorJson == null }
+                    else -> rows
+                }
             }.collectLatest { _bookmarks.value = it }
         }
         viewModelScope.launch {
             combine(
                 container.database.highlightDao().observeForBook(bookId),
-                _preparedEpub
-            ) { rows, prepared ->
-                if (prepared) rows.filter { it.locatorJson == null } else rows
+                _preparedEpub,
+                _convertedPdf
+            ) { rows, prepared, pdf ->
+                when {
+                    pdf != null -> rows.filter {
+                        it.locatorJson == null &&
+                            it.chapterId in pdf.chapterIds
+                    }
+                    prepared -> rows.filter { it.locatorJson == null }
+                    else -> rows
+                }
             }.collectLatest { _highlights.value = it }
         }
         viewModelScope.launch {
@@ -897,6 +956,57 @@ class ReaderViewModel(
                         }
                 }
             var chapters = container.database.chapterDao().forBook(bookId)
+            // v1.7 MR-2 (Part C): the chapter-count heal
+            // where prepared books actually open. A prepared
+            // EPUB's Library card count is the LANDED row
+            // count; the stored count is the import-era
+            // spine number and never self-corrects on this
+            // road (the local reader's heal never fires for
+            // a book that opens straight here — the mr4
+            // phone proof's '42 chapters' card). A4: the
+            // row is re-read here and written only when the
+            // count differs.
+            if (_preparedEpub.value && book != null) {
+                val row = container.database.bookDao().getById(bookId)
+                if (row != null && row.totalChapters != chapters.size) {
+                    container.database.bookDao().update(
+                        row.copy(totalChapters = chapters.size)
+                    )
+                }
+            }
+            // v1.7 MR-2 (P2): a converted PDF's reflow-face
+            // state — the conversion landed (record current
+            // + content present, A8) and its anchor table
+            // persisted. Anything less and this book is an
+            // ordinary core book here: no face switch, no
+            // page label, no marks filtering.
+            if (book != null &&
+                book.sourceType ==
+                    app.xreader.data.db.SourceType.LOCAL_FILE &&
+                book.localFormat == app.xreader.data.db.BookFormat.PDF
+            ) {
+                val record = runCatching {
+                    localReaderPrefs.pdfPrepareRecord(bookId)
+                }.getOrNull()
+                if (app.xreader.data.prepare.PdfPrepareAccess
+                        .isConverted(record, book) &&
+                    chapters.any { it.contentPath != null }
+                ) {
+                    val table = app.xreader.data.prepare
+                        .PdfAnchorTable.load(
+                            java.io.File(
+                                container.applicationContext.cacheDir,
+                                "local-pdf/$bookId"
+                            )
+                        )
+                    if (table != null) {
+                        _convertedPdf.value = ConvertedPdfState(
+                            table = table,
+                            chapterIds = chapters.map { it.id }
+                        )
+                    }
+                }
+            }
             // v1.3.3 (scope S6): the reader opened on an EMPTY
             // stored list (a pre-sign-in preview, a store the
             // repair hasn't reached) must FETCH before it
@@ -3185,7 +3295,71 @@ class ReaderViewModel(
         saveProgressNow()
     }
 
+    /**
+     * v1.7 MR-2 (P2/P3): hop back to the printed face. The
+     * current core place translates through the anchor
+     * bridge to a printed page; the face pref flips and
+     * the single progress row is rewritten in the PDF
+     * surface's own form (locator row) — both BEFORE
+     * [localDocHop] fires, so the local reader opens on
+     * the same page. This VM's savers stand down for the
+     * whole hop ([pdfHopInFlight]) so the row cannot be
+     * overwritten with the core shape on the way out.
+     */
+    fun switchPdfFaceToPrinted() {
+        val pdf = _convertedPdf.value ?: return
+        if (pdfHopInFlight) return
+        pdfHopInFlight = true
+        val stateNow = _state.value
+        val chapter = stateNow.chapter ?: run {
+            pdfHopInFlight = false
+            return
+        }
+        viewModelScope.launch(container.ioDispatcher) {
+            runCatching {
+                val place = app.xreader.data.prepare
+                    .PdfPlaceBridge(pdf.table)
+                    .corePlaceToPage(
+                        chapterIndex = stateNow.chapterIndex,
+                        charOffset = stateNow.positionOffset
+                    )
+                runCatching {
+                    localReaderPrefs.savePdfFace(
+                        bookId,
+                        app.xreader.ui.localreader.PdfFace.AS_PRINTED
+                    )
+                }
+                container.database.readingProgressDao().upsert(
+                    app.xreader.data.db.ReadingProgress(
+                        bookId = bookId,
+                        chapterId = 0,
+                        chapterIndex = place.page,
+                        charOffset = 0,
+                        fraction = if (pdf.table.pageCount > 0) {
+                            (place.page + place.inPageFraction) /
+                                pdf.table.pageCount
+                        } else {
+                            0f
+                        },
+                        scrollFraction = place.inPageFraction,
+                        updatedAt = System.currentTimeMillis(),
+                        locatorJson = app.xreader.data.engine
+                            .LocatorJson.pdfLocator(
+                                place.page, place.inPageFraction
+                            ),
+                        anchorText = chapter.title
+                    )
+                )
+            }
+            _localDocHop.tryEmit(bookId)
+        }
+    }
+
     private suspend fun saveProgressNow() {
+        // MR-2 (P3): a face hop owns the progress row until
+        // its write lands — never overwrite it with this
+        // face's shape mid-hop.
+        if (pdfHopInFlight) return
         val stateNow = _state.value
         val chapter = stateNow.chapter ?: return
         // Keep-previous guard: while a chapter load is in flight
@@ -3331,8 +3505,13 @@ class ReaderViewModel(
         // Same keep-previous guard as saveProgressNow: a clear
         // mid-load must not write the visible text's position
         // against the incoming chapter's row.
+        // MR-2 (P3): a face hop in flight owns the progress
+        // row — this backstop stands down rather than
+        // overwrite the hop's PDF-form row with the core
+        // shape as the text face closes.
         val chapterAtClear = stateAtClear.chapter
             ?.takeIf { visibleTextChapterIndex == stateAtClear.chapterIndex }
+            ?.takeUnless { pdfHopInFlight }
         val snapshot = if (tracker.isRunning) tracker.end() else null
         if (snapshot != null || chapterAtClear != null) {
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {

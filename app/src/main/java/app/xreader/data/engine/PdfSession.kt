@@ -104,6 +104,15 @@ enum class PdfPageFilter {
      * softer than full black & white for long reads. */
     SOFT_GREY;
 
+    // v1.7 MR-2 (P5/A12) note: smart contrast ("Auto") is
+    // deliberately NOT a seventh value here — this enum is
+    // pinned at exactly these six by the shipped display
+    // tests. Auto is a mode over the stored filter
+    // (PdfDocSettings.autoContrast) that resolves at draw
+    // time in the page cell to INVERT or NONE; renders and
+    // the render cache never see it (filters are draw-time
+    // colour filters, never keyed).
+
     /** The colour matrix for this filter, or null for [NONE]. */
     fun colorMatrix(): ColorMatrix? = when (this) {
         NONE -> null
