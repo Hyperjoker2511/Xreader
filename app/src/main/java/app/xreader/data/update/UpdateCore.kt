@@ -19,6 +19,12 @@ import kotlinx.serialization.json.jsonObject
  * RELEASE CONVENTION (what the release process must publish for
  * this to work — see CYCLE1-PLAN "In-app updates"):
  *  - a GitHub Release whose tag is the version (e.g. `v1.3.5`);
+ *  - its version CODE as a body line of the shape
+ *    `Version code: 95` — the updater compares codes first
+ *    (Micro-build M): a test build running AHEAD of the
+ *    release must never be offered the release itself as an
+ *    "update". Version names are the fallback, for releases
+ *    published before the line existed;
  *  - the signed APK as a release asset (name ends `.apk`);
  *  - its SHA-256, either as a checksum ASSET (`SHA256SUMS`,
  *    `SHA256SUMS.txt`, or any `*.sha256` file, in `sha256sum`
@@ -43,7 +49,10 @@ data class ReleaseAsset(
 
 /** A parsed GitHub "latest release", reduced to what the
  * updater needs. [version] is the tag with any leading `v`
- * stripped — the same shape as BuildConfig.VERSION_NAME. */
+ * stripped — the same shape as BuildConfig.VERSION_NAME.
+ * [versionCode] is the code the release body publishes
+ * (see the convention above); null for older releases,
+ * whose comparisons fall back to names. */
 data class ReleaseInfo(
     val tagName: String,
     val version: String,
@@ -51,7 +60,10 @@ data class ReleaseInfo(
     val body: String,
     val htmlUrl: String,
     val apk: ReleaseAsset,
-    val checksumAsset: ReleaseAsset?
+    val checksumAsset: ReleaseAsset?,
+    /** The published version code (Micro-build M) — last
+     * with a default so existing constructions stand. */
+    val versionCode: Int? = null
 )
 
 object ReleaseParsing {
@@ -85,15 +97,32 @@ object ReleaseParsing {
                 )
             }
         val apk = pickApk(assets) ?: return null
+        val body = root.string("body").orEmpty()
         return ReleaseInfo(
             tagName = tag,
             version = VersionNames.normalise(tag),
             title = root.string("name")?.trim().orEmpty(),
-            body = root.string("body").orEmpty(),
+            body = body,
             htmlUrl = root.string("html_url").orEmpty(),
             apk = apk,
-            checksumAsset = pickChecksumAsset(assets)
+            checksumAsset = pickChecksumAsset(assets),
+            versionCode = extractVersionCode(body)
         )
+    }
+
+    private val versionCodeLine =
+        Regex("""(?im)^.*version\s*code\D*(\d+).*$""")
+
+    /** The version code a release body publishes — the
+     * first line that names "version code" followed by a
+     * number (the documented shape is `Version code: 95`).
+     * Null when the body carries no such line: the release
+     * predates the convention and its comparison falls
+     * back to version names. */
+    fun extractVersionCode(body: String?): Int? {
+        if (body.isNullOrBlank()) return null
+        return versionCodeLine.find(body)
+            ?.groupValues?.get(1)?.toIntOrNull()
     }
 
     /** The release's APK asset: any `.apk`; when several are

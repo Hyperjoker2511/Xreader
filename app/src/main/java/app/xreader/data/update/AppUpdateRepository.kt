@@ -17,7 +17,12 @@ class AppUpdateRepository(
     private val prefs: UpdatePrefs,
     private val installedVersion: () -> String,
     private val nowMs: () -> Long = { System.currentTimeMillis() },
-    private val zone: ZoneId = ZoneId.systemDefault()
+    private val zone: ZoneId = ZoneId.systemDefault(),
+    /** Micro-build M: the installed build's version CODE
+     * (BuildConfig.VERSION_CODE in production). Defaulted
+     * so existing constructions stand; 0 = unknown, which
+     * keeps the name comparison in charge. */
+    private val installedVersionCode: () -> Int = { 0 }
 ) {
 
     sealed interface CheckOutcome {
@@ -42,9 +47,22 @@ class AppUpdateRepository(
     }
 
     /** True when [release] is strictly newer than the
-     * installed build. */
-    fun isUpdateAvailable(release: ReleaseInfo): Boolean =
-        VersionNames.isNewer(release.version, installedVersion())
+     * installed build. Micro-build M: when the release
+     * publishes its version code and the installed code is
+     * known, CODES decide — a test build ahead of the
+     * release (a higher code under a suffixed name like
+     * "1.6.2-engine4") is never offered the release as a
+     * downgrade "update". Names decide only for releases
+     * published before the code line existed. */
+    fun isUpdateAvailable(release: ReleaseInfo): Boolean {
+        val releaseCode = release.versionCode
+        val installedCode = installedVersionCode()
+        return if (releaseCode != null && installedCode > 0) {
+            releaseCode > installedCode
+        } else {
+            VersionNames.isNewer(release.version, installedVersion())
+        }
+    }
 
     /**
      * One live check against GitHub. A good answer is cached

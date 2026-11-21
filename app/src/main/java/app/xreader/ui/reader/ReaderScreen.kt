@@ -169,7 +169,11 @@ fun ReaderScreen(
     val searchBusy by viewModel.searchBusy.collectAsStateWithLifecycle()
     val plateFilter by viewModel.plateFilter.collectAsStateWithLifecycle()
     val migrationNote by viewModel.migrationNote.collectAsStateWithLifecycle()
-    val chapterSummary by viewModel.chapterSummary.collectAsStateWithLifecycle()
+    // Micro-build M: the chapter summary no longer shows
+    // in the Contents sheet, so the screen no longer
+    // collects it (the ViewModel flow itself stays — the
+    // book page and AI surfaces read summaries their own
+    // way).
 
     // v1.7 Moon+ standard fix: the display-local translations
     // (Part 2, A8) and the chapter-end wall's gate (Part 3).
@@ -1356,8 +1360,6 @@ fun ReaderScreen(
                     currentTocEntryIndex = currentTocIndex,
                     bookmarks = bookmarks,
                     highlights = allHighlights,
-                    chapterSummary = chapterSummary,
-                    onSummarizeChapter = { aiViewModel.summarizeChapter() },
                     onJumpChapter = { index ->
                         activeSheet = null
                         viewModel.openChapter(index)

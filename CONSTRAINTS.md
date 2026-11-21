@@ -21,7 +21,7 @@ Last reviewed: 2026-11-11, from the owner's settled rules (MEMORY.md).
 ## Enforced with numbers
 | Dimension | Rule | Checked by |
 |-----------|------|-----------|
-| Gate | Full test suite: 0 failures (last full gate 2,549 tests) | gradle test + re-gate on any failure |
+| Gate | Full test suite: 0 failures (last full gate 3,036 tests; 3,046 test methods in the tree at Micro-build M, 2026-11-21) | gradle test + re-gate on any failure |
 | Size | APK < 100 MB, unminified | build report, size vs cap |
 | Proof | Phone proof on Galaxy M31 (old Android 9 phone where it applies) | owner video proof, frame-by-frame |
 | Delivery | One build per delivery, one gate, one APK | build log |

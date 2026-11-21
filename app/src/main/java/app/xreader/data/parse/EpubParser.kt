@@ -237,17 +237,11 @@ class EpubParser : BookParser {
             ?: return AppResult.Err(AppError.BadFile("this EPUB's book file couldn't be read"))
         val opfDir = opfPath.substringBeforeLast('/', "")
         val titles = mutableMapOf<String, String>()
-        opf.tocId?.let { tocId ->
-            opf.manifest[tocId]?.let { tocItem ->
-                val ncxPath = ZipPaths.resolve(opfDir, tocItem.href)
-                val ncxFile = entryFile(unzipped, entryIndex, ncxPath)
-                if (ncxFile != null) {
-                    val ncxDir = ncxPath.substringBeforeLast('/', "")
-                    titles.putAll(
-                        parseNcx(ncxFile).mapKeys { (src, _) -> ZipPaths.resolve(ncxDir, src) }
-                    )
-                }
-            }
+        locateNcx(unzipped, entryIndex, opf, opfDir)?.let { (ncxFile, ncxPath) ->
+            val ncxDir = ncxPath.substringBeforeLast('/', "")
+            titles.putAll(
+                parseNcx(ncxFile).mapKeys { (src, _) -> ZipPaths.resolve(ncxDir, src) }
+            )
         }
         opf.manifest.values.firstOrNull { "nav" in it.properties }?.let { navItem ->
             val navPath = ZipPaths.resolve(opfDir, navItem.href)
@@ -376,7 +370,7 @@ class EpubParser : BookParser {
                     },
                     spineHrefs = spineHrefs,
                     hasTocSource =
-                        opf.tocId?.let { opf.manifest[it] } != null ||
+                        locateNcx(unzipped, entryIndex, opf, opfDir) != null ||
                             opf.manifest.values.any {
                                 "nav" in it.properties
                             }
@@ -387,37 +381,56 @@ class EpubParser : BookParser {
         null
     }
 
-    /** Part 2: the TOC source walk — the NCX when the OPF
-     * declares one and the file is there (its entries, even
-     * an empty list, settle the matter: a broken NCX earns
-     * no nav rescue, the title harvest's own property);
-     * otherwise the nav document. Hrefs resolve against the
-     * TOC file's directory — ZipPaths.resolve strips the
-     * fragment itself, and the fragment is read off the raw
-     * source string, so resolution happens BEFORE the split
-     * in effect. */
+    /** Part 2: the TOC source walk. Micro-build M (the
+     * Moon+ discovery rule, REA 2026-11-20): the NCX is
+     * located by [locateNcx] — the spine's declared toc is
+     * only one route; the archive listing itself is scanned
+     * for a `.ncx` file — and when the book carries BOTH an
+     * NCX and a nav document, both are parsed and the
+     * LONGER list is the book's Contents (a tie keeps the
+     * NCX, the older precedence). This replaces the shipped
+     * rule that a declared-but-broken NCX settled the
+     * matter with no nav rescue: that rule is what left
+     * real books showing their raw spine sections.
+     * Hrefs resolve against the TOC file's directory —
+     * ZipPaths.resolve strips the fragment itself, and the
+     * fragment is read off the raw source string, so
+     * resolution happens BEFORE the split in effect. */
     private fun tocEntries(
         unzipped: File,
         entryIndex: Map<String, String>,
         opf: Opf,
         opfDir: String
     ): List<EpubTocEntry> {
-        val ncxItem = opf.tocId?.let { opf.manifest[it] }
-        if (ncxItem != null) {
-            val ncxPath = ZipPaths.resolve(opfDir, ncxItem.href)
-            val ncxFile = entryFile(unzipped, entryIndex, ncxPath)
-            if (ncxFile != null) {
-                val ncxDir = ncxPath.substringBeforeLast('/', "")
-                return parseNcxEntries(ncxFile).map { (label, src) ->
-                    EpubTocEntry(
-                        label = label,
-                        href = ZipPaths.resolve(ncxDir, src),
-                        fragment = src.substringAfter('#', "")
-                            .ifEmpty { null }
-                    )
-                }
-            }
+        val ncxEntries =
+            locateNcx(unzipped, entryIndex, opf, opfDir)
+                ?.let { (ncxFile, ncxPath) ->
+                    val ncxDir = ncxPath.substringBeforeLast('/', "")
+                    parseNcxEntries(ncxFile).map { (label, src) ->
+                        EpubTocEntry(
+                            label = label,
+                            href = ZipPaths.resolve(ncxDir, src),
+                            fragment = src.substringAfter('#', "")
+                                .ifEmpty { null }
+                        )
+                    }
+                } ?: emptyList()
+        val navEntries = navTocEntries(unzipped, entryIndex, opf, opfDir)
+        return if (navEntries.size > ncxEntries.size) {
+            navEntries
+        } else {
+            ncxEntries
         }
+    }
+
+    /** The nav document's TOC entries, or an empty list
+     * when the book declares no nav (or it can't be read). */
+    private fun navTocEntries(
+        unzipped: File,
+        entryIndex: Map<String, String>,
+        opf: Opf,
+        opfDir: String
+    ): List<EpubTocEntry> {
         val navItem = opf.manifest.values
             .firstOrNull { "nav" in it.properties }
             ?: return emptyList()
@@ -450,19 +463,13 @@ class EpubParser : BookParser {
         opfDir: String
     ): Map<String, String> {
         val titles = mutableMapOf<String, String>()
-        opf.tocId?.let { tocId ->
-            opf.manifest[tocId]?.let { tocItem ->
-                val ncxPath = ZipPaths.resolve(opfDir, tocItem.href)
-                val ncxFile = entryFile(unzipped, entryIndex, ncxPath)
-                if (ncxFile != null) {
-                    val ncxDir = ncxPath.substringBeforeLast('/', "")
-                    titles.putAll(
-                        parseNcx(ncxFile).mapKeys { (src, _) ->
-                            ZipPaths.resolve(ncxDir, src)
-                        }
-                    )
+        locateNcx(unzipped, entryIndex, opf, opfDir)?.let { (ncxFile, ncxPath) ->
+            val ncxDir = ncxPath.substringBeforeLast('/', "")
+            titles.putAll(
+                parseNcx(ncxFile).mapKeys { (src, _) ->
+                    ZipPaths.resolve(ncxDir, src)
                 }
-            }
+            )
         }
         opf.manifest.values.firstOrNull { "nav" in it.properties }
             ?.let { navItem ->
@@ -566,17 +573,11 @@ class EpubParser : BookParser {
 
         val opfDir = opfPath.substringBeforeLast('/', "")
         val titles = mutableMapOf<String, String>()
-        opf.tocId?.let { tocId ->
-            opf.manifest[tocId]?.let { tocItem ->
-                val ncxPath = ZipPaths.resolve(opfDir, tocItem.href)
-                val ncxFile = entryFile(unzipped, entryIndex, ncxPath)
-                if (ncxFile != null) {
-                    val ncxDir = ncxPath.substringBeforeLast('/', "")
-                    titles.putAll(
-                        parseNcx(ncxFile).mapKeys { (src, _) -> ZipPaths.resolve(ncxDir, src) }
-                    )
-                }
-            }
+        locateNcx(unzipped, entryIndex, opf, opfDir)?.let { (ncxFile, ncxPath) ->
+            val ncxDir = ncxPath.substringBeforeLast('/', "")
+            titles.putAll(
+                parseNcx(ncxFile).mapKeys { (src, _) -> ZipPaths.resolve(ncxDir, src) }
+            )
         }
         opf.manifest.values.firstOrNull { "nav" in it.properties }?.let { navItem ->
             val navPath = ZipPaths.resolve(opfDir, navItem.href)
@@ -822,6 +823,49 @@ class EpubParser : BookParser {
      * hit is only ever the fallback. Two entries differing only by
      * case collide — the first extracted wins (a pathological book;
      * either choice is as right as the other). */
+    /**
+     * Micro-build M: finds the book's NCX file — the pair is
+     * the extracted file and its zip-style path (hrefs in
+     * the NCX resolve against the path's directory). The
+     * discovery is Moon+'s (REA 2026-11-20): the spine's
+     * declared `toc` id is tried FIRST (the well-formed
+     * road, unchanged for healthy books), then the archive
+     * listing itself is scanned for a `.ncx` file — an
+     * exact `toc.ncx` name wins, then any folder's
+     * `toc.ncx`, then any `.ncx` at all. The shipped code
+     * knew only the declared route, so a book whose spine
+     * omits or misnames the toc reference silently lost its
+     * own table of contents and fell back to spine sections.
+     */
+    private fun locateNcx(
+        unzipped: File,
+        entryIndex: Map<String, String>,
+        opf: Opf,
+        opfDir: String
+    ): Pair<File, String>? {
+        opf.tocId?.let { tocId ->
+            opf.manifest[tocId]?.let { tocItem ->
+                val ncxPath = ZipPaths.resolve(opfDir, tocItem.href)
+                entryFile(unzipped, entryIndex, ncxPath)?.let { file ->
+                    return file to ncxPath
+                }
+            }
+        }
+        val candidates = entryIndex.values
+            .filter { it.endsWith(".ncx", ignoreCase = true) }
+            .sorted()
+        val scanned = candidates.firstOrNull { it.lowercase() == "toc.ncx" }
+            ?: candidates.firstOrNull {
+                it.lowercase().endsWith("/toc.ncx")
+            }
+            ?: candidates.firstOrNull()
+        return scanned?.let { path ->
+            entryFile(unzipped, entryIndex, path)?.let { file ->
+                file to path
+            }
+        }
+    }
+
     private fun buildEntryIndex(unzipped: File): Map<String, String> {
         val index = HashMap<String, String>()
         unzipped.walkTopDown().forEach { file ->

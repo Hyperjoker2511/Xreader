@@ -237,6 +237,43 @@ class GeminiClient(
     suspend fun testKey(): AppResult<TextResult> =
         generateText(prompt = "Reply with the single word: ready", maxOutputTokens = 16)
 
+    /**
+     * Micro-build M: the AI health check's probe — ONE call
+     * against [model] alone, no cascade stepping, so the
+     * answer says whether THIS model answers for the saved
+     * key (a model-unavailable 404 reports as that model's
+     * failure here, never as a step to the next model).
+     */
+    suspend fun probeModel(model: String): AppResult<TextResult> {
+        val key = keyProvider()?.takeIf { it.isNotBlank() }
+            ?: return AppResult.Err(noKeyError())
+        val body = requestBody(
+            turns = listOf(Turn("user", "Reply with the single word: ready")),
+            system = null,
+            jsonMode = false,
+            temperature = null,
+            maxOutputTokens = 16,
+            imageModalities = false
+        )
+        return when (val outcome = callOnce(model, key, body, stream = false)) {
+            is CallOutcome.Success -> {
+                val text = parseText(outcome.bodyJson)
+                if (text.isNullOrBlank()) {
+                    AppResult.Err(
+                        AppError.ProviderDown(
+                            SERVICE_ID, retryable = false,
+                            detail = "the model returned no text"
+                        )
+                    )
+                } else {
+                    AppResult.Ok(TextResult(text, model))
+                }
+            }
+            is CallOutcome.ModelUnavailable -> AppResult.Err(outcome.error)
+            is CallOutcome.Failure -> AppResult.Err(outcome.error)
+        }
+    }
+
     // -- Plumbing -------------------------------------------------------------
 
     data class Turn(val role: String, val text: String)

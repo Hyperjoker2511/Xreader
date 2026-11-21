@@ -11,6 +11,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.interaction.InteractionSource
@@ -254,33 +256,55 @@ fun stackPopExit(reduceMotion: Boolean): ExitTransition =
     else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) { it / 6 } +
         fadeOut(stackFadeSpec())
 
+/** SlideFade's decelerate curve (the ColorOS 17 demo's own
+ * values, ruled the default 2026-11-20). */
+private val slideFadeDecelerate = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
+
+/** SlideFade's accelerate curve for the exit half. */
+private val slideFadeAccelerate = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
+
 /**
- * Tab-to-tab (travel-choreography round, 2026-11-16,
- * SPEC-NAV-TRAVEL-WAVE-2026-11-16 §A — superseding the nav
- * engine round's sequenced fade-through for TAB ROOTS): the
- * incoming tab is simply THERE at the tap — no enter
- * transition at all. The fade-through's 300 ms crossfade made
- * both heavy screens compose simultaneously (the owner's
- * "works but lags" on the M31) and sat on top of the dock
- * indicator's travel, masking it; every reference in the
- * YouTube study swaps the screen instantly and lets the
- * MARKER be the motion. [direction] is still accepted (the
- * shell computes it) but steers nothing. Under
+ * Tab-to-tab — SlideFade (Micro-build M; the ColorOS 17
+ * demo the owner picked 2026-11-20, "Use it as default
+ * transition", pulled into M at his word). This supersedes
+ * the travel-choreography round's instant swap
+ * (SPEC-NAV-TRAVEL-WAVE-2026-11-16 §A) as the DEFAULT tab
+ * transition: the incoming tab slides in from a quarter
+ * width on the travel side over 450 ms on the decelerate
+ * curve, fading in over 320 ms after a 60 ms delay and
+ * scaling up from 0.94; [direction] steers it (+1 travels
+ * leftward toward the later tab, −1 rightward). Under
  * [reduceMotion] the pair stays the symmetric crossfade it
- * has always been — reduced motion's behaviour is unchanged.
- * Stack pushes/pops keep the shared-axis geometry above —
- * untouched.
+ * has always been — reduced motion's behaviour is
+ * unchanged. Stack pushes/pops keep the shared-axis
+ * geometry above — untouched.
  */
 fun tabEnter(direction: Int = 0, reduceMotion: Boolean = false): EnterTransition =
     if (reduceMotion) fadeIn(tabCrossfadeSpec())
-    else EnterTransition.None
+    else slideInHorizontally(
+        animationSpec = tween(450, easing = slideFadeDecelerate)
+    ) { direction * (it / 4) } +
+        fadeIn(tween(320, delayMillis = 60)) +
+        scaleIn(
+            animationSpec = tween(450, easing = slideFadeDecelerate),
+            initialScale = 0.94f
+        )
 
-/** Tab-to-tab exit: instant with [tabEnter] — the outgoing
- * tab leaves the moment the incoming one is there. Under
- * [reduceMotion] the exit keeps the symmetric crossfade. */
+/** Tab-to-tab exit, SlideFade's second half: the outgoing
+ * tab leaves toward a fifth width on the travel side over
+ * 300 ms on the accelerate curve, fading out over 200 ms
+ * and scaling down to 0.96. Under [reduceMotion] the exit
+ * keeps the symmetric crossfade. */
 fun tabExit(direction: Int = 0, reduceMotion: Boolean = false): ExitTransition =
     if (reduceMotion) fadeOut(tabCrossfadeSpec())
-    else ExitTransition.None
+    else slideOutHorizontally(
+        animationSpec = tween(300, easing = slideFadeAccelerate)
+    ) { -direction * (it / 5) } +
+        fadeOut(tween(200)) +
+        scaleOut(
+            animationSpec = tween(300),
+            targetScale = 0.96f
+        )
 
 /**
  * The Library's Novels ↔ Manga side switch (fix round §D.3):

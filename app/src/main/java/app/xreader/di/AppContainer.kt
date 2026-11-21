@@ -2081,7 +2081,8 @@ class AppContainer(
         app.xreader.data.update.AppUpdateRepository(
             http = app.xreader.data.update.OkHttpUpdateHttp(),
             prefs = updatePrefs,
-            installedVersion = { app.xreader.BuildConfig.VERSION_NAME }
+            installedVersion = { app.xreader.BuildConfig.VERSION_NAME },
+            installedVersionCode = { app.xreader.BuildConfig.VERSION_CODE }
         )
     }
 

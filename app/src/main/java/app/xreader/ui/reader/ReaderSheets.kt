@@ -1643,10 +1643,7 @@ fun TocSheet(
     onDeleteHighlight: (Highlight) -> Unit,
     onEditHighlightNote: (Highlight) -> Unit,
     /** Phase 6: share a highlight as a quote-card PNG. */
-    onQuoteCard: (Highlight) -> Unit = {},
-    /** Phase 5: cached AI summary of the chapter on screen. */
-    chapterSummary: app.xreader.data.db.AiSummary? = null,
-    onSummarizeChapter: (() -> Unit)? = null
+    onQuoteCard: (Highlight) -> Unit = {}
 ) {
     var tab by remember { mutableIntStateOf(0) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -1670,48 +1667,14 @@ fun TocSheet(
         }
         when (tab) {
             0 -> LazyColumn(Modifier.heightIn(max = 480.dp)) {
-                // Phase 5: this chapter's AI summary rides at the top
-                // of the Contents list (§7 "reader's chapter sheet").
-                item(key = "chapter-summary") {
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            "This chapter, in short",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = aiAccentColor()
-                        )
-                        val summary = chapterSummary
-                        if (summary != null) {
-                            app.xreader.data.ai.Summarizer
-                                .decodeBullets(summary.bulletsJson)
-                                .forEach { bullet ->
-                                    Text(
-                                        "• $bullet",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        modifier = Modifier.padding(vertical = 2.dp)
-                                    )
-                                }
-                        } else {
-                            Text(
-                                "No summary yet for this chapter.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (onSummarizeChapter != null) {
-                                androidx.compose.material3.TextButton(
-                                    onClick = onSummarizeChapter
-                                ) { Text("Summarize with AI") }
-                            }
-                        }
-                    }
-                }
+                // Micro-build M: the chapter's AI summary no
+                // longer rides at the top of Contents (the
+                // owner's ruling — Contents is the book's own
+                // list, nothing else; summaries live on the
+                // book page and in the AI sheet).
                 if (tocEntries.isNotEmpty()) {
                     // Part 2: the book's own Contents — the
-                    // TOC's entries in the book's order (the
-                    // summary item above is untouched). Each
+                    // TOC's entries in the book's order. Each
                     // row carries its target segment's state
                     // (the read tick, the "saved" word) exactly
                     // as chapter rows render it, is highlighted

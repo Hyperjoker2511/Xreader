@@ -1402,13 +1402,17 @@ private fun XreaderNavHost(
     // geometry is NOT touched. The branch is the engine's pure
     // isTabSwitch over the two endpoint routes.
     // Travel-choreography round (2026-11-16,
-    // SPEC-NAV-TRAVEL-WAVE-2026-11-16 §A): tab-to-tab is
-    // INSTANT now — the tabEnter / tabExit adapters yield None
-    // off the reduced-motion path, so the incoming tab is
-    // simply there at the tap and the dock marker's travel is
+    // SPEC-NAV-TRAVEL-WAVE-2026-11-16 §A): tab-to-tab was
+    // INSTANT — the tabEnter / tabExit adapters yielded None
+    // off the reduced-motion path, so the incoming tab was
+    // simply there at the tap and the dock marker's travel was
     // the only motion (the fade-through survives only in the
     // Novels ↔ Manga side switch and the reduced-motion
-    // crossfade). The stack geometry is still NOT touched.
+    // crossfade). Micro-build M (2026-11-21): the adapters now
+    // run SlideFade — the owner's picked ColorOS 17 default
+    // (direction-aware slide + fade + scale; see MotionSpecs)
+    // — while the reduced-motion crossfade is unchanged.
+    // The stack geometry is still NOT touched.
     val tabRoutes = remember { Tab.entries.map { it.route }.toSet() }
     // Liquid Glass, piece 3 (Dock Glass): the destination content
     // itself is a haze source (zIndex 1, above the MeshBackdrop

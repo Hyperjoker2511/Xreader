@@ -54,7 +54,7 @@ fun geminiModelLabel(model: String): String = when (model) {
     "gemini-3.5-flash-lite" -> "Gemini 3.5 Flash Lite — fastest, lightest"
     "gemini-3.1-flash-lite" -> "Gemini 3.1 Flash Lite"
     "gemini-3.8-flash" -> "Gemini 3.8 Flash — stronger"
-    "gemini-3.6-flash" -> "Gemini 3.6 Flash"
+    "gemini-4-hydrogen" -> "Gemini 4 Hydrogen — deepest, heaviest"
     else -> model
 }
 
@@ -551,6 +551,45 @@ private fun GeminiCard(
             Spacer(Modifier.height(8.dp))
             TextButton(onClick = { viewModel.removeKey(AiProviders.GEMINI_ID) }) {
                 Text("Remove key")
+            }
+            // Micro-build M: the AI health check — one tap
+            // probes every cascade model with the saved key.
+            TextButton(
+                onClick = { viewModel.checkAiHealth() },
+                enabled = !state.checkingHealth
+            ) {
+                Text(
+                    if (state.checkingHealth) {
+                        "Checking AI health…"
+                    } else {
+                        "Check AI health"
+                    }
+                )
+            }
+            state.aiHealth?.let { lines ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "AI health — each model, asked once:",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                lines.forEach { line ->
+                    Text(
+                        "• " + geminiModelLabel(line.model)
+                            .substringBefore(" — ") +
+                            if (line.ok) {
+                                " — working"
+                            } else {
+                                " — " + line.note
+                            },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (line.ok) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
+                }
             }
         }
     }

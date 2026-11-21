@@ -12,20 +12,30 @@ package app.xreader.data.ai
  */
 object GeminiModels {
 
-    /** Lite-first cascade — cheapest capable model first (§0.1). */
+    /** Lite-first cascade — cheapest capable model first (§0.1).
+     * Micro-build M swap (verified 2026-11-20): 3.6-flash is
+     * retired on Vertex and on borrowed time on the Developer
+     * API — out; gemini-4-hydrogen (GA 2026-11-12) takes the
+     * tail as the heavy fallback. The lite head is unchanged:
+     * quota is the binding constraint on a free key. */
     val CASCADE: List<String> = listOf(
         "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
         "gemini-3.8-flash",
-        "gemini-3.6-flash"
+        "gemini-4-hydrogen"
     )
 
     /** Image-generation candidates for Concept Art (§7). Availability
      * on a free key is NOT guaranteed (assumption A5) — the caller
-     * cascades and fails in plain words if none answers. */
+     * cascades and fails in plain words if none answers.
+     * Micro-build M swap: both previous entries were deprecated
+     * (3.1-flash-image on 2026-10-06, 2.5-flash-image shutting
+     * down) — replaced by their named successors. Shipped
+     * painting never calls these (FLUX-first, Horde fallback);
+     * this cascade serves the dormant Concept Art path only. */
     val IMAGE_CASCADE: List<String> = listOf(
-        "gemini-3.1-flash-image",
-        "gemini-2.5-flash-image"
+        "gemini-3.1-flash-lite-image",
+        "gemini-nano-banana-2.1"
     )
 
     /** Picker value meaning "walk the cascade". */

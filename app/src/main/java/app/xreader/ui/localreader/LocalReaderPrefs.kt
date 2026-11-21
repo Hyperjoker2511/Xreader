@@ -265,8 +265,8 @@ data class EpubTocEntryData(
     val charOffset: Int
 )
 
-/** One string per book: a first line of "v2" (entries
- * follow) or "none-v2" (the no-TOC marker); then one line
+/** One string per book: a first line of "v3" (entries
+ * follow) or "none-v3" (the no-TOC marker); then one line
  * per entry — chapterIndex, charOffset, label,
  * tab-separated, the label's own tabs/newlines flattened
  * to spaces (a label is display text; its whitespace
@@ -277,11 +277,20 @@ data class EpubTocEntryData(
  * so v2 writes a distinguishable marker, and the decode
  * below treats a bare v1 "none" as NO cache (the caller
  * recomputes), which heals books the v1 write poisoned on
- * their next open with no manual step. v1 entry lists
- * decode identically: a good v1 cache stays good. */
+ * their next open with no manual step.
+ *
+ * Micro-build M: the marker moves to v3. Every pre-v3
+ * cache was computed under the old NCX discovery (the
+ * spine's declared toc only), so a v2 entry list can be
+ * the spine-section fallback and a "none-v2" can be a
+ * false absence — neither can be told apart from a good
+ * cache, so ALL pre-v3 markers read as no cache below:
+ * each book recomputes once under the new discovery
+ * (archive scan + NCX/nav dual parse), then v3 settles
+ * it. The same one-time heal A3 ran, one generation on. */
 internal fun encodeEpubTocData(data: EpubTocData): String {
-    if (!data.hasToc) return "none-v2"
-    val builder = StringBuilder("v2")
+    if (!data.hasToc) return "none-v3"
+    val builder = StringBuilder("v3")
     for (entry in data.entries) {
         builder.append('\n')
             .append(entry.chapterIndex).append('\t')
@@ -296,18 +305,21 @@ internal fun encodeEpubTocData(data: EpubTocData): String {
  * "none" is a v1 write and reads as null too (Fix Round
  * G, Part A3): v1 cached failures as "none", so its
  * markers are exactly the poisoned ones and are ignored,
- * never trusted. Only the v2 marker settles a book as
- * TOC-less. */
+ * never trusted. Only the v3 marker settles a book as
+ * TOC-less, and only v3 entry lists are trusted —
+ * pre-v3 caches (v1/v2 lists, "none-v2") were computed
+ * under the old NCX discovery and recompute once under
+ * the new one (Micro-build M; see the encoder's note). */
 internal fun decodeEpubTocData(raw: String?): EpubTocData? {
     if (raw.isNullOrBlank()) return null
     val lines = raw.split('\n')
     return when (lines.first()) {
-        "none-v2" -> if (lines.size == 1) {
+        "none-v3" -> if (lines.size == 1) {
             EpubTocData(emptyList(), hasToc = false)
         } else {
             null
         }
-        "v1", "v2" -> {
+        "v3" -> {
             val entries =
                 ArrayList<EpubTocEntryData>(lines.size - 1)
             for (line in lines.drop(1)) {

@@ -7,6 +7,7 @@ import app.xreader.core.error.AppResult
 import app.xreader.core.error.ErrorText
 import app.xreader.core.security.KeyVault
 import app.xreader.data.ai.GeminiClient
+import app.xreader.data.ai.GeminiModels
 import app.xreader.data.ai.hub.AiProtocol
 import app.xreader.data.ai.hub.AiProviderDef
 import app.xreader.data.ai.hub.AiProviders
@@ -55,12 +56,25 @@ data class AddProviderUiState(
     val models: List<ProviderDiscovery.ModelInfo> = emptyList()
 )
 
+/** One AI-health line (Micro-build M): a cascade model's
+ * verdict from the last health check. */
+data class AiHealthLine(
+    val model: String,
+    val ok: Boolean,
+    /** Plain-words failure line when [ok] is false. */
+    val note: String = ""
+)
+
 data class ProvidersUiState(
     val settings: AiSettings = AiSettings(),
     val providers: List<ProviderCardState> = emptyList(),
     /** Provider id currently being key-tested, if any. */
     val testingId: String? = null,
     val testingOllama: Boolean = false,
+    /** Micro-build M: the AI health check's run state and
+     * its per-model lines (null until the first check). */
+    val checkingHealth: Boolean = false,
+    val aiHealth: List<AiHealthLine>? = null,
     val statusMessage: String? = null,
     val statusIsError: Boolean = false,
     val add: AddProviderUiState = AddProviderUiState(),
@@ -95,6 +109,8 @@ class ProvidersViewModel(private val container: AppContainer) : ViewModel() {
     private data class LocalState(
         val testingId: String? = null,
         val testingOllama: Boolean = false,
+        val checkingHealth: Boolean = false,
+        val aiHealth: List<AiHealthLine>? = null,
         val statusMessage: String? = null,
         val statusIsError: Boolean = false,
         val add: AddProviderUiState = AddProviderUiState(),
@@ -134,6 +150,8 @@ class ProvidersViewModel(private val container: AppContainer) : ViewModel() {
             },
             testingId = localState.testingId,
             testingOllama = localState.testingOllama,
+            checkingHealth = localState.checkingHealth,
+            aiHealth = localState.aiHealth,
             statusMessage = localState.statusMessage,
             statusIsError = localState.statusIsError,
             add = localState.add,
@@ -185,6 +203,35 @@ class ProvidersViewModel(private val container: AppContainer) : ViewModel() {
                     )
                 }
             }
+        }
+    }
+
+    /** Micro-build M: the AI health check — probes every
+     * model in the cascade once with the SAVED key and
+     * reports one plain line per model, so a retired model
+     * or a tired key is visible before a feature fails on
+     * it. Read-only: nothing is saved or changed. */
+    fun checkAiHealth() {
+        if (local.value.checkingHealth) return
+        local.value = local.value.copy(
+            checkingHealth = true, aiHealth = null
+        )
+        viewModelScope.launch {
+            val lines = GeminiModels.CASCADE.map { model ->
+                when (val result = container.geminiClient.probeModel(model)) {
+                    is AppResult.Ok -> AiHealthLine(model, ok = true)
+                    is AppResult.Err -> AiHealthLine(
+                        model,
+                        ok = false,
+                        note = ErrorText.displayText(result.error)
+                            .lineSequence().firstOrNull()?.trim()
+                            .orEmpty()
+                    )
+                }
+            }
+            local.value = local.value.copy(
+                checkingHealth = false, aiHealth = lines
+            )
         }
     }
 
