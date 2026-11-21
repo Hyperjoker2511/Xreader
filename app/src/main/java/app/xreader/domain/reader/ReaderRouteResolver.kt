@@ -149,9 +149,12 @@ class ReaderRouteResolver(
             // v1.7 Patch 3 (Item 2a): a PREPARED EPUB (Item 1's
             // one-time conversion landed + recorded) is a
             // converted book and routes to the core reader;
-            // every other local book — unprepared EPUBs (whose
-            // prepare runs inside the local open flow) and
-            // FXL/RTL EPUBs — keeps the LocalDoc verdict.
+            // every other local book keeps the LocalDoc verdict.
+            // v1.7 OE-2 (R3): for an unprepared EPUB — FXL and
+            // RTL books included, they convert like any EPUB —
+            // the LocalDoc destination is now only the prepare
+            // host: it prepares the book and redirects to the
+            // core. No EPUB is read on the local road any more.
             if (book.localFormat == BookFormat.EPUB &&
                 epubPrepared?.invoke(book) == true
             ) {

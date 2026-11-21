@@ -168,7 +168,23 @@ data class EpubSkeleton(
     /** Provisional chapter titles in spine order (text AND
      * image spine items — the completion's final list may
      * differ where front matter is skipped). */
-    val chapterTitles: List<String>
+    val chapterTitles: List<String>,
+    /** v1.7 OE-2 (R4): the OPF's own fixed-layout flag —
+     * `rendition:layout = pre-paginated` in the package
+     * metadata. Read from the file itself; no engine session
+     * is consulted for it any more. */
+    val isFixedLayout: Boolean = false,
+    /** v1.7 OE-2 (R4): the OPF spine's
+     * `page-progression-direction = "rtl"`, from the file
+     * itself, as above. */
+    val isRtlProgression: Boolean = false,
+    /** v1.7 OE-2 (R5): every spine item's href, resolved
+     * OPF-relative in spine order — the reading-order href
+     * list the EPUB prepare bridge matches BY HREF (through
+     * EpubHrefBridge's canonicalisation, never by raw
+     * index). The space the retired session's reading-order
+     * list used to supply. */
+    val spineHrefs: List<String> = emptyList()
 )
 
 /**
@@ -305,7 +321,14 @@ class EpubParser : BookParser {
                 description = opf.description,
                 language = opf.language,
                 coverFile = coverFile,
-                chapterTitles = chapterTitles
+                chapterTitles = chapterTitles,
+                isFixedLayout = opf.isFixedLayout,
+                isRtlProgression = opf.isRtlProgression,
+                spineHrefs = opf.spine.mapNotNull { idref ->
+                    opf.manifest[idref]?.let { item ->
+                        ZipPaths.resolve(opfDir, item.href)
+                    }
+                }
             )
         )
     }
@@ -1423,7 +1446,14 @@ class EpubParser : BookParser {
          * image at cover-derivation time); null when the guide
          * named an image directly (folded into [coverHref]) or
          * the book has no guide cover. */
-        val guideCoverPageHref: String? = null
+        val guideCoverPageHref: String? = null,
+        /** v1.7 OE-2 (R4): the package metadata declared
+         * `rendition:layout = pre-paginated` — the EPUB 3
+         * fixed-layout signal. */
+        val isFixedLayout: Boolean = false,
+        /** v1.7 OE-2 (R4): the spine declared
+         * `page-progression-direction = "rtl"`. */
+        val isRtlProgression: Boolean = false
     )
 
     private fun parseOpf(file: File): Opf? = try {
@@ -1435,6 +1465,8 @@ class EpubParser : BookParser {
         var coverId: String? = null
         var guideHref: String? = null
         var inGuide = false
+        var fixedLayout = false
+        var spinePageProgression: String? = null
         val manifest = mutableMapOf<String, ManifestItem>()
         val spine = mutableListOf<String>()
         var tocId: String? = null
@@ -1452,6 +1484,21 @@ class EpubParser : BookParser {
                         if (parser.getAttributeValue(null, "name") == "cover") {
                             coverId = parser.getAttributeValue(null, "content")
                         }
+                        // v1.7 OE-2 (R4): the EPUB 3 rendition
+                        // signal — <meta property="rendition:layout">
+                        // pre-paginated</meta> (a content-attribute
+                        // spelling of the same property is read
+                        // too; it is the same signal, not another).
+                        if (parser.getAttributeValue(null, "property") ==
+                            "rendition:layout"
+                        ) {
+                            val declared = parser
+                                .getAttributeValue(null, "content")
+                                ?: parser.nextText()
+                            if (declared?.trim() == "pre-paginated") {
+                                fixedLayout = true
+                            }
+                        }
                     }
                     "item" -> {
                         val id = parser.getAttributeValue(null, "id")
@@ -1466,7 +1513,14 @@ class EpubParser : BookParser {
                             )
                         }
                     }
-                    "spine" -> tocId = parser.getAttributeValue(null, "toc")
+                    "spine" -> {
+                        tocId = parser.getAttributeValue(null, "toc")
+                        // v1.7 OE-2 (R4): the spine's declared
+                        // reading progression.
+                        spinePageProgression = parser.getAttributeValue(
+                            null, "page-progression-direction"
+                        )
+                    }
                     "itemref" -> parser.getAttributeValue(null, "idref")?.let { spine += it }
                     // v1.5.4 (WS-7): the guide cover — the third
                     // standard cover declaration, which commercial
@@ -1511,7 +1565,10 @@ class EpubParser : BookParser {
             ?: guideImageHref
         Opf(
             title, author, description, language, manifest, spine, tocId,
-            coverHref, guidePageHref
+            coverHref, guidePageHref,
+            isFixedLayout = fixedLayout,
+            isRtlProgression = spinePageProgression?.trim()
+                ?.equals("rtl", ignoreCase = true) == true
         )
     } catch (e: Exception) {
         null

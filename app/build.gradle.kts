@@ -27,8 +27,8 @@ android {
         applicationId = "app.xreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 104
-        versionName = "1.6.2-mr8"
+        versionCode = 105
+        versionName = "1.6.2-mr9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -87,8 +87,12 @@ android {
         }
     }
     compileOptions {
-        // v1.5.6 (§3): Readium requires core library desugaring.
-        isCoreLibraryDesugaringEnabled = true
+        // v1.7 OE-2 (R25): core library desugaring retired with
+        // Readium, its only hard requirement — the app's own
+        // java.time use is native at minSdk 26, and the step-1
+        // sweep found no other consumer. (If the release dex
+        // build objects, the build's verdict stands and the
+        // flag returns; see the OE-2 build report.)
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -192,15 +196,12 @@ dependencies {
     implementation(libs.pdfbox.android)
     implementation(libs.junrar)
 
-    // v1.5.6 (§3): the render-the-file EPUB carrier — Readium Kotlin
-    // 3.1.2 (BSD-3). Transitves (media3, kotlin-reflect, …) are taken
-    // as they come; exclusions are NOT gambled on (carrier verdict).
-    implementation(libs.readium.shared)
-    implementation(libs.readium.streamer)
-    implementation(libs.readium.navigator)
-    coreLibraryDesugaring(libs.desugar.jdk.libs)
-    // v1.5.6: real Guava over the empty listenablefuture stub that
-    // media3's graph otherwise selects (ML Kit/CameraX break).
+    // v1.7 OE-2 (R24/R25): the Readium EPUB carrier and the
+    // desugaring dependency are deleted whole — every EPUB
+    // now converts into the core reader, and nothing else in
+    // the graph required either.
+    // v1.5.6: real Guava over the empty listenablefuture stub
+    // (ML Kit/CameraX need the real Guava's ListenableFuture).
     implementation(libs.guava)
 
     // v1.5.7 (Komikku full): SSIV tiling page view for the manga

@@ -36,14 +36,20 @@ import java.io.File
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 
-/** v1.7 Patch 3 (Item 1b): what the detect session hands
- * prepare — fixed-layout and RTL-progression books are
- * refused the core road and keep the picture surface. */
+/** v1.7 Patch 3 (Item 1b): what the detect hands prepare.
+ * v1.7 OE-2 (R5, R6): the detect is built from the parser
+ * probe (EpubParser's OPF parse), not from an engine
+ * session — and the two flags no longer refuse anything:
+ * fixed-layout and RTL-progression books convert like
+ * every EPUB (the owner's Moon+ pick). The fields are
+ * kept as inert information; nothing in prepare keys
+ * behaviour off them. */
 data class EpubDetect(
     val isFixedLayout: Boolean,
     val isRtlProgression: Boolean,
-    /** The detect session's reading-order hrefs (its own
-     * index space — Item 3a's session-bridge input). */
+    /** The reading-order hrefs (the probe's spine hrefs —
+     * Item 3a's session-bridge input, matched BY HREF
+     * through EpubHrefBridge, never by raw index). */
     val sessionHrefs: List<String>
 )
 
@@ -59,14 +65,17 @@ sealed interface EpubPrepareOutcome {
         val marksUnplaced: Int = 0
     ) : EpubPrepareOutcome
 
-    /** Not eligible for the core road (fixed-layout / RTL /
-     * no file to convert): the caller continues on the local
-     * road exactly as before this patch. */
+    /** Not eligible for the core road (not a local EPUB /
+     * no file to convert): the caller lands the book on the
+     * local surface's honest states — there is no second
+     * EPUB road left to continue on (v1.7 OE-2, R6/R13). */
     data object NotEligible : EpubPrepareOutcome
 
     /** A non-DRM prepare failure (Item 1f): the book stays
-     * on the local road for this open, unprepared and
-     * retryable on a later open. Never less readable. */
+     * unprepared and retryable on a later open. v1.7 OE-2
+     * (R13): with no local EPUB road left, the caller lands
+     * it on the Failed state with a working Try again —
+     * never less readable than that honest state. */
     data class Fallback(val reason: String) : EpubPrepareOutcome
 
     /** DRM (Item 1b): content-blocking encryption refuses
@@ -76,7 +85,8 @@ sealed interface EpubPrepareOutcome {
 
 /**
  * v1.7 Patch 3 (Item 1): the EPUB loader for the shared
- * core. On a reflowable in-place EPUB's first open this runs
+ * core. On an in-place EPUB's first open (v1.7 OE-2: every
+ * EPUB — reflowable, fixed-layout, RTL alike) this runs
  * the existing [EpubParser]/XhtmlConverter over the book's
  * file and lands what a converted-chapter import lands —
  * Chapter rows, per-chapter ChapterContent JSON, extracted
@@ -129,9 +139,10 @@ class EpubPrepareService(
         ) {
             return EpubPrepareOutcome.NotEligible
         }
-        if (detect.isFixedLayout || detect.isRtlProgression) {
-            return EpubPrepareOutcome.NotEligible
-        }
+        // v1.7 OE-2 (R6): the fixed-layout / RTL refusal is
+        // deleted — those books convert through the same
+        // pipeline as every EPUB (R7, R10). The detect flags
+        // are inert from here on.
         val oldRecord = runCatching { prefs.epubPrepareRecord(book.id) }
             .getOrNull()
         val saved = runCatching {
@@ -587,10 +598,13 @@ class EpubPrepareService(
      * chapterId/chapterIndex, charOffset set, locatorJson
      * cleared), never a second converted row (the core VM
      * observes the tables unfiltered; a copy would show every
-     * mark twice). The river's DataStore selection store is
-     * READ ONCE here and never written: its EPUB entries
-     * become new core Highlight rows. Marks that cannot be
-     * placed keep their old shape and are counted.
+     * mark twice). The river's DataStore selection store's
+     * EPUB entries become new core Highlight rows — and,
+     * v1.7 OE-2 (R20), every entry this pass processed is
+     * CONSUMED (removed from the store) as part of the same
+     * landed prepare, so a later re-prepare cannot convert
+     * the same entry twice. Marks that cannot be placed
+     * keep their old shape and are counted.
      *
      * Patch 1 (A1): marks that are ALREADY core-shaped
      * (locatorJson == null — the owner's own bookmarks and
@@ -894,13 +908,22 @@ class EpubPrepareService(
             if (!placed) unplaced++
         }
 
-        // The river's selection store: read once, never
-        // written again (Item 4d). EPUB entries (locator-set,
-        // page-less) become NEW core Highlight rows — the
-        // store has no core counterpart row to flip.
-        val stored = runCatching {
+        // The river's selection store (Item 4d). EPUB
+        // entries (locator-set, page-less) become NEW core
+        // Highlight rows — the store has no core counterpart
+        // row to flip. v1.7 OE-2 (R20/R21): the full list is
+        // read once; the entries this pass processes are
+        // consumed below (placed AND counted-unplaced alike)
+        // because this call only ever runs on a prepare that
+        // has already landed and verified — a Fallback or
+        // Refused prepare never reaches here, so nothing is
+        // consumed ahead of a retry. PDF-form entries
+        // (page != null) and other books' entries are never
+        // in the processed set and are never touched.
+        val allStored = runCatching {
             selectionHighlightStore.highlights(book.id).first()
         }.getOrDefault(emptyList())
+        val stored = allStored
             .filter { it.locatorJson != null && it.page == null }
         for (entry in stored) {
             val parserIndex = resolveChapter(entry.locatorJson, -1)
@@ -940,6 +963,27 @@ class EpubPrepareService(
                 }
             }
             if (!placed) unplaced++
+        }
+        // v1.7 OE-2 (R20/R21): consume the processed store
+        // entries — write back exactly the entries this pass
+        // did NOT process (PDF-form entries and any
+        // locator-less rows keep their place untouched). A
+        // failed write is logged, never fatal: the prepare
+        // has landed, and the worst case is the pre-OE-2
+        // behaviour (a re-prepare re-counts the entries).
+        if (stored.isNotEmpty()) {
+            val processedIds = stored.mapTo(HashSet()) { it.id }
+            val survivors = allStored.filterNot { it.id in processedIds }
+            val consumed = runCatching {
+                selectionHighlightStore.save(book.id, survivors)
+            }
+            if (consumed.isFailure) {
+                DiagnosticLog.record(
+                    "epub-prepare",
+                    "book ${book.id}: selection-store consumption " +
+                        "failed; entries stay for the next prepare"
+                )
+            }
         }
         return MarksResult(converted = converted, unplaced = unplaced)
     }

@@ -16,11 +16,9 @@ import app.xreader.data.engine.LocalPasswordRequiredException
 import app.xreader.data.engine.LocatorJson
 import app.xreader.data.engine.OutlineEntry
 import app.xreader.data.engine.PdfSession
-import app.xreader.data.engine.ReadiumEpubSession
 import app.xreader.data.extension.DiagnosticLog
 import app.xreader.data.importer.ImportCompletionState
 import app.xreader.data.prefs.settingsDataStore
-import org.readium.r2.shared.publication.services.positionsByReadingOrder
 import app.xreader.data.reader.ReadAloudController
 import app.xreader.data.reader.TtsEngine
 import app.xreader.di.AppContainer
@@ -39,30 +37,17 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import org.readium.r2.shared.publication.Locator
 
 /**
  * v1.5.6 (§3.1 row 9 / §3.3): the local-document reader's state.
  * ONE open behind ONE loading state — the old "Preparing chapter…"
  * state machine does not exist on this path.
+ *
+ * v1.7 OE-2: the EPUB position/settings state that used to
+ * live here is gone with the river — an EPUB open now ends
+ * in the prepare host's redirect or one of the honest
+ * states below, never in a Ready carrying a session.
  */
-/** v1.5.7 (Scope C): live EPUB position for the book reader's
- * bottom bar — percent + chapter, never a page count.
- * v1.5.10 (F4/F2 seams): [withinChapter] is the status line's
- * (position-in-chapter / pages-in-chapter) pair, derived in
- * the ViewModel from the navigator's own positions (see
- * [LocalDocReaderViewModel.onEpubLocator]); null while
- * positions are unavailable, in which case the status line
- * renders its pre-F4 shape. [inSectionFraction] feeds the
- * Book information sheet's chapter-remaining estimate. */
-data class EpubProgress(
-    val fraction: Float,
-    val chapterTitle: String?,
-    val sectionIndex: Int,
-    val sectionCount: Int,
-    val withinChapter: Pair<Int, Int>? = null,
-    val inSectionFraction: Float = 0f
-)
 
 /** v1.5.7 (Scope C): live PDF position for the document reader's
  * bottom bar — a real file page out of a real total. */
@@ -84,18 +69,10 @@ sealed interface LocalReaderState {
         /** Where reading starts: saved progress or the caller's
          * target, resolved once at open. */
         val initialTargetJson: String?,
-        val initialEpubLocator: Locator?,
         val initialIndex: Int,
         val fontSizeMultiplier: Double,
-        /** v1.5.7: this book's EPUB book-mode settings (loaded at
-         * open; live updates ride [LocalDocReaderViewModel.epubSettings]). */
-        val initialEpubSettings: EpubBookSettings = EpubBookSettings(),
         /** v1.5.7: this book's PDF document-mode settings. */
-        val initialPdfSettings: PdfDocSettings = PdfDocSettings(),
-        /** v1.5.8 (G10): the EPUB declares itself fixed-layout
-         * (rendition:layout = pre-paginated) — the reader labels
-         * it and its per-book default was paginated at open. */
-        val isFixedLayout: Boolean = false
+        val initialPdfSettings: PdfDocSettings = PdfDocSettings()
     ) : LocalReaderState
 
     /** The file is gone / unreadable where it lives (§3.4(d)):
@@ -106,26 +83,16 @@ sealed interface LocalReaderState {
     /** [canResumeImport] (v1.7 MR-1, A4): this failure is a
      * converted-format book that reached the local surface
      * because none of its chapters landed — its retry is the
-     * import resume, offered by the Failed surface. Every
-     * other failure (EPUB/PDF included) leaves it false and
-     * keeps the Back-only shape. */
+     * import resume, offered by the Failed surface.
+     * v1.7 OE-2 (R13): an EPUB whose one-time prepare failed
+     * also carries it — its Try again re-runs the prepare.
+     * Every other failure leaves it false and keeps the
+     * Back-only shape. */
     data class Failed(
         val message: String,
         val canResumeImport: Boolean = false
     ) : LocalReaderState
 }
-
-data class LocalSearchHit(
-    val index: Int,
-    val title: String,
-    val snippet: String,
-    /** v1.5.34 (R6): the query that produced this hit and its
-     * char offset in the section's extracted text — the river
-     * lands a search jump ON the hit (transient mark), not
-     * merely on its section. -1 when unknown. */
-    val query: String = "",
-    val charOffset: Int = -1
-)
 
 /** A one-shot jump request the surface consumes (page/section). */
 data class LocalJump(
@@ -137,38 +104,6 @@ data class LocalJump(
     val markQuery: String? = null,
     val markCharOffset: Int = -1
 )
-
-/**
- * v1.5.9 (F-3b): the locator-pipeline throttle. A locator
- * emission earns the FULL derivation (JSON round-trip, anchor
- * lookup, progress flows, progress save) only when the section
- * changed or the whole-book progression crossed a 0.1% bucket
- * since the last derived emission. Emissions that earn neither
- * still update the VM's raw current locator (bookmark fidelity
- * is unaffected) — they just skip the expensive bookkeeping.
- * Pure and clock-free so the budget test drives it directly.
- */
-internal class EpubLocatorGate {
-    private var lastSection: Int? = null
-    private var lastBucket: Long? = null
-
-    /** The 0.1%-bucket a whole-book progression falls in. */
-    fun bucketOf(totalProgression: Double?): Long? =
-        totalProgression?.let { (it * 1_000).toLong() }
-
-    fun shouldDerive(section: Int, totalProgression: Double?): Boolean {
-        val bucket = bucketOf(totalProgression)
-        if (section == lastSection && bucket == lastBucket) return false
-        lastSection = section
-        lastBucket = bucket
-        return true
-    }
-
-    fun reset() {
-        lastSection = null
-        lastBucket = null
-    }
-}
 
 /**
  * v1.5.9 (F-4a): debounced settings persistence — the same
@@ -201,60 +136,13 @@ internal class DebouncedSettingsSave<T>(
     }
 }
 
-/**
- * v1.5.9 (F-10): the in-book search sweep's session-lifetime
- * text memo. The first sweep fills it lazily, section by
- * section; second and later queries read the memo and perform
- * ZERO additional `textAt` reads. Bounded at 64 MB of chars —
- * beyond the cap a section's text is re-read on demand and
- * never retained. Cleared when a (new) session opens and when
- * the ViewModel is cleared.
- */
-internal class SearchTextMemo(
-    private val maxChars: Long = 64_000_000L
-) {
-    private val texts = mutableMapOf<Int, String>()
-    private var totalChars: Long = 0L
-
-    val size: Int get() = synchronized(texts) { texts.size }
-    val retainedChars: Long get() = synchronized(texts) { totalChars }
-
-    suspend fun textAt(index: Int, provider: suspend (Int) -> String): String {
-        synchronized(texts) { texts[index] }?.let { return it }
-        val text = provider(index)
-        synchronized(texts) {
-            if (!texts.containsKey(index) &&
-                totalChars + text.length <= maxChars
-            ) {
-                texts[index] = text
-                totalChars += text.length
-            }
-        }
-        return text
-    }
-
-    fun clear() {
-        synchronized(texts) {
-            texts.clear()
-            totalChars = 0L
-        }
-    }
-}
-
-/** v1.7 Patch 1 (item 6a): the stored positions index is
- * usable only for the publication it was computed from —
- * the section count is the validity key. A miss, or a
- * count that moved (the file changed under the book),
- * recomputes from the PositionsService instead of trusting
- * stale starts. Pure, pinned by Patch1EpubPositionsTest. */
-internal fun storedPositionsUsable(
-    stored: EpubPositionsIndex?,
-    sectionCount: Int
-): Boolean = stored != null && stored.sectionCount == sectionCount
-
 /** v1.7 Patch 3 (Item 1a): the local open flow's verdict for
- * an EPUB — leave for the core route, refuse honestly, or
- * carry on opening on the local road exactly as before. */
+ * an EPUB — leave for the core route, or refuse honestly.
+ * v1.7 OE-2 (R12): the three shapes are kept, but there is
+ * no local EPUB road left to continue onto — [ContinueLocal]
+ * now means the prepare host has already landed the book on
+ * a local terminal state (Failed / FileMissing) and the
+ * open flow simply stops. */
 private sealed interface EpubOpenStep {
     data class Redirect(val chapterIndex: Int) : EpubOpenStep
     data class Refused(val message: String) : EpubOpenStep
@@ -282,11 +170,6 @@ class LocalDocReaderViewModel(
      * keeps the shipped filter exactly. */
     private val _bookmarksRaw = MutableStateFlow<List<Bookmark>>(emptyList())
 
-    private val _searchHits = MutableStateFlow<List<LocalSearchHit>?>(null)
-    val searchHits: StateFlow<List<LocalSearchHit>?> = _searchHits
-    private val _searchBusy = MutableStateFlow(false)
-    val searchBusy: StateFlow<Boolean> = _searchBusy
-
     private val _jumps = MutableSharedFlow<LocalJump>(extraBufferCapacity = 4)
     val jumps: SharedFlow<LocalJump> = _jumps.asSharedFlow()
 
@@ -301,64 +184,20 @@ class LocalDocReaderViewModel(
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
-    // ── v1.5.7 (Scopes B+C): the two readers' settings + live
+    // ── v1.5.7 (Scopes B+C): the readers' settings + live
     // position. The setting sets are format-specific and are
     // loaded once at open (only this ViewModel writes their
     // keys), then updated through the update* functions below.
+    // v1.7 OE-2: the EPUB half of this machinery (settings
+    // flow, debounced save, locator gate, search memo,
+    // positions seam, progress flow) is deleted with the
+    // river — an EPUB never reaches a session here any more.
     private val localPrefs = LocalReaderPrefs(
         container.applicationContext.settingsDataStore
     )
-    private val _epubSettings = MutableStateFlow(EpubBookSettings())
-    val epubSettings: StateFlow<EpubBookSettings> = _epubSettings
     private val _pdfSettings = MutableStateFlow(PdfDocSettings())
     val pdfSettings: StateFlow<PdfDocSettings> = _pdfSettings
     private var pdfSaveJob: Job? = null
-
-    /** v1.5.9 (F-4a): EPUB settings persistence, debounced
-     * 500 ms exactly like the PDF path — state still applies
-     * instantly in [updateEpubSettings]. */
-    private val epubSave = DebouncedSettingsSave<EpubBookSettings>(
-        scope = viewModelScope,
-        delayMs = 500L,
-        dispatcher = container.ioDispatcher
-    ) { next -> runCatching { localPrefs.saveEpub(bookId, next) } }
-
-    /** v1.5.9 (F-3b): the locator derivation throttle. */
-    internal val epubLocatorGate = EpubLocatorGate()
-
-    /** v1.5.9 (F-10): search texts, memoised for the session. */
-    internal val searchTextMemo = SearchTextMemo()
-
-    private val _epubProgress = MutableStateFlow<EpubProgress?>(null)
-    val epubProgress: StateFlow<EpubProgress?> = _epubProgress
-
-    /**
-     * v1.5.10 (F4): the navigator's positions per reading-order
-     * section, computed ONCE at EPUB open from the
-     * publication's own PositionsService
-     * (`positionsByReadingOrder`): [epubPositionStarts][i] is
-     * the 0-based global position index where section i
-     * starts, [epubPositionCounts][i] its position count.
-     * Null until the computation lands (locators derived
-     * before then simply carry no within-chapter pair).
-     */
-    @Volatile private var epubPositionStarts: IntArray? = null
-    @Volatile private var epubPositionCounts: IntArray? = null
-
-    /** The within-chapter pair for a 1-based global
-     * [position] in [section] — L-FG's pure
-     * [withinChapterPosition] over the positions seam above. */
-    private fun withinChapterFor(
-        section: Int,
-        globalPosition: Int?
-    ): Pair<Int, Int>? {
-        val starts = epubPositionStarts ?: return null
-        val counts = epubPositionCounts ?: return null
-        val start = starts.getOrNull(section) ?: return null
-        val count = counts.getOrNull(section) ?: return null
-        val position = globalPosition ?: return null
-        return withinChapterPosition(position - 1 - start, count)
-    }
 
     /**
      * v1.5.10 (F2): this book's favourite state + toggle — the
@@ -378,12 +217,6 @@ class LocalDocReaderViewModel(
     }
     private val _pdfProgress = MutableStateFlow<PdfProgress?>(null)
     val pdfProgress: StateFlow<PdfProgress?> = _pdfProgress
-
-
-    /** The navigator's latest EPUB locator (drives "is this
-     * contents entry current" highlighting). */
-    @Volatile var currentEpubLocator: Locator? = null
-        private set
 
     /** Current position, as the progress row will store it. */
     private data class Position(
@@ -497,24 +330,18 @@ class LocalDocReaderViewModel(
     @Volatile private var ttsPdfActive: Boolean = false
 
     // ── v1.5.8 (G8): volume-key turns from the comfort host.
-    // PDF turns ride the existing jump seam; EPUB turns are
-    // consumed by the navigator's owner (EpubBody).
-    private val _volumeTurnRequests = MutableSharedFlow<Int>(extraBufferCapacity = 4)
-    val volumeTurnRequests: SharedFlow<Int> = _volumeTurnRequests.asSharedFlow()
-
+    // PDF turns ride the existing jump seam. (v1.7 OE-2: the
+    // EPUB turn requests died with their only consumer, the
+    // river body.)
     /** A volume-key turn from the local-reader comfort host
      * (registered only while the per-book setting is on). */
     fun onVolumeKeyTurn(direction: Int) {
         val pdf = session as? PdfSession
-        when {
-            pdf != null -> {
-                val current = _pdfProgress.value?.page ?: position?.index ?: 0
-                val target = (current + direction)
-                    .coerceIn(0, (pdf.sectionCount - 1).coerceAtLeast(0))
-                _jumps.tryEmit(LocalJump(target))
-            }
-            session is ReadiumEpubSession -> _volumeTurnRequests.tryEmit(direction)
-            else -> Unit
+        if (pdf != null) {
+            val current = _pdfProgress.value?.page ?: position?.index ?: 0
+            val target = (current + direction)
+                .coerceIn(0, (pdf.sectionCount - 1).coerceAtLeast(0))
+            _jumps.tryEmit(LocalJump(target))
         }
     }
 
@@ -558,10 +385,6 @@ class LocalDocReaderViewModel(
     }
 
     private fun open() {
-        // v1.5.9 (F-10/F-3b): a new session starts with an empty
-        // search memo and a fresh locator gate.
-        searchTextMemo.clear()
-        epubLocatorGate.reset()
         _state.value = LocalReaderState.Loading()
         viewModelScope.launch(container.ioDispatcher) {
             val loaded = container.database.bookDao().getById(bookId)
@@ -571,6 +394,24 @@ class LocalDocReaderViewModel(
                 return@launch
             }
             try {
+                val saved = container.database.readingProgressDao().getForBook(bookId)
+                // v1.7 OE-2 (R12): an EPUB never reaches a
+                // session open — BookEngine has no EPUB arm
+                // any more. The prepare host below is its whole
+                // road on this surface, and it is always
+                // terminal: a redirect to the core route, the
+                // DRM refusal, or a terminal state the host
+                // itself set (prepare-failed / file-missing).
+                if (loaded.localFormat == BookFormat.EPUB) {
+                    when (val step = runEpubPrepareStep(loaded, saved)) {
+                        is EpubOpenStep.Redirect ->
+                            _coreRedirect.tryEmit(step.chapterIndex)
+                        is EpubOpenStep.Refused ->
+                            _state.value = LocalReaderState.Failed(step.message)
+                        EpubOpenStep.ContinueLocal -> Unit
+                    }
+                    return@launch
+                }
                 val opened = BookEngine.open(
                     context = container.applicationContext,
                     book = loaded,
@@ -581,73 +422,22 @@ class LocalDocReaderViewModel(
                 session?.close()
                 session = opened
                 runCatching { container.recordHistoryStart(bookId) }
-                val saved = container.database.readingProgressDao().getForBook(bookId)
-                // v1.7 Patch 3 (Item 1a): an EPUB's road to the
-                // shared core runs HERE, where the detect
-                // session already exists — the already-prepared
-                // redirect, or the one-time prepare — before
-                // any local surface is built. PDF never enters.
-                if (opened is ReadiumEpubSession) {
-                    when (
-                        val step = runEpubPrepareStep(loaded, opened, saved)
-                    ) {
-                        is EpubOpenStep.Redirect -> {
-                            _coreRedirect.tryEmit(step.chapterIndex)
-                            return@launch
-                        }
-                        is EpubOpenStep.Refused -> {
-                            _state.value = LocalReaderState.Failed(step.message)
-                            return@launch
-                        }
-                        EpubOpenStep.ContinueLocal -> Unit
-                    }
-                }
                 val target = startTargetJson ?: saved?.locatorJson
                 val fontMultiplier = runCatching {
                     (container.readerPrefs.config.first().fontSizeSp / 16.0)
                         .coerceIn(0.7, 2.5)
                 }.getOrDefault(1.0)
                 // v1.5.7: load this book's format-true settings.
-                // A book whose EPUB settings were never touched
-                // (still exactly the defaults) inherits the global
-                // reader text size as its starting font size.
-                // v1.5.27 (programme item 1, R3): the reads are
-                // KIND-GATED on the opened session — a PDF open
-                // never pays the EPUB settings reads, and an EPUB
-                // open never pays the PDF one. The other format's
-                // value is the untouched default seed, which no
-                // surface for this book's format ever reads; the
-                // stored values stay in the store, untouched.
-                val fixedLayout = (opened as? ReadiumEpubSession)
-                    ?.isFixedLayout == true
-                val epubSettingsNow = if (opened is ReadiumEpubSession) {
-                    val storedEpub = runCatching {
-                        localPrefs.epubSettings(bookId).first()
-                    }.getOrDefault(EpubBookSettings())
-                    val epubSettingsSeeded =
-                        if (storedEpub == EpubBookSettings()) {
-                            storedEpub.copy(fontSize = fontMultiplier)
-                        } else {
-                            storedEpub
-                        }
-                    // v1.5.8 (G10): a fixed-layout EPUB's per-book
-                    // DEFAULT is paginated — applied only when the
-                    // book carries no stored scroll choice (a
-                    // stored choice is the owner's and wins). The
-                    // default is NOT persisted: it is a default,
-                    // not a choice.
-                    if (fixedLayout && !runCatching {
-                            localPrefs.hasStoredEpubScroll(bookId)
-                        }.getOrDefault(false)
-                    ) {
-                        epubSettingsSeeded.copy(scroll = false)
-                    } else {
-                        epubSettingsSeeded
-                    }
-                } else {
-                    EpubBookSettings().copy(fontSize = fontMultiplier)
-                }
-                _epubSettings.value = epubSettingsNow
+                // v1.5.27 (programme item 1, R3): the read is
+                // KIND-GATED on the opened session — only a PDF
+                // open pays the PDF settings read; any other
+                // session gets the untouched default seed, which
+                // no surface for its format ever reads.
+                // v1.7 OE-2: the EPUB settings load that stood
+                // here (inherit-the-global-size seeding, the
+                // fixed-layout paginated default) is deleted —
+                // an EPUB's settings now live in the core
+                // reader, fed by the prepare's settings merge.
                 val pdfSettingsNow = if (opened is PdfSession) {
                     runCatching {
                         localPrefs.pdfSettings(bookId).first()
@@ -657,151 +447,23 @@ class LocalDocReaderViewModel(
                 }
                 _pdfSettings.value = pdfSettingsNow
                 val initialIndex = resolveInitialIndex(opened, target, saved)
-                val initialLocator = (opened as? ReadiumEpubSession)?.let { epub ->
-                    // (target already defaults to the saved
-                    // locator when no start target was given —
-                    // the rungs are attributed by which JSON was
-                    // actually parsed, so the log stays honest.)
-                    val fromTarget = if (startTargetJson != null) {
-                        epub.locatorFromJson(target)
-                    } else {
-                        null
-                    }
-                    val fromSaved = if (fromTarget == null) {
-                        epub.locatorFromJson(saved?.locatorJson)
-                    } else {
-                        null
-                    }
-                    val resolved = fromTarget ?: fromSaved
-                        ?: epub.locatorForSection(initialIndex)
-                    // v1.7 Patch 2 (item 0a/0d): which rung of the
-                    // locator ladder produced the restore target
-                    // goes on the record — the section-start
-                    // fallback rung in particular must never be
-                    // silent again (it lands the reader at the
-                    // chapter top with no trace of why).
-                    DiagnosticLog.record(
-                        "epub-restore",
-                        when {
-                            fromTarget != null ->
-                                "restore target: jump/bookmark locator"
-                            fromSaved != null ->
-                                "restore target: saved locator"
-                            resolved != null ->
-                                "restore target: section-start " +
-                                    "fallback (no usable saved locator)"
-                            else ->
-                                "restore target: none resolved"
-                        }
-                    )
-                    // v1.7 Patch 2 (item 0f): when the resolved
-                    // locator carries NO in-section progression
-                    // (a saved locator whose progression did not
-                    // survive, or the section fallback above), the
-                    // restore target's progression is repaired
-                    // from the saved row's scrollFraction — which
-                    // saveProgressNow writes as exactly that
-                    // in-section progression — when the row names
-                    // the chapter being opened. A 0/absent
-                    // scrollFraction leaves the honest chapter
-                    // start. Fires only when progression is
-                    // absent; the write side is unchanged.
-                    if (resolved != null &&
-                        resolved.locations.progression == null &&
-                        saved != null &&
-                        initialIndex == saved.chapterIndex &&
-                        saved.scrollFraction > 0f
-                    ) {
-                        DiagnosticLog.record(
-                            "epub-restore",
-                            "restore target progression repaired " +
-                                "from the saved row's scrollFraction"
-                        )
-                        resolved.copy(
-                            locations = resolved.locations.copy(
-                                progression = saved.scrollFraction
-                                    .toDouble()
-                            )
-                        )
-                    } else {
-                        resolved
-                    }
-                }
+                // v1.7 OE-2: the EPUB initial-locator ladder,
+                // the EPUB progress seed and the positions seam
+                // that stood here are deleted with the river —
+                // an EPUB's place now travels through the
+                // prepare's place migration into the core row.
                 if (opened is PdfSession) {
                     _pdfProgress.value = PdfProgress(
                         page = initialIndex, pageCount = opened.sectionCount
                     )
                 }
-                if (opened is ReadiumEpubSession) {
-                    _epubProgress.value = EpubProgress(
-                        fraction = saved?.fraction ?: 0f,
-                        chapterTitle = opened.anchorTitleFor(initialIndex),
-                        sectionIndex = initialIndex,
-                        sectionCount = opened.sectionCount
-                    )
-                    // F4: the positions seam — computed once,
-                    // off this open path's critical section,
-                    // from the publication's own positions
-                    // service. A book whose service yields
-                    // nothing simply never gains the pair.
-                    // v1.7 Patch 1 (item 6a): the seam is
-                    // PERSISTED per book — a re-open whose
-                    // stored index matches this publication's
-                    // section count takes it as-is and skips
-                    // the walk entirely; a miss or a mismatch
-                    // recomputes and re-saves.
-                    val storedPositions = runCatching {
-                        localPrefs.epubPositions(bookId)
-                    }.getOrNull()
-                    if (storedPositionsUsable(
-                            storedPositions, opened.sectionCount
-                        )
-                    ) {
-                        epubPositionStarts =
-                            storedPositions!!.starts.toIntArray()
-                        epubPositionCounts =
-                            storedPositions.counts.toIntArray()
-                    } else {
-                        viewModelScope.launch(container.ioDispatcher) {
-                            runCatching {
-                                val byResource = opened.publication
-                                    .positionsByReadingOrder()
-                                if (byResource.isNotEmpty()) {
-                                    val starts = IntArray(byResource.size)
-                                    val counts = IntArray(byResource.size)
-                                    var acc = 0
-                                    byResource.forEachIndexed { i, positions ->
-                                        starts[i] = acc
-                                        counts[i] = positions.size
-                                        acc += positions.size
-                                    }
-                                    epubPositionStarts = starts
-                                    epubPositionCounts = counts
-                                    runCatching {
-                                        localPrefs.saveEpubPositions(
-                                            bookId,
-                                            EpubPositionsIndex(
-                                                sectionCount = opened.sectionCount,
-                                                starts = starts.toList(),
-                                                counts = counts.toList()
-                                            )
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
                 _state.value = LocalReaderState.Ready(
                     book = loaded,
                     session = opened,
                     initialTargetJson = target,
-                    initialEpubLocator = initialLocator,
                     initialIndex = initialIndex,
                     fontSizeMultiplier = fontMultiplier,
-                    initialEpubSettings = epubSettingsNow,
-                    initialPdfSettings = pdfSettingsNow,
-                    isFixedLayout = fixedLayout
+                    initialPdfSettings = pdfSettingsNow
                 )
             } catch (e: LocalPasswordRequiredException) {
                 _state.value = LocalReaderState.PasswordRequired(loaded)
@@ -832,29 +494,25 @@ class LocalDocReaderViewModel(
 
     /**
      * v1.7 Patch 3 (Item 1): the EPUB prepare step of the
-     * open flow. Detect comes from the session this open
-     * already holds (Item 1b — no second open): fixed-layout
-     * and RTL-progression books keep the picture surface; a
-     * book with a current prepare record redirects to the
-     * core route at its saved core place; anything else runs
-     * the one-time prepare, whose failure leaves the book on
-     * this road, unprepared and retryable (Item 1f).
+     * open flow — v1.7 OE-2 (R12): now the prepare HOST, the
+     * only road an EPUB takes on this surface. No session is
+     * opened for an EPUB any more: a book with a current
+     * prepare record redirects to the core route at its
+     * saved core place; anything else runs the one-time
+     * prepare, whose outcomes land as the redirect, the DRM
+     * refusal, or — with no local road left to fall back to
+     * (R13) — the Failed state with a working Try again.
+     * The detect is built from the parser probe (R5), never
+     * from an engine session.
      */
     private suspend fun runEpubPrepareStep(
         book: Book,
-        session: ReadiumEpubSession,
         saved: ReadingProgress?
     ): EpubOpenStep {
-        val detect = app.xreader.data.prepare.EpubDetect(
-            isFixedLayout = session.isFixedLayout,
-            isRtlProgression = session.publication.metadata
-                .readingProgression ==
-                org.readium.r2.shared.publication.ReadingProgression.RTL,
-            sessionHrefs = session.readingOrderHrefList()
-        )
-        if (detect.isFixedLayout || detect.isRtlProgression) {
-            return EpubOpenStep.ContinueLocal
-        }
+        // The open's history start, exactly where the
+        // session-era flow recorded it (after the session
+        // opened, before the prepare step ran).
+        runCatching { container.recordHistoryStart(bookId) }
         val record = runCatching { localPrefs.epubPrepareRecord(bookId) }
             .getOrNull()
         if (app.xreader.data.prepare.EpubPrepareAccess
@@ -876,6 +534,7 @@ class LocalDocReaderViewModel(
             // never migrated: fall through and prepare again —
             // the landing re-lands and Item 3 carries the place.
         }
+        val detect = epubDetectFor(book)
         _state.value = LocalReaderState.Loading(
             "Preparing the book for the reader…"
         )
@@ -927,14 +586,96 @@ class LocalDocReaderViewModel(
             is app.xreader.data.prepare.EpubPrepareOutcome.Refused ->
                 EpubOpenStep.Refused(outcome.message)
             is app.xreader.data.prepare.EpubPrepareOutcome.Fallback -> {
+                // v1.7 OE-2 (R13): no local road remains —
+                // the failure lands on Failed with the retry
+                // offered; Try again re-runs this prepare
+                // (see resumeImport's EPUB branch).
                 DiagnosticLog.record(
                     "epub-prepare",
-                    "book $bookId stays on the local road: ${outcome.reason}"
+                    "book $bookId could not be prepared: ${outcome.reason}"
+                )
+                _state.value = LocalReaderState.Failed(
+                    message = "That book couldn't be prepared " +
+                        "for the reader.",
+                    canResumeImport = true
                 )
                 EpubOpenStep.ContinueLocal
             }
-            app.xreader.data.prepare.EpubPrepareOutcome.NotEligible ->
+            app.xreader.data.prepare.EpubPrepareOutcome.NotEligible -> {
+                // The prepare found nothing to convert: a
+                // book with no file reference at all is the
+                // FileMissing shape (its re-point offer is
+                // the honest road); anything else is a plain
+                // couldn't-open.
+                _state.value =
+                    if (book.filePath == null && book.documentUri == null) {
+                        LocalReaderState.FileMissing(book)
+                    } else {
+                        LocalReaderState.Failed(
+                            "That book couldn't be opened."
+                        )
+                    }
                 EpubOpenStep.ContinueLocal
+            }
+        }
+    }
+
+    /**
+     * v1.7 OE-2 (R5): the sessionless EPUB detect, built
+     * from [app.xreader.data.parse.EpubParser]'s probe of
+     * the book's own file — the fixed-layout and
+     * RTL-progression flags read from the OPF itself, and
+     * the reading-order hrefs from the probe's spine list
+     * (the space EpubHrefBridge matches BY HREF). The file
+     * is staged exactly as the prepare stages it. A probe
+     * that fails yields an empty detect and lets the
+     * prepare's own parse produce the honest outcome
+     * (Refused for a protected book, Fallback otherwise).
+     */
+    private suspend fun epubDetectFor(
+        book: Book
+    ): app.xreader.data.prepare.EpubDetect {
+        val storage = container.bookStorage
+        val scratch = storage.importStagingDir("epub-detect-${book.id}")
+        try {
+            val staged: java.io.File? = when {
+                book.filePath != null -> {
+                    val storedPath = book.filePath!!
+                    val source = if (java.io.File(storedPath).isAbsolute) {
+                        java.io.File(storedPath)
+                    } else {
+                        storage.resolve(storedPath)
+                    }
+                    source.takeIf { it.isFile }
+                }
+                book.documentUri != null -> {
+                    val target = java.io.File(scratch, "book.epub")
+                    val copied = runCatching {
+                        container.applicationContext.contentResolver
+                            .openInputStream(
+                                android.net.Uri.parse(book.documentUri!!)
+                            )
+                            ?.let { input ->
+                                storage.copyStreamAtomic(input, target)
+                            }
+                    }.getOrNull()
+                    if (copied != null) target else null
+                }
+                else -> null
+            }
+            val skeleton = staged?.let { file ->
+                val workDir = java.io.File(scratch, "probe")
+                    .apply { mkdirs() }
+                (app.xreader.data.parse.EpubParser().probe(file, workDir)
+                    as? AppResult.Ok)?.value
+            }
+            return app.xreader.data.prepare.EpubDetect(
+                isFixedLayout = skeleton?.isFixedLayout ?: false,
+                isRtlProgression = skeleton?.isRtlProgression ?: false,
+                sessionHrefs = skeleton?.spineHrefs ?: emptyList()
+            )
+        } finally {
+            runCatching { scratch.deleteRecursively() }
         }
     }
 
@@ -949,9 +690,10 @@ class LocalDocReaderViewModel(
         LocatorJson.parsePdfLocator(targetJson ?: saved?.locatorJson)?.let {
             return it.first.coerceIn(0, (opened.sectionCount - 1).coerceAtLeast(0))
         }
-        (opened as? ReadiumEpubSession)?.sectionIndexOfLocator(
-            targetJson ?: saved?.locatorJson
-        )?.let { return it }
+        // v1.7 OE-2: the Readium-locator rung that stood here
+        // is gone — no session resolves EPUB locators now;
+        // an EPUB's place is a core chapter index by the time
+        // anything reads it.
         return (saved?.chapterIndex ?: 0)
             .coerceIn(0, (opened.sectionCount - 1).coerceAtLeast(0))
     }
@@ -976,10 +718,22 @@ class LocalDocReaderViewModel(
      * exists); the landing is observed on
      * [ImportCompletionState], whose every terminal path
      * publishes running = false (success, failure, cancel).
+     *
+     * v1.7 OE-2 (R13): for an EPUB the same button re-runs
+     * the prepare instead (the branch at the head of the
+     * function) — one Try again shape, two honest retries.
      */
     fun resumeImport() {
         val current = _state.value as? LocalReaderState.Failed ?: return
         if (!current.canResumeImport) return
+        // v1.7 OE-2 (R13): an EPUB's Try again re-runs the
+        // prepare — open() routes an EPUB straight back into
+        // the prepare host, which re-runs the one-time
+        // prepare for a book with no landed record.
+        if (book?.localFormat == BookFormat.EPUB) {
+            open()
+            return
+        }
         _state.value = LocalReaderState.Loading("Preparing the book…")
         viewModelScope.launch(container.ioDispatcher) {
             val started = runCatching {
@@ -1020,58 +774,6 @@ class LocalDocReaderViewModel(
 
     // ── Position reports from the surfaces ───────────────────────
 
-    /** EPUB: the navigator's current locator moved.
-     *
-     * v1.7 Patch 2 (item 0b): [forceDerive] is the EXIT road —
-     * the river's final pull reports through it so the live
-     * place is derived and saved even when the movement since
-     * the last derivation fell inside one 0.1% bucket (the
-     * small-movement loss). The gate is still consulted, so its
-     * bookkeeping stays in sync; only its veto is bypassed. In
-     * session, ordinary reports keep the gate exactly as is. */
-    fun onEpubLocator(locator: Locator, forceDerive: Boolean = false) {
-        val epub = session as? ReadiumEpubSession ?: return
-        // v1.5.9 (F-3b): the RAW locator is always kept (bookmark
-        // fidelity), and the section is a precomputed-map lookup
-        // on the locator's own href — no JSON round-trip. The
-        // full derivation below runs only when the gate earns it
-        // (section changed, or the 0.1%-bucketed total
-        // progression changed).
-        currentEpubLocator = locator
-        val section = epub.sectionIndexOfHref(locator.href.toString())
-            ?: position?.index ?: 0
-        if (!epubLocatorGate.shouldDerive(
-                section, locator.locations.totalProgression
-            ) && !forceDerive
-        ) {
-            return
-        }
-        val locatorJson = runCatching { locator.toJSON().toString() }.getOrNull() ?: return
-        val fraction = locator.locations.totalProgression?.toFloat()
-            ?: LocatorJson.epubTotalProgression(locatorJson)
-            ?: if (epub.sectionCount > 0) section.toFloat() / epub.sectionCount else 0f
-        val anchor = epub.anchorTitleFor(section)
-        position = Position(
-            index = section,
-            locatorJson = locatorJson,
-            bookFraction = fraction.coerceIn(0f, 1f),
-            inSectionFraction = locator.locations.progression?.toFloat() ?: 0f,
-            anchorTitle = anchor
-        )
-        progressDirty = true
-        _epubProgress.value = EpubProgress(
-            fraction = fraction.coerceIn(0f, 1f),
-            chapterTitle = anchor,
-            sectionIndex = section,
-            sectionCount = epub.sectionCount,
-            withinChapter = withinChapterFor(
-                section, locator.locations.position
-            ),
-            inSectionFraction = locator.locations.progression
-                ?.toFloat() ?: 0f
-        )
-        scheduleSave()
-    }
 
     /** PDF: the scrolling surface's current page moved. */
     fun onPdfPosition(page: Int, inPageFraction: Float) {
@@ -1090,39 +792,9 @@ class LocalDocReaderViewModel(
     }
 
     // ── v1.5.7: settings updates + seeks ─────────────────────────
-
-    /** Applies a book-mode (EPUB) settings change: state first
-     * (the surface submits it to the navigator immediately), then
-     * persisted for this book. v1.5.9 (F-4a): persistence is
-     * debounced 500 ms through [epubSave], exactly like the PDF
-     * path — a slider drag no longer writes the whole DataStore
-     * file per tick. The save's SCOPE is unchanged: still this
-     * book only; only WHEN it lands changed. */
-    fun updateEpubSettings(transform: (EpubBookSettings) -> EpubBookSettings) {
-        val next = transform(_epubSettings.value)
-        _epubSettings.value = next
-        epubSave.submit(next)
-    }
-
-    /**
-     * v1.5.10 (G3): set (or clear, with null) this book's USER
-     * FONT and reopen the book. The font joins the publication
-     * AT OPEN — the session's container wrap and the
-     * navigator's font declaration are both built there — so a
-     * pick takes effect by re-opening on the spot; the saved
-     * reading position restores as on any open. The save lands
-     * FIRST, synchronously with this call rather than through
-     * the 500 ms debounce: the reopened session reads the
-     * stored choice from the DataStore itself.
-     */
-    fun setEpubUserFontAndReopen(fileName: String?) {
-        val next = _epubSettings.value.copy(userFontFileName = fileName)
-        _epubSettings.value = next
-        viewModelScope.launch(container.ioDispatcher) {
-            runCatching { localPrefs.saveEpub(bookId, next) }
-            open()
-        }
-    }
+    // v1.7 OE-2: the EPUB half (updateEpubSettings,
+    // setEpubUserFontAndReopen, seekEpubToFraction) is deleted
+    // with the river; the PDF half stays as it was.
 
     /** Applies a document-mode (PDF) settings change. Zoom rides
      * this path on every pinch move, so persistence is debounced;
@@ -1134,27 +806,6 @@ class LocalDocReaderViewModel(
         pdfSaveJob = viewModelScope.launch(container.ioDispatcher) {
             delay(500)
             runCatching { localPrefs.savePdf(bookId, next) }
-        }
-    }
-
-    /** Percent-slider seek (EPUB): resolves the fraction through
-     * the toolkit's locator service; falls back to the nearest
-     * section start when a book can't resolve progressions. */
-    fun seekEpubToFraction(fraction: Float) {
-        val epub = session as? ReadiumEpubSession ?: return
-        val clamped = fraction.coerceIn(0f, 1f)
-        viewModelScope.launch {
-            val locator = epub.locatorForProgression(clamped.toDouble())
-            if (locator != null) {
-                val json = runCatching { locator.toJSON().toString() }.getOrNull()
-                val index = epub.sectionIndexOfLocator(json)
-                    ?: position?.index ?: 0
-                _jumps.tryEmit(LocalJump(index, json))
-            } else {
-                val index = (clamped * epub.sectionCount).toInt()
-                    .coerceIn(0, (epub.sectionCount - 1).coerceAtLeast(0))
-                _jumps.tryEmit(LocalJump(index))
-            }
         }
     }
 
@@ -1191,22 +842,10 @@ class LocalDocReaderViewModel(
      * blocks on the database.
      */
     fun flushPendingProgressSave() {
-        // v1.7 Patch 2 (item 0b): first re-derive the LIVE
-        // place from the raw locator the seam always keeps —
-        // a movement the bucket gate suppressed in-session
-        // must not survive into the stored row just because
-        // no debounce job is active when the exit arrives.
-        // The derivation is onEpubLocator's own chain under
-        // its exit force flag (never a parallel derivation),
-        // so every caller of this shared flush — river exit,
-        // legacy-branch exit, memory-pressure flush — writes
-        // the live derived position. PDF has no gate and
-        // needs none of this: its position derives on every
-        // report.
-        val raw = currentEpubLocator
-        if (raw != null && session is ReadiumEpubSession) {
-            onEpubLocator(raw, forceDerive = true)
-        }
+        // v1.7 OE-2: the EPUB raw-locator re-derive that stood
+        // here (Patch 2 item 0b) is gone with the locator
+        // pipeline — the surviving position reports (PDF)
+        // derive on every report and need no exit re-derive.
         val pending = saveJob
         val hadPending = pending != null && pending.isActive
         if (pending != null) {
@@ -1215,12 +854,11 @@ class LocalDocReaderViewModel(
         }
         // v1.7 Patch 2 (item 0b): the flush fires not only for a
         // live debounce job but whenever the derived position is
-        // newer than the stored row (progressDirty) — the exit
-        // road force-derives the final pulled anchor through
-        // onEpubLocator, and that derivation must land even when
-        // its debounce was already consumed. All three callers
-        // of this shared flush (river exit, legacy-branch exit,
-        // Patch 1's memory-pressure flush) get the same rule.
+        // newer than the stored row (progressDirty) — that
+        // derivation must land even when its debounce was
+        // already consumed. Every caller of this shared flush
+        // (surface exit, Patch 1's memory-pressure flush) gets
+        // the same rule.
         // Nothing pending and nothing newer = no-op, as before.
         if (!hadPending && !progressDirty) return
         viewModelScope.launch(container.ioDispatcher) {
@@ -1258,15 +896,10 @@ class LocalDocReaderViewModel(
 
     fun goToOutline(entry: OutlineEntry) {
         val index = LocatorJson.targetIndex(entry.targetJson) ?: return
-        val epub = session as? ReadiumEpubSession
-        if (epub != null) {
-            val locator = epub.locatorForSection(index)
-            _jumps.tryEmit(LocalJump(index, locator?.let {
-                runCatching { it.toJSON().toString() }.getOrNull()
-            }))
-        } else {
-            _jumps.tryEmit(LocalJump(index))
-        }
+        // v1.7 OE-2: the EPUB locator-carrying jump that stood
+        // here is gone — the plain index jump is the only
+        // shape left, as it always was for PDF.
+        _jumps.tryEmit(LocalJump(index))
     }
 
     /**
@@ -1287,25 +920,25 @@ class LocalDocReaderViewModel(
             _jumps.tryEmit(LocalJump(it.first, locatorJson))
             return
         }
-        val index = (session as? ReadiumEpubSession)
-            ?.sectionIndexOfLocator(locatorJson) ?: bookmark.chapterIndex
-        _jumps.tryEmit(LocalJump(index, locatorJson))
+        // v1.7 OE-2: the Readium section-resolution rung is
+        // gone; the bookmark's own chapterIndex is the target,
+        // as it always was for non-PDF locators.
+        _jumps.tryEmit(LocalJump(bookmark.chapterIndex, locatorJson))
     }
 
     /**
      * v1.5.9 (F-9): the seed a bookmark falls back to before the
-     * first locator lands — the Ready state's initial index +
-     * initial EPUB locator (or the stored target JSON it was
-     * resolved from). Null only when no seed exists either.
+     * first position lands — the Ready state's initial index +
+     * the stored target JSON it was resolved from. Null only
+     * when no seed exists either. (v1.7 OE-2: the seed's EPUB
+     * locator arm is gone with the Ready state field it read.)
      */
     private fun bookmarkSeedPosition(): Position? {
         val ready = _state.value as? LocalReaderState.Ready ?: return null
-        val locatorJson = ready.initialEpubLocator?.let {
-            runCatching { it.toJSON().toString() }.getOrNull()
-        } ?: ready.initialTargetJson ?: return null
+        val locatorJson = ready.initialTargetJson ?: return null
         val count = ready.session.sectionCount
-        val fraction = LocatorJson.epubTotalProgression(locatorJson)
-            ?: LocatorJson.parsePdfLocator(locatorJson)?.let { (page, inPage) ->
+        val fraction = LocatorJson.parsePdfLocator(locatorJson)
+            ?.let { (page, inPage) ->
                 if (count > 0) (page + inPage) / count else 0f
             }
             ?: if (count > 0) ready.initialIndex.toFloat() / count else 0f
@@ -1313,10 +946,9 @@ class LocalDocReaderViewModel(
             index = ready.initialIndex,
             locatorJson = locatorJson,
             bookFraction = fraction.coerceIn(0f, 1f),
-            inSectionFraction = LocatorJson.epubProgression(locatorJson)
-                ?: LocatorJson.parsePdfLocator(locatorJson)?.second ?: 0f,
+            inSectionFraction = LocatorJson.parsePdfLocator(locatorJson)
+                ?.second ?: 0f,
             anchorTitle = when (val s = ready.session) {
-                is ReadiumEpubSession -> s.anchorTitleFor(ready.initialIndex)
                 is PdfSession -> s.anchorTitleFor(ready.initialIndex)
                 else -> null
             }
@@ -1357,73 +989,10 @@ class LocalDocReaderViewModel(
         }
     }
 
-    // ── Search (in-book, §3.1 row 11) ────────────────────────────
-
-    fun search(query: String) {
-        val opened = session ?: return
-        if (query.isBlank()) {
-            _searchHits.value = null
-            return
-        }
-        viewModelScope.launch(container.ioDispatcher) {
-            _searchBusy.value = true
-            try {
-                val hits = mutableListOf<LocalSearchHit>()
-                for (index in 0 until opened.sectionCount) {
-                    if (hits.size >= 100) break
-                    // v1.5.9 (F-10): the sweep reads through the
-                    // session memo — a repeat query performs no
-                    // additional textAt reads.
-                    val text = runCatching {
-                        searchTextMemo.textAt(index) { opened.textAt(it) }
-                    }.getOrDefault("")
-                    if (text.isBlank()) continue
-                    var from = 0
-                    while (hits.size < 100) {
-                        val found = text.indexOf(query, from, ignoreCase = true)
-                        if (found < 0) break
-                        val start = (found - 40).coerceAtLeast(0)
-                        val end = (found + query.length + 60).coerceAtMost(text.length)
-                        hits += LocalSearchHit(
-                            index = index,
-                            title = opened.outline.lastOrNull {
-                                (LocatorJson.targetIndex(it.targetJson)
-                                    ?: Int.MAX_VALUE) <= index
-                            }?.title ?: if (opened.format == BookFormat.PDF) {
-                                "Page ${index + 1}"
-                            } else {
-                                "Section ${index + 1}"
-                            },
-                            snippet = text.substring(start, end).replace('\n', ' '),
-                            query = query,
-                            charOffset = found
-                        )
-                        from = found + query.length
-                    }
-                }
-                _searchHits.value = hits
-            } finally {
-                _searchBusy.value = false
-            }
-        }
-    }
-
-    fun goToSearchHit(hit: LocalSearchHit) {
-        val epub = session as? ReadiumEpubSession
-        if (epub != null) {
-            val locator = epub.locatorForSection(hit.index)
-            _jumps.tryEmit(LocalJump(
-                hit.index,
-                locator?.let {
-                    runCatching { it.toJSON().toString() }.getOrNull()
-                },
-                markQuery = hit.query.takeIf { it.isNotBlank() },
-                markCharOffset = hit.charOffset
-            ))
-        } else {
-            _jumps.tryEmit(LocalJump(hit.index))
-        }
-    }
+    // v1.7 OE-2 (R29): the session in-book search that stood
+    // here (search / goToSearchHit / the text memo) is
+    // deleted — in-book search lives in the core reader now,
+    // which is where every EPUB lands.
 
     // ── Read aloud (TTS, §3.1 row 11) ────────────────────────────
     // Sentence-level through the existing ReadAloudController seam:
@@ -1549,8 +1118,6 @@ class LocalDocReaderViewModel(
     }
 
     override fun onCleared() {
-        // v1.5.9 (F-10): the search memo is session-lifetime.
-        searchTextMemo.clear()
         // Backstop only (sift A-7): the reliable flush is the
         // UI lifecycle's ON_STOP → flushPendingProgressSave,
         // which runs while the scope is healthy. This launch

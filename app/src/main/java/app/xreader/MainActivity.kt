@@ -32,9 +32,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /** The single activity; everything else is Compose (PLAN §3).
- * v1.5.6 (§3): a [FragmentActivity] (a ComponentActivity subclass)
- * so the local EPUB reader can host Readium's EpubNavigatorFragment;
- * setContent and every other behaviour are unchanged. */
+ * v1.5.6 (§3): a [FragmentActivity] (a ComponentActivity subclass),
+ * originally so the local EPUB reader could host Readium's
+ * navigator fragment; v1.7 OE-2 retired that reader, and the
+ * activity class is unchanged — setContent and every other
+ * behaviour are as they were. */
 class MainActivity : FragmentActivity() {
 
     private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -120,22 +122,10 @@ class MainActivity : FragmentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // v1.5.12 (E4 / Readium host conformance): if the
-        // process was killed while the EPUB reader was open,
-        // the FragmentManager restores the EpubNavigatorFragment
-        // DURING super.onCreate — before any Compose code can
-        // install the real factory — and instantiating it
-        // without a factory crashes the restore. Install
-        // Readium's dummy factory FIRST (the reference host's
-        // process-death pattern): the restored fragment can be
-        // instantiated without a live publication, and the
-        // reader's EpubBody replaces this with the real factory
-        // before its own transaction when a book is opened.
-        runCatching {
-            supportFragmentManager.fragmentFactory =
-                org.readium.r2.navigator.epub.EpubNavigatorFragment
-                    .createDummyFactory()
-        }
+        // v1.7 OE-2 (R27): the Readium dummy fragment-factory
+        // install that used to stand here is deleted whole —
+        // with no navigator fragment in the app there is
+        // nothing for process-death restoration to restore.
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val container = (application as XreaderApp).container

@@ -604,8 +604,11 @@ class LocalReaderPrefs(private val store: DataStore<Preferences>) {
     private fun epubOrientation(id: Long) = stringPreferencesKey("localreader.$id.epub.orientation")
     private fun epubAutoScrollSpeed(id: Long) = doublePreferencesKey("localreader.$id.epub.autoscroll_speed")
     private fun epubUserFontFile(id: Long) = stringPreferencesKey(
-        "localreader.$id" +
-            app.xreader.data.engine.ReadiumEpubSession.USER_FONT_FILE_KEY_SUFFIX
+        // v1.7 OE-2: the suffix literal, spelled out — it was
+        // ReadiumEpubSession.USER_FONT_FILE_KEY_SUFFIX before
+        // that file retired. The key string is unchanged, so
+        // stored values still meet it.
+        "localreader.$id" + ".epub.user_font_file"
     )
     private fun epubPrepareKey(id: Long) =
         stringPreferencesKey("localreader.$id.epub.prepare")

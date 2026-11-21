@@ -42,7 +42,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.xreader.data.db.BookFormat
-import app.xreader.data.engine.ReadiumEpubSession
 import app.xreader.di.AppContainer
 
 /**
@@ -51,8 +50,10 @@ import app.xreader.di.AppContainer
  * no route or shell changes — but it no longer renders a format
  * itself. Once a document is open it hands off by format:
  *
- *  - EPUB → [EpubBookReader]: a BOOK reader (flowing text,
- *    Readium book-mode settings, percent + chapter progress).
+ *  - EPUB → the CORE reader (v1.7 OE-2): every EPUB converts
+ *    through this destination's prepare host (the ViewModel's
+ *    Loading/Refused/Failed states below) and redirects to
+ *    the core route; no EPUB is rendered here any more.
  *  - PDF → the CORE reader (v1.7 OE-1): a local PDF opens in
  *    the one reader now; the route never sends one here.
  *
@@ -125,19 +126,15 @@ fun LocalDocReaderScreen(
 
     when (val current = state) {
         is LocalReaderState.Ready -> when (current.session.format) {
-            BookFormat.EPUB -> EpubBookReader(
-                viewModel = viewModel,
-                ready = current,
-                session = current.session as ReadiumEpubSession,
-                snackbar = snackbar,
-                onClose = onClose,
-                onOpenBookPage = onOpenBookPage
-            )
-            // v1.7 OE-1 (R2): PDFs no longer arrive here —
-            // the route sends a local PDF to the core
-            // reader. A PDF reaching this branch falls to
-            // the honest else below, exactly like the other
-            // formats this surface does not render.
+            // v1.7 OE-2 (R29): the EPUB dispatch is deleted —
+            // a Ready state carrying an EPUB session is
+            // unreachable (EPUBs leave through the prepare
+            // host's redirect before any session exists).
+            // v1.7 OE-1 (R2): PDFs no longer arrive here
+            // either — the route sends a local PDF to the
+            // core reader. Anything reaching this branch
+            // falls to the honest else below, exactly like
+            // the other formats this surface does not render.
             else -> StateScaffold(
                 title = current.book.title,
                 snackbar = snackbar,
@@ -222,8 +219,10 @@ fun LocalDocReaderScreen(
                 Spacer(Modifier.height(16.dp))
                 // v1.7 MR-1 (A4): a converted-format book that
                 // landed nothing gets the import resume as a
-                // real retry; every other failure (EPUB/PDF
-                // included) keeps the Back-only shape below.
+                // real retry. v1.7 OE-2 (R13): an EPUB whose
+                // prepare failed carries the same flag — its
+                // Try again re-runs the prepare. Every other
+                // failure keeps the Back-only shape below.
                 if (current.canResumeImport) {
                     Button(onClick = { viewModel.resumeImport() }) {
                         Text("Try again")

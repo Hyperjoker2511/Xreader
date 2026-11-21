@@ -11,8 +11,10 @@ import app.xreader.data.db.SourceType
  * A [DocSession] is ONE open document: outline + geometry up front,
  * sections/pages rendered or read on demand. The local reader
  * depends only on this contract, never on a carrier directly, so
- * the carrier choice (Readium for EPUB, PdfRenderer+PdfBox for PDF)
- * stays reversible behind it.
+ * the carrier choice (PdfRenderer+PdfBox for PDF) stays reversible
+ * behind it. v1.7 OE-2: EPUB has no carrier here any more — every
+ * EPUB converts into the core reader through the prepare step,
+ * and Readium is retired whole.
  */
 data class OutlineEntry(
     val title: String,
@@ -46,8 +48,10 @@ class LocalPasswordRequiredException : Exception("password required")
 
 /**
  * The registry (§3.1 row 1): format → engine for LOCAL_FILE books.
- * EPUB and PDF are the in-place formats this round (§3.4(c)/Q6);
- * every other format keeps today's converted-chapter path.
+ * PDF is the in-place format this registry still opens (§3.4(c)/Q6);
+ * EPUB leaves through the prepare step into the core reader
+ * (v1.7 OE-2) and never reaches [open]; every other format keeps
+ * today's converted-chapter path.
  */
 object BookEngine {
 
@@ -93,7 +97,11 @@ object BookEngine {
         cacheDir: java.io.File,
         password: String? = null
     ): DocSession = when (book.localFormat) {
-        BookFormat.EPUB -> ReadiumEpubSession.open(context, book, filesRoot)
+        // v1.7 OE-2 (R28): no EPUB arm — an EPUB reaching
+        // open() is a programming error (its road is the
+        // prepare step, which runs before any session is
+        // opened), and the else arm's honest exception is
+        // its landing.
         BookFormat.PDF -> PdfSession.open(context, book, filesRoot, cacheDir, password)
         else -> throw LocalFileMissingException(
             "This kind of file reads in the chapter reader."

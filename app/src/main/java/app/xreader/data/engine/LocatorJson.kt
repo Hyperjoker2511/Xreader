@@ -95,3 +95,38 @@ object LocatorJson {
         return runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
     }
 }
+
+/** The path portion of an href: for an absolute URL the scheme
+ * and host are dropped; a relative href IS its path (stripping
+ * its first segment was the v1.5.6 harness find — a relative
+ * "OEBPS/ch1.xhtml" must not collapse to "ch1.xhtml").
+ *
+ * v1.7 OE-2: moved here, verbatim, from the retired
+ * ReadiumEpubSession.kt — the href machinery outlives the
+ * session: the EPUB prepare bridge (EpubHrefBridge) keys on
+ * [canonicalHrefKey]. */
+private fun String.pathPortion(): String {
+    val noHost = if (contains("://")) {
+        substringAfter("://").substringAfter('/', "")
+    } else {
+        this
+    }
+    return noHost.trimStart('/')
+}
+
+/**
+ * v1.5.9 (F-3a): the canonical map key the href-equivalence
+ * relation collapses to — decoded path portion of the
+ * fragment-free href. Two hrefs that name the same resource
+ * in different spellings (fragment, leading base path,
+ * percent-encoding) share one key.
+ *
+ * v1.7 OE-2: moved here, verbatim, from the retired
+ * ReadiumEpubSession.kt — its surviving consumer is the
+ * EPUB prepare bridge (data/prepare/EpubPrepareAccess.kt).
+ */
+internal fun canonicalHrefKey(href: String): String {
+    val path = href.substringBefore('#').pathPortion()
+    return runCatching { java.net.URLDecoder.decode(path, "UTF-8") }
+        .getOrDefault(path)
+}
