@@ -150,7 +150,12 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         /** v1.7 Patch 1 (item 5): DNS-over-HTTPS — source
          * lookups through Cloudflare (1.1.1.1) instead of
          * the device's resolver. Default OFF. */
-        val dohEnabled: Boolean = false
+        val dohEnabled: Boolean = false,
+        /** v1.7 OE-4 (owner's CBZ ruling): where a landed
+         * local CBZ/CBR opens — true = the manga reader
+         * (Komikku, the default), false = the book reader.
+         * One global choice; no per-book override. */
+        val cbzOpensInKomikku: Boolean = true
     )
 
     /** FIX-18: the Komikku manga reader's GLOBAL defaults,
@@ -167,7 +172,8 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         container.sourcePrefs.browserViewEnabled,
         container.sourcePrefs.contentVisibility,
         container.sourcePrefs.keiyoushiPlayerEnabled,
-        container.sourcePrefs.dohEnabled
+        container.sourcePrefs.dohEnabled,
+        container.readerPrefs.cbzOpensInKomikku
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         UiState(
@@ -182,7 +188,8 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
             contentVisibility = values[6]
                 as app.xreader.data.extension.ContentVisibility,
             keiyoushiPlayerEnabled = values[7] as Boolean,
-            dohEnabled = values[8] as Boolean
+            dohEnabled = values[8] as Boolean,
+            cbzOpensInKomikku = values[9] as Boolean
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
@@ -369,6 +376,13 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
     /** v1.7 Patch 1 (item 5): the DNS-over-HTTPS toggle. */
     fun setDohEnabled(value: Boolean) {
         viewModelScope.launch { container.sourcePrefs.setDohEnabled(value) }
+    }
+
+    /** v1.7 OE-4: the "CBZ opens in" choice (ReaderPrefs). */
+    fun setCbzOpensInKomikku(value: Boolean) {
+        viewModelScope.launch {
+            container.readerPrefs.setCbzOpensInKomikku(value)
+        }
     }
 
     // ── v1.0.4 (D10/D13): the download switches, moved here from
@@ -1922,6 +1936,34 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 "How manga and comics open. You can change the " +
                     "mode, tap zones, direction and borders for " +
                     "a single series while reading that series.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // v1.7 OE-4 (owner's CBZ ruling): the ONE global
+            // choice for comic files stored on this device —
+            // no per-book override. A comic that can't open in
+            // the manga reader opens in the book reader by
+            // itself, whichever side is picked here.
+            Text("CBZ opens in", style = MaterialTheme.typography.bodyLarge)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = state.cbzOpensInKomikku,
+                    onClick = { viewModel.setCbzOpensInKomikku(true) },
+                    label = { Text("Komikku") }
+                )
+                FilterChip(
+                    selected = !state.cbzOpensInKomikku,
+                    onClick = { viewModel.setCbzOpensInKomikku(false) },
+                    label = { Text("Book reader") }
+                )
+            }
+            Text(
+                "For CBZ and CBR files on this device. If a " +
+                    "comic can't open in the manga reader, it " +
+                    "opens in the book reader instead.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

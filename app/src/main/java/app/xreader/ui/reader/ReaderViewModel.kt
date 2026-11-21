@@ -298,6 +298,20 @@ data class ReaderUiState(
     val mangaPages: app.xreader.domain.content.ChapterPages? = null,
     /** The chapter [mangaPages] belongs to (same copy). */
     val mangaChapterId: Long? = null,
+    // ── v1.7 OE-4: the local CBZ/CBR page world ─────────────
+    /** A local CBZ/CBR read in THIS reader (the "CBZ opens
+     * in: Book reader" option, or the automatic fallback from
+     * the manga reader): the chapter's stored page assets in
+     * reading order (plain base names, resolved through the
+     * same asset door as chapter images). ReaderScreen renders
+     * the page world while this is non-empty. Empty for every
+     * other book and chapter. */
+    val cbzPages: List<String> = emptyList(),
+    /** The current page inside [cbzPages] — the place is a
+     * page number, kept in the progress row in the manga
+     * reader's own shape (scrollFraction = page/(pages−1)),
+     * so the two readers hand the place to each other. */
+    val cbzPage: Int = 0,
     /** The resolved image-reading mode for THIS book: its own
      * override when one is set, else the global default
      * (option-scope rule — see [MangaModeResolution]). */
@@ -607,6 +621,18 @@ class ReaderViewModel(
     /** The one current-page variable (R15) + the in-page
      * fraction the surfaces report with it. */
     @Volatile private var pdfPage: Int = 0
+
+    // v1.7 OE-4 patch (Fix B): once the reader starts closing
+    // (ON_PAUSE on the way out), position reports are no longer
+    // accepted. OE-1 phone proof (2026-11-21): the owner stopped
+    // on p. 17, the pause flush saved p. 17 correctly — then a
+    // report that arrived while the surface was leaving
+    // composition (after the last frame he ever saw) moved the
+    // field to p. 18, and the clear-time writer persisted that.
+    // The saved page must be the page on screen when the reader
+    // closes; freezing intake at pause makes the label he last
+    // saw and the saved place the same number by construction.
+    @Volatile private var pdfClosing: Boolean = false
     @Volatile private var pdfInPageFraction: Float = 0f
 
     /** Page jumps for the Pages bodies (Contents,
@@ -686,6 +712,28 @@ class ReaderViewModel(
     fun consumeMigrationNote() {
         _migrationNote.value = null
     }
+
+    /** v1.7 OE-4: the automatic-fallback switch line, set once
+     * when this book arrived because the manga reader couldn't
+     * open it; the screen shows it through the reader's
+     * transient notice and consumes it (the migration note's
+     * exact pattern). */
+    private val _cbzSwitchNote = MutableStateFlow<String?>(null)
+    val cbzSwitchNote: StateFlow<String?> = _cbzSwitchNote
+
+    fun consumeCbzSwitchNote() {
+        _cbzSwitchNote.value = null
+    }
+
+    /** v1.7 OE-4: this book is a local CBZ/CBR — its image
+     * chapters render as the page world, not as in-text
+     * pictures in the document flow. Set in the init book
+     * pass, before any chapter lands. */
+    private var isLocalCbzBook: Boolean = false
+
+    private val _cbzJumps =
+        MutableSharedFlow<Int>(extraBufferCapacity = 4)
+    val cbzJumps: SharedFlow<Int> = _cbzJumps.asSharedFlow()
 
     // ── v1.7 Patch 3 (Item 4b): in-book search ───────────────
     private val _searchHits = MutableStateFlow<List<CoreSearchHit>?>(null)
@@ -1023,6 +1071,23 @@ class ReaderViewModel(
         }
         viewModelScope.launch {
             val book = container.database.bookDao().getById(bookId)
+            // v1.7 OE-4: a local CBZ/CBR's image chapters are
+            // this reader's page world (never in-text pictures),
+            // and a book that arrived through the automatic
+            // fallback carries its one plain switch line.
+            isLocalCbzBook = book != null &&
+                book.sourceType ==
+                    app.xreader.data.db.SourceType.LOCAL_FILE &&
+                (book.localFormat ==
+                    app.xreader.data.db.BookFormat.CBZ ||
+                    book.localFormat ==
+                        app.xreader.data.db.BookFormat.CBR)
+            if (container.cbzSwitchNote.value == bookId) {
+                container.cbzSwitchNote.value = null
+                _cbzSwitchNote.value =
+                    "This comic didn't open in the manga reader, " +
+                        "so it's opened in the book reader."
+            }
             // v1.7 OE-1 (R1, R3): a local in-place PDF opens
             // HERE, in the one reader — its own branch
             // (cleanup, then the PdfSession, then
@@ -2029,6 +2094,24 @@ class ReaderViewModel(
         bumpGeneration: Boolean
     ) {
         val content: ChapterContent = original.content
+        // v1.7 OE-4: a local CBZ/CBR chapter's stored pages —
+        // its image blocks in order — and the page the saved
+        // place names (the row's scrollFraction is the manga
+        // reader's own restore currency: page/(pages−1)).
+        val cbzPageList = if (isLocalCbzBook && content.isImageBook) {
+            content.blocks
+                .filterIsInstance<ChapterBlock.Image>()
+                .map { it.fileName }
+        } else {
+            emptyList()
+        }
+        val cbzStartPage = if (cbzPageList.size > 1) {
+            (restoreScrollFraction * (cbzPageList.size - 1) + 0.5f)
+                .toInt()
+                .coerceIn(0, cbzPageList.size - 1)
+        } else {
+            0
+        }
         tracker.begin()
         currentChapterMaxOffset = restoreOffset
         visibleTextChapterIndex = index
@@ -2059,6 +2142,11 @@ class ReaderViewModel(
             // ChapterContent and do not carry the pages record.
             mangaPages = if (content.isImageChapter) content.pages else null,
             mangaChapterId = if (content.isImageChapter) chapter.id else null,
+            // v1.7 OE-4: the CBZ page world rides the same
+            // copy, so a chapter turn can never pair one
+            // chapter's text with another's pages.
+            cbzPages = cbzPageList,
+            cbzPage = cbzStartPage,
             showingTranslation = useTranslation
         )
         followSummaryFor(index)
@@ -3209,7 +3297,7 @@ class ReaderViewModel(
                 _config.value.chapterTransition ==
                 ChapterTransition.CONTINUOUS
             ) {
-                markCurrentChapterFinishedFor(previousIndex)
+                markCurrentChapterFinishedFor(previousIndex, leftFraction)
             }
             planResidency(chapterIndex)
         }
@@ -3247,10 +3335,52 @@ class ReaderViewModel(
         requestSegmentFill(chapterId)
     }
 
-    private fun markCurrentChapterFinishedFor(index: Int) {
+    /**
+     * v1.7 OE-4 patch (Fix A): the EXP pace gate for one chapter
+     * finish. The session's pace pool (active minutes × 500 wpm,
+     * [app.xreader.domain.game.ExpAwards]) is spent in reading
+     * order: chapters finished earlier in this session consumed
+     * their words first ([completedSessionWords] — this chapter's
+     * own words are added only after this check). The finish is
+     * counted for EXP only when ≥80% of the chapter's words were
+     * credited. The read flag and the word ledger are NOT gated —
+     * a crossed chapter is still marked read; only the +25
+     * finish credit is earned at reading pace.
+     */
+    private fun chapterFinishCountsForExp(
+        chapterWords: Long,
+        scrolledWordsInChapter: Long
+    ): Boolean {
+        val pool = tracker.activeMinutes().toLong() *
+            app.xreader.domain.game.ExpAwards.WORDS_CREDITED_PER_MINUTE
+        val consumedBefore = minOf(completedSessionWords, pool)
+        val creditedForChapter = minOf(
+            scrolledWordsInChapter,
+            (pool - consumedBefore).coerceAtLeast(0L)
+        )
+        return app.xreader.domain.game.ExpAwards
+            .chapterCountsAsFinished(chapterWords, creditedForChapter)
+    }
+
+    private fun markCurrentChapterFinishedFor(
+        index: Int,
+        leftFraction: Float = 1f
+    ) {
         val chapter = _state.value.chapters.getOrNull(index) ?: return
         if (!finishedChapterIds.add(chapter.id)) return
-        tracker.addChaptersFinished()
+        // v1.7 OE-4 patch (Fix A): the crossing already proves
+        // ≥90% of the chapter was scrolled past — the gate asks
+        // whether that scrolling happened at reading pace.
+        if (chapterFinishCountsForExp(
+                chapterWords = chapter.wordCount.toLong(),
+                scrolledWordsInChapter = (
+                    chapter.wordCount *
+                        leftFraction.coerceIn(0f, 1f)
+                    ).toLong()
+            )
+        ) {
+            tracker.addChaptersFinished()
+        }
         completedSessionWords += chapter.wordCount
         viewModelScope.launch { container.database.chapterDao().setRead(chapter.id, true) }
         container.aiChapterHooks.onChapterRead(bookId, chapter.id)
@@ -3737,6 +3867,15 @@ class ReaderViewModel(
      * variable moves, the status follows, the save is
      * debounced exactly as the local surface's was. */
     fun onPdfPosition(page: Int, inPageFraction: Float) {
+        // v1.7 OE-4 patch (Fix B): teardown-time reports (the
+        // surface leaving composition during the exit transition)
+        // must never move the saved place past the page the user
+        // last saw — see pdfClosing.
+        if (pdfClosing) return
+        applyPdfPosition(page, inPageFraction)
+    }
+
+    private fun applyPdfPosition(page: Int, inPageFraction: Float) {
         val session = pdfSession ?: return
         val ready = _pdfReader.value as? PdfReaderState.Ready ?: return
         val clamped = page.coerceIn(
@@ -3769,10 +3908,59 @@ class ReaderViewModel(
         if (ready.mode == PdfReadMode.PAGES) {
             _pdfJumps.tryEmit(target)
         }
-        onPdfPosition(target, 0f)
+        // An explicit door is a deliberate jump, not a surface
+        // report — it applies even while pdfClosing is set.
+        applyPdfPosition(target, 0f)
         if (ready.mode == PdfReadMode.REFLOW) {
             preparePdfReflowPage(target)
         }
+    }
+
+    /**
+     * v1.7 OE-4: a page turn inside the local CBZ/CBR page
+     * world. The place is kept as a page number, written
+     * through the ordinary progress saver in the manga
+     * reader's own row shape — scrollFraction = page/(pages−1),
+     * charOffset 0 — so a place saved here is the place
+     * Komikku resumes from, and the other way round.
+     */
+    fun onCbzPage(page: Int) {
+        val stateNow = _state.value
+        val count = stateNow.cbzPages.size
+        if (count == 0) return
+        val clamped = page.coerceIn(0, count - 1)
+        val chapterFraction = if (count > 1) {
+            clamped.toFloat() / (count - 1)
+        } else {
+            1f
+        }
+        val bookFraction = if (stateNow.chapters.isNotEmpty()) {
+            (stateNow.chapterIndex + chapterFraction) /
+                stateNow.chapters.size
+        } else {
+            chapterFraction
+        }
+        _state.value = stateNow.copy(
+            cbzPage = clamped,
+            chapterFraction = chapterFraction,
+            bookFraction = bookFraction
+        )
+        tracker.onActivity()
+        // The manga reader's rule, mirrored: reaching the last
+        // page finishes the chapter (the row is marked read).
+        if (clamped == count - 1) markCurrentChapterFinished()
+        scheduleProgressSave()
+    }
+
+    /** Every explicit CBZ page door (chrome turns, the seek
+     * slider) lands here: the surface consumes the jump; the
+     * place applies at once. */
+    fun cbzGoToPage(page: Int) {
+        val count = _state.value.cbzPages.size
+        if (count == 0) return
+        val target = page.coerceIn(0, count - 1)
+        _cbzJumps.tryEmit(target)
+        onCbzPage(target)
     }
 
     /** A PDF settings change (R21): state first, then
@@ -4035,7 +4223,27 @@ class ReaderViewModel(
     fun markCurrentChapterFinished() {
         val chapter = _state.value.chapter ?: return
         if (!finishedChapterIds.add(chapter.id)) return
-        tracker.addChaptersFinished()
+        // v1.7 OE-4 patch (Fix A): same pace gate as the crossing
+        // door — the chapter's scrolled words are the ones up to
+        // the furthest offset reached (flushSession's own count).
+        val finishText = _state.value.chapterText
+        val scrolledInChapter = if (finishText != null) {
+            ChapterContent.countWords(
+                finishText.text.substring(
+                    0,
+                    currentChapterMaxOffset.coerceAtMost(finishText.length)
+                )
+            ).toLong()
+        } else {
+            chapter.wordCount.toLong()
+        }
+        if (chapterFinishCountsForExp(
+                chapterWords = chapter.wordCount.toLong(),
+                scrolledWordsInChapter = scrolledInChapter
+            )
+        ) {
+            tracker.addChaptersFinished()
+        }
         completedSessionWords += chapter.wordCount
         viewModelScope.launch { container.database.chapterDao().setRead(chapter.id, true) }
         // Phase 5: finishing a chapter is the moment LoreKeeper
@@ -4093,6 +4301,11 @@ class ReaderViewModel(
      * backgrounding the reader always persists the exact final
      * position, whatever the coalescer's schedule said. */
     fun onReaderPaused() {
+        // v1.7 OE-4 patch (Fix B): closing starts here — freeze
+        // PDF position intake BEFORE the flush, so the place this
+        // flush (and the later clear-time writer) persists is the
+        // last page the user actually saw.
+        pdfClosing = true
         viewModelScope.launch {
             flushProgressNow()
             tracker.pause()
@@ -4100,6 +4313,7 @@ class ReaderViewModel(
     }
 
     fun onReaderResumed() {
+        pdfClosing = false
         tracker.resume()
         tracker.onActivity()
     }
@@ -4771,6 +4985,13 @@ class ReaderViewModel(
         // v1.7 OE-1: volume-key turns page a PDF.
         if (pdfSession != null) {
             pdfGoToPage(pdfPage + direction)
+            return
+        }
+        // v1.7 OE-4: volume keys turn pages in the CBZ page
+        // world too.
+        val cbzState = _state.value
+        if (cbzState.cbzPages.isNotEmpty()) {
+            cbzGoToPage(cbzState.cbzPage + direction)
             return
         }
         _externalTurns.tryEmit(direction)

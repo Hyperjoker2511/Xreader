@@ -53,10 +53,14 @@ import app.xreader.data.extension.SourceHandle
  *    exceptions the local branch itself states: a PREPARED
  *    EPUB (v1.7 Patch 3) and a converted-format book whose
  *    chapters have landed (v1.7 MR-1) route to the novel
- *    reader. Checked before priority 2's stored verdict for
- *    non-extension books, because priority 2 is scoped to
- *    extension sources — a local book's stored kind never
- *    reroutes it away from its own file.
+ *    reader. A landed local CBZ/CBR is the OE-4 exception
+ *    (the owner's manga ruling): the global "CBZ opens in"
+ *    option sends it to Komikku (the default) or to the
+ *    novel reader's page world. Checked before priority 2's
+ *    stored verdict for non-extension books, because
+ *    priority 2 is scoped to extension sources — a local
+ *    book's stored kind never reroutes it away from its
+ *    own file.
  * 4. UNKNOWN + non-player source → the novel reader (the
  *    long-standing default), backstopped by the novel reader's
  *    fail-closed guard (ui/reader/ReaderScreen.kt): if a chapter
@@ -114,6 +118,17 @@ class ReaderRouteResolver(
      * registration count, set before anything lands.
      */
     private val localContentLanded: (suspend (Book) -> Boolean)? = null,
+    /**
+     * v1.7 OE-4 (owner's CBZ ruling): the global "CBZ opens in"
+     * choice — true = the manga reader (Komikku, the default),
+     * false = the core book reader's page world. Consulted
+     * only for a LANDED local CBZ/CBR (its stored pages are
+     * the prerequisite either reader needs). The shell wires
+     * the ReaderPrefs read; absent (every pre-OE-4
+     * construction), a local comic keeps today's converted-
+     * format verdict exactly as before.
+     */
+    private val cbzOpensInKomikku: (suspend () -> Boolean)? = null,
 ) {
 
     /** Resolve by book id (the entry-point shape: most surfaces
@@ -154,6 +169,28 @@ class ReaderRouteResolver(
                 BookEngine.isInPlaceBook(book)
             ) {
                 return ReaderRoute.NovelReader(book.id, chapterIndex)
+            }
+            // v1.7 OE-4 (owner's CBZ ruling, 2026-11-21): a
+            // LANDED local CBZ/CBR opens where the global
+            // "CBZ opens in" option says — the manga reader
+            // (Komikku, the default) or the core book reader's
+            // page world. An unlanded comic is not this verdict:
+            // its import runs through the LocalDoc flow first,
+            // and neither reader has pages to show before the
+            // content lands. A Komikku open that fails (error
+            // state / zero readable pages) falls back to the
+            // book reader on its own — that switch lives in the
+            // Komikku reader, not here.
+            if ((book.localFormat == BookFormat.CBZ ||
+                    book.localFormat == BookFormat.CBR) &&
+                cbzOpensInKomikku != null &&
+                localContentLanded?.invoke(book) == true
+            ) {
+                return if (cbzOpensInKomikku.invoke()) {
+                    komikku(book, chapterIndex)
+                } else {
+                    ReaderRoute.NovelReader(book.id, chapterIndex)
+                }
             }
             // v1.7 MR-1: a converted-format book whose chapters
             // have landed in the core is a core book — landed

@@ -139,7 +139,15 @@ class ExpService(
                 activeMinutes = session.activeMinutes,
                 wallMinutes = wallMinutes,
                 chaptersFinished = session.chaptersFinished,
-                focusBonus = session.focusBonusApplied
+                focusBonus = session.focusBonusApplied,
+                // v1.7 OE-4 patch (Fix A): the pace gate — words
+                // credited at ≤500 wpm of active time; zero
+                // credited words pays zero (PDF sessions, which
+                // credit no words, earn nothing for being open).
+                creditedWords = ExpAwards.creditedWords(
+                    wordsScrolled = session.wordsRead,
+                    activeMinutes = session.activeMinutes
+                )
             )
             sessionDao.update(session.copy(expProcessed = true))
             if (exp > 0) {

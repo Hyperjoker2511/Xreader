@@ -576,6 +576,26 @@ fun MainScaffold(
             }
         }
     }
+    // v1.7 OE-4: the automatic CBZ fallback — the manga reader
+    // (Komikku) couldn't open this local comic (error state /
+    // zero readable pages), so it opens in the book reader's
+    // page world instead, with the one plain switch line. The
+    // open is DIRECT (no resolver): the resolver's verdict for
+    // this book is the reader that just failed.
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        container.pendingCbzFallback.collect { bookId ->
+            if (bookId != null) {
+                container.pendingCbzFallback.value = null
+                container.cbzSwitchNote.value = bookId
+                val progress = runCatching {
+                    container.database.readingProgressDao().getForBook(bookId)
+                }.getOrNull()
+                navigateContent(
+                    "reader/$bookId/${progress?.chapterIndex ?: 0}"
+                )
+            }
+        }
+    }
     // v1.0.9: a pinned Live Source shortcut opens that source's
     // catalogue in this window.
     androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -2695,6 +2715,11 @@ private fun readerRouteResolverFor(
         localContentLanded = { book ->
             container.database.chapterDao().forBook(book.id)
                 .any { it.contentPath != null }
+        },
+        // v1.7 OE-4: the global "CBZ opens in" choice (default
+        // Komikku) for a landed local CBZ/CBR.
+        cbzOpensInKomikku = {
+            container.readerPrefs.cbzOpensInKomikku.first()
         }
     )
 }

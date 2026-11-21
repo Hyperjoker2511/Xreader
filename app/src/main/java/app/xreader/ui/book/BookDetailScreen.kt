@@ -961,7 +961,15 @@ fun BookDetailScreen(
                                                     .displayNumber(it)
                                             } ?: "${state.continueChapterIndex + 1}",
                                             chapterTitle = continueChapter?.title,
-                                            bookPercent = bookPercent
+                                            bookPercent = bookPercent,
+                                            unitWord = if (
+                                                book.localFormat ==
+                                                app.xreader.data.db.BookFormat.PDF
+                                            ) {
+                                                "Page"
+                                            } else {
+                                                "Chapter"
+                                            }
                                         )
                                     },
                                     style = MaterialTheme.typography.labelSmall,
@@ -1402,8 +1410,18 @@ fun BookDetailScreen(
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    "Chapter ${state.continueChapterIndex + 1}" +
-                                        " / ${state.chapters.size}",
+                                    // v1.7 OE-4 patch (Fix B): a PDF's
+                                    // place is a page — no chapter
+                                    // word, no chapter denominator.
+                                    if (
+                                        book.localFormat ==
+                                        app.xreader.data.db.BookFormat.PDF
+                                    ) {
+                                        "Page ${state.continueChapterIndex + 1}"
+                                    } else {
+                                        "Chapter ${state.continueChapterIndex + 1}" +
+                                            " / ${state.chapters.size}"
+                                    },
                                     style = MaterialTheme.typography.labelMedium
                                 )
                                 Spacer(Modifier.weight(1f))
@@ -3945,10 +3963,13 @@ private fun BookCleanupActions(
 internal fun continuePillSubLine(
     chapterNumber: String,
     chapterTitle: String?,
-    bookPercent: Int?
+    bookPercent: Int?,
+    // v1.7 OE-4 patch (Fix B): a PDF's place is a page, never a
+    // fabricated chapter — the pill says "Page N" for PDF books.
+    unitWord: String = "Chapter"
 ): String {
     val title = chapterTitle?.trim().orEmpty()
-    val chapterLabel = "Chapter $chapterNumber"
+    val chapterLabel = "$unitWord $chapterNumber"
     val head = when {
         title.isEmpty() -> chapterLabel
         title.equals(chapterLabel, ignoreCase = true) -> title

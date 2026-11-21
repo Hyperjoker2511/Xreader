@@ -1745,7 +1745,16 @@ private fun ContinueReadingHero(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 PrimaryPill(
-                    text = "Continue · Ch. ${continueChapterIndex + 1}",
+                    // v1.7 OE-4 patch (Fix B): a PDF hero's place
+                    // is a page, never a fabricated chapter.
+                    text = if (
+                        hero.book.localFormat ==
+                        app.xreader.data.db.BookFormat.PDF
+                    ) {
+                        "Continue · Page ${continueChapterIndex + 1}"
+                    } else {
+                        "Continue · Ch. ${continueChapterIndex + 1}"
+                    },
                     onClick = onContinue,
                     modifier = Modifier,
                     enabled = true

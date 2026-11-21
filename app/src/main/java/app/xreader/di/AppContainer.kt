@@ -2147,6 +2147,24 @@ class AppContainer(
     val pendingOpenBook =
         kotlinx.coroutines.flow.MutableStateFlow<Long?>(null)
 
+    /** v1.7 OE-4: the automatic CBZ fallback handoff — a local
+     * CBZ/CBR the manga reader (Komikku) failed to open (error
+     * state / zero readable pages). The shell opens the book
+     * DIRECTLY in the core book reader, deliberately bypassing
+     * the route resolver: its verdict for this book is the
+     * manga reader that just failed. Set by
+     * KomikkuReaderActivity as it finishes. */
+    val pendingCbzFallback =
+        kotlinx.coroutines.flow.MutableStateFlow<Long?>(null)
+
+    /** v1.7 OE-4: the book id whose next core-reader open must
+     * carry the one plain switch line ("This comic didn't open
+     * in the manga reader, so it's opened in the book reader").
+     * Set by the shell as it dispatches [pendingCbzFallback];
+     * consumed by ReaderViewModel on that book's open. */
+    val cbzSwitchNote =
+        kotlinx.coroutines.flow.MutableStateFlow<Long?>(null)
+
     /** Site-shortcut → app handoff (v1.0.9): the (extension row
      * id, source id) a pinned Live Source shortcut should open,
      * set by MainActivity from the shortcut's intent. */

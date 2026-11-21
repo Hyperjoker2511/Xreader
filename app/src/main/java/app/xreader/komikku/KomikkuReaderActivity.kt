@@ -44,11 +44,13 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import app.xreader.komikku.presentation.KomikkuReaderScreen
 import app.xreader.komikku.setting.ReaderPreferences
 import app.xreader.ui.theme.XreaderTheme
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.launch
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 
@@ -83,6 +85,20 @@ class KomikkuReaderActivity : ComponentActivity() {
                 page = page
             )
         )[KomikkuReaderViewModel::class.java]
+
+        // v1.7 OE-4: the automatic CBZ fallback — when the VM
+        // reports this local comic can't open here (error
+        // state / zero readable pages), hand it to the shell's
+        // book-reader channel and finish; the comic reopens in
+        // the book reader's page world with its one plain
+        // switch line.
+        lifecycleScope.launch {
+            viewModel.cbzFallback.collect { bookId ->
+                (application as app.xreader.XreaderApp).container
+                    .pendingCbzFallback.value = bookId
+                finish()
+            }
+        }
 
         applyWindowPreferences()
         enableEdgeToEdge()

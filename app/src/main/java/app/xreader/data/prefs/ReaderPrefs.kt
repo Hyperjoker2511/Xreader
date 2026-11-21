@@ -31,6 +31,19 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
 
     val config: Flow<ReaderConfig> = store.data.map { it.toConfig() }
 
+    /** v1.7 OE-4 (owner's CBZ ruling, 2026-11-21): where a
+     * landed local CBZ/CBR opens — the manga reader (Komikku,
+     * the default) or the core book reader's page world. ONE
+     * global choice beside the other reader defaults; there
+     * is deliberately no per-book override. */
+    val cbzOpensInKomikku: Flow<Boolean> = store.data.map {
+        it[KEY_CBZ_OPENS_IN_KOMIKKU] ?: true
+    }
+
+    suspend fun setCbzOpensInKomikku(value: Boolean) {
+        store.edit { prefs -> prefs[KEY_CBZ_OPENS_IN_KOMIKKU] = value }
+    }
+
     /** Reset customisation (R07): write the default config back
      * through the same single-writer path (update writes every
      * field, and removes the optional ones at their defaults). */
@@ -241,6 +254,10 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
         // every pre-fix store by construction).
         val KEY_PARA_SPACING_MIGRATED =
             booleanPreferencesKey("reader.paragraph_spacing_default_migrated")
+        // v1.7 OE-4: the "CBZ opens in" choice (absent = the
+        // Komikku default in every pre-OE-4 store).
+        val KEY_CBZ_OPENS_IN_KOMIKKU =
+            booleanPreferencesKey("reader.cbz_opens_in_komikku")
         val KEY_MARGIN_H = floatPreferencesKey("reader.margin_h")
         val KEY_MARGIN_V = floatPreferencesKey("reader.margin_v")
         val KEY_ALIGNMENT = stringPreferencesKey("reader.alignment")

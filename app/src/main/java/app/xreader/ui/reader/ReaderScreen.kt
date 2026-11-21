@@ -180,6 +180,7 @@ fun ReaderScreen(
     val searchBusy by viewModel.searchBusy.collectAsStateWithLifecycle()
     val plateFilter by viewModel.plateFilter.collectAsStateWithLifecycle()
     val migrationNote by viewModel.migrationNote.collectAsStateWithLifecycle()
+    val cbzSwitchNote by viewModel.cbzSwitchNote.collectAsStateWithLifecycle()
     // v1.7 OE-1: a local PDF read in this one reader — its
     // page-shaped state rides beside the chapter state
     // (the surfaces, the chrome's page label and mode
@@ -454,6 +455,15 @@ fun ReaderScreen(
         migrationNote?.let { text ->
             notice = text
             viewModel.consumeMigrationNote()
+        }
+    }
+
+    // v1.7 OE-4: the automatic CBZ fallback's one plain line,
+    // through the same transient notice, once.
+    LaunchedEffect(cbzSwitchNote) {
+        cbzSwitchNote?.let { text ->
+            notice = text
+            viewModel.consumeCbzSwitchNote()
         }
     }
 
@@ -1004,6 +1014,25 @@ fun ReaderScreen(
                 }
             }
 
+            // v1.7 OE-4: a local CBZ/CBR in this reader renders
+            // its stored pages as a page world — never as
+            // in-text pictures in the document flow (the branch
+            // below), and never through the mangaPages detour
+            // above: that guard backstops SOURCE manga, while a
+            // covered comic arrives here on purpose (the
+            // resolver's Book-reader verdict, or the automatic
+            // fallback from the manga reader).
+            state.cbzPages.isNotEmpty() -> {
+                CbzPagesSurface(
+                    pages = state.cbzPages,
+                    initialPage = state.cbzPage,
+                    jumps = viewModel.cbzJumps,
+                    assetFile = { assetFile(bookId, it) },
+                    onPage = { page -> viewModel.onCbzPage(page) },
+                    onToggleChrome = { chromeVisible = !chromeVisible }
+                )
+            }
+
             // v1.7 document engine: in SCROLL mode the
             // document surface renders the WHOLE BOOK as
             // segments under BOTH transitions — it is the only
@@ -1221,15 +1250,18 @@ fun ReaderScreen(
             } else {
                 state.currentPositionBookmarked
             },
-            hasPrevious = if (pdfReady != null) {
-                pdfReady.page > 0
-            } else {
-                state.hasPrevious
+            hasPrevious = when {
+                pdfReady != null -> pdfReady.page > 0
+                // v1.7 OE-4: in the CBZ page world the turn
+                // buttons turn pages.
+                state.cbzPages.isNotEmpty() -> state.cbzPage > 0
+                else -> state.hasPrevious
             },
-            hasNext = if (pdfReady != null) {
-                pdfReady.page < pdfReady.pageCount - 1
-            } else {
-                state.hasNext
+            hasNext = when {
+                pdfReady != null -> pdfReady.page < pdfReady.pageCount - 1
+                state.cbzPages.isNotEmpty() ->
+                    state.cbzPage < state.cbzPages.lastIndex
+                else -> state.hasNext
             },
             onBack = onBack,
             onToggleBookmark = {
@@ -1252,28 +1284,42 @@ fun ReaderScreen(
                 }
             },
             onPreviousChapter = {
-                if (pdfReady != null) {
-                    viewModel.pdfGoToPage(pdfReady.page - 1)
-                } else {
-                    viewModel.previousChapter()
+                when {
+                    pdfReady != null ->
+                        viewModel.pdfGoToPage(pdfReady.page - 1)
+                    state.cbzPages.isNotEmpty() ->
+                        viewModel.cbzGoToPage(state.cbzPage - 1)
+                    else -> viewModel.previousChapter()
                 }
             },
             onNextChapter = {
-                if (pdfReady != null) {
-                    viewModel.pdfGoToPage(pdfReady.page + 1)
-                } else {
-                    viewModel.nextChapter()
+                when {
+                    pdfReady != null ->
+                        viewModel.pdfGoToPage(pdfReady.page + 1)
+                    state.cbzPages.isNotEmpty() ->
+                        viewModel.cbzGoToPage(state.cbzPage + 1)
+                    else -> viewModel.nextChapter()
                 }
             },
             onSeekFraction = { fraction ->
-                if (pdfReady != null) {
-                    val target = (fraction * pdfReady.pageCount).toInt()
-                        .coerceIn(0, maxOf(0, pdfReady.pageCount - 1))
-                    viewModel.pdfGoToPage(target)
-                } else {
-                    val target = (fraction * state.chapters.size).toInt()
-                        .coerceIn(0, maxOf(0, state.chapters.lastIndex))
-                    viewModel.openChapter(target)
+                when {
+                    pdfReady != null -> {
+                        val target = (fraction * pdfReady.pageCount).toInt()
+                            .coerceIn(0, maxOf(0, pdfReady.pageCount - 1))
+                        viewModel.pdfGoToPage(target)
+                    }
+                    // v1.7 OE-4: the slider seeks pages in the
+                    // CBZ page world.
+                    state.cbzPages.isNotEmpty() -> {
+                        val target = (fraction * state.cbzPages.size).toInt()
+                            .coerceIn(0, state.cbzPages.lastIndex)
+                        viewModel.cbzGoToPage(target)
+                    }
+                    else -> {
+                        val target = (fraction * state.chapters.size).toInt()
+                            .coerceIn(0, maxOf(0, state.chapters.lastIndex))
+                        viewModel.openChapter(target)
+                    }
                 }
             },
             onOpenToc = { activeSheet = ActiveSheet.TOC },
@@ -1309,6 +1355,15 @@ fun ReaderScreen(
                         )
                     }
                 }
+            },
+            // v1.7 OE-4: in the CBZ page world the footer
+            // speaks in pages, and the text-only doors
+            // (Contents / Search / Listen / Ask AI) stay away —
+            // there is no text on an image page to serve them.
+            cbzPageLabel = if (state.cbzPages.isNotEmpty()) {
+                "Page ${state.cbzPage + 1} / ${state.cbzPages.size}"
+            } else {
+                null
             },
             onTopBarHeight = { px -> if (px > 0) topChromePx = px },
             onBottomBarHeight = { px -> if (px > 0) bottomChromePx = px }
@@ -1811,6 +1866,13 @@ private fun ReaderChrome(
      * Null for every non-PDF book. */
     pdfModeLabel: String? = null,
     onTogglePdfMode: () -> Unit = {},
+    /** v1.7 OE-4: for a local CBZ/CBR in the book reader's
+     * page world, the page label ("Page 5 / 42") — when
+     * present, the footer speaks in pages and the text-only
+     * doors (Contents / Search / Listen / Ask AI) are not
+     * offered: an image page has no text for them to serve.
+     * Null for every other book. */
+    cbzPageLabel: String? = null,
     /** v1.0.6.2 (F7): the bars' measured heights (px), so the
      * text insets match the real chrome, never a guess. */
     onTopBarHeight: (Int) -> Unit = {},
@@ -1874,8 +1936,10 @@ private fun ReaderChrome(
                             tint = palette.accent
                         )
                     }
-                    GlassChipButton(palette = palette, onClick = onOpenListen) {
-                        Icon(Icons.Filled.Headphones, "Listen", tint = palette.text)
+                    if (cbzPageLabel == null) {
+                        GlassChipButton(palette = palette, onClick = onOpenListen) {
+                            Icon(Icons.Filled.Headphones, "Listen", tint = palette.text)
+                        }
                     }
                     GlassChipButton(palette = palette, onClick = onOpenSettings) {
                         Icon(Icons.Filled.Settings, "Reading settings", tint = palette.text)
@@ -1957,6 +2021,12 @@ private fun ReaderChrome(
                                         // count.
                                         "$pdfPageLabel · " +
                                             "${(bookFraction * 100).toInt()}%"
+                                    } else if (cbzPageLabel != null) {
+                                        // v1.7 OE-4: a comic's
+                                        // status speaks in
+                                        // pages too.
+                                        "$cbzPageLabel · " +
+                                            "${(bookFraction * 100).toInt()}%"
                                     } else {
                                         ReaderCounters.footerLine(
                                             chapterIndex, chapterCount,
@@ -2022,18 +2092,20 @@ private fun ReaderChrome(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        ChromeAction(
-                            Icons.Filled.List, "Contents", palette, onOpenToc,
-                            modifier = Modifier.weight(1f)
-                        )
-                        ChromeAction(
-                            Icons.Filled.Search, "Search", palette, onOpenSearch,
-                            modifier = Modifier.weight(1f)
-                        )
-                        ChromeAction(
-                            Icons.Filled.Headphones, "Listen", palette, onOpenListen,
-                            modifier = Modifier.weight(1f)
-                        )
+                        if (cbzPageLabel == null) {
+                            ChromeAction(
+                                Icons.Filled.List, "Contents", palette, onOpenToc,
+                                modifier = Modifier.weight(1f)
+                            )
+                            ChromeAction(
+                                Icons.Filled.Search, "Search", palette, onOpenSearch,
+                                modifier = Modifier.weight(1f)
+                            )
+                            ChromeAction(
+                                Icons.Filled.Headphones, "Listen", palette, onOpenListen,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                         if (pdfModeLabel != null) {
                             // OE-1 (R13, OQ4): the mode
                             // switch, one tap on the bar —
@@ -2044,7 +2116,7 @@ private fun ReaderChrome(
                                 onTogglePdfMode,
                                 modifier = Modifier.weight(1f)
                             )
-                        } else {
+                        } else if (cbzPageLabel == null) {
                             ChromeAction(
                                 Icons.Filled.AutoAwesome, "Ask AI",
                                 palette,

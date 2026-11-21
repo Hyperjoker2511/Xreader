@@ -588,6 +588,38 @@ class KomikkuReaderViewModel(
 
     private var isLocalBook = false
 
+    /** v1.7 OE-4 (owner's CBZ ruling): this book is a local
+     * CBZ/CBR. Its stored chapter is image BLOCKS, a shape
+     * this reader's page pipeline never serves (its stored-
+     * pages leg reads the pages record), so its open lands in
+     * the load-failure state below — the one case the
+     * automatic fallback exists for. Set in [open] from the
+     * book row. */
+    private var isLocalCbzBook = false
+
+    /** v1.7 OE-4: the automatic-fallback signal — emitted
+     * ONCE when a local CBZ/CBR's FIRST chapter load reaches
+     * a terminal failure (error state, or a load that ends
+     * with zero readable pages). The Activity collects it,
+     * hands the book to the shell's book-reader channel and
+     * finishes; the comic opens in the book reader's page
+     * world instead, with the one plain switch line. Source
+     * manga never emits: [isLocalCbzBook] is false for it,
+     * and a chapter that opens with a few bad pages is a
+     * Loaded state, not a failure — it stays here (Q4). */
+    private val _cbzFallback =
+        kotlinx.coroutines.flow.MutableSharedFlow<Long>(
+            extraBufferCapacity = 1
+        )
+    val cbzFallback: kotlinx.coroutines.flow.SharedFlow<Long> =
+        _cbzFallback
+
+    private fun emitCbzFallbackIfFirstLoad(adjacent: Boolean) {
+        if (isLocalCbzBook && !adjacent) {
+            _cbzFallback.tryEmit(bookId)
+        }
+    }
+
     /** v1.5.6 (M3): chapters whose page registrations this
      * process has already refreshed (see the pipeline). */
     private val refreshedChapterIds: MutableSet<Long> =
@@ -647,6 +679,14 @@ class KomikkuReaderViewModel(
         }
         val book = container.database.bookDao().getById(bookId)
         isLocalBook = book?.extensionId == null
+        // v1.7 OE-4: a local CBZ/CBR (see the field doc).
+        isLocalCbzBook = book != null &&
+            book.sourceType ==
+                app.xreader.data.db.SourceType.LOCAL_FILE &&
+            (book.localFormat ==
+                app.xreader.data.db.BookFormat.CBZ ||
+                book.localFormat ==
+                    app.xreader.data.db.BookFormat.CBR)
         val appearance = container.appearancePrefs.state.first()
         _state.value = _state.value.copy(
             tier = app.xreader.data.prefs.PerformancePolicy.resolve(
@@ -661,6 +701,9 @@ class KomikkuReaderViewModel(
                 loading = false,
                 errorMessage = "This book has no chapters to read."
             )
+            // v1.7 OE-4: a local comic with nothing to open
+            // here opens in the book reader instead.
+            emitCbzFallbackIfFirstLoad(adjacent = false)
             return
         }
         // Patch 14 (Manga Continue): the handed chapter wins;
@@ -768,6 +811,8 @@ class KomikkuReaderViewModel(
                 loading = false,
                 errorMessage = "That chapter couldn't be opened."
             )
+            // v1.7 OE-4: the automatic CBZ fallback.
+            emitCbzFallbackIfFirstLoad(adjacent)
             return
         }
         val loader = newChapterLoader()
@@ -813,6 +858,8 @@ class KomikkuReaderViewModel(
                     e
                 )
             )
+            // v1.7 OE-4: the automatic CBZ fallback.
+            emitCbzFallbackIfFirstLoad(adjacent)
             return
         }
         val pageCount = window.currChapter.pages?.size ?: 0
@@ -848,6 +895,10 @@ class KomikkuReaderViewModel(
                         ReaderChapter.State.Error)?.error
                 )
             )
+            // v1.7 OE-4: the automatic CBZ fallback — an error
+            // state, or a load that ended with zero readable
+            // pages (a local CBZ's stored shape, every time).
+            emitCbzFallbackIfFirstLoad(adjacent)
             return
         }
         val startPage = when {
