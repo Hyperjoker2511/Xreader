@@ -1054,8 +1054,19 @@ class EpubParser : BookParser {
             var mergedTextLen = 0
             var mergedBlocks = 0
             for (slice in slices) {
+                // Fix round 1: a staged file that fails to
+                // decode ABORTS the whole pass — the throw
+                // lands in segmentByToc's runCatching, which
+                // returns the raw unsegmented emission (the
+                // spec's contract: any failure → raw
+                // emission). Substituting an empty chapter
+                // here would silently drop this slice's
+                // text from the merged book.
                 val content = decodeOld(slice.oldIndex)
-                    ?: ChapterContent()
+                    ?: throw IllegalStateException(
+                        "segmentation: staged chapter " +
+                            "${slice.oldIndex} failed to decode"
+                    )
                 val all = content.blocks
                 val from = slice.fromBlock.coerceIn(0, all.size)
                 val to = slice.toBlock.coerceIn(from, all.size)
@@ -1076,7 +1087,22 @@ class EpubParser : BookParser {
                         oldText.startOf(to) - 2 - startOffset
                         ).coerceAtLeast(0)
                 }
-                val charPrefix = if (mergedBlocks > 0) {
+                // Fix round 1: a zero-block slice carries
+                // no text, so no separator precedes IT —
+                // in ChapterText's join accounting the
+                // "\n\n" exists only where a block actually
+                // follows one, and it is charged to the
+                // next slice that adds a block (mergedTextLen
+                // does not advance here, so that slice still
+                // gets exactly one +2). This slice's prefix
+                // is the seam itself — the end of the text
+                // so far — not 2 past it into the following
+                // text. (mergedTextLen is 0 while
+                // mergedBlocks is 0, so the first-slice case
+                // is covered by the same branch.)
+                val charPrefix = if (part.isEmpty()) {
+                    mergedTextLen
+                } else if (mergedBlocks > 0) {
                     mergedTextLen + 2
                 } else {
                     0

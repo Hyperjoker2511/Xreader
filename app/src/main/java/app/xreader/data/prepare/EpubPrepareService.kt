@@ -656,6 +656,28 @@ class EpubPrepareService(
                 .coerceIn(0, length)
         }
 
+        // Fix round 1: the CORE-shaped rows are snapshotted
+        // BEFORE the locator passes below run. Those passes
+        // flip their rows to core shape IN PLACE (locatorJson
+        // cleared, merged-space chapterId/chapterIndex
+        // written), so a core query issued after them would
+        // match the just-converted rows too — bookmarks
+        // remapped a SECOND time (merged-space keys fed to
+        // the merge map as pre-merge space) and highlights
+        // counted unplaced after being counted converted.
+        // At entry the two shapes are disjoint (a row's
+        // locatorJson is either null or not), so this
+        // snapshot IS the core set for the whole call, on
+        // first prepare and re-prepare alike.
+        val coreBookmarkRows = runCatching {
+            bookmarkDao.forBook(book.id)
+        }.getOrDefault(emptyList())
+            .filter { it.locatorJson == null }
+        val coreHighlightRows = runCatching {
+            highlightDao.forBook(book.id)
+        }.getOrDefault(emptyList())
+            .filter { it.locatorJson == null }
+
         // Bookmarks: DB rows, flipped in place.
         val bookmarks = runCatching { bookmarkDao.forBook(book.id) }
             .getOrDefault(emptyList())
@@ -741,10 +763,10 @@ class EpubPrepareService(
         // the merge span carries each one across. Bookmarks
         // carry no quote, so the arithmetic is the whole
         // road — exact by construction (A3's seams are in
-        // the prefixes).
-        val coreBookmarks = runCatching { bookmarkDao.forBook(book.id) }
-            .getOrDefault(emptyList())
-            .filter { it.locatorJson == null }
+        // the prefixes). Fix round 1: this iterates the
+        // pre-pass snapshot, never a fresh query (see the
+        // snapshot above for why).
+        val coreBookmarks = coreBookmarkRows
         for (row in coreBookmarks) {
             val span = mergeSpan(row.chapterIndex, row.charOffset)
             val landed = span?.let {
@@ -775,9 +797,12 @@ class EpubPrepareService(
         // the check — when the mapped span does not
         // reproduce the highlighted words, findQuote
         // re-anchors (Item 3e's machinery, reused).
-        val coreHighlights = runCatching { highlightDao.forBook(book.id) }
-            .getOrDefault(emptyList())
-            .filter { it.locatorJson == null }
+        // Fix round 1: the pre-pass snapshot again — a
+        // fresh query here would re-match the highlights
+        // the locator pass just converted (their chapterId
+        // is a landed id now, absent from
+        // oldChapterIdsInOrder) and count them unplaced.
+        val coreHighlights = coreHighlightRows
         for (row in coreHighlights) {
             val oldIndex = oldChapterIdsInOrder.indexOf(row.chapterId)
             val startSpan = if (oldIndex >= 0) {

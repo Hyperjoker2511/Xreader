@@ -27,7 +27,7 @@ android {
         applicationId = "app.xreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 96
+        versionCode = 97
         versionName = "1.6.2-mr1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
