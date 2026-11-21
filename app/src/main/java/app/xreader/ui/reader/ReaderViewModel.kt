@@ -16,11 +16,7 @@ import app.xreader.data.reader.MlKitEyeTracker
 import app.xreader.data.reader.OverlayPlayer
 import app.xreader.data.reader.ReadAloudController
 import app.xreader.data.reader.SoundscapePlayer
-import app.xreader.data.engine.canonicalHrefKey
-import app.xreader.data.parse.EpubParser
 import app.xreader.di.AppContainer
-import app.xreader.ui.localreader.EpubTocData
-import app.xreader.ui.localreader.EpubTocEntryData
 import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.reader.BookDocument
@@ -57,7 +53,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /** Where a freshly loaded chapter should open. */
 enum class PageHint { FIRST, LAST, OFFSET }
@@ -936,27 +931,18 @@ class ReaderViewModel(
                 }
             }
             val saved = container.database.readingProgressDao().getForBook(bookId)
-            // Part 2 + Part 3: the open book's EPUB-ness and
-            // its own table of contents, computed BEFORE the
-            // publish below and carried in the SAME copy — the
-            // Contents sheet and the chrome counters read
-            // tocEntries from state, so the TOC must land
-            // atomically with the chapters or the counters
-            // would flip mid-session. Only a PREPARED EPUB
-            // gets the parse (the document surface serves
-            // nothing else); a failure anywhere in the pass
-            // yields no TOC, never a failed open.
+            // Part 2 + Part 3: the open book's EPUB-ness.
+            // Moon Reader update (patch 1): the bridged-TOC
+            // overlay that used to be computed here is
+            // RETIRED — segmentation made a prepared EPUB's
+            // chapters BE the book's own TOC at conversion,
+            // so the Contents sheet and the chrome counters
+            // read the chapter rows themselves and
+            // tocEntries stays empty for every book.
             val epubBook = book != null &&
                 book.sourceType ==
                     app.xreader.data.db.SourceType.LOCAL_FILE &&
                 book.localFormat == app.xreader.data.db.BookFormat.EPUB
-            val tocForPublish: List<ReaderTocEntry> = book
-                ?.takeIf { epubBook && _preparedEpub.value }
-                ?.let { epub ->
-                    runCatching { computeEpubToc(epub, chapters) }
-                        .getOrDefault(emptyList())
-                }
-                ?: emptyList()
             // v1.0.6 (W3.4): a browser-view source gets ONE plain
             // note per source per session, so slower chapter turns
             // never read as the app hanging.
@@ -964,7 +950,7 @@ class ReaderViewModel(
             _state.value = _state.value.copy(
                 bookTitle = book?.title ?: "",
                 chapters = chaptersUpdated(chapters),
-                tocEntries = tocForPublish,
+                tocEntries = emptyList(),
                 isEpubBook = epubBook,
                 pageTurnTier = computeTier(_config.value),
                 browserViewNotice = sourceNotice ?: _state.value.browserViewNotice
@@ -2577,217 +2563,16 @@ class ReaderViewModel(
         }
     }
 
-    /**
-     * Part 2: bridge the book's own TOC to the landed
-     * chapters. A SETTLED result — bridged entries, or a
-     * genuine no-TOC-source verdict — is cached in
-     * LocalReaderPrefs under its own key (A7: the prepare
-     * record is never extended), so a re-open reads the
-     * cache and never re-parses. Cached entries are
-     * re-bounded against the CURRENT chapter list (a
-     * re-imported book can carry fewer chapters than the
-     * cache was bridged against).
-     *
-     * Fix Round G (Part A1): a FAILED computation is never
-     * cached. The first Fix F build cached a null/empty
-     * bridge result as the permanent no-TOC marker, so any
-     * first-open failure — transient or real — locked the
-     * book out of its own Contents forever (the owner's
-     * 'Grieving Soul' shipped exactly that). Now the bridge
-     * answers a tri-state and only the two settled states
-     * reach the cache; a failure publishes no TOC for this
-     * session and the next open retries.
-     */
-    private suspend fun computeEpubToc(
-        book: app.xreader.data.db.Book,
-        chapters: List<Chapter>
-    ): List<ReaderTocEntry> {
-        val cached = runCatching {
-            localReaderPrefs.epubToc(book.id)
-        }.getOrNull()
-        if (cached != null) {
-            return cached.entries
-                .filter { it.chapterIndex in chapters.indices }
-                .map {
-                    ReaderTocEntry(
-                        it.label, it.chapterIndex, it.charOffset
-                    )
-                }
-        }
-        val outcome = withContext(container.ioDispatcher) {
-            runCatching { bridgeEpubToc(book, chapters) }
-                .getOrDefault(EpubTocOutcome.Failed)
-        }
-        return when (outcome) {
-            is EpubTocOutcome.Entries -> {
-                runCatching {
-                    localReaderPrefs.saveEpubToc(
-                        book.id,
-                        EpubTocData(
-                            outcome.entries.map {
-                                EpubTocEntryData(
-                                    it.label, it.chapterIndex,
-                                    it.charOffset
-                                )
-                            },
-                            hasToc = true
-                        )
-                    )
-                }
-                outcome.entries
-            }
-            EpubTocOutcome.NoTocSource -> {
-                runCatching {
-                    localReaderPrefs.saveEpubToc(
-                        book.id,
-                        EpubTocData(emptyList(), hasToc = false)
-                    )
-                }
-                emptyList()
-            }
-            // NOT cached — the next open retries.
-            EpubTocOutcome.Failed -> emptyList()
-        }
-    }
-
-    /** Fix Round G (Part A1): the TOC bridge's tri-state
-     * answer. Only [Entries] and [NoTocSource] are settled
-     * enough to cache; [Failed] means the computation
-     * itself broke (or the book's file couldn't be read)
-     * and must never be remembered as an absence. */
-    private sealed interface EpubTocOutcome {
-        data class Entries(
-            val entries: List<ReaderTocEntry>
-        ) : EpubTocOutcome
-
-        data object NoTocSource : EpubTocOutcome
-        data object Failed : EpubTocOutcome
-    }
-
-    /**
-     * Part 2: the parse + bridge itself (blocking file
-     * work — the caller runs it on the IO dispatcher),
-     * answering the Fix Round G tri-state (A1):
-     * [EpubTocOutcome.Failed] when the book's file can't be
-     * resolved or read, when the parse itself fails, when
-     * the spine comes back empty, or when entries existed
-     * but NONE of them bridged (the bridge broke — never an
-     * absence); [EpubTocOutcome.NoTocSource] when the parse
-     * ran clean and the book declares no NCX and no nav
-     * TOC; [EpubTocOutcome.Entries] with at least one
-     * bridged entry otherwise. tocMap's harvest fallback
-     * (A2) has already had its say by the time entries are
-     * counted here.
-     *
-     * THE BRIDGE: [EpubParser.tocMap] yields the entries
-     * and every spine item's resolved href in spine order;
-     * an entry's segment is its href's index in that list.
-     * The evidence for spine index == chapter index:
-     * prepare converts EpubParser.parse's chapters IN ORDER
-     * (EpubPrepareService lands parsed.chapters by list
-     * position) and parse emits exactly one chapter per
-     * convertible spine item in spine order, so for a
-     * prepared book the landed list and the spine list walk
-     * together; the record's only map is keyed in SESSION
-     * reading-order space, not spine space, so no record
-     * bridge exists to prefer. The match is bounded by the
-     * loaded list — an entry past the end (a spine item
-     * conversion skipped, which can only push indices UP,
-     * never down) drops rather than pointing at the wrong
-     * chapter. Hrefs match in tocMap's own resolved form
-     * first, then by canonicalHrefKey — the two-key
-     * discipline of the prepare bridge (EpubHrefBridge).
-     */
-    private suspend fun bridgeEpubToc(
-        book: app.xreader.data.db.Book,
-        chapters: List<Chapter>
-    ): EpubTocOutcome {
-        // The book's file, resolved exactly as the prepare
-        // service resolves it: an absolute filePath stands
-        // as-is; anything else resolves against book
-        // storage (BookStorage.resolve is relative-only —
-        // File(parent, absoluteChild) would concatenate).
-        // A documentUri-only book has no plain file to
-        // parse: Failed (never cached — if a plain file
-        // ever appears, a later open can still succeed).
-        val storedPath = book.filePath
-            ?: return EpubTocOutcome.Failed
-        val file = if (storedPath.startsWith("/")) {
-            File(storedPath)
-        } else {
-            container.bookStorage.resolve(storedPath)
-        }
-        if (!file.isFile) return EpubTocOutcome.Failed
-        val workDir = File(
-            container.bookStorage
-                .importStagingDir("epub-toc-${book.id}"),
-            "work"
-        )
-        val map = EpubParser().tocMap(file, workDir)
-            ?: return EpubTocOutcome.Failed
-        if (map.spineHrefs.isEmpty()) {
-            return EpubTocOutcome.Failed
-        }
-        if (map.entries.isEmpty()) {
-            return if (map.hasTocSource) {
-                // A source is declared but neither the entry
-                // parse nor the harvest produced an entry:
-                // the parse broke, it did not find an absence.
-                EpubTocOutcome.Failed
-            } else {
-                EpubTocOutcome.NoTocSource
-            }
-        }
-        val spineIndex = HashMap<String, Int>()
-        map.spineHrefs.forEachIndexed { index, href ->
-            spineIndex.putIfAbsent(href, index)
-            spineIndex.putIfAbsent(canonicalHrefKey(href), index)
-        }
-        val result = ArrayList<ReaderTocEntry>(map.entries.size)
-        for (entry in map.entries) {
-            val index = spineIndex[entry.href]
-                ?: spineIndex[canonicalHrefKey(entry.href)]
-                ?: continue
-            if (index !in chapters.indices) continue
-            val offset = entry.fragment?.let { fragment ->
-                fragmentOffset(chapters[index], fragment)
-            } ?: 0
-            result += ReaderTocEntry(entry.label, index, offset)
-        }
-        return if (result.isEmpty()) {
-            EpubTocOutcome.Failed
-        } else {
-            EpubTocOutcome.Entries(result)
-        }
-    }
-
-    /** Part 2: a fragment's char offset inside one landed
-     * chapter — the stored text read DIRECTLY (the same
-     * read loadSegmentText makes, without its cache
-     * publishing), the block carrying the fragment as its
-     * id (Heading or Paragraph — the block types that have
-     * ids), that block's range start. No match, or an
-     * unreadable chapter, → 0: the entry still opens the
-     * right chapter. */
-    private suspend fun fragmentOffset(
-        chapter: Chapter,
-        fragment: String
-    ): Int {
-        val result = container.bookStorage.readChapterContent(
-            chapter.bookId, chapter.id
-        )
-        if (result !is AppResult.Ok) return 0
-        val text = ChapterText(result.value)
-        val blockIndex = text.content.blocks.indexOfFirst { block ->
-            when (block) {
-                is ChapterBlock.Heading -> block.id == fragment
-                is ChapterBlock.Paragraph -> block.id == fragment
-                else -> false
-            }
-        }
-        if (blockIndex < 0) return 0
-        return text.rangeOf(blockIndex)?.start ?: 0
-    }
+    // Moon Reader update (patch 1): the Part 2 TOC bridge
+    // (computeEpubToc / bridgeEpubToc / fragmentOffset and
+    // its EpubTocData cache) is REMOVED, not merely unused.
+    // Segmentation made a prepared EPUB's chapter rows BE
+    // the book's own table of contents at conversion time,
+    // so the reader needs no open-time bridge — and the
+    // bridge's load-bearing assumption (spine index ==
+    // chapter index) is false under segmentation. Contents
+    // and the counters read chapter rows; the stale cache
+    // in LocalReaderPrefs went with it.
 
     /** v1.7 Patch 2 (item 1d): the residency planner's
      * per-chapter char counts — the char map's EXACT length

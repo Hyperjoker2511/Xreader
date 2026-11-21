@@ -3,9 +3,11 @@ package app.xreader.data.parse
 import app.xreader.core.error.AppError
 import app.xreader.core.error.AppResult
 import app.xreader.data.db.BookFormat
+import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.content.MediaClip
 import app.xreader.domain.content.MediaOverlay
+import app.xreader.domain.reader.ChapterText
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FilterInputStream
@@ -653,6 +655,13 @@ class EpubParser : BookParser {
             }
         }
         var illustrationCount = 0
+        // v1.7 Moon Reader update (patch 1, A4): the emitted
+        // chapter index per spine item, or -1 where the item
+        // emitted nothing (the F7 skip, an unlandable plate).
+        // Segmentation groups EMITTED chapters, never raw
+        // spine items, so this is recorded at the writer.add
+        // sites exactly as chapterHrefs is.
+        val spineEmission = IntArray(spineItems.size) { -1 }
         spineItems.forEachIndexed { index, (item, relPath) ->
             val itemFile = entryFile(unzipped, entryIndex, relPath)
             if (item.mediaType.startsWith("image/")) {
@@ -678,6 +687,7 @@ class EpubParser : BookParser {
                         )
                     )
                     chapterHrefs += relPath
+                    spineEmission[index] = writer.metas.lastIndex
                 } else {
                     droppedImages++
                 }
@@ -716,6 +726,7 @@ class EpubParser : BookParser {
                 failures++
                 writer.add(titles[relPath] ?: "Chapter ${index + 1}", ChapterContent())
                 chapterHrefs += relPath
+                spineEmission[index] = writer.metas.lastIndex
             } else {
                 // v1.5.5 (§5): pictures that genuinely couldn't
                 // be read — remote references stay a designed
@@ -759,6 +770,7 @@ class EpubParser : BookParser {
                         content
                     )
                     chapterHrefs += relPath
+                    spineEmission[index] = writer.metas.lastIndex
                 }
             }
             onProgress(if (spineItems.isEmpty()) 1f else (index + 1).toFloat() / spineItems.size)
@@ -798,6 +810,24 @@ class EpubParser : BookParser {
             }
         }
 
+        // Patch 1: segmentation — the book's own TOC anchors
+        // become the chapters (spine files group under the
+        // anchor that starts them). A post-emission merge
+        // over the staged chapter files (A4); any failure in
+        // the pass leaves the emitted chapters untouched —
+        // segmentation never makes a book less readable.
+        val segmented = segmentByToc(
+            unzipped = unzipped,
+            entryIndex = entryIndex,
+            opf = opf,
+            opfDir = opfDir,
+            workDir = workDir,
+            oldMetas = writer.metas,
+            oldHrefs = chapterHrefs,
+            spineHrefs = spineItems.map { it.second },
+            spineEmission = spineEmission
+        )
+
         return AppResult.Ok(
             ParsedBook(
                 title = opf.title,
@@ -806,12 +836,296 @@ class EpubParser : BookParser {
                 language = opf.language,
                 format = BookFormat.EPUB,
                 coverFile = coverFile,
-                chapters = writer.metas,
-                chaptersDir = File(workDir, "chapters"),
+                chapters = segmented.metas,
+                chaptersDir = segmented.chaptersDir,
                 assetsDir = assetsDir.takeIf { it.list()?.isNotEmpty() == true },
                 droppedImages = droppedImages,
-                chapterHrefs = chapterHrefs.toList()
+                chapterHrefs = segmented.hrefs,
+                chapterMerge = segmented.merge,
+                preSegmentChapterHrefs = segmented.preSegmentHrefs,
+                droppedOverlays = segmented.droppedOverlays
             )
+        )
+    }
+
+    /** Patch 1: [segmentByToc]'s yield. When the book has
+     * no usable TOC the emission passes through untouched
+     * and [merge]/[preSegmentHrefs] stay empty — the
+     * signal every consumer keys on. */
+    private data class SegmentationResult(
+        val metas: List<ParsedChapterMeta>,
+        val chaptersDir: File,
+        val hrefs: List<String>,
+        val merge: List<ChapterMergeSpan>,
+        val preSegmentHrefs: List<String>,
+        val droppedOverlays: Int
+    )
+
+    /** One contiguous slice of a pre-merge chapter inside
+     * one merged chapter: blocks [fromBlock, toBlock). */
+    private data class SegmentSlice(
+        val oldIndex: Int,
+        val fromBlock: Int,
+        val toBlock: Int
+    )
+
+    /**
+     * Patch 1 (spec §1/§2, amendments A3–A6): group the
+     * EMITTED chapters under the book's own TOC anchors.
+     *
+     * The anchor list is [tocEntries] — the same ordered,
+     * longer-wins NCX/nav resolution Micro-build M built
+     * (A4); parse()'s href→title harvest is NOT an ordered
+     * TOC and is never used here. Each anchor starts a
+     * chapter at the emitted chapter its href names — or,
+     * when that spine item emitted nothing (A5), at the
+     * next emitted item after it. A fragment anchor splits
+     * its file at the block carrying the fragment id when
+     * one resolves (the converter's ids, A5); an anchor
+     * resolving to nothing starts no split — anchors
+     * sharing one file merge into one chapter named by
+     * the first anchor, with or without fragments (A5).
+     * Files before the first anchor form one front-matter
+     * chapter. Null (the caller keeps the raw emission)
+     * when the book declares no entries or none of them
+     * lands on an emitted chapter.
+     *
+     * The merge itself is a post-emission pass over the
+     * staged `ch-*.json` files (A4): one group is decoded,
+     * concatenated and re-encoded at a time — a whole book
+     * is never held. Metas are regenerated by the writer
+     * (title = the anchor's label verbatim, wordCount =
+     * the merged content's own count, i.e. the sum).
+     * Offsets are ChapterText coordinates (A3): each
+     * slice's charPrefix accounts the 2-char separator at
+     * every seam between absorbed files.
+     */
+    private fun segmentByToc(
+        unzipped: File,
+        entryIndex: Map<String, String>,
+        opf: Opf,
+        opfDir: String,
+        workDir: File,
+        oldMetas: List<ParsedChapterMeta>,
+        oldHrefs: List<String>,
+        spineHrefs: List<String>,
+        spineEmission: IntArray
+    ): SegmentationResult {
+        val untouched = SegmentationResult(
+            metas = oldMetas,
+            chaptersDir = File(workDir, "chapters"),
+            hrefs = oldHrefs.toList(),
+            merge = emptyList(),
+            preSegmentHrefs = emptyList(),
+            droppedOverlays = 0
+        )
+        return runCatching {
+            segmentByTocOrNull(
+                unzipped, entryIndex, opf, opfDir, workDir,
+                oldMetas, oldHrefs, spineHrefs, spineEmission
+            )
+        }.getOrNull() ?: untouched
+    }
+
+    private fun segmentByTocOrNull(
+        unzipped: File,
+        entryIndex: Map<String, String>,
+        opf: Opf,
+        opfDir: String,
+        workDir: File,
+        oldMetas: List<ParsedChapterMeta>,
+        oldHrefs: List<String>,
+        spineHrefs: List<String>,
+        spineEmission: IntArray
+    ): SegmentationResult? {
+        val entries = tocEntries(unzipped, entryIndex, opf, opfDir)
+        if (entries.isEmpty()) return null
+
+        val oldDir = File(workDir, "chapters")
+        val json = kotlinx.serialization.json.Json {
+            ignoreUnknownKeys = true
+        }
+        fun decodeOld(index: Int): ChapterContent? = runCatching {
+            json.decodeChapter(
+                File(oldDir, oldMetas[index].contentFileName).readText()
+            )
+        }.getOrNull()
+
+        // The first spine position of each href — anchor
+        // hrefs and spine hrefs come out of the same
+        // ZipPaths.resolve pipeline, so they meet exactly.
+        val spinePosByHref = HashMap<String, Int>()
+        spineHrefs.forEachIndexed { pos, href ->
+            spinePosByHref.putIfAbsent(href, pos)
+        }
+
+        // Split points, deduped in TOC order (the first
+        // anchor at a point names the chapter), then
+        // ordered by position.
+        data class Split(
+            val oldIndex: Int,
+            val blockIndex: Int,
+            val label: String
+        )
+
+        val seen = HashSet<Pair<Int, Int>>()
+        val splits = ArrayList<Split>()
+        for (entry in entries) {
+            val spinePos = spinePosByHref[entry.href] ?: continue
+            var target = -1
+            var pos = spinePos
+            while (pos < spineEmission.size) {
+                if (spineEmission[pos] >= 0) {
+                    target = spineEmission[pos]
+                    break
+                }
+                pos++
+            }
+            if (target < 0) continue
+            val blockIndex = if (entry.fragment != null) {
+                val found = decodeOld(target)?.blocks
+                    ?.indexOfFirst { block ->
+                        when (block) {
+                            is ChapterBlock.Heading ->
+                                block.id == entry.fragment
+                            is ChapterBlock.Paragraph ->
+                                block.id == entry.fragment
+                            else -> false
+                        }
+                    } ?: -1
+                if (found > 0) found else 0
+            } else {
+                0
+            }
+            if (seen.add(target to blockIndex)) {
+                splits += Split(target, blockIndex, entry.label)
+            }
+        }
+        if (splits.isEmpty()) return null
+        splits.sortWith(compareBy({ it.oldIndex }, { it.blockIndex }))
+
+        // Groups: the front matter before the first split,
+        // then one group per split reaching to the next.
+        val groups = ArrayList<Pair<String?, List<SegmentSlice>>>()
+        val first = splits.first()
+        val front = ArrayList<SegmentSlice>()
+        for (oi in 0 until first.oldIndex) {
+            front += SegmentSlice(oi, 0, Int.MAX_VALUE)
+        }
+        if (first.blockIndex > 0) {
+            front += SegmentSlice(first.oldIndex, 0, first.blockIndex)
+        }
+        if (front.isNotEmpty()) groups += (null to front)
+        splits.forEachIndexed { i, split ->
+            val next = splits.getOrNull(i + 1)
+            val slices = ArrayList<SegmentSlice>()
+            val endBlock = if (
+                next != null && next.oldIndex == split.oldIndex
+            ) {
+                next.blockIndex
+            } else {
+                Int.MAX_VALUE
+            }
+            slices += SegmentSlice(split.oldIndex, split.blockIndex, endBlock)
+            if (next == null) {
+                for (oi in split.oldIndex + 1 until oldMetas.size) {
+                    slices += SegmentSlice(oi, 0, Int.MAX_VALUE)
+                }
+            } else if (next.oldIndex > split.oldIndex) {
+                for (oi in split.oldIndex + 1 until next.oldIndex) {
+                    slices += SegmentSlice(oi, 0, Int.MAX_VALUE)
+                }
+                if (next.blockIndex > 0) {
+                    slices += SegmentSlice(next.oldIndex, 0, next.blockIndex)
+                }
+            }
+            groups += (split.label to slices)
+        }
+
+        // The merge: one group at a time over the staged
+        // files, spans recorded in old-chapter space (A2).
+        val mergedWriter = ChapterFileWriter(File(workDir, "chapters-segmented"))
+        val merge = ArrayList<ChapterMergeSpan>()
+        val newHrefs = ArrayList<String>()
+        var droppedOverlays = 0
+        groups.forEachIndexed { newIndex, (label, slices) ->
+            val blocks = ArrayList<ChapterBlock>()
+            var overlay: MediaOverlay? = null
+            var mergedTextLen = 0
+            var mergedBlocks = 0
+            for (slice in slices) {
+                val content = decodeOld(slice.oldIndex)
+                    ?: ChapterContent()
+                val all = content.blocks
+                val from = slice.fromBlock.coerceIn(0, all.size)
+                val to = slice.toBlock.coerceIn(from, all.size)
+                val part = all.subList(from, to)
+                val oldText = ChapterText(content)
+                val startOffset = if (from > 0) {
+                    oldText.startOf(from)
+                } else {
+                    0
+                }
+                val sliceTextLen = when {
+                    part.isEmpty() -> 0
+                    from == 0 && to == all.size -> oldText.length
+                    from == 0 ->
+                        (oldText.startOf(to) - 2).coerceAtLeast(0)
+                    to == all.size -> oldText.length - startOffset
+                    else -> (
+                        oldText.startOf(to) - 2 - startOffset
+                        ).coerceAtLeast(0)
+                }
+                val charPrefix = if (mergedBlocks > 0) {
+                    mergedTextLen + 2
+                } else {
+                    0
+                }
+                merge += ChapterMergeSpan(
+                    oldChapterIndex = slice.oldIndex,
+                    oldStartOffset = startOffset,
+                    newChapterIndex = newIndex,
+                    charPrefix = charPrefix
+                )
+                if (part.isNotEmpty()) {
+                    mergedTextLen = charPrefix + sliceTextLen
+                    mergedBlocks += part.size
+                    blocks += part
+                }
+                // A6: one overlay slot per merged chapter —
+                // clips merge when the audio file is the
+                // same; a different audio cannot ride along
+                // and is counted, never silent.
+                val partOverlay = content.mediaOverlay
+                if (partOverlay != null) {
+                    val current = overlay
+                    when {
+                        current == null -> overlay = partOverlay
+                        current.audioFileName ==
+                            partOverlay.audioFileName ->
+                            overlay = current.copy(
+                                clips = current.clips + partOverlay.clips
+                            )
+                        else -> droppedOverlays++
+                    }
+                }
+            }
+            val title = label?.takeIf { it.isNotBlank() }
+                ?: oldMetas[slices.first().oldIndex].title
+            mergedWriter.add(
+                title,
+                ChapterContent(blocks = blocks, mediaOverlay = overlay)
+            )
+            newHrefs += oldHrefs[slices.first().oldIndex]
+        }
+
+        return SegmentationResult(
+            metas = mergedWriter.metas,
+            chaptersDir = File(workDir, "chapters-segmented"),
+            hrefs = newHrefs,
+            merge = merge,
+            preSegmentHrefs = oldHrefs.toList(),
+            droppedOverlays = droppedOverlays
         )
     }
 

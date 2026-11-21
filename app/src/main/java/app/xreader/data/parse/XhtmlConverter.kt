@@ -116,6 +116,17 @@ class XhtmlConverter(
         val spans = mutableListOf<TextSpan>()
         var paragraphId: String? = null
 
+        // v1.7 Moon Reader update (patch 1, A5): the id of an
+        // <a id="…"> / <a name="…"> anchor seen since the last
+        // emitted block. EPUB 2 chapter anchors are commonly
+        // bare <a> elements sitting just before (or inside)
+        // the heading or paragraph they name; the old walk
+        // never read them, so a TOC fragment naming one could
+        // not resolve. The next Heading or Paragraph emitted
+        // carries it (its own id wins when it has one), and
+        // emitting that block consumes it.
+        var pendingAnchorId: String? = null
+
         // v1.0.6.2 (F7b): true right after a <br> with no real text
         // since — a second <br> in a row is a paragraph break in the
         // wild (chapters separated by <br/><br/>), not a line break.
@@ -130,7 +141,10 @@ class XhtmlConverter(
                 spans[0] = first.copy(text = first.text.trimStart())
                 val last = spans.last()
                 spans[spans.lastIndex] = last.copy(text = last.text.trimEnd())
-                blocks += ChapterBlock.Paragraph(spans.toList(), paragraphId)
+                blocks += ChapterBlock.Paragraph(
+                    spans.toList(), paragraphId ?: pendingAnchorId
+                )
+                pendingAnchorId = null
             }
             spans.clear()
             paragraphId = null
@@ -257,10 +271,43 @@ class XhtmlConverter(
                                 )
                             }
                             "h1", "h2", "h3", "h4", "h5", "h6" -> {
+                                // Patch 1 (A5): a wrapper's id
+                                // (<section id="ch3"><h2>…) is
+                                // parked in paragraphId by the
+                                // BLOCK_TAGS branch; the flush
+                                // below used to discard it when
+                                // no paragraph preceded the
+                                // heading, losing the anchor.
+                                // When the flush emits nothing,
+                                // the id was naming THIS heading
+                                // — transfer it (the heading's
+                                // own id still wins).
+                                val wrapperId = paragraphId
+                                val blocksBefore = blocks.size
                                 flushParagraph()
                                 headingCapture = StringBuilder()
                                 headingLevel = name[1] - '0'
                                 headingId = parser.getAttributeValue(null, "id")
+                                    ?: wrapperId.takeIf {
+                                        blocks.size == blocksBefore
+                                    }
+                            }
+                            "a" -> {
+                                // Patch 1 (A5): a bare anchor
+                                // element — park its id for the
+                                // next emitted block (see
+                                // pendingAnchorId above). An
+                                // <a> that also links keeps its
+                                // text handling untouched; only
+                                // the id is new.
+                                val anchorId = parser
+                                    .getAttributeValue(null, "id")
+                                    ?: parser.getAttributeValue(null, "name")
+                                if (pendingAnchorId == null &&
+                                    !anchorId.isNullOrBlank()
+                                ) {
+                                    pendingAnchorId = anchorId
+                                }
                             }
                             in BLOCK_TAGS -> {
                                 flushParagraph()
@@ -298,7 +345,17 @@ class XhtmlConverter(
                                 headingCapture = null
                                 if (text.isNotEmpty()) {
                                     if (heading == null && headingLevel <= 2) heading = text
-                                    blocks += ChapterBlock.Heading(headingLevel, text, headingId)
+                                    // Patch 1 (A5): an anchor
+                                    // parked inside or before
+                                    // this heading names it when
+                                    // the heading carries no id
+                                    // of its own; the heading
+                                    // consumes the parked anchor
+                                    // either way — its position
+                                    // was the anchor's target.
+                                    val resolvedId = headingId ?: pendingAnchorId
+                                    pendingAnchorId = null
+                                    blocks += ChapterBlock.Heading(headingLevel, text, resolvedId)
                                 }
                                 headingId = null
                             }

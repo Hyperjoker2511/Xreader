@@ -239,6 +239,18 @@ class EpubPrepareService(
                         "in the file couldn't be read"
                 )
             }
+            // Patch 1 (A6): narration overlays a chapter
+            // merge could not carry (a merged chapter holds
+            // one overlay; a second absorbed file narrating
+            // over different audio loses its slot) — counted
+            // on the same honesty line as dropped pictures.
+            if (parsed.droppedOverlays > 0) {
+                DiagnosticLog.record(
+                    "epub-prepare",
+                    "book ${book.id}: ${parsed.droppedOverlays} narration " +
+                        "overlay(s) couldn't ride a merged chapter"
+                )
+            }
 
             // Converted text lengths, one chapter at a time —
             // no whole-book text is held (Item 1g).
@@ -348,7 +360,9 @@ class EpubPrepareService(
                     parserTitles = parsed.chapters.map { it.title },
                     parserLengths = parserLengths,
                     oldChapterIdsInOrder = oldRows.map { it.id },
-                    oldChapterLengths = oldLengths
+                    oldChapterLengths = oldLengths,
+                    chapterMerge = parsed.chapterMerge,
+                    preSegmentChapterHrefs = parsed.preSegmentChapterHrefs
                 )
             )
             val landedIndex = place.chapterIndex
@@ -397,14 +411,37 @@ class EpubPrepareService(
                 sessionHrefs = detect.sessionHrefs,
                 landedRows = landedRows,
                 parserLengths = parserLengths,
+                oldChapterIdsInOrder = oldRows.map { it.id },
                 now = now
             )
 
             // ── Item 2e: the session→core section map ─────────
-            val bridge = EpubHrefBridge(parsed.chapterHrefs)
+            // Patch 1 (A7a): the bridge is built over the
+            // PRE-merge hrefs and each hit is carried through
+            // the merge map — a session section naming an
+            // absorbed file lands on the merged chapter that
+            // absorbed it (the chapter holding the file's
+            // start), never on the Contents door's Continue
+            // fallback. Unsegmented parses keep the shipped
+            // road exactly (the pre-merge list is empty and
+            // the map is the identity).
+            val bridge = EpubHrefBridge(
+                parsed.preSegmentChapterHrefs
+                    .ifEmpty { parsed.chapterHrefs }
+            )
             val sectionMap = LinkedHashMap<Int, Long>()
             detect.sessionHrefs.forEachIndexed { sessionIndex, href ->
-                val parserIndex = bridge.chapterForHref(href)
+                val oldIndex = bridge.chapterForHref(href)
+                val parserIndex = oldIndex?.let { oi ->
+                    if (parsed.chapterMerge.isEmpty()) {
+                        oi
+                    } else {
+                        parsed.chapterMerge.firstOrNull {
+                            it.oldChapterIndex == oi &&
+                                it.oldStartOffset == 0
+                        }?.newChapterIndex ?: oi
+                    }
+                }
                 val chapterId = parserIndex?.let { landedIds.getOrNull(it) }
                 if (chapterId != null) sectionMap[sessionIndex] = chapterId
             }
@@ -445,6 +482,15 @@ class EpubPrepareService(
             File(parsed.chaptersDir, contentFileName).readText()
         )
     }.getOrNull()
+
+    /** Patch 1 (A1): whitespace-insensitive equality for
+     * the highlight quote check — the same normalisation
+     * findQuote applies (runs of whitespace collapse to
+     * one space), so a quote spanning a line break still
+     * verifies at its mapped span. */
+    private fun whitespaceMatches(a: String, b: String): Boolean =
+        a.replace(Regex("\\s+"), " ").trim() ==
+            b.replace(Regex("\\s+"), " ").trim()
 
     /** After a landing, the content dir holds exactly the new
      * chapters' files + the copied assets; anything else there
@@ -511,6 +557,13 @@ class EpubPrepareService(
      * READ ONCE here and never written: its EPUB entries
      * become new core Highlight rows. Marks that cannot be
      * placed keep their old shape and are counted.
+     *
+     * Patch 1 (A1): marks that are ALREADY core-shaped
+     * (locatorJson == null — the owner's own bookmarks and
+     * highlights from the core road) are remapped through
+     * the segmentation merge map in the last two passes
+     * below: the landing deleted the chapters they keyed
+     * on, so without the remap a re-prepare orphans them.
      */
     private suspend fun convertMarks(
         book: Book,
@@ -518,6 +571,7 @@ class EpubPrepareService(
         sessionHrefs: List<String>,
         landedRows: List<Chapter>,
         parserLengths: List<Int>,
+        oldChapterIdsInOrder: List<Long>,
         now: Long
     ): MarksResult {
         val bridge = EpubHrefBridge(parsed.chapterHrefs)
@@ -537,6 +591,33 @@ class EpubPrepareService(
             if (textCache.size >= 8) textCache.clear()
             textCache[parserIndex] = text
             return text
+        }
+
+        /** Patch 1 (A1): the merge span carrying a
+         * PRE-merge place — the parser's own map when the
+         * parse segmented, the identity span when it did
+         * not (a re-prepare re-lands every chapter under
+         * NEW ids either way, so core-shaped marks must be
+         * re-pointed even when no chapter moved). */
+        fun mergeSpan(
+            oldIndex: Int,
+            oldOffset: Int
+        ): app.xreader.data.parse.ChapterMergeSpan? {
+            if (parsed.chapterMerge.isEmpty()) {
+                return if (oldIndex in landedRows.indices) {
+                    app.xreader.data.parse.ChapterMergeSpan(
+                        oldIndex, 0, oldIndex, 0
+                    )
+                } else {
+                    null
+                }
+            }
+            return parsed.chapterMerge
+                .filter {
+                    it.oldChapterIndex == oldIndex &&
+                        it.oldStartOffset <= oldOffset
+                }
+                .maxByOrNull { it.oldStartOffset }
         }
 
         /** The parser chapter a locator-shaped mark names:
@@ -648,6 +729,108 @@ class EpubPrepareService(
                     converted++
                     placed = true
                 }
+            }
+            if (!placed) unplaced++
+        }
+
+        // Patch 1 (A1): CORE-shaped bookmarks — the marks
+        // the owner actually made on the core road (the
+        // locator passes above never touch them). Their
+        // chapterIndex is PRE-merge space and their
+        // chapterId names a row the landing just deleted;
+        // the merge span carries each one across. Bookmarks
+        // carry no quote, so the arithmetic is the whole
+        // road — exact by construction (A3's seams are in
+        // the prefixes).
+        val coreBookmarks = runCatching { bookmarkDao.forBook(book.id) }
+            .getOrDefault(emptyList())
+            .filter { it.locatorJson == null }
+        for (row in coreBookmarks) {
+            val span = mergeSpan(row.chapterIndex, row.charOffset)
+            val landed = span?.let {
+                landedRows.getOrNull(it.newChapterIndex)
+            }
+            if (span != null && landed != null) {
+                runCatching {
+                    bookmarkDao.update(
+                        row.copy(
+                            chapterId = landed.id,
+                            chapterIndex = span.newChapterIndex,
+                            charOffset = span.charPrefix +
+                                (row.charOffset - span.oldStartOffset),
+                            updatedAt = now
+                        )
+                    )
+                }
+                converted++
+            } else {
+                unplaced++
+            }
+        }
+
+        // Patch 1 (A1): CORE-shaped highlights — keyed by
+        // chapterId alone (no chapterIndex column), so the
+        // old landing's id order gives the pre-merge index.
+        // Both offsets ride their merge spans; the quote is
+        // the check — when the mapped span does not
+        // reproduce the highlighted words, findQuote
+        // re-anchors (Item 3e's machinery, reused).
+        val coreHighlights = runCatching { highlightDao.forBook(book.id) }
+            .getOrDefault(emptyList())
+            .filter { it.locatorJson == null }
+        for (row in coreHighlights) {
+            val oldIndex = oldChapterIdsInOrder.indexOf(row.chapterId)
+            val startSpan = if (oldIndex >= 0) {
+                mergeSpan(oldIndex, row.startOffset)
+            } else {
+                null
+            }
+            val landed = startSpan?.let {
+                landedRows.getOrNull(it.newChapterIndex)
+            }
+            var placed = false
+            if (startSpan != null && landed != null) {
+                var start = startSpan.charPrefix +
+                    (row.startOffset - startSpan.oldStartOffset)
+                var end = mergeSpan(oldIndex, row.endOffset)
+                    ?.takeIf {
+                        it.newChapterIndex == startSpan.newChapterIndex
+                    }
+                    ?.let { endSpan ->
+                        endSpan.charPrefix +
+                            (row.endOffset - endSpan.oldStartOffset)
+                    }
+                    ?: (start + row.quotedText.length)
+                val text = chapterText(startSpan.newChapterIndex)
+                if (text != null && row.quotedText.isNotBlank()) {
+                    val atMapped = text.substring(
+                        start.coerceIn(0, text.length),
+                        (start + row.quotedText.length)
+                            .coerceIn(0, text.length)
+                    )
+                    if (!whitespaceMatches(atMapped, row.quotedText)) {
+                        EpubPlaceMigration.findQuote(
+                            text, row.quotedText
+                        )?.let { found ->
+                            start = found
+                            end = found + row.quotedText.length
+                        }
+                    }
+                }
+                val limit = text?.length ?: Int.MAX_VALUE
+                end = end.coerceIn(start, maxOf(start, limit))
+                runCatching {
+                    highlightDao.update(
+                        row.copy(
+                            chapterId = landed.id,
+                            startOffset = start,
+                            endOffset = end,
+                            updatedAt = now
+                        )
+                    )
+                }
+                converted++
+                placed = true
             }
             if (!placed) unplaced++
         }

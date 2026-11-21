@@ -232,113 +232,12 @@ internal fun decodeEpubPositionsIndex(raw: String?): EpubPositionsIndex? {
     return EpubPositionsIndex(sections, starts, counts)
 }
 
-// ── EPUB table of contents (v1.7 Moon+ standard fix, Part 2) ──
-
-/**
- * Part 2: one prepared book's bridged table of contents —
- * the book's own TOC entries resolved to (chapter index,
- * char offset) targets in the landed chapter list. Cached
- * in a SEPARATE per-book value (A7): the prepare record is
- * a strict-decode pipe string where a malformed extension
- * would null the WHOLE record and force re-conversion, so
- * the TOC never rides it; this value follows the
- * [EpubPositionsIndex] separate-value precedent instead.
- * [hasToc] false is the cached "this book has no TOC"
- * marker. Fix Round G (Part A1): only a SETTLED
- * computation is ever cached — entries, or a genuine
- * no-source verdict; a failed computation writes nothing
- * here and is retried on the next open.
- * Labels are display text only; targets are plain
- * positions, so a stale cache can mislabel a Contents row
- * but can never move a saved place.
- */
-data class EpubTocData(
-    val entries: List<EpubTocEntryData>,
-    val hasToc: Boolean
-)
-
-/** One bridged TOC entry: label, landed chapter index,
- * char offset inside that chapter. */
-data class EpubTocEntryData(
-    val label: String,
-    val chapterIndex: Int,
-    val charOffset: Int
-)
-
-/** One string per book: a first line of "v3" (entries
- * follow) or "none-v3" (the no-TOC marker); then one line
- * per entry — chapterIndex, charOffset, label,
- * tab-separated, the label's own tabs/newlines flattened
- * to spaces (a label is display text; its whitespace
- * shape is not load-bearing).
- *
- * Fix Round G (Part A3): the v1 writer cached a FAILED
- * computation as its bare "none" marker, permanently —
- * so v2 writes a distinguishable marker, and the decode
- * below treats a bare v1 "none" as NO cache (the caller
- * recomputes), which heals books the v1 write poisoned on
- * their next open with no manual step.
- *
- * Micro-build M: the marker moves to v3. Every pre-v3
- * cache was computed under the old NCX discovery (the
- * spine's declared toc only), so a v2 entry list can be
- * the spine-section fallback and a "none-v2" can be a
- * false absence — neither can be told apart from a good
- * cache, so ALL pre-v3 markers read as no cache below:
- * each book recomputes once under the new discovery
- * (archive scan + NCX/nav dual parse), then v3 settles
- * it. The same one-time heal A3 ran, one generation on. */
-internal fun encodeEpubTocData(data: EpubTocData): String {
-    if (!data.hasToc) return "none-v3"
-    val builder = StringBuilder("v3")
-    for (entry in data.entries) {
-        builder.append('\n')
-            .append(entry.chapterIndex).append('\t')
-            .append(entry.charOffset).append('\t')
-            .append(entry.label.replace(Regex("[\t\n\r]"), " "))
-    }
-    return builder.toString()
-}
-
-/** Strict decode — anything malformed reads as null (no
- * cache: the caller recomputes), never a half TOC. A bare
- * "none" is a v1 write and reads as null too (Fix Round
- * G, Part A3): v1 cached failures as "none", so its
- * markers are exactly the poisoned ones and are ignored,
- * never trusted. Only the v3 marker settles a book as
- * TOC-less, and only v3 entry lists are trusted —
- * pre-v3 caches (v1/v2 lists, "none-v2") were computed
- * under the old NCX discovery and recompute once under
- * the new one (Micro-build M; see the encoder's note). */
-internal fun decodeEpubTocData(raw: String?): EpubTocData? {
-    if (raw.isNullOrBlank()) return null
-    val lines = raw.split('\n')
-    return when (lines.first()) {
-        "none-v3" -> if (lines.size == 1) {
-            EpubTocData(emptyList(), hasToc = false)
-        } else {
-            null
-        }
-        "v3" -> {
-            val entries =
-                ArrayList<EpubTocEntryData>(lines.size - 1)
-            for (line in lines.drop(1)) {
-                val parts = line.split('\t')
-                if (parts.size != 3) return null
-                val chapterIndex = parts[0].toIntOrNull()
-                    ?: return null
-                val charOffset = parts[1].toIntOrNull()
-                    ?: return null
-                if (chapterIndex < 0 || charOffset < 0) return null
-                entries += EpubTocEntryData(
-                    parts[2], chapterIndex, charOffset
-                )
-            }
-            EpubTocData(entries, hasToc = true)
-        }
-        else -> null
-    }
-}
+// ── EPUB table of contents: REMOVED (Moon Reader update, patch 1).
+// The Part 2 bridged-TOC cache (EpubTocData + encode/decode + the
+// per-book epub.toc value) is gone: segmentation made a prepared
+// book's chapter rows BE its table of contents at conversion, so
+// nothing reads a cached bridge any more. Values already stored
+// under the old key are simply never read again.
 
 // ── EPUB prepare record (v1.7 Patch 3, Item 1e) ─────────────
 
@@ -626,26 +525,6 @@ class LocalReaderPrefs(private val store: DataStore<Preferences>) {
         }
     }
 
-    // ── EPUB table of contents (Part 2) ─────────────────────
-    //
-    // The bridged TOC, persisted per book beside the
-    // positions index: a re-open reads this instead of
-    // re-parsing the book's NCX/nav. Null = no cache value
-    // (or a malformed one) — the caller computes and saves;
-    // an EpubTocData with hasToc false is the cached
-    // no-TOC marker and is trusted as-is.
-
-    suspend fun epubToc(bookId: Long): EpubTocData? =
-        decodeEpubTocData(
-            store.data.first()[epubTocKey(bookId)]
-        )
-
-    suspend fun saveEpubToc(bookId: Long, data: EpubTocData) {
-        store.edit { prefs ->
-            prefs[epubTocKey(bookId)] = encodeEpubTocData(data)
-        }
-    }
-
     // ── EPUB prepare record (v1.7 Patch 3, Item 1e) ────────
 
     suspend fun epubPrepareRecord(bookId: Long): EpubPrepareRecord? =
@@ -703,8 +582,6 @@ class LocalReaderPrefs(private val store: DataStore<Preferences>) {
         stringPreferencesKey("localreader.$id.epub.prepare")
     private fun epubPositionsKey(id: Long) =
         stringPreferencesKey("localreader.$id.epub.positions")
-    private fun epubTocKey(id: Long) =
-        stringPreferencesKey("localreader.$id.epub.toc")
 
     // PDF keys
     private fun pdfZoom(id: Long) = floatPreferencesKey("localreader.$id.pdf.zoom")

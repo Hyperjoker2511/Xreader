@@ -2,6 +2,7 @@ package app.xreader.data.prepare
 
 import app.xreader.data.db.ReadingProgress
 import app.xreader.data.engine.LocatorJson
+import app.xreader.data.parse.ChapterMergeSpan
 
 /**
  * v1.7 Patch 3 (Item 3): the place migration, as pure
@@ -27,7 +28,16 @@ object EpubPlaceMigration {
         val parserTitles: List<String>,
         val parserLengths: List<Int>,
         val oldChapterIdsInOrder: List<Long> = emptyList(),
-        val oldChapterLengths: Map<Long, Int> = emptyMap()
+        val oldChapterLengths: Map<Long, Int> = emptyMap(),
+        /** Patch 1 (A2): the parser's segmentation merge
+         * map (pre-merge chapter space → merged chapter +
+         * char prefix), empty when the parse did not
+         * segment. [parserHrefs]/[parserLengths]/
+         * [parserTitles] always describe the MERGED parse;
+         * [preSegmentChapterHrefs] names the pre-merge
+         * chapters the map is keyed in. */
+        val chapterMerge: List<ChapterMergeSpan> = emptyList(),
+        val preSegmentChapterHrefs: List<String> = emptyList()
     )
 
     /** A resolved place in parser space. [resolved] is false
@@ -57,9 +67,97 @@ object EpubPlaceMigration {
         }
     }
 
+    // ── Patch 1 (A2): the segmentation merge map ───────────
+
+    /**
+     * The merged landing of a PRE-merge place: the span of
+     * [oldChapterIndex] whose start the offset has reached,
+     * the offset carried across by the span's char prefix.
+     * Char-exact by construction (the parser computed the
+     * prefixes in ChapterText coordinates, seams included).
+     * Null when the parse did not segment or the old
+     * chapter is outside the map.
+     */
+    fun mergedPlace(
+        input: Inputs,
+        oldChapterIndex: Int,
+        oldOffset: Int
+    ): Place? {
+        val spans = input.chapterMerge
+            .filter { it.oldChapterIndex == oldChapterIndex }
+        if (spans.isEmpty()) return null
+        val span = spans
+            .filter { it.oldStartOffset <= oldOffset }
+            .maxByOrNull { it.oldStartOffset }
+            ?: spans.minByOrNull { it.oldStartOffset }
+            ?: return null
+        val newLength = input.parserLengths
+            .getOrElse(span.newChapterIndex) { 0 }
+        return Place(
+            span.newChapterIndex,
+            (span.charPrefix + (oldOffset - span.oldStartOffset))
+                .coerceIn(0, newLength),
+            resolved = true
+        )
+    }
+
+    /**
+     * A pre-merge chapter's ChapterText length, derived
+     * from its spans and the merged lengths: each slice
+     * runs to the next span in its merged chapter (minus
+     * the 2-char seam) or to that chapter's end, and a
+     * file split across two merged chapters counts the
+     * seam between its own halves once. Null when the old
+     * chapter is outside the map.
+     */
+    fun mergedOldLength(
+        input: Inputs,
+        oldChapterIndex: Int
+    ): Int? {
+        val own = input.chapterMerge
+            .filter { it.oldChapterIndex == oldChapterIndex }
+            .sortedBy { it.oldStartOffset }
+        if (own.isEmpty()) return null
+        var total = 0
+        for ((i, span) in own.withIndex()) {
+            val newLength = input.parserLengths
+                .getOrElse(span.newChapterIndex) { 0 }
+            val nextInNew = input.chapterMerge
+                .filter {
+                    it.newChapterIndex == span.newChapterIndex &&
+                        it.charPrefix > span.charPrefix
+                }
+                .minByOrNull { it.charPrefix }
+            val slice = if (nextInNew != null) {
+                nextInNew.charPrefix - span.charPrefix - 2
+            } else {
+                newLength - span.charPrefix
+            }
+            total += slice.coerceAtLeast(0)
+            if (i > 0) total += 2
+        }
+        return total
+    }
+
     // ── Item 3d: a core row carried across a re-prepare ─────
 
     private fun resolveCoreRow(input: Inputs, saved: ReadingProgress): Place {
+        // Rung 0 (Patch 1, A2): the merge map. The row's
+        // chapter id names a chapter of the PRE-reprepare
+        // landing; its position in that landing's order is
+        // the pre-merge chapter the parser's map is keyed
+        // in, and the map carries the place across exactly
+        // — ahead of every href rung, whose bridges are
+        // built over the merged hrefs and miss every place
+        // in an absorbed file by construction.
+        if (input.chapterMerge.isNotEmpty()) {
+            val oldIndex = input.oldChapterIdsInOrder
+                .indexOf(saved.chapterId)
+            if (oldIndex >= 0) {
+                mergedPlace(input, oldIndex, saved.charOffset)
+                    ?.let { return it }
+            }
+        }
         val bridge = EpubHrefBridge(input.parserHrefs)
         // Rung 1: the stored session→core map, inverted — the
         // row's chapter id names a session section, whose href
@@ -114,6 +212,22 @@ object EpubPlaceMigration {
     // ── Item 3a/3b: a never-migrated locator row ────────────
 
     private fun resolveLocatorRow(input: Inputs, saved: ReadingProgress): Place {
+        // Patch 1 (A2, the locator side): when the parse
+        // segmented, the locator's href and the saved
+        // session-space index both name PRE-merge files —
+        // the merged-href bridge below would miss every
+        // absorbed file and misread the rest (a fraction of
+        // a merged chapter is not a fraction of the file).
+        // Resolve in pre-merge space and carry the place
+        // across the merge map, the fraction applied to the
+        // file it was taken in (Item 3b's promise, kept in
+        // its own coordinates). A miss falls through to the
+        // shipped rungs unchanged.
+        if (input.chapterMerge.isNotEmpty() &&
+            input.preSegmentChapterHrefs.isNotEmpty()
+        ) {
+            mergedLocatorPlace(input, saved)?.let { return it }
+        }
         val bridge = EpubHrefBridge(input.parserHrefs)
         // Rung 1: the saved locator's own href, matched in
         // parser space.
@@ -152,6 +266,32 @@ object EpubPlaceMigration {
             }
         }
         return bookStart
+    }
+
+    /** Patch 1: a locator row's place through the merge
+     * map — its href first, the session bridge second,
+     * both read in PRE-merge space; the Item 3b fraction
+     * (locator progression, else scrollFraction) applied
+     * to the pre-merge file's own length, then carried
+     * across by [mergedPlace]. */
+    private fun mergedLocatorPlace(
+        input: Inputs,
+        saved: ReadingProgress
+    ): Place? {
+        val oldBridge = EpubHrefBridge(input.preSegmentChapterHrefs)
+        val oldIndex = LocatorJson.epubLocatorHref(saved.locatorJson)
+            ?.let { oldBridge.chapterForHref(it) }
+            ?: oldBridge.chapterForSessionIndex(
+                input.sessionHrefs, saved.chapterIndex
+            )
+            ?: return null
+        val oldLength = mergedOldLength(input, oldIndex) ?: return null
+        val fraction = LocatorJson.epubProgression(saved.locatorJson)
+            ?: saved.scrollFraction.takeIf { it > 0f }
+            ?: 0f
+        val oldOffset = (fraction.coerceIn(0f, 1f) * oldLength).toInt()
+            .coerceIn(0, oldLength)
+        return mergedPlace(input, oldIndex, oldOffset)
     }
 
     /** Item 3b: the in-section fraction is the locator's

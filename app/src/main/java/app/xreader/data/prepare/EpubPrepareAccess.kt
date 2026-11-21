@@ -17,8 +17,12 @@ object EpubPrepareAccess {
 
     /** The loader version records are written with. A record
      * from any other version does not key routing: the book
-     * re-prepares under the current loader. */
-    const val LOADER_VERSION: Int = 1
+     * re-prepares under the current loader. Version 2 is the
+     * Moon Reader update's segmentation (patch 1): chapters
+     * became the book's own TOC anchors, so every prepared
+     * book re-prepares once and its place and marks ride
+     * the parser's merge map across the renumbering. */
+    const val LOADER_VERSION: Int = 2
 
     /**
      * A book counts as PREPARED when a record exists, its

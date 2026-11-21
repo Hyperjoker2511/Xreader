@@ -55,7 +55,53 @@ data class ParsedBook(
      * Parsers that cannot name their chapters' sources leave
      * the default.
      */
-    val chapterHrefs: List<String> = emptyList()
+    val chapterHrefs: List<String> = emptyList(),
+    /**
+     * v1.7 Moon Reader update (patch 1, amendment A2): the
+     * segmentation merge map, in PRE-segmentation chapter
+     * space — one span per (old chapter, contiguous slice)
+     * saying where that slice's text begins in the merged
+     * chapter list. Empty when the parse did not segment
+     * (no usable TOC): consumers then read [chapterHrefs]
+     * as the only chapter space there is. When non-empty,
+     * [chapterHrefs] names the MERGED chapters and
+     * [preSegmentChapterHrefs] names the pre-merge ones.
+     */
+    val chapterMerge: List<ChapterMergeSpan> = emptyList(),
+    /** Patch 1 (A2): the spine href of each PRE-merge
+     * emitted chapter, parallel to the old chapter space
+     * [chapterMerge] is keyed in. Empty when the parse did
+     * not segment. */
+    val preSegmentChapterHrefs: List<String> = emptyList(),
+    /**
+     * Patch 1 (amendment A6): Media Overlays lost to a
+     * chapter merge — a merged chapter holds ONE overlay
+     * slot, so when two absorbed files carry narration on
+     * DIFFERENT audio, the later one cannot ride along.
+     * Counted, never silent, exactly the way
+     * [droppedImages] is.
+     */
+    val droppedOverlays: Int = 0
+)
+
+/**
+ * Patch 1 (A2/A3): one slice of the segmentation merge
+ * map. The pre-merge chapter [oldChapterIndex]'s text
+ * from [oldStartOffset] (a
+ * [app.xreader.domain.reader.ChapterText] offset inside
+ * that chapter — 0 unless a fragment anchor split the
+ * file) lands in merged chapter [newChapterIndex] at
+ * [charPrefix]: a place at old offset `o` in this slice
+ * is at `charPrefix + (o - oldStartOffset)` in the new
+ * chapter. Prefixes are computed in ChapterText
+ * coordinates, so the 2-char block separator at each
+ * absorbed file's seam is already accounted (A3).
+ */
+data class ChapterMergeSpan(
+    val oldChapterIndex: Int,
+    val oldStartOffset: Int,
+    val newChapterIndex: Int,
+    val charPrefix: Int
 )
 
 data class ParsedChapterMeta(
