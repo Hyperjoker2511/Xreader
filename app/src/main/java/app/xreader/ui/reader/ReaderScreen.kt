@@ -946,8 +946,9 @@ fun ReaderScreen(
                     segmentFailedReasons = state.segmentFailedReasons,
                     segmentsWithOwnTitle = state.segmentsWithOwnTitle,
                     wallActive = wallActive,
-                    onWallAppend = { crossed ->
-                        viewModel.markFinishedAtWall(crossed)
+                    onWallSwapNext = { viewModel.nextChapter() },
+                    onWallSwapPrevious = {
+                        viewModel.previousChapter()
                     },
                     config = config,
                     palette = palette,

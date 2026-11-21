@@ -1,5 +1,12 @@
 package app.xreader.ui.reader
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -9,7 +16,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,19 +34,24 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
@@ -67,8 +78,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
+import kotlin.math.sign
 
 /** Actions offered on a long-pressed paragraph (passage tools, §2.4 #7).
  * v1.7 one-engine (C1): relocated to the unified scroll core from the
@@ -77,27 +89,44 @@ import kotlinx.coroutines.withContext
 enum class ParagraphAction { HIGHLIGHT, NOTE, BOOKMARK }
 
 /**
- * Fix Round G (Part B): the Moon+ wall's constants — ALL
- * of them in this one object, so a feel fix round tunes
- * the wall from a single place. The wall has no resistance
- * and no commit threshold (B2/B3): the scroll simply stops
- * at the composed range's end, and any further push
- * appends the next segment below ONE blank gap.
+ * Seam patch (Moon Reader update): the wall's gesture
+ * constants — the REA's numbers, ALL of them in this one
+ * object, so a feel fix round tunes the wall from a single
+ * place. The wall is a commitment gesture: drag distance
+ * the chapter cannot scroll ACCUMULATES, the ProgressWheel
+ * stands past [SHOW_THRESHOLD_DP] of it, and its arc fills
+ * at [ARC_DEGREES_PER_DP] degrees per accumulated dp — a
+ * full circle (60 dp of drag) ARMS the chapter change,
+ * which happens only when the finger lifts. There is no
+ * resistance and no visual give (B2 stands): the chapter
+ * simply ends, and the wheel is the only answer to a push
+ * past that end.
  */
-private object WallGap {
-    /** The one blank gap between two composed segments —
-     * Moon+'s separation between one chapter's last line
-     * and the next chapter's heading (≈1/6 of the proof
-     * phone's screen, inside the study's 100–150 dp band).
-     */
-    val GAP = 120.dp
+private object WallWheel {
+    /** Accumulated drag (dp) past which the wheel stands. */
+    const val SHOW_THRESHOLD_DP = 8f
 
-    /** A fling that reaches the composed end and appends
-     * re-kicks the list with this fraction of its leftover
-     * velocity (px/s) as a scroll distance (px), so the
-     * gesture's momentum carries into the appended segment
-     * instead of dying at the old end. */
-    const val FLING_CARRY_FRACTION = 0.22f
+    /** Arc fill per accumulated dp (REA: arc = min(360,
+     * |drag| × 6 / density), drag in px). */
+    const val ARC_DEGREES_PER_DP = 6f
+
+    const val FULL_CIRCLE_DEGREES = 360f
+
+    /** The wheel's diameter (REA: a 40 dp circle). */
+    val SIZE = 40.dp
+}
+
+/**
+ * The wall wheel's live drag state: SIGNED accumulated
+ * un-scrollable drag in px — negative pushes past the
+ * chapter's END (toward NEXT), positive pulls past its
+ * START (toward PREVIOUS). Written by the wall connection
+ * (accumulation + unwind) and by the release observer
+ * (the reset); read ONLY by the wheel overlay, so a drag
+ * delta recomposes the wheel alone, never the list.
+ */
+private class WallWheelState {
+    var dragPx by mutableFloatStateOf(0f)
 }
 
 /**
@@ -148,23 +177,28 @@ fun DocumentReader(
      * compose NO app header; the book's own heading stands
      * alone. */
     segmentsWithOwnTitle: Set<Long> = emptySet(),
-    /** Fix Round G (Part B): the chapter-end wall is live
-     * for this book (Chapter-by-chapter + the owner's wall
-     * scope, decided by ReaderScreen): the surface composes
-     * a RANGE of segments starting at the anchor, and a push
-     * past the composed end (or start) appends the next (or
-     * prepends the previous) segment Moon+-style — the
-     * scroll stops at a real end, the neighbour joins below
-     * one blank gap, and the reading chapter follows the
-     * last visible item. */
+    /** Seam patch (Moon Reader update): the chapter-end
+     * wall is live for this book (Chapter-by-chapter + the
+     * owner's wall scope, decided by ReaderScreen): the
+     * surface composes ONLY the anchor chapter, and a drag
+     * past its end (or start) fills the ProgressWheel —
+     * releasing with a full wheel swaps the whole content
+     * to the next (or previous) chapter through the swap
+     * doors below. Moon+'s model: one chapter resident,
+     * neighbours held only as filled text, never composed. */
     wallActive: Boolean = false,
-    /** Fix Round G (B7): the surface appended past a
-     * chapter's end — that chapter counts as FINISHED. The
-     * append is the only finished-marking door in wall
-     * mode: position reports never mark there, and
-     * scrolling on into an appended chapter marks nothing
-     * more. Carries the crossed chapter's index. */
-    onWallAppend: (finishedChapterIndex: Int) -> Unit = {},
+    /** Seam patch: an ARMED forward swap — the reader
+     * dragged past the anchor chapter's end, filled the
+     * wheel and let go. The ViewModel's next-chapter door
+     * owns the semantics: the chapter being left counts as
+     * FINISHED (A1 — the mark the retired append used to
+     * make, now made by the swap), then the anchor moves
+     * to the next chapter's top. */
+    onWallSwapNext: () -> Unit = {},
+    /** Seam patch: an ARMED backward swap — the anchor
+     * moves to the previous chapter's END. Nothing is
+     * marked (the retired prepend's precedent). */
+    onWallSwapPrevious: () -> Unit = {},
     config: ReaderConfig,
     palette: ReaderPalette,
     fontFamily: FontFamily,
@@ -284,117 +318,67 @@ fun DocumentReader(
         )
     }
 
-    // ── Wall mode: composed range + local index space ────
-    // (Fix Round G, Part B — replaces Fix F Part 3's
-    // single-segment wall.)
+    // ── Wall mode: one chapter composed, the swap ────────
+    // (Seam patch, Moon Reader update — replaces Fix Round
+    // G's composed-range append wall.)
     //
-    // When the wall is active the surface composes a RANGE
-    // of segments [rangeStart..rangeEnd] that starts as the
-    // anchor alone and grows by Moon+ appends/prepends (B1).
-    // A second SegmentIndex stands over the range; each
-    // segment past the range's first carries its blank GAP
-    // in its header slot (pinned mode composes no headers,
-    // so the slot is free — the gap is ONE item, counted by
-    // the index exactly like a header). Every consumer
-    // below reads through `index` and translates its
-    // segment argument through `indexSegment` (chapters-
-    // space minus rangeStart):
+    // When the wall is active the surface composes ONLY the
+    // anchor segment: the composed "range" is the anchor
+    // alone (rangeStart == rangeEnd == anchorChapterIndex),
+    // and a second SegmentIndex stands over it. Every
+    // consumer below reads through `index` and translates
+    // its segment argument through `indexSegment`
+    // (chapters-space minus rangeStart):
     //
     // - initialFlat / restore stages 1+2: the anchor's
-    //   local index is anchorChapterIndex − rangeStart;
+    //   local index is anchorChapterIndex − rangeStart (0);
     // - the reporter: locate() yields a local segment,
     //   translated ONCE into chapters-space (+ rangeStart)
     //   before ANY use (the position report, the STATE_ITEM
     //   boundary math, StreamReadingPosition.resolve — the
-    //   ViewModel never sees a local index); a HEADER
-    //   location in wall mode is the GAP item — the
-    //   following segment at its start, the same answer the
-    //   header branch gives everywhere; the end-of-book
+    //   ViewModel never sees a local index); the end-of-book
     //   branch's last segment is rangeEnd;
     // - Item 4's pinned block: the boundary prefetch (a)
-    //   fires as today; the finished report (b) NEVER fires
-    //   in wall mode — the append is the only
-    //   finished-marking door (B7);
+    //   fires as today — it is one of the fill triggers
+    //   that prepare the next chapter; the finished report
+    //   (b) NEVER fires in wall mode — the forward SWAP is
+    //   the only finished-marking door there (A1: the swap
+    //   door in the ViewModel marks the chapter it leaves);
     // - auto-scroll's halt check: form unchanged (locate →
     //   STATE_ITEM), reading the local index; at the wall
-    //   the drift simply stops (B9 — it never appends and
-    //   never crosses);
+    //   the drift simply stops (B9 — it never fills the
+    //   wheel and never crosses);
     // - spoken follow: flatIndexOf(indexSegment(anchor), …)
     //   — the spoken range is anchor-space by contract;
-    // - overlay follow: segments inside the composed range
-    //   are eligible; segments outside it are skipped,
-    //   never translated.
+    // - overlay follow: only the anchor segment is
+    //   eligible; segments outside it are skipped, never
+    //   translated — a neighbour joins the screen only by
+    //   becoming the anchor through a swap.
+    //
+    // A crossing is a WHOLE-CONTENT SWAP through the
+    // ViewModel's deliberate-move doors (onWallSwapNext /
+    // onWallSwapPrevious): the anchor flips exactly when
+    // the armed gesture is RELEASED (never mid-drag), and
+    // the restore stages assert the landing — the next
+    // chapter's top, the previous chapter's END — against
+    // text the preparation already holds, or park on the
+    // segment's LOADING state item until its fill lands
+    // (the cache-miss road; never a blank chapter).
     //
     // When the wall is off, `index` IS segmentIndex,
     // `indexSegment` is the identity and the range is
     // unused — every path below is then exactly the
     // pre-wall code.
-    val rangeStartState = remember {
-        mutableIntStateOf(anchorChapterIndex)
-    }
-    val rangeEndState = remember {
-        mutableIntStateOf(anchorChapterIndex)
-    }
-    // B3's wait states (the append doors below own their
-    // meaning): a push past an end whose neighbour has not
-    // landed stands pending until the fill lands.
-    var pendingAppend by remember { mutableStateOf(false) }
-    var pendingPrepend by remember { mutableStateOf(false) }
-
-    // B8: the range collapses back to the anchor on every
-    // DELIBERATE move — a restore generation is consumed
-    // exactly for opens, Contents jumps and the prev/next
-    // chapter buttons — and when the wall or the transition
-    // mode is switched mid-session. The collapse is a
-    // composition-time adjustment, NOT an effect: the
-    // restore stages read `index` from the composition that
-    // first sees the new generation, so the range (and with
-    // it the index) must already be the anchor's in THAT
-    // composition — an effect would let stage 1 consume the
-    // generation against the pre-collapse index and the
-    // landing would be lost. Position-report chapter flips
-    // (crossings) consume no generation, so a crossing's
-    // composed neighbours survive them.
-    var collapsedGeneration by remember {
-        mutableIntStateOf(restoreGeneration)
-    }
-    var collapsedWall by remember { mutableStateOf(wallActive) }
-    var collapsedPinned by remember { mutableStateOf(pinned) }
-    if (collapsedGeneration != restoreGeneration ||
-        collapsedWall != wallActive ||
-        collapsedPinned != pinned
-    ) {
-        collapsedGeneration = restoreGeneration
-        collapsedWall = wallActive
-        collapsedPinned = pinned
-        rangeStartState.intValue = anchorChapterIndex
-        rangeEndState.intValue = anchorChapterIndex
-        pendingAppend = false
-        pendingPrepend = false
-    }
-
-    // Read AFTER the collapse adjustment above, so this
-    // composition's index and item range already speak for
-    // the collapsed range on a deliberate move.
-    val rangeStart = rangeStartState.intValue
-    val rangeEnd = rangeEndState.intValue
-
-    // B8's eviction discipline: when the anchor moves (a
-    // crossing), range edges the residency planner has
-    // since evicted fall out of the range; the anchor
-    // itself and resident edges always stay.
-    LaunchedEffect(anchorChapterIndex, segmentStates, segmentTexts) {
-        while (rangeStartState.intValue < anchorChapterIndex &&
-            stateOf(rangeStartState.intValue) != SegmentState.RESIDENT
-        ) {
-            rangeStartState.intValue += 1
-        }
-        while (rangeEndState.intValue > anchorChapterIndex &&
-            stateOf(rangeEndState.intValue) != SegmentState.RESIDENT
-        ) {
-            rangeEndState.intValue -= 1
-        }
-    }
+    // The composed range IS the anchor (see the block
+    // comment above): derived from the anchor at every
+    // composition, so the composition that first sees a
+    // swap's new anchor already speaks for it — the restore
+    // stages can never consume a generation against a
+    // pre-swap index. (Fix Round G's B8 collapse machinery
+    // existed to force exactly this for its growing range;
+    // a range that cannot grow needs no forcing.)
+    val rangeStart = anchorChapterIndex
+    val rangeEnd = anchorChapterIndex
 
     val wallIndex = remember(
         chapters, rangeStart, rangeEnd, segmentStates, segmentTexts
@@ -402,9 +386,10 @@ fun DocumentReader(
         SegmentIndex(
             (rangeStart..rangeEnd).map { segment ->
                 SegmentIndex.Shape(
-                    // The header slot carries the GAP for
-                    // every segment past the range's first.
-                    hasHeader = segment > rangeStart,
+                    // The header slot carried the retired
+                    // append wall's GAP; the swap composes
+                    // ONE segment, so the slot never exists.
+                    hasHeader = false,
                     blockCount = if (
                         stateOf(segment) == SegmentState.RESIDENT
                     ) {
@@ -422,9 +407,12 @@ fun DocumentReader(
         if (wallActive) segment - rangeStart else segment
 
     // The wall's live reads for the never-restarting
-    // callbacks (key turns, the append connection): they
-    // must see the CURRENT composition's values, not the
-    // values of the composition that created them.
+    // callbacks (key turns, the wall connection, the
+    // release observer): they must see the CURRENT
+    // composition's values, not the values of the
+    // composition that created them. The chapter gates are
+    // the wheel's book-start/end suppression (the REA's):
+    // no wheel stands past the book's own ends.
     val wallActiveNow by rememberUpdatedState(wallActive)
     val hasNextChapterNow by rememberUpdatedState(
         rangeEnd < chapters.lastIndex
@@ -432,55 +420,41 @@ fun DocumentReader(
     val hasPreviousChapterNow by rememberUpdatedState(
         rangeStart > 0
     )
-    val nextResidentNow by rememberUpdatedState(
-        rangeEnd < chapters.lastIndex &&
-            stateOf(rangeEnd + 1) == SegmentState.RESIDENT
-    )
-    val prevResidentNow by rememberUpdatedState(
-        rangeStart > 0 &&
-            stateOf(rangeStart - 1) == SegmentState.RESIDENT
-    )
-    val nextChapterIdNow by rememberUpdatedState(
-        chapters.getOrNull(rangeEnd + 1)?.id
-    )
-    val prevChapterIdNow by rememberUpdatedState(
-        chapters.getOrNull(rangeStart - 1)?.id
+    // The swap doors, likewise read through updated-state
+    // holders by the never-restarting observers.
+    val onWallSwapNextNow by rememberUpdatedState(onWallSwapNext)
+    val onWallSwapPreviousNow by rememberUpdatedState(
+        onWallSwapPrevious
     )
 
-    // ── Fix Round G (Part B): the Moon+ append doors ──────
-    //
-    // Appending is the ONLY way the composed range grows,
-    // and only onto a RESIDENT neighbour (B3): a push past
-    // an end whose neighbour has not landed does not
-    // stretch or teleport — it requests the neighbour's
-    // fill through the one B1 door (the caller sets the
-    // matching pending flag and calls onSegmentVisible) and
-    // the append completes when the fill lands, via the
-    // pending effects below. The doors read only the
-    // updated-state holders and the range states, so the
-    // never-restarting callbacks can call them safely.
+    /** The wheel's live drag state (see [WallWheelState]):
+     * the connection accumulates into it, the release
+     * observer reads and resets it, the overlay renders
+     * it. */
+    val wheelState = remember { WallWheelState() }
 
-    /** Append the next segment below the composed end and
-     * report the crossed chapter finished (B7). False when
-     * no append happened (the book's end, or the neighbour
-     * is not resident — the caller then stands pending). */
-    fun appendNextSegment(): Boolean {
-        if (!hasNextChapterNow || !nextResidentNow) return false
-        val crossed = rangeEndState.intValue
-        rangeEndState.intValue = crossed + 1
-        pendingAppend = false
-        onWallAppend(crossed)
-        return true
-    }
+    /** The anchor whose NEXT chapter the ⅓ trigger (in the
+     * reporter below) has already requested — once per
+     * anchor. */
+    var wallThirdFillAnchor by remember { mutableIntStateOf(-1) }
 
-    /** Prepend the previous segment above the composed
-     * start. No chapter is marked by an upward crossing —
-     * the reader is going back, not finishing. */
-    fun prependPreviousSegment(): Boolean {
-        if (!hasPreviousChapterNow || !prevResidentNow) return false
-        rangeStartState.intValue -= 1
-        pendingPrepend = false
-        return true
+    // Seam patch (A5): ~100 ms after every completed
+    // chapter change, refresh BOTH neighbours' fills
+    // through the one fill door, so the next crossing in
+    // either direction swaps onto held text. (The
+    // residency planner already keeps the chapters BEHIND
+    // the anchor filled; this is what prepares the one
+    // AHEAD between boundary triggers.) It fires on the
+    // anchor's first composition too — Moon+ pre-renders
+    // the neighbours at open, which is what makes a first
+    // crossing bounce like a later one.
+    LaunchedEffect(anchorChapterIndex, wallActive) {
+        if (!wallActive) return@LaunchedEffect
+        delay(100)
+        chapters.getOrNull(anchorChapterIndex - 1)
+            ?.let { onSegmentVisible(it.id) }
+        chapters.getOrNull(anchorChapterIndex + 1)
+            ?.let { onSegmentVisible(it.id) }
     }
 
     // Open at the anchor segment: its saved block when it is
@@ -531,29 +505,6 @@ fun DocumentReader(
     // it). Reset per anchor chapter, as the retired surfaces
     // reset it per chapter.
     var autoPaused by remember(anchorChapterIndex) { mutableStateOf(false) }
-
-    // B3's wait: a pending append completes when its
-    // segment lands — but only while the list still stands
-    // at that end. If the reader scrolled away meanwhile,
-    // the wait is over (their next push re-asks). The door
-    // itself re-checks residency, so an effect that fires
-    // early simply leaves the flag standing.
-    LaunchedEffect(pendingAppend, segmentStates, segmentTexts) {
-        if (!pendingAppend) return@LaunchedEffect
-        if (!listState.canScrollForward) {
-            appendNextSegment()
-        } else {
-            pendingAppend = false
-        }
-    }
-    LaunchedEffect(pendingPrepend, segmentStates, segmentTexts) {
-        if (!pendingPrepend) return@LaunchedEffect
-        if (!listState.canScrollBackward) {
-            prependPreviousSegment()
-        } else {
-            pendingPrepend = false
-        }
-    }
 
     // Restore, stage 1 (block granularity): assert once per
     // generation, when the anchor segment has text. While it
@@ -844,7 +795,7 @@ fun DocumentReader(
             // A textless last segment never names the position
             // (the residency check), exactly as B1's contract
             // demands of the first.
-            if (wallActive &&
+            val finalReport = if (wallActive &&
                 baseReport is DocumentReport.Position
             ) {
                 val rawLast = if (last.index < index.itemCount) {
@@ -868,6 +819,39 @@ fun DocumentReader(
             } else {
                 baseReport
             }
+            // Seam patch, fix round 1 (re-check 10c): in
+            // wall mode, while the anchor's restore
+            // generation is unconsumed, a Position report
+            // naming any chapter but the anchor is the
+            // boundary-posture artifact — the surface is
+            // parked on the anchor's LOADING/FAILED state
+            // item (an armed swap or a volume-key turn onto
+            // an unfilled neighbour, its fill still in
+            // flight) and the STATE_ITEM branch above names
+            // the previous chapter at its end. Emitting it
+            // would flip the ViewModel's anchor back before
+            // the fill lands, and nothing would move it
+            // forward again — the swap's landing fails.
+            // Suppress the report until stage 1 consumes
+            // the generation. Nothing truthful is lost:
+            // the swap door already wrote the left
+            // chapter's end progress (A1's marking +
+            // moveAnchor's flush) before the anchor moved.
+            // The guard lifts the moment the generation is
+            // consumed — the fill landing (stage 1 asserts
+            // the swap's landing) or a genuine user drag
+            // retiring the restore (R2's witness consumes
+            // it the same way) — and reports naming the
+            // anchor itself flow throughout.
+            if (wallActive &&
+                consumedGeneration != restoreGeneration &&
+                finalReport is DocumentReport.Position &&
+                finalReport.chapterIndex != anchorChapterIndex
+            ) {
+                null
+            } else {
+                finalReport
+            }
         }
             .distinctUntilChanged()
             .debounce(180L)
@@ -887,11 +871,11 @@ fun DocumentReader(
                         // item BEYOND the current segment
                         // becoming the last visible item is the
                         // end report (the chapter counts as
-                        // finished). Fix Round G: in wall mode
+                        // finished). Seam patch: in wall mode
                         // (a) still fires — it is the prefetch
-                        // door — and (b) NEVER fires: the
-                        // append is the only finished-marking
-                        // door there (B7).
+                        // backstop — and (b) NEVER fires: the
+                        // forward swap is the only
+                        // finished-marking door there (A1).
                         if (pinned) {
                             val rawLastLoc = if (
                                 report.lastVisibleIndex <
@@ -936,6 +920,29 @@ fun DocumentReader(
                                 }
                             }
                         }
+                        // Seam patch (A5): in wall mode, once
+                        // the reader is a third into the
+                        // anchor chapter, the NEXT chapter's
+                        // fill is requested through the one
+                        // fill door — Moon+'s ⅓ pre-render
+                        // trigger — so the wheel swap lands
+                        // on held text instead of the LOADING
+                        // state item. Once per anchor; the
+                        // boundary trigger above stays as the
+                        // backstop.
+                        if (wallActive &&
+                            report.chapterIndex ==
+                            anchorChapterIndex &&
+                            report.fraction >= 1f / 3f &&
+                            wallThirdFillAnchor !=
+                            anchorChapterIndex
+                        ) {
+                            wallThirdFillAnchor =
+                                anchorChapterIndex
+                            chapters.getOrNull(
+                                anchorChapterIndex + 1
+                            )?.let { onSegmentVisible(it.id) }
+                        }
                     }
                     is DocumentReport.Approach ->
                         onSegmentApproached(report.chapterId)
@@ -962,42 +969,36 @@ fun DocumentReader(
     // Volume-key turns scroll a viewport, as in scroll mode.
     LaunchedEffect(Unit) {
         externalTurns.collectLatest { direction ->
-            // Fix Round G (B3): a key turn AT the wall crosses
-            // it the Moon+ way — the keypress is the
-            // deliberate pull, standing in for the nudge: it
-            // appends (or prepends) the neighbour segment,
-            // and the turn's own viewport scroll then lands
-            // the reader inside the crossed chapter (its top
-            // going down; its end region coming up, B6). A
-            // turn whose neighbour has not landed stands
-            // pending and asks for its fill instead — the
-            // turn itself is spent, there is nothing to
-            // scroll yet. The wall inputs are read through
-            // their updated-state holders because this effect
-            // never restarts. (Auto-scroll never does this —
-            // B9; keys are the reader's hand only.)
+            // Seam patch: a key turn AT the wall crosses it
+            // — the keypress is the deliberate pull, standing
+            // in for the armed drag: the swap door moves the
+            // anchor (the next chapter's top; the previous
+            // chapter's END) and the restore stages assert
+            // the landing, so the turn is spent on the swap
+            // itself and no viewport scroll follows it. A
+            // turn whose neighbour has not landed swaps onto
+            // its LOADING state item, which requests the
+            // fill. At the book's own ends the turn falls
+            // through to the viewport scroll below, which
+            // simply clamps. The wall inputs are read
+            // through their updated-state holders because
+            // this effect never restarts. (Auto-scroll never
+            // does this — B9; keys are the reader's hand
+            // only.)
             if (wallActiveNow) {
                 if (direction > 0 &&
-                    !listState.canScrollForward
+                    !listState.canScrollForward &&
+                    hasNextChapterNow
                 ) {
-                    if (!appendNextSegment()) {
-                        if (hasNextChapterNow) {
-                            pendingAppend = true
-                            nextChapterIdNow?.let(onSegmentVisible)
-                        }
-                        return@collectLatest
-                    }
+                    onWallSwapNextNow()
+                    return@collectLatest
                 }
                 if (direction < 0 &&
-                    !listState.canScrollBackward
+                    !listState.canScrollBackward &&
+                    hasPreviousChapterNow
                 ) {
-                    if (!prependPreviousSegment()) {
-                        if (hasPreviousChapterNow) {
-                            pendingPrepend = true
-                            prevChapterIdNow?.let(onSegmentVisible)
-                        }
-                        return@collectLatest
-                    }
+                    onWallSwapPreviousNow()
+                    return@collectLatest
                 }
             }
             val viewport = listState.layoutInfo.viewportSize.height
@@ -1031,10 +1032,10 @@ fun DocumentReader(
                     SegmentIndex.STATE_ITEM
             }
             if (!halted) {
-                // Fix Round G (B9): the drift meeting the
-                // wall PAUSES — auto-scroll never appends and
-                // never crosses; the wall waits for the
-                // reader's own nudge, fling or key turn
+                // Fix Round G (B9), kept by the seam patch
+                // (A3): the drift meeting the wall PAUSES —
+                // auto-scroll never crosses; the wall waits
+                // for the reader's own drag or key turn
                 // (Moon+'s own auto-scroll likewise stops at
                 // a chapter end). The pause is per-anchor, so
                 // after a manual crossing the landing chapter
@@ -1086,49 +1087,55 @@ fun DocumentReader(
         }
     }
 
-    // ── Fix Round G (Part B): the Moon+ wall connection ──
+    // ── Seam patch: the wall connection + the release ────
     //
-    // The wall has NO overscroll machinery (B2): the column
-    // ends at the composed range's end — a REAL end, blank
-    // below the last line, no stretch, no give, no commit
-    // threshold (Fix F's WallFeel connection is deleted, not
-    // retuned). This connection only listens for a genuine
-    // push PAST an end — Drag-source deltas the child could
-    // not scroll, while the list stands at that end — and
-    // answers with the Moon+ append/prepend (B3/B6):
+    // The wall has NO overscroll machinery and no visual
+    // give (B2 stands): the column ends at the anchor
+    // chapter's end — a REAL end, blank below the last
+    // line, no stretch. This connection only ACCUMULATES
+    // the un-scrollable part of a genuine drag at that end
+    // — Drag-source deltas the child could not scroll,
+    // while the list stands at the end — into the wheel
+    // state the overlay renders:
     //
-    // - the neighbour segment joins the composed range:
-    //   below ONE blank gap going down; above going up,
-    //   where LazyColumn's key anchoring holds the reader's
-    //   place exactly — no position jump;
+    // - pushing past the end accumulates toward NEXT
+    //   (negative), pulling past the start toward PREVIOUS
+    //   (positive); a drag that switches ends starts over
+    //   from its own delta;
+    // - content scrolling back toward the chapter un-fills
+    //   the wheel by the same distance (the unwind, clamped
+    //   at zero), so the fill always tracks the finger;
     // - nothing is consumed and nothing is stretched: the
-    //   same drag simply continues into the new segment,
-    //   and a fling that arrives at the end appends and
-    //   re-kicks the list with a fraction of its leftover
-    //   velocity, so the momentum carries in instead of
-    //   dying at the old end;
-    // - an append requires the neighbour RESIDENT (B3): if
-    //   it has not landed, the push requests its fill
-    //   through the one B1 door and stands pending (the
-    //   pending effects complete the append when the fill
-    //   lands, while the list still stands at the end);
-    // - one append per boundary: after an append the list
-    //   can scroll again, so the next push-past-the-end is
-    //   a new boundary by construction.
+    //   deltas are OBSERVED, not eaten — the list's own
+    //   behaviour is untouched — and only Drag sources are
+    //   read at all, which keeps the drift's, the restore's
+    //   and the follows' programmatic scrolls out, so
+    //   auto-scroll can never fill the wheel (B9);
+    // - a FLING never crosses: Moon+ arms the change by
+    //   drag alone, so onPostFling is a deliberate no-op —
+    //   momentum that merely arrives at the end stops
+    //   there, and the crossing waits for the drag and the
+    //   release below.
+    //
+    // THE RELEASE comes from the pointer observer on the
+    // Box (wallReleaseObserver, below), NOT from this
+    // connection: a NestedScrollConnection has no finger-up
+    // callback for a slow, zero-velocity release (its only
+    // release-shaped callback, onPostFling, is a fling
+    // path). The observer watches the raw pointer stream
+    // in the Initial pass and fires on the release itself,
+    // so a release at any speed — including a dead stop —
+    // is seen. That is the release proof (A6).
     //
     // Fences (B10): a pinch/pan zoom in progress
-    // (zoomLockedItems non-empty) freezes the doors — the
-    // drag belongs to the image. Text selection needs no
-    // gate: selection drags are consumed by the
+    // (zoomLockedItems non-empty) freezes accumulation —
+    // the drag belongs to the image. Text selection needs
+    // no gate: selection drags are consumed by the
     // SelectionContainer and never enter the nested-scroll
-    // chain, and only Drag-source deltas are read at all —
-    // which also keeps the drift's, the restore's and the
-    // follows' programmatic scrolls out, so auto-scroll can
-    // never append (B9). Inert unless the wall is active:
-    // every callback checks wallActiveNow first, and the
+    // chain. Inert unless the wall is active: every
+    // callback checks wallActiveNow first, and the
     // modifier below only attaches the connection in wall
     // mode.
-    val wallScope = rememberCoroutineScope()
     val wallConnection = remember(wallActive) {
         object : NestedScrollConnection {
             override fun onPostScroll(
@@ -1142,21 +1149,50 @@ fun DocumentReader(
                 ) {
                     return Offset.Zero
                 }
+                // The unwind: content scrolling back toward
+                // the chapter un-fills the wheel by the same
+                // distance, clamped at zero — the fill
+                // tracks the finger in both directions.
+                val drag = wheelState.dragPx
+                if (drag != 0f && consumed.y != 0f &&
+                    sign(consumed.y) != sign(drag)
+                ) {
+                    val unwound = drag + consumed.y
+                    wheelState.dragPx =
+                        if (sign(unwound) == sign(drag)) {
+                            unwound
+                        } else {
+                            0f
+                        }
+                }
                 if (available.y < 0f &&
                     !listState.canScrollForward
                 ) {
-                    if (!appendNextSegment() && hasNextChapterNow) {
-                        pendingAppend = true
-                        nextChapterIdNow?.let(onSegmentVisible)
+                    // Pushing past the chapter's end: NEXT.
+                    // Suppressed at the book's own end.
+                    if (hasNextChapterNow) {
+                        val current = wheelState.dragPx
+                        wheelState.dragPx =
+                            if (current > 0f) {
+                                available.y
+                            } else {
+                                current + available.y
+                            }
                     }
                 } else if (available.y > 0f &&
                     !listState.canScrollBackward
                 ) {
-                    if (!prependPreviousSegment() &&
-                        hasPreviousChapterNow
-                    ) {
-                        pendingPrepend = true
-                        prevChapterIdNow?.let(onSegmentVisible)
+                    // Pulling past the chapter's start:
+                    // PREVIOUS. Suppressed at the book's
+                    // own start.
+                    if (hasPreviousChapterNow) {
+                        val current = wheelState.dragPx
+                        wheelState.dragPx =
+                            if (current < 0f) {
+                                available.y
+                            } else {
+                                current + available.y
+                            }
                     }
                 }
                 return Offset.Zero
@@ -1166,51 +1202,62 @@ fun DocumentReader(
                 consumed: Velocity,
                 available: Velocity
             ): Velocity {
-                if (!wallActiveNow ||
-                    zoomLockedItems.isNotEmpty()
-                ) {
-                    return Velocity.Zero
-                }
-                val crossed = when {
-                    available.y < 0f &&
-                        !listState.canScrollForward ->
-                        appendNextSegment()
-                    available.y > 0f &&
-                        !listState.canScrollBackward ->
-                        prependPreviousSegment()
-                    else -> false
-                }
-                if (!crossed) {
-                    // The neighbour has not landed: stand
-                    // pending and ask for its fill, as a
-                    // drag would.
-                    if (available.y < 0f &&
-                        !listState.canScrollForward &&
-                        hasNextChapterNow
-                    ) {
-                        pendingAppend = true
-                        nextChapterIdNow?.let(onSegmentVisible)
-                    } else if (available.y > 0f &&
-                        !listState.canScrollBackward &&
-                        hasPreviousChapterNow
-                    ) {
-                        pendingPrepend = true
-                        prevChapterIdNow?.let(onSegmentVisible)
-                    }
-                    return Velocity.Zero
-                }
-                // The append landed: re-kick the list with a
-                // fraction of the fling's leftover velocity
-                // so the gesture carries into the new
-                // segment (B3).
-                val carry = -available.y *
-                    WallGap.FLING_CARRY_FRACTION
-                if (carry != 0f) {
-                    wallScope.launch {
-                        listState.animateScrollBy(carry)
-                    }
-                }
+                // Deliberate no-op (see the block comment):
+                // a fling never arms and never crosses — the
+                // release observer owns every crossing.
                 return Velocity.Zero
+            }
+        }
+    }
+
+    // Seam patch: THE RELEASE OBSERVER (A6) — the swap's
+    // trigger. A pointerInput watching the raw pointer
+    // stream in the Initial pass (the readerTapToggle
+    // precedent, on this same Box): it consumes NOTHING, so
+    // taps, scrolls, selection and image zooms flow through
+    // untouched; it only notices the moment the LAST
+    // pressed pointer lifts. That event exists for every
+    // release — fast, slow, or a dead stop at zero
+    // velocity — which is exactly the guarantee
+    // NestedScrollConnection cannot give. On a release the
+    // wheel state is ALWAYS reset (an un-armed release just
+    // hides the wheel; nothing changes); the swap fires
+    // only when the wheel stands ARMED — a full circle of
+    // accumulated drag (60 dp at the REA's 6°/dp) — the
+    // wall is active, and no image zoom owns the gesture.
+    // (The density is read into a local first: inside
+    // pointerInput the scope IS a Density, whose own
+    // `density` property would shadow the composition's.)
+    val wallDensity = density
+    val wallReleaseObserver = Modifier.pointerInput(Unit) {
+        awaitPointerEventScope {
+            var anyPressed = false
+            while (true) {
+                val event = awaitPointerEvent(
+                    PointerEventPass.Initial
+                )
+                val pressedNow = event.changes.any { it.pressed }
+                if (anyPressed && !pressedNow) {
+                    val drag = wheelState.dragPx
+                    wheelState.dragPx = 0f
+                    val armedDistancePx =
+                        WallWheel.FULL_CIRCLE_DEGREES /
+                            WallWheel.ARC_DEGREES_PER_DP *
+                            wallDensity.density
+                    if (wallActiveNow &&
+                        zoomLockedItems.isEmpty() &&
+                        abs(drag) >= armedDistancePx
+                    ) {
+                        if (drag < 0f && hasNextChapterNow) {
+                            onWallSwapNextNow()
+                        } else if (drag > 0f &&
+                            hasPreviousChapterNow
+                        ) {
+                            onWallSwapPreviousNow()
+                        }
+                    }
+                }
+                anyPressed = pressedNow
             }
         }
     }
@@ -1230,6 +1277,10 @@ fun DocumentReader(
                     autoPaused = true
                 }
             }
+            // Seam patch: the wall's release observer (see
+            // its definition above) — a second Initial-pass
+            // watcher on the same root; it consumes nothing.
+            .then(wallReleaseObserver)
     ) {
         ReaderSelectionMenuHost(onAction = onSelectionAction) {
         SelectionContainer {
@@ -1242,10 +1293,11 @@ fun DocumentReader(
                     top = config.marginVerticalDp.dp + topInset,
                     bottom = config.marginVerticalDp.dp + bottomInset
                 ),
-                // Fix Round G: wall mode attaches the append
-                // connection only — there is no visual give
-                // to apply (B2: the end is real). Non-wall the
-                // chain is exactly fillMaxSize, as before.
+                // Seam patch: wall mode attaches the
+                // accumulation connection only — there is no
+                // visual give to apply (B2: the end is real).
+                // Non-wall the chain is exactly fillMaxSize,
+                // as before.
                 modifier = Modifier
                     .fillMaxSize()
                     .then(
@@ -1257,31 +1309,21 @@ fun DocumentReader(
                     )
             ) {
                 chapters.forEachIndexed { segment, chapter ->
-                    // Fix Round G (B1): the wall composes the
-                    // RANGE [rangeStart..rangeEnd] — every
-                    // segment outside it emits nothing (no
-                    // blocks, no state item, no boundary
-                    // door). A composed segment's own state
+                    // Seam patch: the wall composes ONLY the
+                    // anchor segment — every other segment
+                    // emits nothing (no blocks, no state item,
+                    // no boundary door, and NO gap item: the
+                    // retired append wall's blank gap between
+                    // composed segments is gone with the range
+                    // itself). A neighbour's text is prepared
+                    // through the fill door and joins the
+                    // screen only by becoming the anchor
+                    // through a swap. The anchor's own state
                     // item below still fires its B1 fill.
                     if (wallActive &&
                         segment !in rangeStart..rangeEnd
                     ) {
                         return@forEachIndexed
-                    }
-                    // B1: ONE blank gap item between two
-                    // composed segments — it rides the
-                    // FOLLOWING segment's header slot in the
-                    // wall index (see the index construction),
-                    // so the emitted items and the index stay
-                    // in lockstep.
-                    if (wallActive && segment > rangeStart) {
-                        item(key = "g-${chapter.id}") {
-                            Spacer(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(WallGap.GAP)
-                            )
-                        }
                     }
                     if (headerFor(segment)) {
                         item(key = "h-${chapter.id}") {
@@ -1429,6 +1471,126 @@ fun DocumentReader(
         } // ReaderSelectionMenuHost
         if (config.readingLine) {
             ReadingLineOverlay(palette = palette)
+        }
+        // Seam patch: the ProgressWheel overlay — the
+        // commitment gesture made visible. It reads ONLY
+        // the wheel state, so drag deltas recompose this
+        // overlay alone, never the list.
+        if (wallActive) {
+            WallWheelOverlay(
+                state = wheelState,
+                palette = palette,
+                topInset = topInset,
+                bottomInset = bottomInset
+            )
+        }
+    }
+}
+
+/**
+ * Seam patch: the wall's ProgressWheel (Moon+'s
+ * views/ProgressViews/ProgressWheel) — a 40 dp circle that
+ * SPINS continuously while it stands and whose arc FILLS
+ * with the accumulated drag (arc = min(360°, |drag| × 6 /
+ * density), the REA's formula): a full circle is the armed
+ * state the release observer reads. Below the REA's 8 dp
+ * of accumulated drag it does not stand at all. Bottom-
+ * centre when pushing for NEXT, top-centre when pulling
+ * for PREVIOUS, inset clear of the measured chrome.
+ */
+@Composable
+private fun WallWheelOverlay(
+    state: WallWheelState,
+    palette: ReaderPalette,
+    topInset: androidx.compose.ui.unit.Dp,
+    bottomInset: androidx.compose.ui.unit.Dp
+) {
+    val drag = state.dragPx
+    val density = LocalDensity.current
+    if (drag == 0f ||
+        abs(drag) <= WallWheel.SHOW_THRESHOLD_DP * density.density
+    ) {
+        return
+    }
+    val arcDegrees = minOf(
+        WallWheel.FULL_CIRCLE_DEGREES,
+        abs(drag) / density.density *
+            WallWheel.ARC_DEGREES_PER_DP
+    )
+    Box(Modifier.fillMaxSize()) {
+        WallWheelSpinner(
+            arcDegrees = arcDegrees,
+            palette = palette,
+            modifier = Modifier
+                .align(
+                    if (drag < 0f) {
+                        Alignment.BottomCenter
+                    } else {
+                        Alignment.TopCenter
+                    }
+                )
+                .padding(
+                    top = if (drag > 0f) {
+                        topInset + 20.dp
+                    } else {
+                        0.dp
+                    },
+                    bottom = if (drag < 0f) {
+                        bottomInset + 20.dp
+                    } else {
+                        0.dp
+                    }
+                )
+        )
+    }
+}
+
+/** The standing wheel itself: the spin animation lives in
+ * this child so it is only composed (and only animating)
+ * while the wheel stands — the overlay above gates on the
+ * drag threshold before this is ever called. */
+@Composable
+private fun WallWheelSpinner(
+    arcDegrees: Float,
+    palette: ReaderPalette,
+    modifier: Modifier = Modifier
+) {
+    val spinTransition = rememberInfiniteTransition(
+        label = "wallWheelSpin"
+    )
+    val spin by spinTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = 900,
+                easing = LinearEasing
+            ),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "wallWheelSpinAngle"
+    )
+    Canvas(modifier.size(WallWheel.SIZE)) {
+        val stroke = 3.dp.toPx()
+        // A soft disc so the wheel reads over text.
+        drawCircle(
+            color = palette.background.copy(alpha = 0.72f)
+        )
+        drawCircle(
+            color = palette.muted.copy(alpha = 0.35f),
+            style = Stroke(width = stroke)
+        )
+        rotate(spin) {
+            drawArc(
+                color = palette.accent,
+                startAngle = -90f,
+                sweepAngle = arcDegrees,
+                useCenter = false,
+                style = Stroke(
+                    width = stroke,
+                    cap = StrokeCap.Round
+                )
+            )
         }
     }
 }
