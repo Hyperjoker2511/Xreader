@@ -63,6 +63,25 @@ object BookEngine {
             book.documentUri == null && book.filePath == null
 
     /**
+     * v1.7 MR-1: the CONVERTED formats — a local book in one of
+     * these reads through the converted-chapter (core) reader
+     * once its chapters have landed; before landing (or after
+     * its content is deleted) it reaches the local surface,
+     * whose open throws the chapter-reader message below and
+     * whose Failed state offers the import resume. EPUB and
+     * PDF are the in-place formats, never this set; UNKNOWN
+     * has no parser and is not either.
+     */
+    fun isConvertedFormat(format: BookFormat): Boolean =
+        when (format) {
+            BookFormat.TXT, BookFormat.FB2, BookFormat.MARKDOWN,
+            BookFormat.HTML, BookFormat.MOBI, BookFormat.AZW3,
+            BookFormat.CBR, BookFormat.CBZ -> true
+            BookFormat.EPUB, BookFormat.PDF,
+            BookFormat.UNKNOWN -> false
+        }
+
+    /**
      * Opens [book]'s own file. Must be called off the main thread.
      * [filesRoot] resolves retained-copy relative paths
      * ([Book.filePath]); [cacheDir] hosts the bounded render cache.

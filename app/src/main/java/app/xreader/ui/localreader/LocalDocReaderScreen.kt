@@ -225,7 +225,19 @@ fun LocalDocReaderScreen(
             ) {
                 Text(current.message)
                 Spacer(Modifier.height(16.dp))
-                Button(onClick = onClose) { Text("Back") }
+                // v1.7 MR-1 (A4): a converted-format book that
+                // landed nothing gets the import resume as a
+                // real retry; every other failure (EPUB/PDF
+                // included) keeps the Back-only shape below.
+                if (current.canResumeImport) {
+                    Button(onClick = { viewModel.resumeImport() }) {
+                        Text("Try again")
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = onClose) { Text("Back") }
+                } else {
+                    Button(onClick = onClose) { Text("Back") }
+                }
             }
         }
     }

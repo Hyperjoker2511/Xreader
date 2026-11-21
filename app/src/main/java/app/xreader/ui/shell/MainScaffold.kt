@@ -2167,36 +2167,30 @@ private fun XreaderNavHost(
                 // the shared chapter door's index cannot express
                 // it (the LocalDoc verdict is book-scoped).
                 onReadLocalTarget = { id, targetJson ->
-                    // v1.7 Patch 3 (Item 2e): for a PREPARED
-                    // book the door's session-space
-                    // {"section":i} target translates through
-                    // the prepare record's section map and
-                    // opens the CORE route at that chapter (a
-                    // section with no map entry opens the book
-                    // at its Continue place). Unprepared/FXL
-                    // books take the local route exactly as
-                    // before.
+                    // v1.7 Patch 3 (Item 2e) + MR-1 (A3): the
+                    // door's verdict is the RESOLVER's — the
+                    // same landed-content law every other door
+                    // obeys, never a second hand-rolled check;
+                    // this lambda only translates the outline
+                    // target into the winning road's
+                    // coordinates. For a PREPARED book the
+                    // door's session-space {"section":i} target
+                    // translates through the prepare record's
+                    // section map (a section with no map entry
+                    // opens the book at its Continue place); a
+                    // landed converted book's {"section":i}
+                    // target was written in the parser's own
+                    // chapter space, so it IS the chapter index.
+                    // Books the resolver sends local take the
+                    // local route exactly as before.
                     scope.launch {
                         val book = container.database.bookDao()
                             .getById(id)
-                        val record = if (
-                            book != null &&
-                            book.sourceType ==
-                                app.xreader.data.db.SourceType.LOCAL_FILE &&
-                            book.localFormat ==
-                                app.xreader.data.db.BookFormat.EPUB
-                        ) {
-                            runCatching {
-                                localReaderPrefsFor(container)
-                                    .epubPrepareRecord(id)
-                            }.getOrNull()
-                        } else {
-                            null
+                        val route = book?.let {
+                            readerRouteResolverFor(container)
+                                .resolve(it, 0)
                         }
-                        if (book != null && record != null &&
-                            app.xreader.data.prepare.EpubPrepareAccess
-                                .isPrepared(record, book)
-                        ) {
+                        if (book != null && route is app.xreader.domain.reader.ReaderRoute.NovelReader) {
                             val continueIndex = runCatching {
                                 container.database
                                     .readingProgressDao()
@@ -2206,7 +2200,22 @@ private fun XreaderNavHost(
                                 container.database.chapterDao()
                                     .forBook(id)
                             }.getOrDefault(emptyList())
-                            val chapterIndex =
+                            val record = if (
+                                book.localFormat ==
+                                    app.xreader.data.db.BookFormat.EPUB
+                            ) {
+                                runCatching {
+                                    localReaderPrefsFor(container)
+                                        .epubPrepareRecord(id)
+                                }.getOrNull()
+                            } else {
+                                null
+                            }
+                            val chapterIndex = if (
+                                record != null &&
+                                app.xreader.data.prepare.EpubPrepareAccess
+                                    .isPrepared(record, book)
+                            ) {
                                 app.xreader.data.prepare
                                     .EpubPrepareAccess
                                     .contentsChapterIndex(
@@ -2215,6 +2224,24 @@ private fun XreaderNavHost(
                                         landedChapters = landedChapters,
                                         continueChapterIndex = continueIndex
                                     )
+                            } else {
+                                val targetIndex =
+                                    app.xreader.data.engine.LocatorJson.targetIndex(targetJson)
+                                val rawIndex = if (
+                                    targetIndex != null &&
+                                    landedChapters.any {
+                                        it.index == targetIndex
+                                    }
+                                ) {
+                                    targetIndex
+                                } else {
+                                    continueIndex
+                                }
+                                rawIndex.coerceIn(
+                                    0,
+                                    maxOf(0, landedChapters.lastIndex)
+                                )
+                            }
                             navController.navigate(
                                 "reader/$id/$chapterIndex"
                             )
@@ -2635,6 +2662,18 @@ private fun readerRouteResolverFor(
                 .isPrepared(record, book) &&
                 container.database.chapterDao().forBook(book.id)
                     .any { it.contentPath != null }
+        },
+        // v1.7 MR-1: the landed-content half for converted
+        // formats — a chapter row carrying content is the
+        // durable signal (provisional rows carry
+        // contentPath = null, so this is false during an
+        // in-flight completion and true once content lands;
+        // Book.totalChapters is the provisional count and is
+        // never consulted). No record is required here: the
+        // prepare record is the EPUB road's own contract.
+        localContentLanded = { book ->
+            container.database.chapterDao().forBook(book.id)
+                .any { it.contentPath != null }
         }
     )
 }

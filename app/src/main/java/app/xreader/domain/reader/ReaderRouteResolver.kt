@@ -2,8 +2,10 @@ package app.xreader.domain.reader
 
 import app.xreader.data.db.Book
 import app.xreader.data.db.BookDao
+import app.xreader.data.db.BookFormat
 import app.xreader.data.db.ChapterDao
 import app.xreader.data.db.SourceType
+import app.xreader.data.engine.BookEngine
 import app.xreader.data.extension.BookKind152
 import app.xreader.data.extension.ExtensionService
 import app.xreader.data.extension.MediaKind
@@ -47,10 +49,14 @@ import app.xreader.data.extension.SourceHandle
  *    TEXT → novel reader.
  * 3. `sourceType == LOCAL_FILE` → the local-document reader
  *    (EPUB/PDF are text books for routing purposes, but they
- *    read the file in place, §3). Checked before priority 2's
- *    stored verdict for non-extension books, because priority 2
- *    is scoped to extension sources — a local book's stored
- *    kind never reroutes it away from its own file.
+ *    read the file in place, §3) — with the two converted-book
+ *    exceptions the local branch itself states: a PREPARED
+ *    EPUB (v1.7 Patch 3) and a converted-format book whose
+ *    chapters have landed (v1.7 MR-1) route to the novel
+ *    reader. Checked before priority 2's stored verdict for
+ *    non-extension books, because priority 2 is scoped to
+ *    extension sources — a local book's stored kind never
+ *    reroutes it away from its own file.
  * 4. UNKNOWN + non-player source → the novel reader (the
  *    long-standing default), backstopped by the novel reader's
  *    fail-closed guard (ui/reader/ReaderScreen.kt): if a chapter
@@ -94,7 +100,20 @@ class ReaderRouteResolver(
      * absent (every pre-Patch-3 construction), local books
      * keep the LocalDoc verdict exactly as before.
      */
-    private val epubPrepared: (suspend (Book) -> Boolean)? = null
+    private val epubPrepared: (suspend (Book) -> Boolean)? = null,
+    /**
+     * v1.7 MR-1: the landed-content check for converted-format
+     * LOCAL_FILE books ([BookEngine.isConvertedFormat]) — true
+     * when the book's converted chapters are in place (a
+     * chapter row carries content), in which case it routes
+     * to the novel reader like any converted book. The shell
+     * wires the real check; absent (every pre-MR-1
+     * construction), converted local books keep the LocalDoc
+     * verdict exactly as before. Deliberately NOT keyed on
+     * `Book.totalChapters` — that is the provisional
+     * registration count, set before anything lands.
+     */
+    private val localContentLanded: (suspend (Book) -> Boolean)? = null
 ) {
 
     /** Resolve by book id (the entry-point shape: most surfaces
@@ -119,8 +138,20 @@ class ReaderRouteResolver(
             // prepare runs inside the local open flow), FXL/RTL
             // EPUBs, and PDFs, whose verdict is byte-identical
             // — keeps the LocalDoc verdict.
-            if (book.localFormat == app.xreader.data.db.BookFormat.EPUB &&
+            if (book.localFormat == BookFormat.EPUB &&
                 epubPrepared?.invoke(book) == true
+            ) {
+                return ReaderRoute.NovelReader(book.id, chapterIndex)
+            }
+            // v1.7 MR-1: a converted-format book whose chapters
+            // have landed in the core is a core book — landed
+            // content decides, not the format. PDF is not a
+            // converted format and never reaches this branch;
+            // an unlanded converted book keeps the LocalDoc
+            // verdict, whose open flow shows the honest state
+            // with the import resume as its retry.
+            if (BookEngine.isConvertedFormat(book.localFormat) &&
+                localContentLanded?.invoke(book) == true
             ) {
                 return ReaderRoute.NovelReader(book.id, chapterIndex)
             }

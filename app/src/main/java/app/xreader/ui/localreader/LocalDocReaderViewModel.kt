@@ -18,6 +18,7 @@ import app.xreader.data.engine.OutlineEntry
 import app.xreader.data.engine.PdfSession
 import app.xreader.data.engine.ReadiumEpubSession
 import app.xreader.data.extension.DiagnosticLog
+import app.xreader.data.importer.ImportCompletionState
 import app.xreader.data.prefs.settingsDataStore
 import org.readium.r2.shared.publication.services.positionsByReadingOrder
 import app.xreader.data.reader.ReadAloudController
@@ -102,7 +103,17 @@ sealed interface LocalReaderState {
      * plain words + a re-point offer. */
     data class FileMissing(val book: Book?) : LocalReaderState
     data class PasswordRequired(val book: Book?) : LocalReaderState
-    data class Failed(val message: String) : LocalReaderState
+
+    /** [canResumeImport] (v1.7 MR-1, A4): this failure is a
+     * converted-format book that reached the local surface
+     * because none of its chapters landed — its retry is the
+     * import resume, offered by the Failed surface. Every
+     * other failure (EPUB/PDF included) leaves it false and
+     * keeps the Back-only shape. */
+    data class Failed(
+        val message: String,
+        val canResumeImport: Boolean = false
+    ) : LocalReaderState
 }
 
 data class LocalSearchHit(
@@ -780,7 +791,18 @@ class LocalDocReaderViewModel(
                 _state.value = if (e.message == "file not found") {
                     LocalReaderState.FileMissing(loaded)
                 } else {
-                    LocalReaderState.Failed(e.message ?: "That book couldn't be opened.")
+                    LocalReaderState.Failed(
+                        message = e.message ?: "That book couldn't be opened.",
+                        // v1.7 MR-1 (A4): BookEngine.open's
+                        // chapter-reader message is the designed
+                        // landing for a converted-format book
+                        // with nothing landed — its Failed state
+                        // offers the import resume. EPUB/PDF
+                        // failures never set this (their formats
+                        // are not converted formats).
+                        canResumeImport =
+                            BookEngine.isConvertedFormat(loaded.localFormat)
+                    )
                 }
             } catch (e: Exception) {
                 _state.value = LocalReaderState.Failed(
@@ -902,6 +924,63 @@ class LocalDocReaderViewModel(
     fun retryWithPassword(candidate: String) {
         password = candidate.takeIf { it.isNotEmpty() }
         open()
+    }
+
+    /**
+     * v1.7 MR-1 (A4): the Failed state's "Try again" for a
+     * converted-format book that landed nothing — resume the
+     * import completion from the book's retained source, watch
+     * it land, and hand the book to the core reader through
+     * the same redirect door the EPUB prepare uses. A resume
+     * that cannot start (no retained source) or that finishes
+     * without landing returns to the honest Failed state, with
+     * the retry still offered.
+     *
+     * [BookImporter.resumeCompletion] launches the completion
+     * job and returns at once (true = a resumable source
+     * exists); the landing is observed on
+     * [ImportCompletionState], whose every terminal path
+     * publishes running = false (success, failure, cancel).
+     */
+    fun resumeImport() {
+        val current = _state.value as? LocalReaderState.Failed ?: return
+        if (!current.canResumeImport) return
+        _state.value = LocalReaderState.Loading("Preparing the book…")
+        viewModelScope.launch(container.ioDispatcher) {
+            val started = runCatching {
+                container.bookImporter.resumeCompletion(bookId)
+            }.getOrDefault(false)
+            if (!started) {
+                _state.value = LocalReaderState.Failed(
+                    message = "That book couldn't be prepared — " +
+                        "its file may have been moved or deleted.",
+                    canResumeImport = true
+                )
+                return@launch
+            }
+            val finished = runCatching {
+                ImportCompletionState.statusFlow(bookId)
+                    .first { it != null && !it.running }
+            }.getOrNull()
+            val landedRows = runCatching {
+                container.database.chapterDao().forBook(bookId)
+            }.getOrDefault(emptyList())
+            val landed = landedRows.any { it.contentPath != null }
+            if (finished != null && !finished.failed && landed) {
+                val savedIndex = runCatching {
+                    container.database.readingProgressDao()
+                        .getForBook(bookId)?.chapterIndex
+                }.getOrNull() ?: 0
+                _coreRedirect.tryEmit(
+                    savedIndex.coerceIn(0, maxOf(0, landedRows.lastIndex))
+                )
+            } else {
+                _state.value = LocalReaderState.Failed(
+                    message = "That book couldn't be prepared.",
+                    canResumeImport = true
+                )
+            }
+        }
     }
 
     // ── Position reports from the surfaces ───────────────────────
