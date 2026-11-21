@@ -875,6 +875,23 @@ class LocalDocReaderViewModel(
             contentResolver = container.applicationContext.contentResolver,
             inTransaction = { block ->
                 container.database.withTransaction(block)
+            },
+            // The 42-chapters fix: prepare reports the
+            // landed chapter count; write it onto the Book
+            // row so totalChapters shows the segmented
+            // count (13), not the raw-parse count (42)
+            // stamped at import. ONLY totalChapters moves —
+            // updatedAt and every other field stay as-is,
+            // and a row already carrying the right count
+            // is not rewritten.
+            onChaptersLanded = { bookId, landedCount ->
+                val bookDao = container.database.bookDao()
+                val row = bookDao.getById(bookId)
+                if (row != null && row.totalChapters != landedCount) {
+                    bookDao.update(
+                        row.copy(totalChapters = landedCount)
+                    )
+                }
             }
         )
         return when (

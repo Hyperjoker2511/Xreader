@@ -101,6 +101,18 @@ class EpubPrepareService(
     private val selectionHighlightStore: SelectionHighlightStore,
     private val contentResolver: ContentResolver?,
     private val inTransaction: suspend (suspend () -> Unit) -> Unit,
+    // The 42-chapters fix: the Book row's totalChapters is
+    // written at import registration from the RAW parse and
+    // prepare used to never correct it, so a book segmented
+    // at prepare (42 spine sections → 13 TOC chapters)
+    // kept showing the raw count on its book page and
+    // library cards. The service has no bookDao; the owner
+    // of the row is told the landed count at each
+    // successful exit and writes it back. Defaulted so
+    // existing constructions (tests) are untouched.
+    private val onChaptersLanded: suspend (
+        bookId: Long, landedCount: Int
+    ) -> Unit = { _, _ -> },
     private val parser: BookParser = EpubParser(),
     private val clock: () -> Long = System::currentTimeMillis
 ) {
@@ -190,6 +202,17 @@ class EpubPrepareService(
             ) {
                 val rows = chapterDao.forBook(book.id)
                 if (rows.any { it.contentPath != null }) {
+                    // The 42-chapters fix, healing leg: an
+                    // already-prepared book reports its
+                    // landed row count on this ordinary
+                    // open — no re-prepare, no loader bump —
+                    // so a stale raw-parse totalChapters
+                    // corrects itself. Same basis as the
+                    // book page's "n/m downloaded" chip:
+                    // the book's chapter-row count.
+                    runCatching {
+                        onChaptersLanded(book.id, rows.size)
+                    }
                     return EpubPrepareOutcome.Redirect(
                         (saved?.chapterIndex ?: 0)
                             .coerceIn(0, maxOf(0, rows.lastIndex))
@@ -456,6 +479,17 @@ class EpubPrepareService(
                     notePending = saved != null || marks.converted > 0
                 )
             )
+            // The 42-chapters fix: the record is written
+            // (above, still LAST among prepare's own
+            // stores); now report the landed count so the
+            // Book row's totalChapters matches the rows
+            // this prepare just landed — the same basis
+            // the book page's "n/m downloaded" chip counts
+            // (the book's chapter-row count). Best-effort:
+            // a failed report never fails the prepare.
+            runCatching {
+                onChaptersLanded(book.id, landedRows.size)
+            }
             if (marks.unplaced > 0) {
                 DiagnosticLog.record(
                     "epub-prepare",
