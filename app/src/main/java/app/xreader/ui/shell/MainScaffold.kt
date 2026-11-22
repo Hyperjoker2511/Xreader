@@ -2699,8 +2699,15 @@ private fun readerRouteResolverFor(
             val record = runCatching {
                 localPrefs.epubPrepareRecord(book.id)
             }.getOrNull()
+            // D13: the routing decision is toggle-aware — a
+            // record prepared under the other footnotes value
+            // routes to the open flow, which re-prepares,
+            // rather than straight into stale-shaped content.
             app.xreader.data.prepare.EpubPrepareAccess
-                .isPrepared(record, book) &&
+                .isPrepared(
+                    record, book,
+                    container.effectiveFootnotesInText(book.id)
+                ) &&
                 container.database.chapterDao().forBook(book.id)
                     .any { it.contentPath != null }
         },

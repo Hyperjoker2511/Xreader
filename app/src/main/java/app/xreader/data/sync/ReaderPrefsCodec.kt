@@ -45,7 +45,8 @@ object ReaderPrefsCodec {
         "customPage" to config.customPageArgb.toString(),
         "customText" to config.customTextArgb.toString(),
         "twoPageSpread" to config.twoPageSpread.toString(),
-        "speechRate" to config.speechRate.toString()
+        "speechRate" to config.speechRate.toString(),
+        "footnotesInText" to config.footnotesInText.toString()
     )
 
     /** Defensive decode (§1.5): every field falls back to the current
@@ -114,7 +115,8 @@ object ReaderPrefsCodec {
                     current.turnOverride
                 ),
                 twoPageSpread = bool("twoPageSpread", current.twoPageSpread),
-                speechRate = float("speechRate", current.speechRate)
+                speechRate = float("speechRate", current.speechRate),
+                footnotesInText = bool("footnotesInText", current.footnotesInText)
             )
         )
     }

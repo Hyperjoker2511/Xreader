@@ -277,7 +277,20 @@ data class ReaderConfig(
     val paragraphIndent: Boolean = true,
     /** The indent's depth, in em of the body font size
      * (Moon+'s factory indentLength is 2). */
-    val paragraphIndentEm: Float = 2f
+    val paragraphIndentEm: Float = 2f,
+    /** D13 (Moon+ copy): "Show footnotes directly in chapter
+     * text" — Moon+'s `footnoteOnBottom` switch (its settings
+     * section "Footnotes"). Moon+'s own default is OFF; the
+     * owner's ruling (2026-11-22) supersedes: ON, so a book's
+     * footnotes are never silently lost. This is the GLOBAL
+     * default; a book's own override (BookReaderPrefs), set
+     * from inside its reader, wins for that book only. The
+     * choice is baked at EPUB prepare time — landed content
+     * is keyed on the effective value and a change
+     * re-prepares the book once (see EpubPrepareAccess).
+     * Appended LAST for the same positional-caller reason as
+     * the fields above. */
+    val footnotesInText: Boolean = true
 )
 
 /** How the reader moves between chapters (v1.0.1).

@@ -192,6 +192,15 @@ class AppContainer(
     val bookReaderPrefs: app.xreader.data.prefs.BookReaderPrefs =
         app.xreader.data.prefs.BookReaderPrefs(appContext.settingsDataStore)
 
+    /** D13: a book's effective footnotes-in-text value — its
+     * own in-reader override over the global default. The
+     * EPUB prepare is keyed on this value, and the landing
+     * decisions (open flow, route resolver) compare the
+     * prepare record against it. */
+    suspend fun effectiveFootnotesInText(bookId: Long): Boolean =
+        bookReaderPrefs.overrides(bookId).first().footnotesInText
+            ?: readerPrefs.config.first().footnotesInText
+
     /** FIX-18 (Komikku transplant): the manga reader's GLOBAL
      * preference store (Settings/Customise defaults) and the
      * per-book overlay factory (in-reader changes land on the

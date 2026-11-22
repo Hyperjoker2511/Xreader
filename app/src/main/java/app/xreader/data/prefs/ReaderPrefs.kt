@@ -44,6 +44,7 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
         store.edit { prefs -> prefs[KEY_CBZ_OPENS_IN_KOMIKKU] = value }
     }
 
+
     /** Reset customisation (R07): write the default config back
      * through the same single-writer path (update writes every
      * field, and removes the optional ones at their defaults). */
@@ -156,6 +157,7 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
             prefs[KEY_PARA_SPACING] = next.paragraphSpacingDp
             prefs[KEY_INDENT] = next.paragraphIndent
             prefs[KEY_INDENT_EM] = next.paragraphIndentEm
+            prefs[KEY_FOOTNOTES_IN_TEXT] = next.footnotesInText
             prefs[KEY_MARGIN_H] = next.marginHorizontalDp
             prefs[KEY_MARGIN_V] = next.marginVerticalDp
             prefs[KEY_ALIGNMENT] = next.alignment.name
@@ -224,6 +226,7 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
             paragraphSpacingDp = this[KEY_PARA_SPACING] ?: 0f,
             paragraphIndent = this[KEY_INDENT] ?: true,
             paragraphIndentEm = this[KEY_INDENT_EM] ?: 2f,
+            footnotesInText = this[KEY_FOOTNOTES_IN_TEXT] ?: true,
             marginHorizontalDp = this[KEY_MARGIN_H] ?: 26f,
             marginVerticalDp = this[KEY_MARGIN_V] ?: 30f,
             alignment = ReaderValidation.parseEnum(
@@ -333,6 +336,11 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
         // Komikku default in every pre-OE-4 store).
         val KEY_CBZ_OPENS_IN_KOMIKKU =
             booleanPreferencesKey("reader.cbz_opens_in_komikku")
+        // D13: the footnotes-in-text choice (absent = ON in
+        // every pre-D13 store, the owner's default ruling —
+        // Moon+'s own default for this switch is off).
+        val KEY_FOOTNOTES_IN_TEXT =
+            booleanPreferencesKey("reader.footnotes_in_text")
         val KEY_MARGIN_H = floatPreferencesKey("reader.margin_h")
         val KEY_MARGIN_V = floatPreferencesKey("reader.margin_v")
         val KEY_ALIGNMENT = stringPreferencesKey("reader.alignment")

@@ -1025,6 +1025,18 @@ private fun PageContent(
                         .fillMaxWidth()
                         .padding(vertical = 6.dp)
                 )
+                // D13: Moon+'s footnote box, whole on one
+                // page (a fixed-height block in the paginator,
+                // like an image).
+                is ChapterBlock.FootnoteBox -> FootnoteBoxView(
+                    block = block,
+                    config = config,
+                    palette = palette,
+                    fontFamily = fontFamily,
+                    assetFile = assetFile,
+                    modifier = Modifier.fillMaxWidth(),
+                    onZoomActiveChanged = onZoomActiveChanged
+                )
                 else -> {
                     // v1.2.0 (Wave 3, audit #2): remembered per
                     // slice — PageContent recomposes on EVERY turn
@@ -1129,6 +1141,35 @@ class ComposeChapterMeasurer(
                 blockEnd = range.end,
                 fixedHeightPx = with(density) { 30.dp.toPx() }
             )
+            is ChapterBlock.FootnoteBox -> {
+                // D13: a fixed-height block — its flattened
+                // text measured at the box style inside the
+                // box's own chrome (margin + padding together
+                // are 1 em of the box size on each side), plus
+                // a flat reserve for each image inside the
+                // notes. Self-spaced (its margin is part of
+                // the box), so no paragraph space-after.
+                val emPx = with(density) {
+                    (config.fontSizeSp * 0.8f).dp.toPx()
+                }
+                val layout = textMeasurer.measure(
+                    block.flattenedText(),
+                    footnoteTextStyle(config, fontFamily),
+                    constraints = Constraints(
+                        maxWidth = (columnWidthPx - 2 * emPx)
+                            .toInt().coerceAtLeast(1)
+                    )
+                )
+                val imageCount = block.entries.sumOf { entry ->
+                    entry.blocks.count { it is ChapterBlock.Image }
+                }
+                MeasuredBlock(
+                    blockIndex = blockIndex, blockStart = range.start,
+                    blockEnd = range.end,
+                    fixedHeightPx = layout.size.height + 2 * emPx +
+                        imageCount * with(density) { 120.dp.toPx() }
+                )
+            }
             else -> {
                 val style = blockTextStyle(block, config, fontFamily)
                 val layout = textMeasurer.measure(

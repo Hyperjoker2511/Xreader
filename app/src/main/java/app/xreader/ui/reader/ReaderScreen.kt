@@ -180,6 +180,8 @@ fun ReaderScreen(
     val searchHits by viewModel.searchHits.collectAsStateWithLifecycle()
     val searchBusy by viewModel.searchBusy.collectAsStateWithLifecycle()
     val plateFilter by viewModel.plateFilter.collectAsStateWithLifecycle()
+    val footnotesInText by viewModel.footnotesInText
+        .collectAsStateWithLifecycle()
     val migrationNote by viewModel.migrationNote.collectAsStateWithLifecycle()
     val cbzSwitchNote by viewModel.cbzSwitchNote.collectAsStateWithLifecycle()
     // v1.7 OE-1: a local PDF read in this one reader — its
@@ -1594,6 +1596,13 @@ fun ReaderScreen(
                         } else {
                             pdfAutoScroll.stop()
                         }
+                    },
+                    // D13: this book's footnotes switch
+                    // (prepared EPUBs only — the VM publishes
+                    // null otherwise and the section hides).
+                    footnotesInText = footnotesInText,
+                    onFootnotesInTextChange = { value ->
+                        viewModel.setFootnotesInText(value)
                     }
                 )
                 ActiveSheet.LISTEN -> ListenSheet(

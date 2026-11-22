@@ -42,13 +42,21 @@ data class BookReaderOverride(
     val voiceEngine: VoiceEngine? = null,
     /** Patch 12: this book's own Edge voice id. Applies only when
      * the chapter's language matches the voice's language. */
-    val edgeVoiceId: String? = null
+    val edgeVoiceId: String? = null,
+    /** D13 (Moon+ copy): this book's own footnotes-in-text
+     * choice, set from inside its reader (option-scope rule).
+     * Null = the global default in ReaderConfig.footnotesInText.
+     * The choice is baked at EPUB prepare time: the prepare
+     * pipeline reads the effective value (this override over
+     * the global) and keys the book's landed content on it. */
+    val footnotesInText: Boolean? = null
 ) {
     val isEmpty: Boolean
         get() = paletteName == null && fontSizeSp == null && imageMode == null &&
             mangaTapLayout == null && mangaOrientation == null &&
             mangaCropBorders == null &&
-            voiceEngine == null && edgeVoiceId == null
+            voiceEngine == null && edgeVoiceId == null &&
+            footnotesInText == null
 
     /** True when any MANGA override is set (the in-reader
      * sheet's "reset this series' settings" row keys on it). */
@@ -94,7 +102,8 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
             voiceEngine = prefs[voiceEngineKey(bookId)]?.let { stored ->
                 VoiceEngine.entries.firstOrNull { it.name == stored }
             },
-            edgeVoiceId = prefs[voiceIdKey(bookId)]
+            edgeVoiceId = prefs[voiceIdKey(bookId)],
+            footnotesInText = prefs[footnotesKey(bookId)]
         )
     }
 
@@ -168,6 +177,18 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    /** D13: the in-reader Footnotes switch's write — this
+     * book only, never the global default (option-scope
+     * rule). Null clears back to following the global
+     * choice. Takes effect at the book's next prepare (the
+     * landed content is keyed on the effective value). */
+    suspend fun setFootnotesInText(bookId: Long, value: Boolean?) {
+        store.edit { prefs ->
+            if (value == null) prefs.remove(footnotesKey(bookId))
+            else prefs[footnotesKey(bookId)] = value
+        }
+    }
+
     /** v1.5.0 (Part C): clear ONLY the manga overrides (the
      * in-reader sheet's reset — the donor's ResetViewerFlags
      * shape); palette/text-size overrides are untouched. */
@@ -212,6 +233,7 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
             prefs.remove(mangaCropKey(bookId))
             prefs.remove(voiceEngineKey(bookId))
             prefs.remove(voiceIdKey(bookId))
+            prefs.remove(footnotesKey(bookId))
             prefs.remove(excludedScanlatorsKey(bookId))
         }
     }
@@ -244,4 +266,9 @@ class BookReaderPrefs(private val store: DataStore<Preferences>) {
 
     private fun excludedScanlatorsKey(bookId: Long) =
         stringSetPreferencesKey("bookreader.$bookId.excluded_scanlators")
+
+    private fun footnotesKey(bookId: Long) =
+        androidx.datastore.preferences.core.booleanPreferencesKey(
+            "bookreader.$bookId.footnotes_in_text"
+        )
 }

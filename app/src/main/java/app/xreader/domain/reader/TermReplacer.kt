@@ -240,6 +240,20 @@ object TermReplacer {
                     }
                     if (changed) block.copy(spans = newSpans) else block
                 }
+                // D13: a footnote box contributes its
+                // flattened text to the chapter text
+                // (ChapterText), so both cursors advance by
+                // exactly that length; the box itself is
+                // never rewritten (term pairs name novel
+                // prose; a note's label and body keep the
+                // book's own words, and the offset map stays
+                // exact for every block after the box).
+                is ChapterBlock.FootnoteBox -> {
+                    val length = block.flattenedText().length
+                    originalCursor += length
+                    displayCursor += length
+                    block
+                }
                 else -> block
             }
         }

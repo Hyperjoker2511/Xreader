@@ -546,6 +546,33 @@ class ReaderViewModel(
         )
     }
 
+    /** D13: republish the settings sheet's footnotes value
+     * from the two layers (this book's override over the
+     * global default) — called wherever those layers move
+     * and when the prepared-EPUB flag lands. A non-prepared
+     * book publishes null: no Footnotes section. */
+    private fun publishFootnotes() {
+        _footnotesInText.value = if (_preparedEpub.value) {
+            bookOverride.footnotesInText ?: globalConfig.footnotesInText
+        } else {
+            null
+        }
+    }
+
+    /** D13: the in-reader footnotes switch — option-scope
+     * tier 2, like [setImageMode]: the change is written as
+     * THIS book's override only; the global default is never
+     * touched from inside a reader. The value republishes
+     * optimistically so the switch answers the tap at once;
+     * the new shape takes effect the next time the book
+     * opens (the prepare is keyed on the value). */
+    fun setFootnotesInText(value: Boolean) {
+        _footnotesInText.value = value
+        viewModelScope.launch {
+            container.bookReaderPrefs.setFootnotesInText(bookId, value)
+        }
+    }
+
     /** Manga programme (slice M2): the image reader's mode
      * switch — option-scope tier 2: the change is written as
      * THIS series' override only; the global default in
@@ -618,6 +645,15 @@ class ReaderViewModel(
      * stored but are not this road's marks (Item 3e). */
     private val _preparedEpub = MutableStateFlow(false)
     val preparedEpub: StateFlow<Boolean> = _preparedEpub
+
+    /** D13: this book's effective footnotes-in-text value
+     * for the settings sheet — null unless the book is a
+     * prepared EPUB (the sheet's Footnotes section renders
+     * only then). The value is the book's own override over
+     * the global default — the same effective value the
+     * prepare is keyed on. */
+    private val _footnotesInText = MutableStateFlow<Boolean?>(null)
+    val footnotesInText: StateFlow<Boolean?> = _footnotesInText
 
     // ── v1.7 OE-1: PDF in the one reader ─────────────────
     /** The PDF state (null for every non-PDF book — the
@@ -1065,6 +1101,7 @@ class ReaderViewModel(
                 globalConfig = newConfig
                 publishConfig()
                 publishImageMode()
+                publishFootnotes()
                 _state.value = _state.value.copy(
                     pageTurnTier = computeTier(newConfig)
                 )
@@ -1081,6 +1118,7 @@ class ReaderViewModel(
                 _state.value = _state.value.copy(hasBookOverride = !override.isEmpty)
                 publishConfig()
                 publishImageMode()
+                publishFootnotes()
                 publishVoiceState()
             }
         }
@@ -1208,6 +1246,7 @@ class ReaderViewModel(
                         .isPrepared(record, book)
                 ) {
                     _preparedEpub.value = true
+                    publishFootnotes()
                     _plateFilter.value = runCatching {
                         localReaderPrefs.epubSettings(bookId)
                             .first().plateFilter
@@ -1590,15 +1629,20 @@ class ReaderViewModel(
     /**
      * v1.7 document engine (Item 5): THE anchor move — the
      * only scroll-mode bumper of restoreGeneration (the only
-     * other bump is loadChapter's landing). Discipline,
-     * mirroring loadChapter's: the outgoing place is flushed
-     * FIRST (progress + session segment, exactly, while the
-     * state still describes it), then ONE state copy publishes
-     * (chapterIndex, restoreOffset, restoreHint,
-     * restoreGeneration + 1) — and, when the target segment is
-     * RESIDENT, its display as chapterText in the same copy,
-     * so the surface's restore effect can assert at once.
-     * When the target is not resident, chapterText keeps the
+     * other bump is loadChapter's landing). Discipline
+     * (smoothness fix §1, Moon+'s shape — the swap is the
+     * gesture's own step, bookkeeping is not on its path):
+     * ONE state copy publishes FIRST (chapterIndex,
+     * restoreOffset, restoreHint, restoreGeneration + 1) —
+     * and, when the target segment is RESIDENT, its display
+     * as chapterText in the same copy, so the surface's
+     * landing seed can assert in the same composition. The
+     * outgoing place is flushed AFTER the publish (progress
+     * + session segment, exactly) from the door's capture —
+     * [OutgoingFlush], snapshotted below while the state
+     * still describes the outgoing chapter, so the saved row
+     * is the same row the old flush-first order wrote. When
+     * the target is not resident, chapterText keeps the
      * previous chapter (the keep-previous discipline) until
      * the fill lands and [followAnchorChapter] publishes it.
      * The restore hint is carried, never pre-resolved: LAST
@@ -1616,12 +1660,16 @@ class ReaderViewModel(
         )
         val chapter = stateNow.chapters.getOrNull(index) ?: return
         val chapterChanges = index != stateNow.chapterIndex
+        // Smoothness fix (§1): the persistence chain's inputs,
+        // captured from the OUTGOING state here at the door —
+        // the publish below no longer waits for the chain, and
+        // the chain, running after it, reads only this capture.
+        val outgoing = if (chapterChanges) {
+            captureOutgoingFlush(stateNow)
+        } else {
+            null
+        }
         viewModelScope.launch {
-            if (chapterChanges) {
-                flushProgressNow()
-                flushSession()
-                runCatching { container.recordHistoryStart(bookId) }
-            }
             val display = segmentDisplay[chapter.id]
             // DIAGNOSTIC (code 109): the write itself, inside
             // the launched block that performs it.
@@ -1643,6 +1691,16 @@ class ReaderViewModel(
                     _state.value.showingTranslation
                 }
             )
+            // Smoothness fix (§1): the persistence chain runs
+            // AFTER the publish, consuming only the door's
+            // capture of the outgoing state — and still ahead
+            // of tracker.begin(), so the session segment it
+            // ends is the outgoing one, as before.
+            if (chapterChanges && outgoing != null) {
+                flushProgressNow(outgoing)
+                flushSession(outgoing)
+                runCatching { container.recordHistoryStart(bookId) }
+            }
             if (chapterChanges) tracker.begin()
             if (display != null) {
                 visibleTextChapterIndex = index
@@ -3757,6 +3815,67 @@ class ReaderViewModel(
         }
     }
 
+    /**
+     * Smoothness fix (§1): everything the chapter-change
+     * persistence chain (the progress flush, the session
+     * flush, the history start) reads from the OUTGOING
+     * state, captured at the [moveAnchor] door BEFORE the
+     * publish. The chain used to run in front of the publish
+     * because its inputs were the outgoing chapter's live
+     * state; captured, it runs behind the publish and reads
+     * only this — the outgoing saved row is value-identical
+     * to the old order's. The session ledger's own
+     * accumulators (completedSessionWords, lastFlushedWords,
+     * currentChapterMaxOffset, finishedChapterIds,
+     * pendingFocusBonus, the tracker itself) are NOT
+     * captured: the publish never mutates them, and the
+     * session flush's resets must land on the live fields.
+     */
+    private data class OutgoingFlush(
+        /** The progress flush's chapter arm: the outgoing row. */
+        val chapter: Chapter?,
+        val chapterIndex: Int,
+        val positionOffset: Int,
+        val bookFraction: Float,
+        val chapterFraction: Float,
+        /** The keep-previous guard's witness, at the door. */
+        val visibleTextChapterIndex: Int,
+        /** The session flush's word source: the outgoing text. */
+        val chapterText: ChapterText?,
+        val currentChapterId: Long?,
+        /** The progress flush's PDF arm (null for chapter books). */
+        val pdfPlace: PdfPlaceSnapshot?,
+        val pdfBook: app.xreader.data.db.Book?
+    )
+
+    private fun captureOutgoingFlush(
+        stateNow: ReaderUiState
+    ): OutgoingFlush = OutgoingFlush(
+        chapter = stateNow.chapter,
+        chapterIndex = stateNow.chapterIndex,
+        positionOffset = stateNow.positionOffset,
+        bookFraction = stateNow.bookFraction,
+        chapterFraction = stateNow.chapterFraction,
+        visibleTextChapterIndex = visibleTextChapterIndex,
+        chapterText = stateNow.chapterText,
+        currentChapterId = stateNow.chapter?.id,
+        pdfPlace = capturePdfPlace(),
+        pdfBook = pdfBook
+    )
+
+    /** The PDF place, captured synchronously (onCleared's
+     * shape): the session's page, in-page fraction, page
+     * count and anchor title — null for a chapter book. */
+    private fun capturePdfPlace(): PdfPlaceSnapshot? {
+        val session = pdfSession ?: return null
+        return PdfPlaceSnapshot(
+            page = pdfPage,
+            inPageFraction = pdfInPageFraction,
+            pageCount = session.sectionCount,
+            anchorTitle = session.anchorTitleFor(pdfPage)
+        )
+    }
+
     /** The guaranteed flush: cancel any coalesced write and
      * persist the CURRENT position immediately and exactly. */
     private suspend fun flushProgressNow() {
@@ -3765,28 +3884,40 @@ class ReaderViewModel(
         saveProgressNow()
     }
 
+    /** Smoothness fix (§1): the same guaranteed flush,
+     * consuming the door's capture of the OUTGOING state —
+     * [moveAnchor]'s post-publish chain. */
+    private suspend fun flushProgressNow(outgoing: OutgoingFlush) {
+        saveJob?.cancel()
+        pdfSaveJob?.cancel()
+        saveProgressNow(outgoing)
+    }
+
     private suspend fun saveProgressNow() {
+        saveProgressNow(captureOutgoingFlush(_state.value))
+    }
+
+    private suspend fun saveProgressNow(outgoing: OutgoingFlush) {
         // v1.7 OE-1: a PDF's progress is page-shaped and
         // has its own writer; the chapter writer below
         // never runs for one.
-        if (pdfSession != null) {
-            savePdfProgressNow()
+        if (outgoing.pdfPlace != null) {
+            savePdfProgressNow(outgoing.pdfPlace, outgoing.pdfBook)
             return
         }
-        val stateNow = _state.value
-        val chapter = stateNow.chapter ?: return
+        val chapter = outgoing.chapter ?: return
         // Keep-previous guard: while a chapter load is in flight
         // the visible text (and the position describing it) still
         // belongs to the outgoing chapter — never write it against
         // the incoming chapter's row. The incoming chapter's own
         // onPosition resumes saves the moment its text lands.
-        if (visibleTextChapterIndex != stateNow.chapterIndex) {
+        if (outgoing.visibleTextChapterIndex != outgoing.chapterIndex) {
             // DIAGNOSTIC (code 109): a save suppressed by the
             // keep-previous guard.
             DiagLog.log(
                 "VM-SAVE",
-                "skipped visibleText=$visibleTextChapterIndex " +
-                    "anchor=${stateNow.chapterIndex} reason=keep-previous"
+                "skipped visibleText=${outgoing.visibleTextChapterIndex} " +
+                    "anchor=${outgoing.chapterIndex} reason=keep-previous"
             )
             return
         }
@@ -3799,9 +3930,9 @@ class ReaderViewModel(
             container.database.readingProgressDao().getForBook(bookId)
         }.getOrNull()
         val writeFraction = BookProgressClamp.clamp(
-            computed = stateNow.bookFraction,
-            newChapterIndex = stateNow.chapterIndex,
-            newCharOffset = stateNow.positionOffset,
+            computed = outgoing.bookFraction,
+            newChapterIndex = outgoing.chapterIndex,
+            newCharOffset = outgoing.positionOffset,
             storedChapterIndex = storedRow?.chapterIndex,
             storedCharOffset = storedRow?.charOffset,
             storedFraction = storedRow?.fraction
@@ -3809,17 +3940,17 @@ class ReaderViewModel(
         // DIAGNOSTIC (code 109): the place actually written.
         DiagLog.log(
             "VM-SAVE",
-            "upsert chapter=${stateNow.chapterIndex} offset=${stateNow.positionOffset} " +
-                "fraction=$writeFraction scrollFraction=${stateNow.chapterFraction}"
+            "upsert chapter=${outgoing.chapterIndex} offset=${outgoing.positionOffset} " +
+                "fraction=$writeFraction scrollFraction=${outgoing.chapterFraction}"
         )
         container.database.readingProgressDao().upsert(
             ReadingProgress(
                 bookId = bookId,
                 chapterId = chapter.id,
-                chapterIndex = stateNow.chapterIndex,
-                charOffset = stateNow.positionOffset,
+                chapterIndex = outgoing.chapterIndex,
+                charOffset = outgoing.positionOffset,
                 fraction = writeFraction,
-                scrollFraction = stateNow.chapterFraction,
+                scrollFraction = outgoing.chapterFraction,
                 updatedAt = now
             )
         )
@@ -4431,23 +4562,33 @@ class ReaderViewModel(
      * the page as the index, the pdfLocator carrying the
      * in-page fraction. */
     private suspend fun savePdfProgressNow() {
-        val session = pdfSession ?: return
-        val book = pdfBook ?: return
-        val count = session.sectionCount.coerceAtLeast(1)
+        val place = capturePdfPlace() ?: return
+        savePdfProgressNow(place, pdfBook)
+    }
+
+    /** The same write from a captured place (smoothness
+     * fix §1: [moveAnchor]'s post-publish chain carries the
+     * door's capture, never a post-publish read). */
+    private suspend fun savePdfProgressNow(
+        place: PdfPlaceSnapshot,
+        book: app.xreader.data.db.Book?
+    ) {
+        if (book == null) return
+        val count = place.pageCount.coerceAtLeast(1)
         container.database.readingProgressDao().upsert(
             ReadingProgress(
                 bookId = bookId,
                 chapterId = 0,
-                chapterIndex = pdfPage,
+                chapterIndex = place.page,
                 charOffset = 0,
-                fraction = ((pdfPage + pdfInPageFraction) / count)
+                fraction = ((place.page + place.inPageFraction) / count)
                     .coerceIn(0f, 1f),
-                scrollFraction = pdfInPageFraction,
+                scrollFraction = place.inPageFraction,
                 updatedAt = System.currentTimeMillis(),
                 locatorJson = LocatorJson.pdfLocator(
-                    pdfPage, pdfInPageFraction
+                    place.page, place.inPageFraction
                 ),
-                anchorText = session.anchorTitleFor(pdfPage)
+                anchorText = place.anchorTitle
             )
         )
         runCatching {
@@ -4501,12 +4642,21 @@ class ReaderViewModel(
     // -- Sessions ------------------------------------------------------------------
 
     private suspend fun flushSession() {
+        flushSession(captureOutgoingFlush(_state.value))
+    }
+
+    /** Smoothness fix (§1): the session flush consuming the
+     * door's capture — [moveAnchor]'s post-publish chain
+     * must price the OUTGOING chapter's text, not the text
+     * the publish just seated. The ledger's accumulators
+     * stay live (see [OutgoingFlush]). */
+    private suspend fun flushSession(outgoing: OutgoingFlush) {
         if (!tracker.isRunning) return
-        val text = _state.value.chapterText
+        val text = outgoing.chapterText
         // A chapter already marked finished contributed its full word
         // count to completedSessionWords — never count it twice.
         val currentAlreadyCounted =
-            _state.value.chapter?.id?.let { it in finishedChapterIds } ?: false
+            outgoing.currentChapterId?.let { it in finishedChapterIds } ?: false
         val currentWords = if (text != null && !currentAlreadyCounted) {
             ChapterContent.countWords(
                 text.text.substring(0, currentChapterMaxOffset.coerceAtMost(text.length))

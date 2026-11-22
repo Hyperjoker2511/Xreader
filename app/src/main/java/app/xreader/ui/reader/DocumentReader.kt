@@ -133,6 +133,33 @@ private class WallWheelState {
 }
 
 /**
+ * The landing seed's memory (smoothness fix §2): which
+ * generation the composition-time seed has landed, and
+ * whether that landing already folded the line refinement
+ * from the layout record (§3 — stage 2's fallback reads
+ * [foldedFor] to stand down). Deliberately PLAIN vars in a
+ * remembered holder, never snapshot state: the seed writes
+ * them during composition, and a snapshot write there
+ * would schedule a recomposition the landing does not
+ * need. The generation the surface is born into starts
+ * landed iff its anchor already has text — the creation
+ * seed (initialFlat) asserts that landing, and a textless
+ * birth generation lands through the park + seed when its
+ * fill arrives.
+ */
+private class LandingSeedTracker(
+    var generation: Int,
+    var landed: Boolean,
+    var folded: Boolean
+) {
+    fun isLanded(generation: Int): Boolean =
+        this.generation == generation && landed
+
+    fun foldedFor(generation: Int): Boolean =
+        this.generation == generation && folded
+}
+
+/**
  * The document surface (v1.7 Moon+ document engine, Item 1):
  * ONE LazyColumn over the WHOLE BOOK — every chapter a
  * segment, composed per segment from the ViewModel's
@@ -485,7 +512,7 @@ fun DocumentReader(
 
     // Open at the anchor segment: its saved block when it is
     // already resident (a warm re-entry), else its state item
-    // (the restore effect asserts the block landing when the
+    // (the landing seed asserts the block landing when the
     // fill lands). Stage 2 refines to the line (below).
     val anchorText = textOf(anchorChapterIndex)
     val initialFlat = remember(index, anchorChapterIndex) {
@@ -525,14 +552,25 @@ fun DocumentReader(
         )
     }
 
-    // Restore bookkeeping (Item 5): a generation is consumed
-    // exactly once — stage 1 (block granularity) records its
-    // consumption on hit OR miss; stage 2 (line granularity)
-    // refines from the layout record when it exists. Neither
-    // stage is keyed on any list size (there is no flat list)
-    // and neither fires once the user has moved (R2).
-    var consumedGeneration by remember { mutableIntStateOf(-1) }
-    var stage1Generation by remember { mutableIntStateOf(-1) }
+    // Restore bookkeeping (Item 5 + the smoothness fix): a
+    // generation is landed exactly once — by the creation
+    // seed (initialFlat) for the generation the surface is
+    // born into, by the composition-time landing seed below
+    // for every later one; the seed records its landing on
+    // hit OR miss. Stage 2 (line granularity) survives only
+    // as the record-miss fallback and keeps its own witness.
+    // Neither path is keyed on any list size (there is no
+    // flat list) and neither fires once the user has moved
+    // (R2). [seedTracker] is a PLAIN remembered holder, not
+    // snapshot state: the seed writes it during composition,
+    // and no recomposition may ride on those writes.
+    val seedTracker = remember {
+        LandingSeedTracker(
+            generation = restoreGeneration,
+            landed = anchorText != null,
+            folded = false
+        )
+    }
     var refinedGeneration by remember { mutableIntStateOf(-1) }
     var userMovedGeneration by remember { mutableIntStateOf(-1) }
     // v1.2.0 (WS2): scroll lock for image zoom — the item keys
@@ -546,70 +584,156 @@ fun DocumentReader(
     // reset it per chapter.
     var autoPaused by remember(anchorChapterIndex) { mutableStateOf(false) }
 
-    // Restore, stage 1 (block granularity): assert once per
-    // generation, when the anchor segment has text. While it
-    // has none, the generation is NOT consumed — the list is
-    // merely parked at the anchor's state item (composing it
-    // is what triggers its fill), and the only retry is the
-    // anchor gaining text, which is this effect's key.
-    LaunchedEffect(restoreGeneration, anchorText) {
-        if (consumedGeneration == restoreGeneration) return@LaunchedEffect
+    // Restore, the landing seed (smoothness fix §2): when
+    // the generation changes — or a parked generation's text
+    // arrives — the landing is asserted HERE, during the
+    // composition that first speaks for the new anchor,
+    // through requestScrollToItem: the list's next layout
+    // pass measures the new anchor AT the landing, so no
+    // frame of it is ever laid out at the previous chapter's
+    // scroll position. (The retired stage-1 effect scrolled
+    // only after that first layout committed — a full
+    // recomposition late, the new chapter briefly drawn at
+    // the stale clamped index, then snapped.) The
+    // derivation is the creation path's own (initialFlat
+    // above): FIRST → the segment's block 0, LAST → its
+    // last block, OFFSET → restoreOffset's block. §3's fold
+    // adds the line-exact scroll offset from the layout
+    // record when the record exists at this moment (FIRST
+    // never looks — its line is always 0). Landed on hit
+    // or miss, exactly as stage 1 consumed (R1); a
+    // generation the user has already dragged in is landed
+    // without asserting (R2 — reachable through the park:
+    // the generation publishes, the reader scrolls the
+    // still-textless list, then the fill arrives).
+    if (seedTracker.generation != restoreGeneration) {
+        seedTracker.generation = restoreGeneration
+        seedTracker.landed = false
+        seedTracker.folded = false
+    }
+    if (!seedTracker.landed && anchorText != null) {
         if (userMovedGeneration == restoreGeneration) {
-            consumedGeneration = restoreGeneration
-            return@LaunchedEffect
-        }
-        if (anchorText == null) {
+            seedTracker.landed = true
+        } else {
+            val targetOffset = when (restoreHint) {
+                PageHint.FIRST -> 0
+                PageHint.LAST -> anchorText.length
+                PageHint.OFFSET -> restoreOffset
+            }
+            val blockIndex = anchorText.blockIndexAt(targetOffset)
             val flat = index.flatIndexOf(
-                indexSegment(anchorChapterIndex),
-                SegmentIndex.STATE_ITEM
+                indexSegment(anchorChapterIndex), blockIndex
             )
-            if (flat >= 0 &&
-                listState.layoutInfo.visibleItemsInfo
-                    .none { it.index == flat }
-            ) {
-                // DIAGNOSTIC (code 109): programmatic scroll.
+            if (flat >= 0) {
+                var scrollOffsetPx = 0
+                if (restoreHint != PageHint.FIRST) {
+                    // §3's fold: the line refinement, from
+                    // the same record stage 2 reads, folded
+                    // into this one assertion when the record
+                    // exists. A record that exists but holds
+                    // no usable line for the block still
+                    // settles the question (stage 2's own
+                    // verdict on such a record is "no
+                    // refinement") — folded either way.
+                    val chapter = chapters.getOrNull(anchorChapterIndex)
+                    val layout = chapter?.let {
+                        layoutService.cache.get(
+                            ChapterLayoutCache.Key(
+                                chapterId = it.id,
+                                contentHash = ChapterLayoutCache
+                                    .contentHash(anchorText),
+                                fingerprint = layoutFingerprint
+                            )
+                        )
+                    }
+                    if (layout != null) {
+                        seedTracker.folded = true
+                        val measured = layout.measuredBlocks
+                            .getOrNull(blockIndex)
+                        if (measured != null &&
+                            measured.lineStarts.isNotEmpty() &&
+                            measured.lineHeightPx > 0f
+                        ) {
+                            val lineIndex = measured.lineStarts
+                                .indexOfLast { it <= targetOffset }
+                                .coerceAtLeast(0)
+                            if (lineIndex > 0) {
+                                val block = anchorText.content.blocks
+                                    .getOrNull(blockIndex)
+                                val topInsetPx = if (
+                                    block is ChapterBlock.Heading
+                                ) {
+                                    with(density) { 16.dp.toPx() }
+                                } else {
+                                    0f
+                                }
+                                scrollOffsetPx =
+                                    (-(topInsetPx +
+                                        lineIndex * measured.lineHeightPx)
+                                        ).toInt()
+                            }
+                        }
+                    }
+                }
+                // DIAGNOSTIC (code 109): the landing assertion.
                 DiagLog.log(
                     "SURF-SCROLL",
-                    "stage1-park scrollToItem flat=$flat gen=$restoreGeneration " +
-                        "anchor=$anchorChapterIndex"
+                    "stage1 seed requestScrollToItem flat=$flat " +
+                        "gen=$restoreGeneration " +
+                        "anchor=$anchorChapterIndex block=$blockIndex " +
+                        "offsetPx=$scrollOffsetPx folded=${seedTracker.folded}"
                 )
-                listState.scrollToItem(flat)
+                listState.requestScrollToItem(flat, scrollOffsetPx)
             }
+            seedTracker.landed = true
+        }
+    }
+
+    // Restore, the park (the kept post-layout consumer):
+    // while the anchor segment has NO text, the generation's
+    // landing cannot be derived — the list is merely parked
+    // at the anchor's state item (composing it is what
+    // triggers its fill). A post-layout scroll is the right
+    // tool here: the segment has no text to misplace, and
+    // the park must read the CURRENT layout to know whether
+    // the state item already stands visible. When the fill
+    // lands, the seed above asserts the real landing in the
+    // composition that first speaks the text.
+    LaunchedEffect(restoreGeneration, anchorText) {
+        if (anchorText != null) return@LaunchedEffect
+        if (userMovedGeneration == restoreGeneration) {
             return@LaunchedEffect
         }
-        val targetOffset = when (restoreHint) {
-            PageHint.FIRST -> 0
-            PageHint.LAST -> anchorText.length
-            PageHint.OFFSET -> restoreOffset
-        }
-        val blockIndex = anchorText.blockIndexAt(targetOffset)
         val flat = index.flatIndexOf(
-            indexSegment(anchorChapterIndex), blockIndex
+            indexSegment(anchorChapterIndex),
+            SegmentIndex.STATE_ITEM
         )
-        if (flat >= 0) {
+        if (flat >= 0 &&
+            listState.layoutInfo.visibleItemsInfo
+                .none { it.index == flat }
+        ) {
             // DIAGNOSTIC (code 109): programmatic scroll.
             DiagLog.log(
                 "SURF-SCROLL",
-                "stage1 scrollToItem flat=$flat gen=$restoreGeneration " +
-                    "anchor=$anchorChapterIndex block=$blockIndex"
+                "stage1-park scrollToItem flat=$flat gen=$restoreGeneration " +
+                    "anchor=$anchorChapterIndex"
             )
             listState.scrollToItem(flat)
         }
-        // Consumed whether the lookup hit or missed (R1).
-        consumedGeneration = restoreGeneration
-        stage1Generation = restoreGeneration
     }
 
-    // Restore, stage 2 (line granularity): once stage 1 has
-    // landed and the anchor segment's layout record exists
-    // under the SCROLL fingerprint, refine within the block —
-    // scroll so the exact saved line sits at the viewport
-    // top. The record comes from the shared store (the
-    // worker may have measured it ahead); on a miss THIS
-    // surface measures the anchor segment with its own
-    // visible-path measurer, off the composition path, and
-    // puts the record. The arithmetic (A3): the block item's
-    // top inset for this block (the stage-2 authority: a
+    // Restore, stage 2 (line granularity) — now the
+    // record-miss FALLBACK (smoothness fix §3): the seed
+    // above folds the refinement into the landing itself
+    // whenever the anchor segment's layout record exists at
+    // assertion time, so this effect's scroll is owed only
+    // when the record was missing then (or arrived only
+    // with the layoutVersion bump). On a miss THIS surface
+    // measures the anchor segment with its own visible-path
+    // measurer, off the composition path, and puts the
+    // record — the analogue of Moon+'s rare on-the-spot
+    // render. The arithmetic (A3): the block item's top
+    // inset for this block (the stage-2 authority: a
     // heading's rendered top padding) plus the lines above
     // the saved offset at the record's average line height —
     // exact for uniform-metric text (the common case) and
@@ -628,12 +752,22 @@ fun DocumentReader(
         )
     }
     LaunchedEffect(restoreGeneration, anchorText, layoutVersion) {
-        if (stage1Generation != restoreGeneration ||
+        if (!seedTracker.isLanded(restoreGeneration) ||
             refinedGeneration == restoreGeneration
         ) {
             return@LaunchedEffect
         }
         if (userMovedGeneration == restoreGeneration) {
+            refinedGeneration = restoreGeneration
+            return@LaunchedEffect
+        }
+        // §3: a landing the seed already folded from the
+        // record needs no second assertion, and a FIRST
+        // landing's line is always 0 — neither may pay the
+        // lookup or the measure below.
+        if (seedTracker.foldedFor(restoreGeneration) ||
+            restoreHint == PageHint.FIRST
+        ) {
             refinedGeneration = restoreGeneration
             return@LaunchedEffect
         }
@@ -2028,6 +2162,20 @@ private fun DocumentBlock(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 12.dp)
+        )
+        // D13: Moon+'s footnote box — the notes this
+        // chapter's paragraphs referenced, inlined at
+        // prepare time. Rendered whole (it is a fixed
+        // block in the chapter's text coordinate system,
+        // like an image); its own text carries no marks.
+        is ChapterBlock.FootnoteBox -> FootnoteBoxView(
+            block = block,
+            config = config,
+            palette = palette,
+            fontFamily = fontFamily,
+            assetFile = assetFile,
+            modifier = Modifier.fillMaxWidth(),
+            onZoomActiveChanged = onZoomActiveChanged
         )
         else -> {
             // The paragraph long-press menu (Highlight / Note /

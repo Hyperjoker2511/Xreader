@@ -284,24 +284,35 @@ data class EpubPrepareRecord(
     val fingerprint: String,
     val loaderVersion: Int,
     val sectionMap: Map<Int, Long> = emptyMap(),
-    val notePending: Boolean = false
+    val notePending: Boolean = false,
+    /** D13: the footnotes-in-text value this book's landed
+     * content was prepared under (its effective setting at
+     * prepare time). Landed content is keyed on it — a
+     * later flip of the setting re-prepares the book (see
+     * EpubPrepareAccess.isPrepared's three-argument form). */
+    val footnotesInText: Boolean = true
 )
 
 /** One string per book:
- * "loaderVersion|sha256hex|note(0/1)|sec:chapterId,sec:chapterId,…". */
+ * "loaderVersion|sha256hex|note(0/1)|sec:chapterId,sec:chapterId,…|footnotes(0/1)".
+ * The fifth segment is D13's; four-segment strings (every
+ * pre-D13 record) still decode, with footnotes read as on —
+ * those records are loader-version-stale anyway and
+ * re-prepare under the current version before use. */
 internal fun encodeEpubPrepareRecord(record: EpubPrepareRecord): String =
     "${record.loaderVersion}|${record.fingerprint}|" +
         (if (record.notePending) "1" else "0") + "|" +
         record.sectionMap.entries
             .sortedBy { it.key }
-            .joinToString(",") { "${it.key}:${it.value}" }
+            .joinToString(",") { "${it.key}:${it.value}" } +
+        "|" + (if (record.footnotesInText) "1" else "0")
 
 /** Strict decode — anything malformed reads as null (no
  * record: the book prepares again), never a half record. */
 internal fun decodeEpubPrepareRecord(raw: String?): EpubPrepareRecord? {
     if (raw.isNullOrBlank()) return null
     val parts = raw.split("|")
-    if (parts.size != 4) return null
+    if (parts.size != 4 && parts.size != 5) return null
     val version = parts[0].toIntOrNull() ?: return null
     if (version <= 0) return null
     val fingerprint = parts[1]
@@ -322,7 +333,16 @@ internal fun decodeEpubPrepareRecord(raw: String?): EpubPrepareRecord? {
             map[section] = chapterId
         }
     }
-    return EpubPrepareRecord(fingerprint, version, map, note)
+    val footnotes = if (parts.size == 5) {
+        when (parts[4]) {
+            "0" -> false
+            "1" -> true
+            else -> return null
+        }
+    } else {
+        true
+    }
+    return EpubPrepareRecord(fingerprint, version, map, note, footnotes)
 }
 
 // ── Store ────────────────────────────────────────────────────────

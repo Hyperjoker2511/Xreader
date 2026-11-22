@@ -158,7 +158,15 @@ fun ReaderSettingsSheet(
     pdfAutoResolvedFilter: app.xreader.data.engine.PdfPageFilter =
         app.xreader.data.engine.PdfPageFilter.NONE,
     pdfAutoScrollOn: Boolean = false,
-    onPdfAutoScrollToggle: (Boolean) -> Unit = {}
+    onPdfAutoScrollToggle: (Boolean) -> Unit = {},
+    /** D13: this book's footnotes-in-text value — present
+     * only for a prepared EPUB in this reader (the screen
+     * passes null otherwise, and the section never renders).
+     * The switch writes THIS book's override (option-scope:
+     * a change inside the reader is per-book); the global
+     * default lives in Settings → Customise. */
+    footnotesInText: Boolean? = null,
+    onFootnotesInTextChange: (Boolean) -> Unit = {}
 ) {
     // v1.0.6.2 (F8c): the sheet is a short INDEX of plainly-named
     // groups now — not one long scroll. Each group is its own
@@ -1024,6 +1032,25 @@ fun ReaderSettingsSheet(
                             onUpdate { it.copy(paragraphIndent = v) }
                         }
                     )
+                }
+                // D13 (Moon+ copy): the footnotes switch,
+                // Moon+'s own words for it. Per-book here (the
+                // option-scope rule); the global default is in
+                // Customise. A prepared EPUB only.
+                if (footnotesInText != null) {
+                    SheetSection("Footnotes") {
+                        SheetSwitch(
+                            label = "Show footnotes directly in chapter text",
+                            checked = footnotesInText,
+                            onChange = onFootnotesInTextChange
+                        )
+                        Text(
+                            "For this book only. Takes effect the " +
+                                "next time this book opens.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 SheetSection("Custom colours") {
                     // v1.5.40: which colour the wheel is picking

@@ -228,6 +228,19 @@ class EpubParser : BookParser {
     override val format: BookFormat = BookFormat.EPUB
 
     /**
+     * D13 (Moon+ copy): whether this parse inlines EPUB
+     * footnotes into their referencing paragraphs (Moon+'s
+     * "Show footnotes directly in chapter text"). Set by the
+     * prepare service from the book's effective setting (its
+     * own override over the global default) before [parse]
+     * runs. The importer's provisional parse leaves the
+     * default — on, the global default — because a prepared
+     * book always re-parses under its effective value before
+     * anything reads the content.
+     */
+    var inlineFootnotes: Boolean = true
+
+    /**
      * v1.5.5 (§4): the probe — unzip, container → OPF → spine
      * titles + cover, NOTHING converted. DRM keeps its honest
      * refusal HERE (a locked book is never filed), exactly as
@@ -685,6 +698,30 @@ class EpubParser : BookParser {
         // spine items, so this is recorded at the writer.add
         // sites exactly as chapterHrefs is.
         val spineEmission = IntArray(spineItems.size) { -1 }
+        // D13 (Moon+ copy): the footnote pre-pass — a
+        // whole-archive note index plus the set of notes that
+        // marked references actually claim, both computed
+        // BEFORE any spine item converts, so a note inlines
+        // into (and is suppressed at) any file regardless of
+        // spine order: a notes file later in the spine
+        // resolves exactly like a same-file aside. Both stay
+        // empty when the book's effective setting is off, and
+        // conversion is then exactly what it was before D13.
+        val footnoteIndex: Map<String, String> =
+            if (inlineFootnotes) {
+                buildFootnoteIndex(unzipped, entryIndex)
+            } else {
+                emptyMap()
+            }
+        val footnoteClaims: Set<String> =
+            if (footnoteIndex.isNotEmpty()) {
+                scanFootnoteClaims(
+                    unzipped, entryIndex,
+                    spineItems.map { it.second }, footnoteIndex
+                )
+            } else {
+                emptySet()
+            }
         spineItems.forEachIndexed { index, (item, relPath) ->
             val itemFile = entryFile(unzipped, entryIndex, relPath)
             if (item.mediaType.startsWith("image/")) {
@@ -721,23 +758,73 @@ class EpubParser : BookParser {
                 return@forEachIndexed
             }
             val itemDir = relPath.substringBeforeLast('/', "")
-            val converter = XhtmlConverter { src ->
-                val actual = resolveImageEntry(entryIndex, itemDir, opfDir, src)
-                if (actual == null) {
-                    // v1.5.5 (§5): NOT counted here — the
-                    // converter may still land the picture from a
-                    // fallback candidate (srcset, dual href). The
-                    // converter reports one unresolved entry per
-                    // element that ultimately failed, and THAT is
-                    // what the count below reads.
-                    null
+            // D13: this item's footnote resolver — the
+            // converter consults it only for noteref-marked
+            // anchors; a hit converts the note body through a
+            // nested resolver-less converter whose images
+            // resolve against the NOTE's home directory (the
+            // note's own context, as Moon+ resolves them
+            // through the book's image getter). Notes this
+            // item HOSTS that references claimed are
+            // suppressed here (Q3: shown once, in the box).
+            val footnoteResolver: ((String) -> List<ChapterBlock>?)? =
+                if (footnoteIndex.isNotEmpty()) {
+                    { href ->
+                        val hit = resolveFootnote(
+                            footnoteIndex, entryIndex, relPath, href
+                        )
+                        if (hit == null) {
+                            null
+                        } else {
+                            val (key, body) = hit
+                            val noteDir = key.substringBefore('#')
+                                .substringBeforeLast('/', "")
+                            val (blocks, unresolved) =
+                                convertFootnoteBody(
+                                    body, noteDir, unzipped, entryIndex,
+                                    opfDir, assetsDir, usedAssetNames
+                                )
+                            droppedImages += unresolved.count {
+                                !isRemoteRef(it)
+                            }
+                            blocks
+                        }
+                    }
                 } else {
-                    val name = ZipPaths.assetFileName(actual, usedAssetNames)
-                    File(unzipped, actual)
-                        .copyTo(File(assetsDir, name), overwrite = true)
-                    name
+                    null
                 }
-            }
+            val suppressedHere: Set<String> =
+                if (footnoteClaims.isEmpty()) {
+                    emptySet()
+                } else {
+                    footnoteClaims
+                        .filter {
+                            it.substringBefore('#') == relPath.lowercase()
+                        }
+                        .map { it.substringAfter('#') }
+                        .toSet()
+                }
+            val converter = XhtmlConverter(
+                imageResolver = { src ->
+                    val actual = resolveImageEntry(entryIndex, itemDir, opfDir, src)
+                    if (actual == null) {
+                        // v1.5.5 (§5): NOT counted here — the
+                        // converter may still land the picture from a
+                        // fallback candidate (srcset, dual href). The
+                        // converter reports one unresolved entry per
+                        // element that ultimately failed, and THAT is
+                        // what the count below reads.
+                        null
+                    } else {
+                        val name = ZipPaths.assetFileName(actual, usedAssetNames)
+                        File(unzipped, actual)
+                            .copyTo(File(assetsDir, name), overwrite = true)
+                        name
+                    }
+                },
+                footnoteResolver = footnoteResolver,
+                suppressedIds = suppressedHere
+            )
             val converted = if (itemFile != null) {
                 runCatching {
                     itemFile.inputStream().buffered().use { converter.convert(it) }
@@ -1307,6 +1394,269 @@ class EpubParser : BookParser {
                 file to path
             }
         }
+    }
+
+    // ── D13: footnotes (Moon+ copy) ─────────────────────────
+    //
+    // The note index works on RAW XHTML text, exactly as
+    // Moon+'s resolver does (its getFootnoteHtml is string
+    // surgery over the file text, cross-file included) — a
+    // parsed tree is never built for it. Keys are
+    // "<lowercased actual entry path>#<fragment id>".
+
+    private val footnoteIdAttr =
+        Regex("""id\s*=\s*"([^"]+)"|id\s*=\s*'([^']+)'""")
+    private val footnoteAnchorTag =
+        Regex("""<a\b[^>]*>""", RegexOption.IGNORE_CASE)
+    private val footnoteHrefAttr =
+        Regex("""href\s*=\s*"([^"]*)"|href\s*=\s*'([^']*)'""")
+
+    /** Every footnote body in the archive, keyed for lookup.
+     * A file contributes only its `<aside>`-housed notes
+     * (Moon+'s aside gate); a malformed aside (no closing
+     * tag) contributes nothing — Moon+'s function returns
+     * null on any failed step, and so does this index. */
+    private fun buildFootnoteIndex(
+        unzipped: File,
+        entryIndex: Map<String, String>
+    ): Map<String, String> {
+        val index = LinkedHashMap<String, String>()
+        val xhtmlPaths = entryIndex.values.filter { path ->
+            val lower = path.lowercase()
+            lower.endsWith(".xhtml") || lower.endsWith(".html") ||
+                lower.endsWith(".htm")
+        }
+        for (path in xhtmlPaths) {
+            val file = File(unzipped, path).takeIf { it.isFile }
+                ?: continue
+            val text = runCatching { file.readText() }.getOrNull()
+                ?: continue
+            for ((id, body) in extractAsideNotes(text)) {
+                index.putIfAbsent(path.lowercase() + "#" + id, body)
+            }
+        }
+        return index
+    }
+
+    /**
+     * The notes inside one file's `<aside>` elements, as
+     * (id, inner XHTML) pairs — Moon+'s evidenced boundaries:
+     * the target id must sit within 1000 chars after an
+     * `<aside` opening (Moon+'s constant); a note's body runs
+     * from the end of its element's opening tag to the next
+     * element in the same aside whose id shares this id's
+     * series prefix (the id minus its trailing digits —
+     * Moon+'s multi-note split rule), or to `</aside>`.
+     */
+    private fun extractAsideNotes(
+        text: String
+    ): List<Pair<String, String>> {
+        val notes = mutableListOf<Pair<String, String>>()
+        var searchFrom = 0
+        while (true) {
+            val asideStart = text.indexOf("<aside", searchFrom, true)
+            if (asideStart < 0) break
+            val closeStart = text.indexOf("</aside>", asideStart, true)
+            if (closeStart < 0) break
+            val ids = footnoteIdAttr.findAll(text, asideStart)
+                .takeWhile { it.range.first < closeStart }
+                .toList()
+            for (match in ids) {
+                val id = match.groupValues[1]
+                    .ifEmpty { match.groupValues[2] }
+                if (match.range.first - asideStart >= 1000) continue
+                val elementStart = text.lastIndexOf('<', match.range.first)
+                if (elementStart < asideStart) continue
+                val openTagEnd = text.indexOf('>', match.range.first)
+                if (openTagEnd < 0 || openTagEnd >= closeStart) continue
+                val prefix = id.trimEnd { it.isDigit() }.ifEmpty { id }
+                var boundary = closeStart
+                for (next in ids) {
+                    if (next.range.first <= match.range.first) continue
+                    val nextId = next.groupValues[1]
+                        .ifEmpty { next.groupValues[2] }
+                    if (nextId != id && nextId.startsWith(prefix)) {
+                        boundary = text.lastIndexOf('<', next.range.first)
+                        break
+                    }
+                }
+                if (boundary <= openTagEnd) continue
+                var body = text.substring(openTagEnd + 1, boundary).trim()
+                // The slice ends where the NEXT element (or
+                // the aside) begins, so it still carries the
+                // note element's OWN closing tag at its tail
+                // whenever the element is not the aside
+                // itself. Moon+ renders its slice as HTML,
+                // which ignores a stray closer; our converter
+                // is a strict XML walk that one stray closer
+                // would kill whole — so the element's own
+                // trailing closer (in well-formed source it
+                // is always the slice's last tag, and it
+                // carries no content) is dropped here.
+                val elementTag = text
+                    .substring(elementStart + 1)
+                    .takeWhile {
+                        !it.isWhitespace() && it != '>' && it != '/'
+                    }
+                if (elementTag.isNotEmpty()) {
+                    body = Regex(
+                        "</\\s*" + Regex.escape(elementTag) + "\\s*>\\s*$",
+                        RegexOption.IGNORE_CASE
+                    ).replace(body, "").trim()
+                }
+                notes += id to body
+            }
+            searchFrom = closeStart + "</aside>".length
+        }
+        return notes
+    }
+
+    /** The note-index keys that marked references in the
+     * spine files actually claim — the suppression set's
+     * source (Q3): only a note a reference INLINES is ever
+     * suppressed at home; an unreferenced note stays as
+     * ordinary text exactly as before D13. The scan reads
+     * raw text with Moon+'s own test: the anchor tag
+     * contains the substring `noteref`. References INSIDE
+     * an aside region never claim: a note's own conversion
+     * runs resolver-less (no recursion), so a note-to-note
+     * reference inlines nothing — claiming its target would
+     * suppress that note at home and lose it from the book. */
+    private fun scanFootnoteClaims(
+        unzipped: File,
+        entryIndex: Map<String, String>,
+        spinePaths: List<String>,
+        footnoteIndex: Map<String, String>
+    ): Set<String> {
+        val claims = mutableSetOf<String>()
+        for (relPath in spinePaths) {
+            val file = entryFile(unzipped, entryIndex, relPath)
+                ?: continue
+            val text = runCatching { file.readText() }.getOrNull()
+                ?: continue
+            val asideRegions = asideRegions(text)
+            for (tag in footnoteAnchorTag.findAll(text)) {
+                if (asideRegions.any { tag.range.first in it }) {
+                    continue
+                }
+                if (!tag.value.contains("noteref")) continue
+                val href = footnoteHrefAttr.find(tag.value)?.let {
+                    it.groupValues[1].ifEmpty { it.groupValues[2] }
+                } ?: continue
+                resolveFootnote(footnoteIndex, entryIndex, relPath, href)
+                    ?.let { (key, _) -> claims += key }
+            }
+        }
+        return claims
+    }
+
+    /** The `<aside>…</aside>` spans of one file's raw text
+     * (start of the opening tag to the end of the closing
+     * tag). A malformed aside (no closing tag) spans to the
+     * end of the file — references inside it are note-side
+     * either way. */
+    private fun asideRegions(text: String): List<IntRange> {
+        val regions = mutableListOf<IntRange>()
+        var searchFrom = 0
+        while (true) {
+            val start = text.indexOf("<aside", searchFrom, true)
+            if (start < 0) break
+            val closeStart = text.indexOf("</aside>", start, true)
+            val end = if (closeStart < 0) {
+                text.length
+            } else {
+                closeStart + "</aside>".length
+            }
+            regions += start until end
+            searchFrom = end
+        }
+        return regions
+    }
+
+    /** The note an [href] names from the file at [fromPath]:
+     * its index key and body, or null — a missing fragment,
+     * a target outside any aside, an unknown file are all
+     * simply "not a footnote" (Moon+'s resolver-miss). */
+    private fun resolveFootnote(
+        footnoteIndex: Map<String, String>,
+        entryIndex: Map<String, String>,
+        fromPath: String,
+        href: String
+    ): Pair<String, String>? {
+        val key = footnoteKeyFor(entryIndex, fromPath, href)
+            ?: return null
+        footnoteIndex[key]?.let { return key to it }
+        // A percent-encoded fragment names the same id.
+        val fragment = key.substringAfter('#')
+        val decoded = ZipPaths.percentDecode(fragment)
+        if (decoded != fragment) {
+            val altKey = key.substringBefore('#') + "#" + decoded
+            footnoteIndex[altKey]?.let { return altKey to it }
+        }
+        return null
+    }
+
+    /** "<actual path>#<fragment>" for an href resolved
+     * against its referencing file (ZipPaths semantics, the
+     * same resolution TOC hrefs get). */
+    private fun footnoteKeyFor(
+        entryIndex: Map<String, String>,
+        fromPath: String,
+        href: String
+    ): String? {
+        val hash = href.indexOf('#')
+        if (hash < 0) return null
+        val fragment = href.substring(hash + 1)
+        if (fragment.isBlank()) return null
+        val filePart = href.substring(0, hash)
+        val target = if (filePart.isBlank()) {
+            fromPath
+        } else {
+            ZipPaths.resolve(
+                fromPath.substringBeforeLast('/', ""), filePart
+            )
+        }
+        val actual = entryIndex[target.lowercase()] ?: target
+        return actual.lowercase() + "#" + fragment
+    }
+
+    /** A note body → blocks, through a nested converter with
+     * NO footnote resolver (no recursion) and an image
+     * resolver rooted at the note's home directory. A failed
+     * image drops alone (and is reported for the dropped
+     * count); it never takes the note with it. */
+    private fun convertFootnoteBody(
+        bodyXhtml: String,
+        noteDir: String,
+        unzipped: File,
+        entryIndex: Map<String, String>,
+        opfDir: String,
+        assetsDir: File,
+        usedAssetNames: MutableSet<String>
+    ): Pair<List<ChapterBlock>, List<String>> {
+        val noteConverter = XhtmlConverter(
+            imageResolver = { src ->
+                val actual = resolveImageEntry(
+                    entryIndex, noteDir, opfDir, src
+                )
+                if (actual == null) {
+                    null
+                } else {
+                    runCatching {
+                        val name = ZipPaths.assetFileName(
+                            actual, usedAssetNames
+                        )
+                        File(unzipped, actual)
+                            .copyTo(File(assetsDir, name), overwrite = true)
+                        name
+                    }.getOrNull()
+                }
+            }
+        )
+        val result = runCatching {
+            noteConverter.convert("<div>$bodyXhtml</div>")
+        }.getOrNull() ?: return emptyList<ChapterBlock>() to emptyList()
+        return result.blocks to result.unresolvedImages
     }
 
     private fun buildEntryIndex(unzipped: File): Map<String, String> {

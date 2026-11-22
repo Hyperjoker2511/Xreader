@@ -200,6 +200,12 @@ class RawTranslator(
                 }
                 is ChapterBlock.Image -> outBlocks += block
                 ChapterBlock.Rule -> outBlocks += block
+                // D13: a footnote box passes through whole —
+                // the note keeps the book's own words (the
+                // same choice TermReplacer makes), so the
+                // translated copy loses nothing the original
+                // chapter carries.
+                is ChapterBlock.FootnoteBox -> outBlocks += block
             }
         }
         val translated = ChapterContent(blocks = outBlocks)

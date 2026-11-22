@@ -515,8 +515,15 @@ class LocalDocReaderViewModel(
         runCatching { container.recordHistoryStart(bookId) }
         val record = runCatching { localPrefs.epubPrepareRecord(bookId) }
             .getOrNull()
+        // D13: the landing decision is toggle-aware — a
+        // record prepared under the other footnotes value is
+        // stale content for this open, so the flow falls
+        // through and re-prepares rather than redirecting.
         if (app.xreader.data.prepare.EpubPrepareAccess
-                .isPrepared(record, book)
+                .isPrepared(
+                    record, book,
+                    container.effectiveFootnotesInText(bookId)
+                )
         ) {
             val rows = runCatching {
                 container.database.chapterDao().forBook(bookId)
@@ -569,6 +576,12 @@ class LocalDocReaderViewModel(
                         row.copy(totalChapters = landedCount)
                     )
                 }
+            },
+            // D13: the prepare runs under the book's
+            // effective footnotes value and the record is
+            // keyed on it.
+            footnotesInText = { id ->
+                container.effectiveFootnotesInText(id)
             }
         )
         return when (

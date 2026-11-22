@@ -1967,6 +1967,24 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            // D13 (Moon+ copy): the footnotes default for
+            // every book — Moon+'s own switch words. A book
+            // can carry its own choice, made while reading
+            // it; this is the default books without one use.
+            Text("Footnotes", style = MaterialTheme.typography.bodyLarge)
+            CustomiseSwitch(
+                label = "Show footnotes directly in chapter text",
+                description = "EPUB footnotes appear in a small " +
+                    "box at the end of the paragraph that refers " +
+                    "to them. Changing this re-prepares each " +
+                    "EPUB book once, the next time it opens.",
+                checked = reader.footnotesInText,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(footnotesInText = value)
+                    }
+                }
+            )
             Text("Manga tap zones", style = MaterialTheme.typography.bodyLarge)
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),

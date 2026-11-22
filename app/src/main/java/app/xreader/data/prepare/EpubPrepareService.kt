@@ -124,7 +124,16 @@ class EpubPrepareService(
         bookId: Long, landedCount: Int
     ) -> Unit = { _, _ -> },
     private val parser: BookParser = EpubParser(),
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    // D13: the book's effective footnotes-in-text value
+    // (its own override over the global default), read at
+    // prepare time. The parse is keyed on it and the record
+    // stores it: a later flip re-prepares the book instead
+    // of serving content prepared under the other value.
+    // Defaulted (on — the global default) so existing
+    // constructions are untouched.
+    private val footnotesInText: suspend (bookId: Long) -> Boolean =
+        { true }
 ) {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -148,6 +157,11 @@ class EpubPrepareService(
         val saved = runCatching {
             readingProgressDao.getForBook(book.id)
         }.getOrNull()
+        // D13: the footnotes-in-text value this prepare runs
+        // under — the parse is keyed on it below and the
+        // record stores it (a stale-value record never
+        // short-circuits).
+        val footnotes = footnotesInText(book.id)
 
         val scratch = storage.importStagingDir("epub-prepare-${book.id}")
         try {
@@ -207,7 +221,7 @@ class EpubPrepareService(
             // record over this exact file, with landed content
             // in place, needs no conversion at all.
             if (oldRecord != null &&
-                EpubPrepareAccess.isPrepared(oldRecord, book) &&
+                EpubPrepareAccess.isPrepared(oldRecord, book, footnotes) &&
                 oldRecord.fingerprint == fingerprint &&
                 EpubPlaceMigration.isCoreShaped(saved)
             ) {
@@ -232,6 +246,9 @@ class EpubPrepareService(
             }
 
             // ── Item 1d: conversion ──────────────────────────
+            // D13: hand the parse its footnote mode before it
+            // runs — the value this prepare is keyed on.
+            (parser as? EpubParser)?.inlineFootnotes = footnotes
             val parsed = when (
                 val result = parser.parse(
                     staged, File(scratch, "work")
@@ -487,7 +504,8 @@ class EpubPrepareService(
                     fingerprint = fingerprint,
                     loaderVersion = EpubPrepareAccess.LOADER_VERSION,
                     sectionMap = sectionMap,
-                    notePending = saved != null || marks.converted > 0
+                    notePending = saved != null || marks.converted > 0,
+                    footnotesInText = footnotes
                 )
             )
             // The 42-chapters fix: the record is written

@@ -28,8 +28,12 @@ object EpubPrepareAccess {
      * dedup collapse, a case-diverged href), so every
      * prepared book re-prepares once more and gains its
      * missing tail chapters, place and marks riding the
-     * same merge map. */
-    const val LOADER_VERSION: Int = 3
+     * same merge map. Version 4 is D13 (2026-11-22): EPUB
+     * footnotes inline into their referencing paragraphs
+     * (and are suppressed at home), so converted output
+     * changes shape again — every prepared book re-prepares
+     * once more, place and marks riding the same merge map. */
+    const val LOADER_VERSION: Int = 4
 
     /**
      * A book counts as PREPARED when a record exists, its
@@ -50,6 +54,27 @@ object EpubPrepareAccess {
             ?: return true
         return record.fingerprint == bookSha
     }
+
+    /**
+     * D13: the landing-decision form of the rule — a record
+     * is current for OPENING only when the book's landed
+     * content was also prepared under the caller's
+     * [footnotesInText] value (the book's effective setting:
+     * its own override over the global default). A mismatch
+     * means the content's footnote shape is stale, so the
+     * open flow must re-prepare rather than redirect to it.
+     * Display-only consumers (the book page's Contents
+     * choice, the reader's mark filter) keep the plain
+     * two-argument rule above — this is the same one rule,
+     * with the prepare-time key the landing decisions add.
+     */
+    fun isPrepared(
+        record: EpubPrepareRecord?,
+        book: Book,
+        footnotesInText: Boolean
+    ): Boolean =
+        record != null && isPrepared(record, book) &&
+            record.footnotesInText == footnotesInText
 
     /**
      * Item 2e: the Contents door for a prepared book. The

@@ -45,6 +45,14 @@ class ChapterText(val content: ChapterContent) {
                 }
                 is ChapterBlock.Image -> built += BlockRange(index, start, start, null)
                 is ChapterBlock.Rule -> built += BlockRange(index, start, start, null)
+                // D13: a footnote box's text IS chapter text
+                // (Moon+'s inlined boxes are chapter text) —
+                // it occupies its flattened range so search,
+                // TTS and place offsets include the notes.
+                is ChapterBlock.FootnoteBox -> {
+                    builder.append(block.flattenedText())
+                    built += BlockRange(index, start, builder.length, null)
+                }
             }
         }
         text = builder.toString()

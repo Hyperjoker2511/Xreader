@@ -54,6 +54,62 @@ sealed interface ChapterBlock {
     @Serializable
     @SerialName("rule")
     data object Rule : ChapterBlock
+
+    /**
+     * D13 (Moon+ copy): a footnote box — the notes one
+     * paragraph referred to, inlined at the END of that
+     * paragraph (Moon+'s FB2-proven placement), rendered as
+     * one tinted, dotted-bordered box at 0.8× the text size.
+     * Built only by the EPUB converter when a marked
+     * (`noteref`) reference resolves into the book's note
+     * index; the reference's own text stays in the paragraph
+     * above, and an inlined note is suppressed at its home
+     * aside so it reads exactly once. Entries ride in
+     * reference order; an entry's [Entry.blocks] are the
+     * note body's own converted blocks (Moon+ keeps the
+     * note HTML; our sanitised block form is the converter
+     * contract for all content, notes included).
+     */
+    @Serializable
+    @SerialName("footnoteBox")
+    data class FootnoteBox(
+        val entries: List<Entry>
+    ) : ChapterBlock {
+
+        @Serializable
+        data class Entry(
+            /** The reference's visible text (Moon+'s
+             * `linkName`) — the box's bold header for this
+             * note. */
+            val linkName: String,
+            /** The note body's converted blocks, in order. */
+            val blocks: List<ChapterBlock>
+        )
+
+        /**
+         * The box as plain text — its contribution to the
+         * chapter's flattened text (ChapterText), word
+         * counts, search and TTS: each entry is its
+         * [Entry.linkName] header followed by its blocks'
+         * text, blocks and entries joined by blank lines.
+         * The ONE layout every consumer shares, so char
+         * offsets agree everywhere.
+         */
+        fun flattenedText(): String = entries.joinToString("\n\n") { entry ->
+            val body = entry.blocks.mapNotNull { block ->
+                when (block) {
+                    is Heading -> block.text.takeIf { it.isNotEmpty() }
+                    is Paragraph -> block.text.takeIf { it.isNotEmpty() }
+                    else -> null
+                }
+            }.joinToString("\n\n")
+            when {
+                entry.linkName.isBlank() -> body
+                body.isEmpty() -> entry.linkName
+                else -> entry.linkName + " " + body
+            }
+        }
+    }
 }
 
 @Serializable
@@ -100,12 +156,15 @@ data class ChapterContent(
     /** True for a manga chapter: content is an ordered page
      * list, not prose blocks. */
     val isImageChapter: Boolean get() = pages?.isEmpty == false
-    /** Words across heading + paragraph text (image books count 0). */
+    /** Words across heading + paragraph text (image books count 0).
+     * D13: a footnote box's text is chapter text (Moon+ treats
+     * its inlined boxes the same way), so it counts too. */
     val wordCount: Int
         get() = blocks.sumOf { block ->
             when (block) {
                 is ChapterBlock.Heading -> countWords(block.text)
                 is ChapterBlock.Paragraph -> countWords(block.text)
+                is ChapterBlock.FootnoteBox -> countWords(block.flattenedText())
                 else -> 0
             }
         }
@@ -114,11 +173,16 @@ data class ChapterContent(
     val isImageBook: Boolean
         get() = blocks.isNotEmpty() && blocks.all { it is ChapterBlock.Image }
 
-    /** All prose as plain text, blocks separated by blank lines. */
+    /** All prose as plain text, blocks separated by blank lines.
+     * D13: footnote boxes contribute their flattened text —
+     * the notes are searchable and read aloud in flow, as in
+     * Moon+ (its boxes are chapter text). */
     fun plainText(): String = blocks.mapNotNull { block ->
         when (block) {
             is ChapterBlock.Heading -> block.text
             is ChapterBlock.Paragraph -> block.text
+            is ChapterBlock.FootnoteBox ->
+                block.flattenedText().takeIf { it.isNotEmpty() }
             else -> null
         }
     }.joinToString("\n\n")

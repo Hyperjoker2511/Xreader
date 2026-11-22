@@ -25,7 +25,31 @@ import org.xmlpull.v1.XmlPullParserFactory
  * the retry path maps common named entities to numeric references.
  */
 class XhtmlConverter(
-    private val imageResolver: (src: String) -> String? = { null }
+    private val imageResolver: (src: String) -> String? = { null },
+    /**
+     * D13 (Moon+ copy): resolves a footnote REFERENCE to the
+     * note's converted blocks, or null when the reference is
+     * not a footnote. Consulted only for anchors whose own
+     * markup carries the `noteref` mark (Moon+'s substring
+     * test — `epub:type="noteref"`, `role="doc-noteref"`, a
+     * class carrying the word) and whose href names a
+     * fragment. The caller (the EPUB parser) converts the
+     * note body through a nested converter WITHOUT a
+     * resolver, so a note's own references are never chased
+     * (no recursion — Moon+ doesn't either). Null (the
+     * default) disables footnote handling entirely: every
+     * other converter consumer converts exactly as before.
+     */
+    private val footnoteResolver: ((href: String) -> List<ChapterBlock>?)? = null,
+    /**
+     * D13 (owner ruling Q3 — show once): element ids in THIS
+     * document whose subtrees are suppressed at home — notes
+     * that were inlined into their referencing paragraphs
+     * elsewhere in the book must not also render where they
+     * live. Only ids the parser's note index resolved AND a
+     * marked reference claimed are ever passed here.
+     */
+    private val suppressedIds: Set<String> = emptySet()
 ) {
 
     data class Result(
@@ -112,6 +136,26 @@ class XhtmlConverter(
         var italicDepth = 0
         var preDepth = 0
 
+        // D13: depth inside a suppressed note element (see
+        // suppressedIds) — the subtree is walked for balance
+        // only; nothing inside it converts.
+        var suppressDepth = 0
+
+        // D13: the notes collected for the paragraph under
+        // construction, in reference order — emitted as ONE
+        // FootnoteBox right after that paragraph (Moon+'s
+        // paragraph-end placement).
+        val pendingNotes = mutableListOf<ChapterBlock.FootnoteBox.Entry>()
+
+        // D13: the open anchor's capture — its href, whether
+        // its markup carries the noteref mark, and its
+        // visible text (the note's linkName) as it flows
+        // through appendSpanText.
+        var anchorOpen = false
+        var anchorHref: String? = null
+        var anchorMarked = false
+        val anchorText = StringBuilder()
+
         // Current paragraph under construction.
         val spans = mutableListOf<TextSpan>()
         var paragraphId: String? = null
@@ -145,12 +189,28 @@ class XhtmlConverter(
                     spans.toList(), paragraphId ?: pendingAnchorId
                 )
                 pendingAnchorId = null
+                // D13: the paragraph's footnote box follows
+                // it immediately — ONE box holding every note
+                // the paragraph referred to, in reference
+                // order (Moon+'s placement, §1.1 of the spec).
+                if (pendingNotes.isNotEmpty()) {
+                    blocks += ChapterBlock.FootnoteBox(pendingNotes.toList())
+                }
             }
+            // Notes collected against a paragraph that never
+            // materialised (its only content was the
+            // reference, trimmed away above) have no
+            // paragraph to hang on — they are dropped with
+            // it, never re-homed onto a later paragraph.
+            pendingNotes.clear()
             spans.clear()
             paragraphId = null
         }
 
         fun appendSpanText(text: String) {
+            // D13: the open anchor's visible text is its
+            // note's linkName — capture it as it flows.
+            if (anchorOpen) anchorText.append(text)
             val bold = boldDepth > 0
             val italic = italicDepth > 0
             val last = spans.lastOrNull()
@@ -193,7 +253,18 @@ class XhtmlConverter(
                 XmlPullParser.START_TAG -> {
                     val name = parser.name.lowercase()
                     if (name in SKIP_TAGS) skipDepth++
-                    if (skipDepth == 0) {
+                    // D13 (Q3): suppression bookkeeping — an
+                    // element carrying a suppressed id opens a
+                    // muted subtree; elements inside it only
+                    // count toward its depth.
+                    if (suppressDepth > 0) {
+                        suppressDepth++
+                    } else if (suppressedIds.isNotEmpty() &&
+                        parser.getAttributeValue(null, "id") in suppressedIds
+                    ) {
+                        suppressDepth = 1
+                    }
+                    if (skipDepth == 0 && suppressDepth == 0) {
                         // v1.5.5 (§5): a CSS background plate —
                         // a div/figure whose inline style paints
                         // the illustration as background-image.
@@ -308,6 +379,40 @@ class XhtmlConverter(
                                 ) {
                                     pendingAnchorId = anchorId
                                 }
+                                // D13: open the footnote
+                                // reference capture — the href,
+                                // the noteref mark (Moon+'s
+                                // substring test over the whole
+                                // tag, run here over attribute
+                                // names and values: the mark
+                                // lives in epub:type, role or
+                                // class), and the visible text
+                                // via appendSpanText. The
+                                // capture opens even inside a
+                                // heading — its note then rides
+                                // the next paragraph's box with
+                                // an empty linkName, but it is
+                                // never lost: the parser's
+                                // claim scan reads the same
+                                // tags and would suppress the
+                                // note at home.
+                                if (footnoteResolver != null && !anchorOpen) {
+                                    val href = parser
+                                        .getAttributeValue(null, "href")
+                                    if (href != null) {
+                                        anchorOpen = true
+                                        anchorHref = href
+                                        anchorText.setLength(0)
+                                        anchorMarked =
+                                            (0 until parser.attributeCount)
+                                                .any { i ->
+                                                    parser.getAttributeName(i)
+                                                        ?.contains("noteref") == true ||
+                                                        parser.getAttributeValue(i)
+                                                            ?.contains("noteref") == true
+                                                }
+                                    }
+                                }
                             }
                             in BLOCK_TAGS -> {
                                 flushParagraph()
@@ -321,7 +426,7 @@ class XhtmlConverter(
                 XmlPullParser.TEXT -> {
                     val text = parser.text ?: ""
                     when {
-                        skipDepth > 0 -> Unit
+                        skipDepth > 0 || suppressDepth > 0 -> Unit
                         inTitle -> titleTag = ((titleTag ?: "") + text).trim()
                         headingCapture != null -> headingCapture.append(text)
                         else -> appendText(text)
@@ -330,9 +435,49 @@ class XhtmlConverter(
                 XmlPullParser.END_TAG -> {
                     val name = parser.name.lowercase()
                     if (name in SKIP_TAGS && skipDepth > 0) skipDepth--
-                    if (skipDepth == 0) {
+                    // D13 (Q3): inside a suppressed subtree an
+                    // end tag only unwinds the depth — nothing
+                    // in it converts, not even a paragraph
+                    // flush.
+                    if (suppressDepth > 0) {
+                        suppressDepth--
+                    } else if (skipDepth == 0) {
                         when (name) {
                             "title" -> inTitle = false
+                            "a" -> {
+                                // D13: close the reference
+                                // capture. A marked reference
+                                // the resolver confirms becomes
+                                // a pending note on the current
+                                // paragraph; anything else (an
+                                // unmarked link, a resolver
+                                // miss) leaves the text exactly
+                                // as it always was — plain.
+                                if (anchorOpen) {
+                                    anchorOpen = false
+                                    val href = anchorHref
+                                    anchorHref = null
+                                    val resolver = footnoteResolver
+                                    if (anchorMarked && href != null &&
+                                        resolver != null
+                                    ) {
+                                        val noteBlocks = runCatching {
+                                            resolver(href)
+                                        }.getOrNull()
+                                        if (noteBlocks != null) {
+                                            pendingNotes +=
+                                                ChapterBlock.FootnoteBox.Entry(
+                                                    linkName = anchorText
+                                                        .toString()
+                                                        .replace(WHITESPACE, " ")
+                                                        .trim(),
+                                                    blocks = noteBlocks
+                                                )
+                                        }
+                                    }
+                                    anchorMarked = false
+                                }
+                            }
                             "b", "strong" -> if (boldDepth > 0) boldDepth--
                             "i", "em" -> if (italicDepth > 0) italicDepth--
                             "pre" -> {

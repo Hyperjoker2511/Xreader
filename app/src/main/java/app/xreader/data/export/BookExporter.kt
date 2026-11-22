@@ -85,6 +85,19 @@ class BookExporter(
             if (content.blocks.isNotEmpty()) anyReadable = true
             for (block in content.blocks) {
                 if (block is ChapterBlock.Image) assetNames += block.fileName
+                if (block is ChapterBlock.FootnoteBox) {
+                    // D13: images inside note boxes are export
+                    // assets too — without this descent the
+                    // exported XHTML would reference files the
+                    // asset pass never wrote into the zip.
+                    for (entry in block.entries) {
+                        for (noteBlock in entry.blocks) {
+                            if (noteBlock is ChapterBlock.Image) {
+                                assetNames += noteBlock.fileName
+                            }
+                        }
+                    }
+                }
             }
             content.mediaOverlay?.let { overlay ->
                 assetNames += overlay.audioFileName
@@ -212,26 +225,13 @@ class BookExporter(
         val body = StringBuilder()
         var headingWritten = false
         for (block in content.blocks) {
-            when (block) {
-                is ChapterBlock.Heading -> {
-                    body.append("<h").append(block.level.coerceIn(1, 6))
-                    block.id?.let { body.append(" id=\"").append(escapeAttr(it)).append('"') }
-                    body.append('>').append(escapeXml(block.text))
-                        .append("</h").append(block.level.coerceIn(1, 6)).append('>')
-                    if (block.level == 1) headingWritten = true
-                }
-                is ChapterBlock.Paragraph -> {
-                    body.append("<p")
-                    block.id?.let { body.append(" id=\"").append(escapeAttr(it)).append('"') }
-                    body.append('>')
-                    for (span in block.spans) body.append(spanXhtml(span))
-                    body.append("</p>")
-                }
-                is ChapterBlock.Image ->
-                    body.append("<p><img src=\"").append(escapeAttr(hrefOf(block.fileName)))
-                        .append("\" alt=\"").append(escapeAttr(block.alt)).append("\"/></p>")
-                is ChapterBlock.Rule -> body.append("<hr/>")
+            // Only a CHAPTER-level h1 counts for the title
+            // fallback below — a heading inside a footnote
+            // box is the note's own, not the chapter's.
+            if (block is ChapterBlock.Heading && block.level == 1) {
+                headingWritten = true
             }
+            body.append(blockXhtml(block, hrefOf))
         }
         if (!headingWritten) {
             body.insert(0, "<h1>${escapeXml(title)}</h1>")
@@ -239,6 +239,81 @@ class BookExporter(
         return """<?xml version="1.0" encoding="utf-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>${escapeXml(title)}</title></head>
 <body>$body</body></html>"""
+    }
+
+    /** One block as XHTML — the exporter's per-block idiom,
+     * shared by chapter bodies and (D13) footnote-box entries,
+     * whose blocks render exactly as chapter blocks do. */
+    private fun blockXhtml(
+        block: ChapterBlock,
+        hrefOf: (String) -> String
+    ): String {
+        val sb = StringBuilder()
+        when (block) {
+            is ChapterBlock.Heading -> {
+                sb.append("<h").append(block.level.coerceIn(1, 6))
+                block.id?.let { sb.append(" id=\"").append(escapeAttr(it)).append('"') }
+                sb.append('>').append(escapeXml(block.text))
+                    .append("</h").append(block.level.coerceIn(1, 6)).append('>')
+            }
+            is ChapterBlock.Paragraph -> {
+                sb.append("<p")
+                block.id?.let { sb.append(" id=\"").append(escapeAttr(it)).append('"') }
+                sb.append('>')
+                for (span in block.spans) sb.append(spanXhtml(span))
+                sb.append("</p>")
+            }
+            is ChapterBlock.Image ->
+                sb.append("<p><img src=\"").append(escapeAttr(hrefOf(block.fileName)))
+                    .append("\" alt=\"").append(escapeAttr(block.alt)).append("\"/></p>")
+            is ChapterBlock.Rule -> sb.append("<hr/>")
+            is ChapterBlock.FootnoteBox -> {
+                sb.append("<aside class=\"footnote-box\">")
+                for (entry in block.entries) {
+                    sb.append(footnoteEntryXhtml(entry, hrefOf))
+                }
+                sb.append("</aside>")
+            }
+        }
+        return sb.toString()
+    }
+
+    /** One footnote-box entry as XHTML (D13): the bold
+     * linkName header leads — prepended to the note's first
+     * paragraph with a space when the note opens with one,
+     * its own line when it doesn't (or is empty), the header
+     * alone for an empty note — the reader's (and Moon+'s)
+     * shape. The note's blocks render through [blockXhtml],
+     * same as chapter blocks. */
+    private fun footnoteEntryXhtml(
+        entry: ChapterBlock.FootnoteBox.Entry,
+        hrefOf: (String) -> String
+    ): String {
+        val sb = StringBuilder()
+        var headerPending = entry.linkName.isNotBlank()
+        if (headerPending &&
+            entry.blocks.firstOrNull() !is ChapterBlock.Paragraph
+        ) {
+            sb.append("<p><strong>").append(escapeXml(entry.linkName))
+                .append("</strong></p>")
+            headerPending = false
+        }
+        for (noteBlock in entry.blocks) {
+            if (headerPending && noteBlock is ChapterBlock.Paragraph) {
+                sb.append("<p")
+                noteBlock.id?.let {
+                    sb.append(" id=\"").append(escapeAttr(it)).append('"')
+                }
+                sb.append("><strong>").append(escapeXml(entry.linkName))
+                    .append("</strong> ")
+                for (span in noteBlock.spans) sb.append(spanXhtml(span))
+                sb.append("</p>")
+                headerPending = false
+            } else {
+                sb.append(blockXhtml(noteBlock, hrefOf))
+            }
+        }
+        return sb.toString()
     }
 
     private fun spanXhtml(span: TextSpan): String {
