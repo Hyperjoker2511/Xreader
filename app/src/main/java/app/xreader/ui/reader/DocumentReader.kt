@@ -1407,9 +1407,7 @@ fun DocumentReader(
                             layout.totalItemsCount > 0 &&
                             lastVisible.index ==
                                 layout.totalItemsCount - 1 &&
-                            layout.viewportEndOffset -
-                                (lastVisible.offset + lastVisible.size) <=
-                                wallPinPx
+                            !listState.canScrollForward
                         // Moon+'s `noScrollDist` (REA §(b),
                         // MR-2 fix round 1): the SIGNED
                         // current overscroll — while a pin
