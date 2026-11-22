@@ -219,9 +219,12 @@ class V132SearchRepoTest {
     // ── Typography (items 86/87) ──────────────────────────────
 
     @Test
-    fun `fresh reader config defaults to literata and compact spacing`() {
+    fun `fresh reader config defaults to noto serif and compact spacing`() {
         val config = ReaderConfig()
-        assertEquals(ReaderFontChoice.LITERATA, config.fontChoice)
+        // Default font is NOTO_SERIF (2026-11-22 typography
+        // ruling — Moon+ "same to same"; owner-authorised pin
+        // change. Literata remains on the shelf below.)
+        assertEquals(ReaderFontChoice.NOTO_SERIF, config.fontChoice)
         assertEquals(
             ParagraphSpacing.COMPACT,
             ParagraphSpacing.of(config.paragraphSpacingDp)
