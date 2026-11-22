@@ -231,6 +231,15 @@ fun DocumentReader(
      * ahead record — the refinement effect's re-trigger. */
     layoutVersion: Int,
     onDocumentPosition: (chapterIndex: Int, charOffset: Int, chapterFraction: Float) -> Unit,
+    /** Moon+ full copy: a boundary CROSSING out of the anchor
+     * segment — observed by the reporter from the settled
+     * viewport and verified against the live layout before it
+     * fires (see the report handler below). A door-equivalent
+     * anchor move to the named segment: the joint-stream
+     * analogue of Moon+'s pageDownToNextChapter event.
+     * Position reports proper ride [onDocumentPosition] and
+     * can never name another chapter. */
+    onChapterCrossed: (chapterIndex: Int) -> Unit,
     /** The paragraph long-press menu's actions,
      * CHAPTER-QUALIFIED — the callback carries the
      * paragraph's own chapter index; the ViewModel resolves
@@ -246,7 +255,7 @@ fun DocumentReader(
     /** B1: a state item entered the composed range. */
     onSegmentVisible: (chapterId: Long) -> Unit,
     /** B1: the first visible item belongs to a textless
-     * segment no boundary posture covers. */
+     * segment — a display state, never a position. */
     onSegmentApproached: (chapterId: Long) -> Unit,
     /** Item 4: the current segment's last block became the
      * last visible item (CHAPTER_BY_CHAPTER) — the boundary
@@ -336,10 +345,9 @@ fun DocumentReader(
     //   local index is anchorChapterIndex − rangeStart (0);
     // - the reporter: locate() yields a local segment,
     //   translated ONCE into chapters-space (+ rangeStart)
-    //   before ANY use (the position report, the STATE_ITEM
-    //   boundary math, StreamReadingPosition.resolve — the
-    //   ViewModel never sees a local index); the end-of-book
-    //   branch's last segment is rangeEnd;
+    //   before ANY use (the position report and the crossing
+    //   check — the ViewModel never sees a local index); the
+    //   end-of-book branch's last segment is rangeEnd;
     // - Item 4's pinned block: the boundary prefetch (a)
     //   fires as today — it is one of the fill triggers
     //   that prepare the next chapter; the finished report
@@ -428,21 +436,19 @@ fun DocumentReader(
         onWallSwapPrevious
     )
 
-    // OE-2 hotfix (code 106): the reporter's restore guard
-    // (below) must judge against the CURRENT restore
-    // generation and anchor, not the values captured when
-    // its effect last restarted. In wall mode the effect
-    // restarts on every anchor change (the wall index is
-    // remembered on the anchor), so its captures were
-    // always fresh; on the whole-book list the restart
-    // rides on segment-map republishes, whose timing
-    // against a deliberate jump is not guaranteed. These
-    // holders make the guard's reads live in every mode —
-    // the same updated-state pattern as the swap doors
-    // above.
-    val restoreGenerationNow by rememberUpdatedState(
-        restoreGeneration
-    )
+    // Moon+ full copy: the report handler (below) reads the
+    // CURRENT anchor through this holder — never the value
+    // captured when its effect last restarted — to tell a
+    // within-anchor position from a crossing candidate. In
+    // wall mode the effect restarts on every anchor change
+    // (the wall index is remembered on the anchor), so its
+    // captures were always fresh; on the whole-book list the
+    // restart rides on segment-map republishes, whose timing
+    // against a deliberate jump is not guaranteed. The
+    // code-106 restore guard that also read a generation
+    // holder here is DELETED with the inference layer it
+    // fenced (see the report handler): with no report able
+    // to rename the chapter, there is nothing to guard.
     val anchorChapterIndexNow by rememberUpdatedState(
         anchorChapterIndex
     )
@@ -687,7 +693,171 @@ fun DocumentReader(
 
     // Position reporting from the first visible item, plus
     // Item 4's last-visible end-detection (CHAPTER_BY_CHAPTER).
+    //
+    // Moon+ full copy — the reporter's contract. The
+    // snapshotFlow below OBSERVES the settled viewport and
+    // computes the position inside whichever segment is
+    // first-visible; observation is all it does. What a
+    // report may DO is decided here, and it is Moon+'s
+    // shape: a report naming the CURRENT anchor is the
+    // one-way derivation (anchor, scroll) → within-chapter
+    // offset — it feeds the footer, progress and place
+    // saving, and nothing else. A report naming ANOTHER
+    // segment is a crossing CANDIDATE, never a position: it
+    // fires the crossing door only if the viewport, read
+    // LIVE at delivery time, really stands in or past that
+    // segment. Otherwise the report is stale — a pre-jump
+    // reading report, or the park on a neighbour's state
+    // item — and it is dropped: nothing truthful is lost,
+    // because the next settled report carries the anchor's
+    // own place. This replaces the code-106 generation
+    // guard, which fenced the same inference path only
+    // while a restore was unconsumed and stood down by
+    // design once the jump landed; here there is no
+    // inference path left to fence — a report can never
+    // rename the chapter, in any mode, at any time.
     LaunchedEffect(index, pinned, wallActive) {
+        // True when the viewport, read LIVE at delivery
+        // time, really stands in or past [target] relative
+        // to [anchor]: forward (target > anchor) requires
+        // the first visible item's segment to be at or past
+        // the target; backward, at or before it. A genuine
+        // crossing passes — the stream really moved into the
+        // neighbouring segment. A stale report fails — after
+        // a deliberate jump the live first segment IS the
+        // just-landed anchor, contradicting the report's old
+        // segment. A deep fling converges through sequential
+        // one-step crossings from subsequent settled
+        // reports, never through one report's say-so.
+        val crossingConfirmed: (Int, Int) -> Boolean =
+            { target, anchor ->
+                val liveFirst = listState.layoutInfo
+                    .visibleItemsInfo.firstOrNull()
+                when {
+                    liveFirst == null -> false
+                    liveFirst.index >= index.itemCount -> {
+                        val lastSegment = if (wallActive) {
+                            rangeEnd
+                        } else {
+                            index.segmentCount - 1
+                        }
+                        if (target > anchor) {
+                            lastSegment >= target
+                        } else {
+                            lastSegment <= target
+                        }
+                    }
+                    else -> {
+                        val raw = index.locate(liveFirst.index)
+                        val segmentNow = if (wallActive) {
+                            raw.segment + rangeStart
+                        } else {
+                            raw.segment
+                        }
+                        if (target > anchor) {
+                            segmentNow >= target
+                        } else {
+                            segmentNow <= target
+                        }
+                    }
+                }
+            }
+        // Delivers a position that names the CURRENT anchor
+        // (or the segment a confirmed crossing has just made
+        // the anchor): the one-way derivation into the
+        // ViewModel, plus the two last-visible side doors
+        // that have always ridden on it — Item 4's
+        // end-detection (CHAPTER_BY_CHAPTER) and the wall
+        // mode ⅓ prefetch trigger. The trigger reads the
+        // LIVE anchor holder, as the handler does.
+        val deliverPosition: (DocumentReport.Position) -> Unit =
+            { position ->
+                onDocumentPosition(
+                    position.chapterIndex, position.offset,
+                    position.fraction
+                )
+                // Item 4 end-detection —
+                // CHAPTER_BY_CHAPTER only, and NO
+                // fraction threshold anywhere: (a) the
+                // current segment's last BLOCK becoming
+                // the last visible item requests the
+                // next segment's fill; (b) the first
+                // item BEYOND the current segment
+                // becoming the last visible item is the
+                // end report (the chapter counts as
+                // finished). Seam patch: in wall mode
+                // (a) still fires — it is the prefetch
+                // backstop — and (b) NEVER fires: the
+                // forward swap is the only
+                // finished-marking door there (A1).
+                if (pinned) {
+                    val rawLastLoc = if (
+                        position.lastVisibleIndex <
+                        index.itemCount
+                    ) {
+                        index.locate(position.lastVisibleIndex)
+                    } else {
+                        null
+                    }
+                    val lastLoc = if (
+                        wallActive && rawLastLoc != null
+                    ) {
+                        rawLastLoc.copy(
+                            segment = rawLastLoc.segment +
+                                rangeStart
+                        )
+                    } else {
+                        rawLastLoc
+                    }
+                    val currentText = textOf(position.chapterIndex)
+                    val lastBlockIndex =
+                        (currentText?.content?.blocks?.size ?: 0) - 1
+                    if (lastLoc != null &&
+                        lastLoc.segment == position.chapterIndex &&
+                        lastLoc.block >= 0 &&
+                        lastBlockIndex >= 0 &&
+                        lastLoc.block >= lastBlockIndex
+                    ) {
+                        onBoundaryEndVisible()
+                    }
+                    if (!wallActive) {
+                        val nextStart = index
+                            .segmentStart(
+                                indexSegment(
+                                    position.chapterIndex + 1
+                                )
+                            )
+                        if (nextStart >= 0 &&
+                            position.lastVisibleIndex >= nextStart
+                        ) {
+                            onChapterEndReached()
+                        }
+                    }
+                }
+                // Seam patch (A5): in wall mode, once
+                // the reader is a third into the
+                // anchor chapter, the NEXT chapter's
+                // fill is requested through the one
+                // fill door — Moon+'s ⅓ pre-render
+                // trigger — so the wheel swap lands
+                // on held text instead of the LOADING
+                // state item. Once per anchor; the
+                // boundary trigger above stays as the
+                // backstop.
+                if (wallActive &&
+                    position.chapterIndex ==
+                    anchorChapterIndexNow &&
+                    position.fraction >= 1f / 3f &&
+                    wallThirdFillAnchor !=
+                    anchorChapterIndexNow
+                ) {
+                    wallThirdFillAnchor =
+                        anchorChapterIndexNow
+                    chapters.getOrNull(
+                        anchorChapterIndexNow + 1
+                    )?.let { onSegmentVisible(it.id) }
+                }
+            }
         snapshotFlow {
             val info = listState.layoutInfo
             val first = info.visibleItemsInfo.firstOrNull()
@@ -718,291 +888,120 @@ fun DocumentReader(
                 ?: return@snapshotFlow null
             // Wall mode: translate the local segment into
             // chapters-space ONCE (+ rangeStart) — every use
-            // below (the position, the STATE_ITEM boundary
-            // math, StreamReadingPosition.resolve) reads
-            // chapters-space.
+            // below (the position report, the crossing
+            // check) reads chapters-space.
             val loc = if (wallActive) {
                 rawLoc.copy(segment = rawLoc.segment + rangeStart)
             } else {
                 rawLoc
             }
-            val baseReport = when (loc.block) {
+            val baseReport: DocumentReport? = when (loc.block) {
                 SegmentIndex.STATE_ITEM -> {
                     // B1's acceptance contract: a textless
                     // first-visible segment is NEVER named as
-                    // a position. Boundary posture (A3): the
-                    // state item is LOADING or FAILED and the
-                    // previous segment is resident → the
-                    // previous segment at its end. Otherwise
-                    // the approach door owns the report.
-                    val segState = stateOf(loc.segment)
-                    val prevText = if (loc.segment > 0) {
-                        textOf(loc.segment - 1)
-                    } else {
-                        null
-                    }
-                    if ((segState == SegmentState.LOADING ||
-                            segState == SegmentState.FAILED) &&
-                        prevText != null
-                    ) {
-                        DocumentReport.Position(
-                            loc.segment - 1, prevText.length, 1f,
-                            last.index
-                        )
-                    } else {
-                        chapters.getOrNull(loc.segment)?.let {
-                            DocumentReport.Approach(it.id)
-                        }
+                    // a position. Moon+ full copy: the boundary
+                    // posture that used to name the PREVIOUS
+                    // segment at its end here is DELETED with
+                    // the rest of the inference layer — a state
+                    // item is a DISPLAY state (the park while a
+                    // fill is in flight), never a position
+                    // source. The approach door owns the
+                    // report: it requests the segment's fill
+                    // and writes nothing else.
+                    chapters.getOrNull(loc.segment)?.let {
+                        DocumentReport.Approach(it.id)
                     }
                 }
                 SegmentIndex.HEADER -> DocumentReport.Position(
                     loc.segment, 0, 0f, last.index
                 )
                 else -> {
-                    // F7: the named segment is the one whose
-                    // TEXT is on screen — a known-empty segment
-                    // (imported front matter) never names the
-                    // position by itself. resolve() and its
-                    // signature are the shipped, test-pinned
-                    // ones; the counts are the segments' block
-                    // counts (not-yet-parsed counts as live).
-                    val blockCounts = chapters.indices.associate {
-                        it to (textOf(it)?.content?.blocks?.size ?: -1)
-                    }
-                    val resolved = app.xreader.domain.reader
-                        .StreamReadingPosition.resolve(loc.segment, blockCounts)
-                    if (resolved != loc.segment) {
-                        DocumentReport.Position(resolved, 0, 0f, last.index)
+                    // The named segment is the one whose TEXT
+                    // is on screen, and the position is
+                    // computed inside it alone. The reporter
+                    // no longer renames the segment (the F7
+                    // resolve() call is gone from the report
+                    // path): a segment with zero blocks
+                    // composes no block items, so a block can
+                    // only ever be first-visible in the
+                    // segment that holds it — and an empty
+                    // segment's header, when it has one, is
+                    // the HEADER branch above.
+                    val text = textOf(loc.segment)
+                        ?: return@snapshotFlow null
+                    val range = text.rangeOf(loc.block)
+                        ?: return@snapshotFlow null
+                    val blockLength = maxOf(1, range.end - range.start)
+                    val within = if (first.size > 0) {
+                        (listState.firstVisibleItemScrollOffset
+                            .toFloat() / first.size)
+                            .coerceIn(0f, 1f)
                     } else {
-                        val text = textOf(loc.segment)
-                            ?: return@snapshotFlow null
-                        val range = text.rangeOf(loc.block)
-                            ?: return@snapshotFlow null
-                        val blockLength = maxOf(1, range.end - range.start)
-                        val within = if (first.size > 0) {
-                            (listState.firstVisibleItemScrollOffset
-                                .toFloat() / first.size)
-                                .coerceIn(0f, 1f)
-                        } else {
-                            0f
-                        }
-                        val offset = range.start +
-                            (blockLength * within).toInt()
-                        DocumentReport.Position(
-                            chapterIndex = loc.segment,
-                            offset = offset,
-                            fraction = offset.toFloat() /
-                                maxOf(1, text.length),
-                            lastVisibleIndex = last.index
-                        )
+                        0f
                     }
-                }
-            }
-            // Fix Round G (B4): in wall mode the reading
-            // chapter is the segment of the LAST VISIBLE item
-            // — Moon+'s footer flips the moment the next
-            // chapter's content reaches the screen's lower
-            // part, and on the way up the previous chapter's
-            // name stands until the current chapter's heading
-            // has left the screen. So when the last visible
-            // item sits in a LATER resident segment than the
-            // reported one, the report names that segment at
-            // its start: the reader has just crossed into it.
-            // Within one segment the report stays the
-            // first-visible computation above, unchanged — the
-            // saved place never drifts to the screen's bottom.
-            // A textless last segment never names the position
-            // (the residency check), exactly as B1's contract
-            // demands of the first.
-            val finalReport = if (wallActive &&
-                baseReport is DocumentReport.Position
-            ) {
-                val rawLast = if (last.index < index.itemCount) {
-                    index.locate(last.index)
-                } else {
-                    null
-                }
-                val lastSegment = rawLast?.let {
-                    it.segment + rangeStart
-                }
-                if (lastSegment != null &&
-                    lastSegment > baseReport.chapterIndex &&
-                    stateOf(lastSegment) == SegmentState.RESIDENT
-                ) {
+                    val offset = range.start +
+                        (blockLength * within).toInt()
                     DocumentReport.Position(
-                        lastSegment, 0, 0f, last.index
+                        chapterIndex = loc.segment,
+                        offset = offset,
+                        fraction = offset.toFloat() /
+                            maxOf(1, text.length),
+                        lastVisibleIndex = last.index
                     )
-                } else {
-                    baseReport
                 }
-            } else {
-                baseReport
             }
-            // Seam patch, fix round 1 (re-check 10c): in
-            // wall mode, while the anchor's restore
-            // generation is unconsumed, a Position report
-            // naming any chapter but the anchor is the
-            // boundary-posture artifact — the surface is
-            // parked on the anchor's LOADING/FAILED state
-            // item (an armed swap or a volume-key turn onto
-            // an unfilled neighbour, its fill still in
-            // flight) and the STATE_ITEM branch above names
-            // the previous chapter at its end. Emitting it
-            // would flip the ViewModel's anchor back before
-            // the fill lands, and nothing would move it
-            // forward again — the swap's landing fails.
-            // Suppress the report until stage 1 consumes
-            // the generation. Nothing truthful is lost:
-            // the swap door already wrote the left
-            // chapter's end progress (A1's marking +
-            // moveAnchor's flush) before the anchor moved.
-            // The guard lifts the moment the generation is
-            // consumed — the fill landing (stage 1 asserts
-            // the swap's landing) or a genuine user drag
-            // retiring the restore (R2's witness consumes
-            // it the same way) — and reports naming the
-            // anchor itself flow throughout.
-            //
-            // OE-2 hotfix (code 106): the same artifact
-            // exists on the whole-book list, on ANY
-            // deliberate chapter change — a Contents jump,
-            // the seek door, the next/previous doors, a
-            // mode flip — whenever the target segment is
-            // not yet resident: the surface parks on the
-            // target's state item, the boundary posture
-            // names the chapter being left at its end, and
-            // the 180 ms debounce can deliver that report
-            // (or a pre-jump reading report) after the
-            // jump's own landing. The ViewModel obeys any
-            // resident-segment report by moving its anchor
-            // back, and stage 1 then asserts the jump's
-            // restore against the chapter it was never
-            // issued for — the view snaps back to the
-            // previous chapter's start and the chapter
-            // state desyncs from the displayed chapter
-            // (the owner's code-105 proof: Contents →
-            // Chapter 1 landed, snapped back to the
-            // Prologue, and Next chapter then resolved to
-            // the chapter already on screen). Moon+ holds
-            // exactly one chapter: on a chapter change the
-            // new chapter is loaded fresh and its position
-            // set once — the previous chapter is not a
-            // position source at all, not a party to a
-            // negotiation. So the guard is no longer
-            // wall-only: while a deliberate restore owns
-            // the surface (its generation unconsumed),
-            // a Position report naming any other chapter
-            // is SUPERSEDED — dropped, in every mode. The
-            // generation/anchor reads are the live holders
-            // above, so the guard judges the current jump,
-            // not a captured one. Outside wall mode a
-            // genuine user drag also retires the restore
-            // (R2's witness), so a jump onto a chapter
-            // whose fill never lands can never mute the
-            // reader's own scrolling; in wall mode the
-            // shipped semantics stand unchanged (only the
-            // anchor is composed, and stage 1's userMoved
-            // consumption retires the restore there).
-            if (consumedGeneration != restoreGenerationNow &&
-                (wallActive ||
-                    userMovedGeneration != restoreGenerationNow) &&
-                finalReport is DocumentReport.Position &&
-                finalReport.chapterIndex != anchorChapterIndexNow
-            ) {
-                null
-            } else {
-                finalReport
-            }
+            // Moon+ full copy: the report IS the base report.
+            // The two rewrites that used to stand here are
+            // DELETED with the inference layer they served:
+            // the B4 last-visible rewrite (which renamed the
+            // report to a LATER segment's start, from the
+            // screen's bottom edge) and the generation guard
+            // (which dropped reports naming another chapter
+            // while a deliberate restore's generation was
+            // unconsumed). Both existed only to negotiate
+            // between scroll observation and the anchor;
+            // under the copy there is nothing to negotiate —
+            // the handler below delivers a report as the
+            // anchor's own position, as a verified crossing,
+            // or not at all.
+            baseReport
         }
             .distinctUntilChanged()
             .debounce(180L)
             .collectLatest { report ->
                 when (report) {
                     is DocumentReport.Position -> {
-                        onDocumentPosition(
-                            report.chapterIndex, report.offset,
-                            report.fraction
-                        )
-                        // Item 4 end-detection —
-                        // CHAPTER_BY_CHAPTER only, and NO
-                        // fraction threshold anywhere: (a) the
-                        // current segment's last BLOCK becoming
-                        // the last visible item requests the
-                        // next segment's fill; (b) the first
-                        // item BEYOND the current segment
-                        // becoming the last visible item is the
-                        // end report (the chapter counts as
-                        // finished). Seam patch: in wall mode
-                        // (a) still fires — it is the prefetch
-                        // backstop — and (b) NEVER fires: the
-                        // forward swap is the only
-                        // finished-marking door there (A1).
-                        if (pinned) {
-                            val rawLastLoc = if (
-                                report.lastVisibleIndex <
-                                index.itemCount
-                            ) {
-                                index.locate(report.lastVisibleIndex)
-                            } else {
-                                null
+                        val anchor = anchorChapterIndexNow
+                        when {
+                            // The anchor's own place: the
+                            // one-way derivation.
+                            report.chapterIndex == anchor ->
+                                deliverPosition(report)
+                            // A crossing candidate: fire the
+                            // door only if the viewport, read
+                            // live NOW, really stands in or
+                            // past the named segment. The door
+                            // moves the anchor first, so the
+                            // position that follows lands as
+                            // the new anchor's own place.
+                            // Never in wall mode: the wheel
+                            // owns crossings there, so a
+                            // non-anchor report in wall mode
+                            // is stale by construction and
+                            // drops like any other.
+                            !wallActive &&
+                                crossingConfirmed(
+                                    report.chapterIndex, anchor
+                                ) -> {
+                                onChapterCrossed(report.chapterIndex)
+                                deliverPosition(report)
                             }
-                            val lastLoc = if (
-                                wallActive && rawLastLoc != null
-                            ) {
-                                rawLastLoc.copy(
-                                    segment = rawLastLoc.segment +
-                                        rangeStart
-                                )
-                            } else {
-                                rawLastLoc
-                            }
-                            val currentText = textOf(report.chapterIndex)
-                            val lastBlockIndex =
-                                (currentText?.content?.blocks?.size ?: 0) - 1
-                            if (lastLoc != null &&
-                                lastLoc.segment == report.chapterIndex &&
-                                lastLoc.block >= 0 &&
-                                lastBlockIndex >= 0 &&
-                                lastLoc.block >= lastBlockIndex
-                            ) {
-                                onBoundaryEndVisible()
-                            }
-                            if (!wallActive) {
-                                val nextStart = index
-                                    .segmentStart(
-                                        indexSegment(
-                                            report.chapterIndex + 1
-                                        )
-                                    )
-                                if (nextStart >= 0 &&
-                                    report.lastVisibleIndex >= nextStart
-                                ) {
-                                    onChapterEndReached()
-                                }
-                            }
-                        }
-                        // Seam patch (A5): in wall mode, once
-                        // the reader is a third into the
-                        // anchor chapter, the NEXT chapter's
-                        // fill is requested through the one
-                        // fill door — Moon+'s ⅓ pre-render
-                        // trigger — so the wheel swap lands
-                        // on held text instead of the LOADING
-                        // state item. Once per anchor; the
-                        // boundary trigger above stays as the
-                        // backstop.
-                        if (wallActive &&
-                            report.chapterIndex ==
-                            anchorChapterIndex &&
-                            report.fraction >= 1f / 3f &&
-                            wallThirdFillAnchor !=
-                            anchorChapterIndex
-                        ) {
-                            wallThirdFillAnchor =
-                                anchorChapterIndex
-                            chapters.getOrNull(
-                                anchorChapterIndex + 1
-                            )?.let { onSegmentVisible(it.id) }
+                            // Stale: a pre-jump reading
+                            // report, or the park on a
+                            // neighbour's state item. Dropped
+                            // — the next settled report
+                            // carries the anchor's own place.
+                            else -> {}
                         }
                     }
                     is DocumentReport.Approach ->
@@ -1682,9 +1681,9 @@ private fun WallWheelSpinner(
  * either a position (the named segment + char offset +
  * fraction, and the last visible flat index — Item 4's
  * end-detection input) or an approach (the first visible
- * item belongs to a textless segment no boundary posture
- * covers — B1's acceptance contract routes it to the
- * approach door, never to a position). */
+ * item belongs to a textless segment — B1's acceptance
+ * contract routes it to the approach door, never to a
+ * position). */
 private sealed interface DocumentReport {
     data class Position(
         val chapterIndex: Int,

@@ -1075,6 +1075,9 @@ fun ReaderScreen(
                     onDocumentPosition = { chapterIndex, offset, fraction ->
                         viewModel.onDocumentPosition(chapterIndex, offset, fraction)
                     },
+                    onChapterCrossed = { chapterIndex ->
+                        viewModel.onChapterCrossed(chapterIndex)
+                    },
                     // A5: ranges resolve against the
                     // paragraph's OWN segment text; marks are
                     // written against that chapter. Bookmark

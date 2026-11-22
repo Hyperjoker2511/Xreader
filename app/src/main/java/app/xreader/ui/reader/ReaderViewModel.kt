@@ -3293,54 +3293,84 @@ class ReaderViewModel(
     }
 
     /**
-     * The document surface reports its settled position here.
-     *
-     * B1's guard, restated for the document: a report naming
-     * a segment with NO text is never accepted as a position
-     * — the reporter routes textless first-visible items to
-     * the approach door ([onSegmentApproached]) or, in the
-     * boundary posture, reports the previous segment at its
-     * end; it never names a textless segment here. The guard
-     * below is the second half of that contract: the named
-     * segment must be RESIDENT (its display held), or the
-     * report is dropped.
-     *
-     * Crossing follows the shipped discipline: the visible
-     * chapter and its text publish on the crossing; in
-     * CONTINUOUS a chapter left behind at ≥90% read counts as
-     * finished (Item 4 — in CHAPTER_BY_CHAPTER the finish is
-     * the surface's end report instead); an anchor change
-     * re-plans residency around the new anchor. There is no
-     * window to slide.
+     * Moon+ full copy: the document surface's position
+     * report, DEMOTED to Moon+'s one-way derivation. In
+     * Moon+ there is no onScrollChanged at all: scrolling
+     * feeds only the within-chapter offset, derived
+     * one-way (chapter, scroll) → saved offset, and the
+     * derivation never runs scroll → chapter. So a
+     * report here may ONLY price the CURRENT anchor: a
+     * report naming any other chapter is refused outright
+     * — the anchor is written by doors alone (see
+     * [onChapterCrossed] for the one scroll-side door, and
+     * the moveAnchor doors for the rest). The refusal is
+     * structural, not a fence: there is no branch in this
+     * function that can move the anchor, so no report
+     * — stale, parked, or post-jump — can rename the
+     * chapter at any time, in any mode. The resident
+     * backstop stands as the second half of B1's contract:
+     * a report for the anchor whose display is not held
+     * prices nothing.
      */
     fun onDocumentPosition(chapterIndex: Int, charOffset: Int, chapterFraction: Float) {
         val stateNow = _state.value
-        val chapter = stateNow.chapters.getOrNull(chapterIndex) ?: return
-        val text = segmentDisplay[chapter.id] ?: return
-        val previousIndex = stateNow.chapterIndex
+        if (chapterIndex != stateNow.chapterIndex) return
+        val chapter = stateNow.chapter ?: return
+        if (segmentDisplay[chapter.id] == null) return
         reportedFractions[chapterIndex] = chapterFraction
-        if (chapterIndex != previousIndex) {
-            val leftFraction = reportedFractions[previousIndex] ?: 0f
-            visibleTextChapterIndex = chapterIndex
-            _state.value = stateNow.copy(
-                chapterIndex = chapterIndex,
-                chapterText = text
-            )
-            if (chapterIndex > previousIndex && leftFraction >= 0.9f &&
-                _config.value.chapterTransition ==
-                ChapterTransition.CONTINUOUS
-            ) {
-                markCurrentChapterFinishedFor(previousIndex, leftFraction)
-            }
-            planResidency(chapterIndex)
-        }
         onPosition(charOffset, chapterFraction)
-        // A text-carrying report from another segment means
-        // the reader has moved on: the approach target is
-        // spent.
+        // The anchor reporting its own place spends any
+        // approach target aimed at another segment.
         if (approachTargetId != null && approachTargetId != chapter.id) {
             approachTargetId = null
         }
+    }
+
+    /**
+     * Moon+ full copy: THE CROSSING DOOR — the
+     * joint-stream analogue of Moon+'s
+     * pageDownToNextChapter / pageUpToPriorChapter. In
+     * Moon+ a boundary crossing is an EVENT (the armed
+     * wheel released, a page turn past the edge): the
+     * chapter changes once, from the door's parameters.
+     * Here the surface fires this when the settled viewport
+     * has verifiably crossed into a neighbouring segment
+     * (the report handler re-reads the live layout before
+     * firing), and this door is the ONLY scroll-side writer
+     * of the anchor. It mirrors the retired report-branch
+     * exactly: the visible chapter and its text publish
+     * together; in CONTINUOUS a chapter left behind at
+     * ≥90% read counts as finished (Item 4 — in
+     * CHAPTER_BY_CHAPTER the finish is the surface's end
+     * report instead); residency re-plans around the new
+     * anchor. Resident-only (B1): a segment whose display
+     * is not held can never become the anchor from here
+     * — its fill is requested through the approach /
+     * visible doors, and the crossing fires when it is
+     * held and the viewport stands in it. The door touches
+     * no restore field and no generation: the anchor move
+     * IS the whole event, and the surface's restore stages
+     * belong to deliberate jumps, not to crossings.
+     */
+    fun onChapterCrossed(targetIndex: Int) {
+        val stateNow = _state.value
+        val previousIndex = stateNow.chapterIndex
+        if (targetIndex == previousIndex) return
+        val chapter = stateNow.chapters.getOrNull(targetIndex) ?: return
+        val text = segmentDisplay[chapter.id] ?: return
+        val leftFraction = reportedFractions[previousIndex] ?: 0f
+        visibleTextChapterIndex = targetIndex
+        _state.value = stateNow.copy(
+            chapterIndex = targetIndex,
+            chapterText = text
+        )
+        if (targetIndex > previousIndex && leftFraction >= 0.9f &&
+            _config.value.chapterTransition ==
+            ChapterTransition.CONTINUOUS
+        ) {
+            markCurrentChapterFinishedFor(previousIndex, leftFraction)
+        }
+        planResidency(targetIndex)
     }
 
     /** Item 1: the composition trigger's other half — a
@@ -3355,7 +3385,7 @@ class ReaderViewModel(
     /**
      * Item 1: THE APPROACH DOOR. The surface calls this when
      * the first visible item belongs to a segment with no
-     * text and no boundary posture covers it. It records the
+     * text. It records the
      * approached segment as the eviction-protected target
      * and requests its fill at anchor priority — and writes
      * NOTHING else: no chapterIndex, no chapterText, no
