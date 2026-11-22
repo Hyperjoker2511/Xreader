@@ -749,15 +749,19 @@ fun DocumentReader(
                     }
                     else -> {
                         val raw = index.locate(liveFirst.index)
-                        val segmentNow = if (wallActive) {
-                            raw.segment + rangeStart
+                        if (raw == null) {
+                            false
                         } else {
-                            raw.segment
-                        }
-                        if (target > anchor) {
-                            segmentNow >= target
-                        } else {
-                            segmentNow <= target
+                            val segmentNow = if (wallActive) {
+                                raw.segment + rangeStart
+                            } else {
+                                raw.segment
+                            }
+                            if (target > anchor) {
+                                segmentNow >= target
+                            } else {
+                                segmentNow <= target
+                            }
                         }
                     }
                 }
