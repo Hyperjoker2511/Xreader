@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.Highlight
+import app.xreader.diag.DiagLog
 import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.reader.AutoScrollController
 import app.xreader.domain.reader.ChapterLayoutCache
@@ -510,6 +511,20 @@ fun DocumentReader(
         initialFirstVisibleItemIndex = initialFlat
     )
 
+    // DIAGNOSTIC (code 109): the surface's creation — the
+    // initial place it was handed, captured at first
+    // composition. A RE-creation (the surface leaving and
+    // re-entering composition) fires this again.
+    LaunchedEffect(Unit) {
+        DiagLog.log(
+            "SURF-CREATE",
+            "surface created place segment=$anchorChapterIndex " +
+                "offset=$restoreOffset hint=$restoreHint " +
+                "gen=$restoreGeneration wallActive=$wallActive " +
+                "pinned=$pinned initialFlat=$initialFlat"
+        )
+    }
+
     // Restore bookkeeping (Item 5): a generation is consumed
     // exactly once — stage 1 (block granularity) records its
     // consumption on hit OR miss; stage 2 (line granularity)
@@ -552,6 +567,12 @@ fun DocumentReader(
                 listState.layoutInfo.visibleItemsInfo
                     .none { it.index == flat }
             ) {
+                // DIAGNOSTIC (code 109): programmatic scroll.
+                DiagLog.log(
+                    "SURF-SCROLL",
+                    "stage1-park scrollToItem flat=$flat gen=$restoreGeneration " +
+                        "anchor=$anchorChapterIndex"
+                )
                 listState.scrollToItem(flat)
             }
             return@LaunchedEffect
@@ -566,6 +587,12 @@ fun DocumentReader(
             indexSegment(anchorChapterIndex), blockIndex
         )
         if (flat >= 0) {
+            // DIAGNOSTIC (code 109): programmatic scroll.
+            DiagLog.log(
+                "SURF-SCROLL",
+                "stage1 scrollToItem flat=$flat gen=$restoreGeneration " +
+                    "anchor=$anchorChapterIndex block=$blockIndex"
+            )
             listState.scrollToItem(flat)
         }
         // Consumed whether the lookup hit or missed (R1).
@@ -668,6 +695,12 @@ fun DocumentReader(
             indexSegment(anchorChapterIndex), blockIndex
         )
         if (flat >= 0) {
+            // DIAGNOSTIC (code 109): programmatic scroll.
+            DiagLog.log(
+                "SURF-SCROLL",
+                "stage2 scrollToItem flat=$flat gen=$restoreGeneration " +
+                    "anchor=$anchorChapterIndex block=$blockIndex line=$lineIndex"
+            )
             listState.scrollToItem(
                 flat,
                 (-(topInsetPx + lineIndex * measured.lineHeightPx)).toInt()
@@ -976,11 +1009,44 @@ fun DocumentReader(
                 when (report) {
                     is DocumentReport.Position -> {
                         val anchor = anchorChapterIndexNow
+                        // DIAGNOSTIC (code 109): the live
+                        // first-visible segment at decision
+                        // time (a pure layout read).
+                        val liveFirstItem = listState.layoutInfo
+                            .visibleItemsInfo.firstOrNull()
+                        val liveFirstSeg = liveFirstItem?.let { item ->
+                            when {
+                                item.index >= index.itemCount ->
+                                    if (wallActive) {
+                                        rangeEnd
+                                    } else {
+                                        index.segmentCount - 1
+                                    }
+                                else -> index.locate(item.index)
+                                    ?.let { loc ->
+                                        if (wallActive) {
+                                            loc.segment + rangeStart
+                                        } else {
+                                            loc.segment
+                                        }
+                                    }
+                            }
+                        }
                         when {
                             // The anchor's own place: the
                             // one-way derivation.
-                            report.chapterIndex == anchor ->
+                            report.chapterIndex == anchor -> {
+                                // DIAGNOSTIC (code 109):
+                                // reporter decision.
+                                DiagLog.log(
+                                    "SURF-REPORT",
+                                    "report seg=${report.chapterIndex} " +
+                                        "offset=${report.offset} frac=${report.fraction} " +
+                                        "-> ANCHOR-DELIVERY anchor=$anchor " +
+                                        "liveFirstSeg=$liveFirstSeg wall=$wallActive"
+                                )
                                 deliverPosition(report)
+                            }
                             // A crossing candidate: fire the
                             // door only if the viewport, read
                             // live NOW, really stands in or
@@ -997,6 +1063,15 @@ fun DocumentReader(
                                 crossingConfirmed(
                                     report.chapterIndex, anchor
                                 ) -> {
+                                // DIAGNOSTIC (code 109):
+                                // reporter decision.
+                                DiagLog.log(
+                                    "SURF-REPORT",
+                                    "report seg=${report.chapterIndex} " +
+                                        "offset=${report.offset} frac=${report.fraction} " +
+                                        "-> CROSSING anchor=$anchor " +
+                                        "liveFirstSeg=$liveFirstSeg wall=$wallActive"
+                                )
                                 onChapterCrossed(report.chapterIndex)
                                 deliverPosition(report)
                             }
@@ -1005,11 +1080,30 @@ fun DocumentReader(
                             // neighbour's state item. Dropped
                             // — the next settled report
                             // carries the anchor's own place.
-                            else -> {}
+                            else -> {
+                                // DIAGNOSTIC (code 109):
+                                // reporter decision.
+                                DiagLog.log(
+                                    "SURF-REPORT",
+                                    "report seg=${report.chapterIndex} " +
+                                        "offset=${report.offset} frac=${report.fraction} " +
+                                        "-> DROPPED anchor=$anchor " +
+                                        "liveFirstSeg=$liveFirstSeg wall=$wallActive"
+                                )
+                            }
                         }
                     }
-                    is DocumentReport.Approach ->
+                    is DocumentReport.Approach -> {
+                        // DIAGNOSTIC (code 109): reporter
+                        // decision.
+                        DiagLog.log(
+                            "SURF-REPORT",
+                            "approach chapterId=${report.chapterId} " +
+                                "-> FILL-DOOR anchor=$anchorChapterIndexNow " +
+                                "wall=$wallActive"
+                        )
                         onSegmentApproached(report.chapterId)
+                    }
                     null -> {}
                 }
             }
@@ -1054,6 +1148,11 @@ fun DocumentReader(
                     !listState.canScrollForward &&
                     hasNextChapterNow
                 ) {
+                    // DIAGNOSTIC (code 109): wall crossing.
+                    DiagLog.log(
+                        "SURF-WALL",
+                        "swap NEXT via volume key anchor=$anchorChapterIndexNow"
+                    )
                     onWallSwapNextNow()
                     return@collectLatest
                 }
@@ -1061,12 +1160,23 @@ fun DocumentReader(
                     !listState.canScrollBackward &&
                     hasPreviousChapterNow
                 ) {
+                    // DIAGNOSTIC (code 109): wall crossing.
+                    DiagLog.log(
+                        "SURF-WALL",
+                        "swap PREVIOUS via volume key anchor=$anchorChapterIndexNow"
+                    )
                     onWallSwapPreviousNow()
                     return@collectLatest
                 }
             }
             val viewport = listState.layoutInfo.viewportSize.height
             if (viewport > 0) {
+                // DIAGNOSTIC (code 109): programmatic scroll.
+                DiagLog.log(
+                    "SURF-SCROLL",
+                    "volume-turn animateScrollBy direction=$direction " +
+                        "anchor=$anchorChapterIndexNow"
+                )
                 listState.animateScrollBy(direction * viewport.toFloat() * 0.92f)
             }
         }
@@ -1126,7 +1236,14 @@ fun DocumentReader(
         val flat = index.flatIndexOf(
             indexSegment(anchorChapterIndex), blockIndex
         )
-        if (flat >= 0) listState.animateScrollToItem(flat)
+        if (flat >= 0) {
+            // DIAGNOSTIC (code 109): programmatic scroll.
+            DiagLog.log(
+                "SURF-SCROLL",
+                "spoken-follow animateScrollToItem flat=$flat anchor=$anchorChapterIndex"
+            )
+            listState.animateScrollToItem(flat)
+        }
     }
 
     // Media-overlay follow — keep the overlay's block visible,
@@ -1146,7 +1263,14 @@ fun DocumentReader(
             val flat = index.flatIndexOf(
                 indexSegment(segment), range.blockIndex
             )
-            if (flat >= 0) listState.animateScrollToItem(flat)
+            if (flat >= 0) {
+                // DIAGNOSTIC (code 109): programmatic scroll.
+                DiagLog.log(
+                    "SURF-SCROLL",
+                    "overlay-follow animateScrollToItem flat=$flat segment=$segment"
+                )
+                listState.animateScrollToItem(flat)
+            }
             return@LaunchedEffect
         }
     }
@@ -1340,10 +1464,24 @@ fun DocumentReader(
                         abs(drag) >= armedDistancePx
                     ) {
                         if (drag < 0f && hasNextChapterNow) {
+                            // DIAGNOSTIC (code 109): wall
+                            // crossing.
+                            DiagLog.log(
+                                "SURF-WALL",
+                                "swap NEXT via wheel release drag=$drag " +
+                                    "anchor=$anchorChapterIndexNow"
+                            )
                             onWallSwapNextNow()
                         } else if (drag > 0f &&
                             hasPreviousChapterNow
                         ) {
+                            // DIAGNOSTIC (code 109): wall
+                            // crossing.
+                            DiagLog.log(
+                                "SURF-WALL",
+                                "swap PREVIOUS via wheel release drag=$drag " +
+                                    "anchor=$anchorChapterIndexNow"
+                            )
                             onWallSwapPreviousNow()
                         }
                     }

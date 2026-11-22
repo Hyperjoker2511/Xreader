@@ -94,6 +94,7 @@ import app.xreader.core.motion.sharedAxisYEnter
 import app.xreader.core.motion.sharedAxisYExit
 import app.xreader.data.db.Highlight
 import app.xreader.di.AppContainer
+import app.xreader.diag.DiagLog
 import androidx.compose.ui.text.rememberTextMeasurer
 import app.xreader.domain.reader.ChapterEndWall
 import app.xreader.domain.reader.ChapterLayoutCache
@@ -279,6 +280,34 @@ fun ReaderScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
+
+    // DIAGNOSTIC (code 109): session header (build version,
+    // then wallActive + reading mode once known), and the
+    // dump on reader close — the screen's dispose is the
+    // catch-all exit (back navigation removes the screen).
+    LaunchedEffect(Unit) {
+        @Suppress("DEPRECATION")
+        val version = runCatching {
+            val info = context.packageManager
+                .getPackageInfo(context.packageName, 0)
+            "${info.versionName} (${info.versionCode})"
+        }.getOrDefault("unknown")
+        DiagLog.init(version)
+        DiagLog.log("SCR", "reader screen open bookId=$bookId version=$version")
+    }
+    LaunchedEffect(wallActive, config.mode) {
+        DiagLog.log(
+            "SESSION",
+            "wallActive=$wallActive mode=${config.mode} " +
+                "transition=${config.chapterTransition}"
+        )
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            DiagLog.log("SCR", "reader screen disposed -> dumping to Downloads")
+            DiagLog.dumpToDownloads(context)
+        }
+    }
 
     val basePalette = if (config.paletteName == "Custom" && !config.eInkMode) {
         // v1.0.1 custom colour pair (QuickNovel lesson): the user's
@@ -1040,6 +1069,21 @@ fun ReaderScreen(
             // per-segment state; there is no window and no
             // activation gap.
             config.mode == ReaderMode.SCROLL && state.chapterText != null -> {
+                // DIAGNOSTIC (code 109): the surface's
+                // creation and every RE-creation (this branch
+                // leaving and re-entering composition), with
+                // the initial place it is handed.
+                DisposableEffect(Unit) {
+                    DiagLog.log(
+                        "SCR-SURFACE",
+                        "surface create place segment=${state.chapterIndex} " +
+                            "offset=${state.restoreOffset} hint=${state.restoreHint} " +
+                            "gen=${state.restoreGeneration} wallActive=$wallActive"
+                    )
+                    onDispose {
+                        DiagLog.log("SCR-SURFACE", "surface disposed")
+                    }
+                }
                 DocumentReader(
                     chapters = state.chapters,
                     segmentStates = state.segmentStates,
