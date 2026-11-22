@@ -27,8 +27,8 @@ android {
         applicationId = "app.xreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 106
-        versionName = "1.6.2-mr10"
+        versionCode = 107
+        versionName = "1.6.2-mr11"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

@@ -873,6 +873,7 @@ class ReaderViewModel(
     private var currentChapterMaxOffset = 0
     private var saveJob: Job? = null
     private var loadJob: Job? = null
+    private var growJob: kotlinx.coroutines.Job? = null
     /** v1.5.10 (B4): generation counter for the chapter stall
      * watcher — a newer load supersedes an older watcher. */
     @Volatile
@@ -925,6 +926,70 @@ class ReaderViewModel(
     private var visibleTextChapterIndex: Int = -1
     private var pendingAutoplayTts = false
     private val chapterCache = LinkedHashMap<Long, ChapterText>()
+
+    /** The segment store: ORIGINALS held per segment, keyed
+     * by chapter id (the successor of the stream cache —
+     * chapterCache's discipline: originals only, display
+     * copies derived per read). */
+    private val segmentOriginals = mutableMapOf<Long, ChapterText>()
+
+    /** The current DISPLAY derivation of each held original,
+     * keyed by chapter id — published into the state by
+     * [publishDocumentState] and read by the anchor paths.
+     * Kept beside the originals so a terms swap re-derives
+     * every resident segment in one pass. */
+    private val segmentDisplay = mutableMapOf<Long, ChapterText>()
+
+    /** Segments whose held text came from the RAW translation
+     * (their display rides the translated road). */
+    private val segmentTranslatedIds = mutableSetOf<Long>()
+
+    /** Part 1: the own-title decisions, keyed by chapter id —
+     * computed by [detectOwnTitle] when a segment's original
+     * is first held, evicted with the segment, published by
+     * [publishDocumentState]. */
+    private val segmentsWithOwnTitle = mutableSetOf<Long>()
+
+    /** FAILED segments' honest reasons, keyed by chapter id. */
+    private val segmentFailedReasonsMap = mutableMapOf<Long, String>()
+
+    /** THE one in-flight set (Item 1): every segment fill —
+     * parse fills and fetch fills alike — registers here, so
+     * any number of triggers for one segment produce exactly
+     * one fill. */
+    private val segmentFillsInFlight = mutableSetOf<Long>()
+
+    private var residencyJob: kotlinx.coroutines.Job? = null
+
+    /** The current resident run (chapter indices), the
+     * planner's output — published as ids in the state. */
+    private var residentRunIndices: List<Int> = emptyList()
+
+    /** True once the book's first load has returned and the
+     * document exists (Item 3, row 10). Residency planning
+     * and mode flips act only after this. */
+    @Volatile
+    private var readerOpened: Boolean = false
+
+    /** The segment the surface last reported approaching
+     * (Item 1's approach door): protected from eviction
+     * while it is the target. One field; a newer report
+     * replaces it. */
+    private var approachTargetId: Long? = null
+
+    /** B2: a narration advance waiting on its segment's
+     * fill — the landing runs when the fill completes. */
+    private var pendingNarrationChapterId: Long? = null
+
+    /** Item 3, row 1: anchor segments whose content swap
+     * (translation / terms) is in flight — when the swapped
+     * text lands, the place re-asserts once, scoped to the
+     * anchor, through [moveAnchor]. */
+    private val pendingSwapReassertIds = mutableSetOf<Long>()
+
+    /** v1.3.3 (scope S6): chapters whose extraction failure
+     * already earned its one re-resolution this session. */
+    private val extractionRetriedFor = mutableSetOf<Long>()
 
     // ── P0 (Reader Terms): display-time replacements ────────────
     // The caches above always hold the ORIGINAL text (storage
@@ -1690,8 +1755,6 @@ class ReaderViewModel(
             launchLoad { loadChapter(target, 0, 0f, PageHint.LAST) }
         }
     }
-
-    private var growJob: kotlinx.coroutines.Job? = null
 
     /** v1.0.8: reading near the loaded edge of a partially
      * loaded book grows the chapter list ahead of the reader —
@@ -2516,10 +2579,6 @@ class ReaderViewModel(
         }
     }
 
-    /** v1.3.3 (scope S6): chapters whose extraction failure
-     * already earned its one re-resolution this session. */
-    private val extractionRetriedFor = mutableSetOf<Long>()
-
     /** v1.5.0 (A4): the failure shapes that mean "this
      * chapter's saved reference no longer resolves" — the
      * extraction shapes plus the resolution shapes (a moved
@@ -2757,69 +2816,9 @@ class ReaderViewModel(
     // machinery the paged reader uses, so bookmarks, sessions
     // and sync don't know the document exists.
 
-    /** The segment store: ORIGINALS held per segment, keyed
-     * by chapter id (the successor of the stream cache —
-     * chapterCache's discipline: originals only, display
-     * copies derived per read). */
-    private val segmentOriginals = mutableMapOf<Long, ChapterText>()
-
-    /** The current DISPLAY derivation of each held original,
-     * keyed by chapter id — published into the state by
-     * [publishDocumentState] and read by the anchor paths.
-     * Kept beside the originals so a terms swap re-derives
-     * every resident segment in one pass. */
-    private val segmentDisplay = mutableMapOf<Long, ChapterText>()
-
-    /** Segments whose held text came from the RAW translation
-     * (their display rides the translated road). */
-    private val segmentTranslatedIds = mutableSetOf<Long>()
-
-    /** Part 1: the own-title decisions, keyed by chapter id —
-     * computed by [detectOwnTitle] when a segment's original
-     * is first held, evicted with the segment, published by
-     * [publishDocumentState]. */
-    private val segmentsWithOwnTitle = mutableSetOf<Long>()
-
-    /** FAILED segments' honest reasons, keyed by chapter id. */
-    private val segmentFailedReasonsMap = mutableMapOf<Long, String>()
-
-    /** THE one in-flight set (Item 1): every segment fill —
-     * parse fills and fetch fills alike — registers here, so
-     * any number of triggers for one segment produce exactly
-     * one fill. */
-    private val segmentFillsInFlight = mutableSetOf<Long>()
-
     /** Per-chapter settled fractions, for the CONTINUOUS
      * left-behind marking (Item 4). */
     private val reportedFractions = mutableMapOf<Int, Float>()
-
-    private var residencyJob: kotlinx.coroutines.Job? = null
-
-    /** The current resident run (chapter indices), the
-     * planner's output — published as ids in the state. */
-    private var residentRunIndices: List<Int> = emptyList()
-
-    /** True once the book's first load has returned and the
-     * document exists (Item 3, row 10). Residency planning
-     * and mode flips act only after this. */
-    @Volatile
-    private var readerOpened: Boolean = false
-
-    /** The segment the surface last reported approaching
-     * (Item 1's approach door): protected from eviction
-     * while it is the target. One field; a newer report
-     * replaces it. */
-    private var approachTargetId: Long? = null
-
-    /** B2: a narration advance waiting on its segment's
-     * fill — the landing runs when the fill completes. */
-    private var pendingNarrationChapterId: Long? = null
-
-    /** Item 3, row 1: anchor segments whose content swap
-     * (translation / terms) is in flight — when the swapped
-     * text lands, the place re-asserts once, scoped to the
-     * anchor, through [moveAnchor]. */
-    private val pendingSwapReassertIds = mutableSetOf<Long>()
 
     /**
      * The segment store's read (Item 1): the parse road of a
