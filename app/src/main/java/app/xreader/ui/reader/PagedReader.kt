@@ -48,6 +48,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -1066,7 +1067,23 @@ private fun PageContent(
                     }
                     Text(
                         annotated,
-                        style = blockTextStyle(block, config, fontFamily),
+                        style = blockTextStyle(block, config, fontFamily)
+                            .let { style ->
+                                // Code 106 (the fromChar == 0
+                                // gate): the block style carries
+                                // the first-line indent, which
+                                // belongs to the paragraph's TRUE
+                                // first line only. A slice that
+                                // starts mid-block is a paragraph
+                                // continuing onto this page — it
+                                // renders with the indent stripped,
+                                // or it would grow a false one.
+                                if (slice.startChar > range.start) {
+                                    style.copy(textIndent = TextIndent.None)
+                                } else {
+                                    style
+                                }
+                            },
                         color = palette.text
                     )
                 }
@@ -1159,16 +1176,33 @@ fun blockTextStyle(
     val base = config.fontSizeSp
     return when (block) {
         is ChapterBlock.Heading -> {
+            // v1.7 (code 106): Moon+'s heading scales, copied
+            // from its HtmlToSpannedConverter HEADER_SIZES —
+            // h1 2.0×, h2 1.5×, h3+ 1.17× body size. The
+            // chapter title of the owner's proof book behaves
+            // as Moon+'s h2, so the crowned title renders at
+            // 1.5×; in-chapter headings keep their own level's
+            // scale (Moon+ scales by HTML level — the levels
+            // are NOT flattened to 1.5). Headings are centred
+            // (the photo's title is centred exactly; heading
+            // blocks in this model are display headings —
+            // body emphasis rides Paragraph spans) and take
+            // the BODY line-height multiplier, replacing the
+            // hard-coded 1.3, so a wrapped title's pitch is
+            // its size × the same ratio as the body's (the
+            // photo measures title pitch = 1.51 × body pitch
+            // ≈ 1.5 × 1.43).
             val size = when (block.level) {
-                1 -> base * 1.45f
-                2 -> base * 1.28f
-                else -> base * 1.12f
+                1 -> base * 2.0f
+                2 -> base * 1.5f
+                else -> base * 1.17f
             }
             TextStyle(
                 fontFamily = fontFamily,
                 fontWeight = FontWeight.Bold,
                 fontSize = size.sp,
-                lineHeight = (size * 1.3f).sp
+                lineHeight = (size * config.lineHeightMultiplier).sp,
+                textAlign = TextAlign.Center
             )
         }
         else -> TextStyle(
@@ -1184,6 +1218,28 @@ fun blockTextStyle(
                 TextAlign.Justify
             } else {
                 TextAlign.Left
+            },
+            // v1.7 (code 106): Moon+'s first-line paragraph
+            // indent, the faithful Compose equivalent — a
+            // TextIndent (the ParagraphStyle quantity) carried
+            // on the block style, so the measurer and every
+            // surface that renders through this one function
+            // (scroll, paged, PDF Reflow) lay out identically.
+            // Layout-only: the text string is never rewritten,
+            // so char offsets, highlights, TTS ranges and
+            // saved places are untouched. The gate that keeps
+            // a paragraph CONTINUING onto a new page from
+            // growing a false indent lives at the paged
+            // render site (PageContent strips this for
+            // mid-block slices — the fromChar == 0 rule); the
+            // other surfaces always render whole blocks, whose
+            // first line IS the paragraph's first line.
+            textIndent = if (config.paragraphIndent) {
+                TextIndent(
+                    firstLine = (config.paragraphIndentEm * base).sp
+                )
+            } else {
+                TextIndent.None
             }
         )
     }

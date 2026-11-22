@@ -1929,12 +1929,23 @@ private fun ReaderChrome(
                             )
                         }
                     }
-                    GlassChipButton(palette = palette, onClick = onToggleBookmark) {
-                        Icon(
-                            if (bookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
-                            if (bookmarked) "Remove bookmark" else "Bookmark here",
-                            tint = palette.accent
-                        )
+                    // v1.6.2-mr10 (audit B2): in the CBZ page
+                    // world the bookmark chip is gated off,
+                    // exactly like Listen below — its toggle
+                    // writes text bookmarks at char offset 0
+                    // whatever page is showing, its filled
+                    // state never updates there, and the list
+                    // that would show them is hidden in this
+                    // world. Page bookmarks for the page worlds
+                    // are Patch 5 work; until then, no chip.
+                    if (cbzPageLabel == null) {
+                        GlassChipButton(palette = palette, onClick = onToggleBookmark) {
+                            Icon(
+                                if (bookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+                                if (bookmarked) "Remove bookmark" else "Bookmark here",
+                                tint = palette.accent
+                            )
+                        }
                     }
                     if (cbzPageLabel == null) {
                         GlassChipButton(palette = palette, onClick = onOpenListen) {

@@ -1010,6 +1010,20 @@ fun ReaderSettingsSheet(
                             onUpdate { it.copy(paragraphSpacingDp = v) }
                         }
                     )
+                    // v1.7 (code 106): Moon+'s first-line
+                    // indent, beside the spacing it pairs
+                    // with (at the Moon+ defaults paragraphs
+                    // separate by this indent alone). The
+                    // depth is Moon+'s factory 2 em, carried
+                    // in the config; the sheet's door is the
+                    // plain on/off.
+                    SheetSwitch(
+                        label = "Indent the first line of paragraphs",
+                        checked = config.paragraphIndent,
+                        onChange = { v ->
+                            onUpdate { it.copy(paragraphIndent = v) }
+                        }
+                    )
                 }
                 SheetSection("Custom colours") {
                     // v1.5.40: which colour the wheel is picking

@@ -118,21 +118,46 @@ data class ReaderConfig(
      * pair for its page (pure white on dark pages, near-black on
      * light ones) — see ReaderPalette.withHighContrastText. */
     val highContrastText: Boolean = false,
-    val fontChoice: ReaderFontChoice = ReaderFontChoice.LITERATA,
+    /** v1.7 (code 106, owner's "same to same" ruling
+     * 2026-11-22): the default face is NOTO_SERIF — the
+     * family Moon+'s "serif" names (its factory default,
+     * useCssFont off), measured off his Moon+ screenshot of
+     * the 'Grieving Soul' Prologue. Literata stays a user
+     * option. Stored LITERATA values that are the untouched
+     * old default move once (see ReaderPrefs). */
+    val fontChoice: ReaderFontChoice = ReaderFontChoice.NOTO_SERIF,
     /** File name inside filesDir/fonts when [fontChoice] is USER. */
     val userFontName: String? = null,
-    val fontSizeSp: Float = 19f,
-    val lineHeightMultiplier: Float = 1.55f,
+    /** Code 106: 17 sp — the size the Moon+ photo measures
+     * to (cap height 2.86 % of page width under Noto Serif);
+     * the old 19 sp default moves once for untouched stores. */
+    val fontSizeSp: Float = 17f,
+    /** Code 106: 1.43 — the photo's measured pitch ÷ em
+     * under Noto Serif (Moon+'s lineSpace has no plain em
+     * equivalent; the photo is the binding number). */
+    val lineHeightMultiplier: Float = 1.43f,
     /** v1.7 Moon+ standard fix (Part 4): the fresh-install
-     * default is the COMPACT stop — tight, book-like spacing
-     * (the Moon+ pages' shape), not the old 10 dp air. The
-     * slider range is unchanged; stored values are untouched
-     * except the one-time migration of an untouched old
-     * default (see ReaderPrefs). */
-    val paragraphSpacingDp: Float = ParagraphSpacing.COMPACT.dp,
-    val marginHorizontalDp: Float = 24f,
-    val marginVerticalDp: Float = 20f,
-    val alignment: ReaderAlignment = ReaderAlignment.LEFT,
+     * default was moved NORMAL → COMPACT. Code 106 (the
+     * "same to same" ruling) moves it once more, COMPACT →
+     * 0 dp: in the Moon+ photo paragraphs separate by their
+     * first-line indent alone, with no extra vertical air
+     * (pitch is uniform across paragraph boundaries). The
+     * named stops and the slider range are unchanged;
+     * stored values are untouched except the one-time
+     * migration of an untouched old default (see
+     * ReaderPrefs). */
+    val paragraphSpacingDp: Float = 0f,
+    /** Code 106: Moon+'s large-phone margin branch, which
+     * the photo measures to (6.35 % of width ≈ 26 dp). */
+    val marginHorizontalDp: Float = 26f,
+    /** Code 106: Moon+'s fullscreen-phone top/bottom
+     * margin (30 dp). */
+    val marginVerticalDp: Float = 30f,
+    /** Code 106: JUSTIFY — the photo's body text is flush
+     * on both edges (Moon+ reaches it via the book's CSS
+     * through its factory cssJustify; the owner's ruling
+     * makes the photo state the default outright). */
+    val alignment: ReaderAlignment = ReaderAlignment.JUSTIFY,
     val bionicReading: Boolean = false,
     /** In-reader brightness (window brightness 0..1); null = system. */
     val brightness: Float? = null,
@@ -236,7 +261,23 @@ data class ReaderConfig(
      * novels keep the flowing crossing unless the owner
      * widens the scope. Appended LAST: positional
      * constructor callers must not shift. */
-    val chapterEndWall: ChapterEndWall = ChapterEndWall.FOR_EPUB_BOOKS
+    val chapterEndWall: ChapterEndWall = ChapterEndWall.FOR_EPUB_BOOKS,
+    /** v1.7 (code 106): the first-line paragraph indent —
+     * Moon+'s indentParagraph with its factory indentLength
+     * 2 × indentWidth (one full-width char ≈ 1 em), ON in
+     * the owner's Moon+ and the target of his "same to
+     * same" ruling. Carried here, inside the config, so the
+     * layout cache's fingerprint (the whole config object)
+     * invalidates stale layouts by construction. Applied
+     * as a layout-only TextIndent in blockTextStyle: the
+     * text itself is never rewritten, so char offsets,
+     * highlights, TTS ranges and saved places are
+     * untouched. Appended after [chapterEndWall] for the
+     * same positional-caller reason it was. */
+    val paragraphIndent: Boolean = true,
+    /** The indent's depth, in em of the body font size
+     * (Moon+'s factory indentLength is 2). */
+    val paragraphIndentEm: Float = 2f
 )
 
 /** How the reader moves between chapters (v1.0.1).
@@ -271,6 +312,7 @@ object ReaderValidation {
     val FONT_SIZE_RANGE = 12f..34f
     val LINE_HEIGHT_RANGE = 1.1f..2.2f
     val PARAGRAPH_SPACING_RANGE = 0f..32f
+    val INDENT_EM_RANGE = 0.5f..4f
     val MARGIN_H_RANGE = 0f..72f
     val MARGIN_V_RANGE = 0f..64f
     val WARM_LIGHT_RANGE = 0f..0.6f
@@ -287,11 +329,12 @@ object ReaderValidation {
         // v1.5.0 (Part C): the webtoon side padding is a
         // percent in the donor's 0–25 range.
         webtoonSidePadding = config.webtoonSidePadding.coerceIn(0, 25),
-        fontSizeSp = clamp(config.fontSizeSp, FONT_SIZE_RANGE, 19f),
-        lineHeightMultiplier = clamp(config.lineHeightMultiplier, LINE_HEIGHT_RANGE, 1.55f),
-        paragraphSpacingDp = clamp(config.paragraphSpacingDp, PARAGRAPH_SPACING_RANGE, 10f),
-        marginHorizontalDp = clamp(config.marginHorizontalDp, MARGIN_H_RANGE, 24f),
-        marginVerticalDp = clamp(config.marginVerticalDp, MARGIN_V_RANGE, 20f),
+        fontSizeSp = clamp(config.fontSizeSp, FONT_SIZE_RANGE, 17f),
+        lineHeightMultiplier = clamp(config.lineHeightMultiplier, LINE_HEIGHT_RANGE, 1.43f),
+        paragraphSpacingDp = clamp(config.paragraphSpacingDp, PARAGRAPH_SPACING_RANGE, 0f),
+        marginHorizontalDp = clamp(config.marginHorizontalDp, MARGIN_H_RANGE, 26f),
+        marginVerticalDp = clamp(config.marginVerticalDp, MARGIN_V_RANGE, 30f),
+        paragraphIndentEm = clamp(config.paragraphIndentEm, INDENT_EM_RANGE, 2f),
         warmLight = clamp(config.warmLight, WARM_LIGHT_RANGE, 0f),
         speechRate = clamp(config.speechRate, SPEECH_RATE_RANGE, 1f),
         autoScrollSpeed = clamp(config.autoScrollSpeed, AUTO_SCROLL_SPEED_RANGE, 1f),

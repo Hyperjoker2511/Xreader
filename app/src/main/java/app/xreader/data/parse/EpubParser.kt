@@ -922,6 +922,19 @@ class EpubParser : BookParser {
      * Offsets are ChapterText coordinates (A3): each
      * slice's charPrefix accounts the 2-char separator at
      * every seam between absorbed files.
+     *
+     * TOC-tail fix (2026-11-22): three silent losses are
+     * closed in [segmentByTocOrNull] — an anchor whose
+     * forward walk runs off the end of the book still
+     * opens its own chapter, split at the last emitted
+     * chapter's end; the split dedup keys on the anchor's
+     * own spine position, so distinct TOC entries landing
+     * on one emitted chapter keep distinct chapters; and
+     * an anchor whose href meets no spine file falls back
+     * through the case-insensitive entry index, and is
+     * counted and logged when it still resolves nowhere.
+     * Moon+ rule: Contents is the book's own TOC, all
+     * of it.
      */
     private fun segmentByToc(
         unzipped: File,
@@ -977,24 +990,58 @@ class EpubParser : BookParser {
         // The first spine position of each href — anchor
         // hrefs and spine hrefs come out of the same
         // ZipPaths.resolve pipeline, so they meet exactly.
+        // (The anchor lookup below still carries the
+        // case-insensitive entry-index fallback for the
+        // books where they don't.)
         val spinePosByHref = HashMap<String, Int>()
+        val spinePosByLowerHref = HashMap<String, Int>()
         spineHrefs.forEachIndexed { pos, href ->
             spinePosByHref.putIfAbsent(href, pos)
+            spinePosByLowerHref.putIfAbsent(href.lowercase(), pos)
         }
 
-        // Split points, deduped in TOC order (the first
-        // anchor at a point names the chapter), then
-        // ordered by position.
+        // Split points, deduped in TOC order, then ordered
+        // by position. The dedup key carries the anchor's
+        // own spine position (TOC-tail fix, 2026-11-22):
+        // two distinct TOC entries at distinct spine
+        // positions keep distinct chapters even when both
+        // resolve to the same emitted chapter at the same
+        // block — the old (target, blockIndex) key silently
+        // collapsed the second entry into the first one's
+        // chapter. True duplicates (same spine position,
+        // same landing point) still dedupe, as before.
         data class Split(
             val oldIndex: Int,
             val blockIndex: Int,
-            val label: String
+            val label: String,
+            val spinePos: Int
         )
 
-        val seen = HashSet<Pair<Int, Int>>()
+        val seen = HashSet<Triple<Int, Int, Int>>()
         val splits = ArrayList<Split>()
+        var unresolvedAnchors = 0
+        val unresolvedLabels = ArrayList<String>()
         for (entry in entries) {
-            val spinePos = spinePosByHref[entry.href] ?: continue
+            // TOC-tail fix (S1): an anchor whose href meets
+            // no spine href exactly falls back through the
+            // case-insensitive machinery the rest of the
+            // parser resolves by — the entry index's actual
+            // path first, then the spine map keyed by
+            // lowercase on both sides. A letter-case
+            // divergence between the TOC's spelling and the
+            // spine's must not silently cost the entry its
+            // chapter. An anchor that still resolves
+            // nowhere is counted and logged after the loop,
+            // never a bare skip.
+            val spinePos = spinePosByHref[entry.href]
+                ?: entryIndex[entry.href.lowercase()]
+                    ?.let { actual -> spinePosByHref[actual] }
+                ?: spinePosByLowerHref[entry.href.lowercase()]
+                ?: run {
+                    unresolvedAnchors++
+                    unresolvedLabels += entry.label
+                    continue
+                }
             var target = -1
             var pos = spinePos
             while (pos < spineEmission.size) {
@@ -1004,28 +1051,61 @@ class EpubParser : BookParser {
                 }
                 pos++
             }
-            if (target < 0) continue
-            val blockIndex = if (entry.fragment != null) {
-                val found = decodeOld(target)?.blocks
-                    ?.indexOfFirst { block ->
-                        when (block) {
-                            is ChapterBlock.Heading ->
-                                block.id == entry.fragment
-                            is ChapterBlock.Paragraph ->
-                                block.id == entry.fragment
-                            else -> false
-                        }
-                    } ?: -1
-                if (found > 0) found else 0
+            val blockIndex: Int
+            if (target >= 0) {
+                blockIndex = if (entry.fragment != null) {
+                    val found = decodeOld(target)?.blocks
+                        ?.indexOfFirst { block ->
+                            when (block) {
+                                is ChapterBlock.Heading ->
+                                    block.id == entry.fragment
+                                is ChapterBlock.Paragraph ->
+                                    block.id == entry.fragment
+                                else -> false
+                            }
+                        } ?: -1
+                    if (found > 0) found else 0
+                } else {
+                    0
+                }
             } else {
-                0
+                // TOC-tail fix (S2): the anchor's own spine
+                // item — and everything after it — emitted
+                // nothing (the F7 skip: a clean zero-block
+                // conversion, classically an image-only
+                // final page), so the forward walk ran off
+                // the end of the book and the old code
+                // dropped the anchor whole. Moon+ shape:
+                // Contents is the book's own TOC, all of
+                // it — the anchor still opens its own
+                // chapter, split at the END of the last
+                // emitted chapter. The chapter is
+                // legitimately empty of blocks when nothing
+                // emitted remains for it; its title row is
+                // the entry's presence in Contents, and the
+                // merge below already writes zero-block
+                // groups like any other.
+                if (oldMetas.isEmpty()) continue
+                target = oldMetas.lastIndex
+                blockIndex = decodeOld(target)?.blocks?.size
+                    ?: Int.MAX_VALUE
             }
-            if (seen.add(target to blockIndex)) {
-                splits += Split(target, blockIndex, entry.label)
+            if (seen.add(Triple(spinePos, target, blockIndex))) {
+                splits += Split(target, blockIndex, entry.label, spinePos)
             }
         }
+        if (unresolvedAnchors > 0) {
+            android.util.Log.w(
+                "EpubParser",
+                "segmentation: $unresolvedAnchors TOC anchor(s) named " +
+                    "no spine file and open no chapter: " +
+                    unresolvedLabels.joinToString("; ")
+            )
+        }
         if (splits.isEmpty()) return null
-        splits.sortWith(compareBy({ it.oldIndex }, { it.blockIndex }))
+        splits.sortWith(
+            compareBy({ it.oldIndex }, { it.blockIndex }, { it.spinePos })
+        )
 
         // Groups: the front matter before the first split,
         // then one group per split reaching to the next.

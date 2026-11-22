@@ -24,6 +24,8 @@ object ReaderPrefsCodec {
         "fontSize" to config.fontSizeSp.toString(),
         "lineHeight" to config.lineHeightMultiplier.toString(),
         "paragraphSpacing" to config.paragraphSpacingDp.toString(),
+        "paragraphIndent" to config.paragraphIndent.toString(),
+        "paragraphIndentEm" to config.paragraphIndentEm.toString(),
         "marginH" to config.marginHorizontalDp.toString(),
         "marginV" to config.marginVerticalDp.toString(),
         "alignment" to config.alignment.name,
@@ -94,6 +96,8 @@ object ReaderPrefsCodec {
                 fontSizeSp = float("fontSize", current.fontSizeSp),
                 lineHeightMultiplier = float("lineHeight", current.lineHeightMultiplier),
                 paragraphSpacingDp = float("paragraphSpacing", current.paragraphSpacingDp),
+                paragraphIndent = bool("paragraphIndent", current.paragraphIndent),
+                paragraphIndentEm = float("paragraphIndentEm", current.paragraphIndentEm),
                 marginHorizontalDp = float("marginH", current.marginHorizontalDp),
                 marginVerticalDp = float("marginV", current.marginVerticalDp),
                 alignment = ReaderValidation.parseEnum(

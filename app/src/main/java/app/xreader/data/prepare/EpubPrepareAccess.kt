@@ -21,8 +21,15 @@ object EpubPrepareAccess {
      * Moon Reader update's segmentation (patch 1): chapters
      * became the book's own TOC anchors, so every prepared
      * book re-prepares once and its place and marks ride
-     * the parser's merge map across the renumbering. */
-    const val LOADER_VERSION: Int = 2
+     * the parser's merge map across the renumbering.
+     * Version 3 is the TOC-tail fix (2026-11-22): the
+     * segmentation pass no longer drops the book's last TOC
+     * anchors (a forward walk off the book's end, a split
+     * dedup collapse, a case-diverged href), so every
+     * prepared book re-prepares once more and gains its
+     * missing tail chapters, place and marks riding the
+     * same merge map. */
+    const val LOADER_VERSION: Int = 3
 
     /**
      * A book counts as PREPARED when a record exists, its

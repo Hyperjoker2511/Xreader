@@ -52,10 +52,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.Highlight
 import app.xreader.domain.content.ChapterBlock
@@ -423,6 +426,25 @@ fun DocumentReader(
     val onWallSwapNextNow by rememberUpdatedState(onWallSwapNext)
     val onWallSwapPreviousNow by rememberUpdatedState(
         onWallSwapPrevious
+    )
+
+    // OE-2 hotfix (code 106): the reporter's restore guard
+    // (below) must judge against the CURRENT restore
+    // generation and anchor, not the values captured when
+    // its effect last restarted. In wall mode the effect
+    // restarts on every anchor change (the wall index is
+    // remembered on the anchor), so its captures were
+    // always fresh; on the whole-book list the restart
+    // rides on segment-map republishes, whose timing
+    // against a deliberate jump is not guaranteed. These
+    // holders make the guard's reads live in every mode —
+    // the same updated-state pattern as the swap doors
+    // above.
+    val restoreGenerationNow by rememberUpdatedState(
+        restoreGeneration
+    )
+    val anchorChapterIndexNow by rememberUpdatedState(
+        anchorChapterIndex
     )
 
     /** The wheel's live drag state (see [WallWheelState]):
@@ -840,10 +862,52 @@ fun DocumentReader(
             // retiring the restore (R2's witness consumes
             // it the same way) — and reports naming the
             // anchor itself flow throughout.
-            if (wallActive &&
-                consumedGeneration != restoreGeneration &&
+            //
+            // OE-2 hotfix (code 106): the same artifact
+            // exists on the whole-book list, on ANY
+            // deliberate chapter change — a Contents jump,
+            // the seek door, the next/previous doors, a
+            // mode flip — whenever the target segment is
+            // not yet resident: the surface parks on the
+            // target's state item, the boundary posture
+            // names the chapter being left at its end, and
+            // the 180 ms debounce can deliver that report
+            // (or a pre-jump reading report) after the
+            // jump's own landing. The ViewModel obeys any
+            // resident-segment report by moving its anchor
+            // back, and stage 1 then asserts the jump's
+            // restore against the chapter it was never
+            // issued for — the view snaps back to the
+            // previous chapter's start and the chapter
+            // state desyncs from the displayed chapter
+            // (the owner's code-105 proof: Contents →
+            // Chapter 1 landed, snapped back to the
+            // Prologue, and Next chapter then resolved to
+            // the chapter already on screen). Moon+ holds
+            // exactly one chapter: on a chapter change the
+            // new chapter is loaded fresh and its position
+            // set once — the previous chapter is not a
+            // position source at all, not a party to a
+            // negotiation. So the guard is no longer
+            // wall-only: while a deliberate restore owns
+            // the surface (its generation unconsumed),
+            // a Position report naming any other chapter
+            // is SUPERSEDED — dropped, in every mode. The
+            // generation/anchor reads are the live holders
+            // above, so the guard judges the current jump,
+            // not a captured one. Outside wall mode a
+            // genuine user drag also retires the restore
+            // (R2's witness), so a jump onto a chapter
+            // whose fill never lands can never mute the
+            // reader's own scrolling; in wall mode the
+            // shipped semantics stand unchanged (only the
+            // anchor is composed, and stage 1's userMoved
+            // consumption retires the restore there).
+            if (consumedGeneration != restoreGenerationNow &&
+                (wallActive ||
+                    userMovedGeneration != restoreGenerationNow) &&
                 finalReport is DocumentReport.Position &&
-                finalReport.chapterIndex != anchorChapterIndex
+                finalReport.chapterIndex != anchorChapterIndexNow
             ) {
                 null
             } else {
@@ -1367,7 +1431,8 @@ fun DocumentReader(
                                             .parseAny(chapter.title, "")
                                 ),
                                 palette = palette,
-                                fontFamily = fontFamily
+                                fontFamily = fontFamily,
+                                config = config
                             )
                         }
                     }
@@ -1736,8 +1801,10 @@ private fun SegmentStateItem(
 /**
  * Part 1: the app's chapter header — ONE clean line in the
  * QuickNovel / Moon+ shape: the reconciled title set as a
- * real chapter heading (titleLarge in the reading font),
- * generous space above, modest space below. The eyebrow
+ * real chapter heading in the reading font (1.5× the body
+ * size, bold, centred — the same treatment a book's own
+ * in-flow heading gets), generous space above, modest
+ * space below. The eyebrow
  * ("Chapter N"), the second title line and the rule that
  * used to stack over the book's own heading are gone; a
  * segment whose text opens with its own title composes no
@@ -1748,12 +1815,26 @@ private fun SegmentStateItem(
 private fun DocumentChapterHeader(
     title: String,
     palette: ReaderPalette,
-    fontFamily: FontFamily
+    fontFamily: FontFamily,
+    config: ReaderConfig
 ) {
+    // v1.7 (code 106): the app line carries the SAME title
+    // treatment as a book's own in-flow heading — the
+    // Heading branch of blockTextStyle at Moon+'s h2 level:
+    // the reading font at 1.5× the body size, bold, centred,
+    // line height following the body's multiplier — so a
+    // chapter's name looks the same whether the book
+    // printed it or the app did ("same to same").
+    val titleSize = config.fontSizeSp * 1.5f
     Text(
         title,
-        style = MaterialTheme.typography.titleLarge
-            .copy(fontFamily = fontFamily),
+        style = TextStyle(
+            fontFamily = fontFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = titleSize.sp,
+            lineHeight = (titleSize * config.lineHeightMultiplier).sp,
+            textAlign = TextAlign.Center
+        ),
         color = palette.text,
         modifier = Modifier
             .fillMaxWidth()

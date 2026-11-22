@@ -78,6 +78,69 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    /**
+     * v1.7 (code 106): the one-time Moon+ "same to same"
+     * typography-default migration — the same shape as the
+     * Part 4 migration above, widened to every field the
+     * ruling moves. Per field, a stored value EXACTLY equal
+     * to the old default — and only that value — is
+     * rewritten to the new default; any other stored value
+     * is a deliberate choice and is never touched. A
+     * deliberate choice that happens to equal an old
+     * default is indistinguishable from untouched and moves
+     * with it (the trade the owner accepted at Part 4). An
+     * absent key needs no write: the code fallback in
+     * [toConfig] already IS the new default. The flag is
+     * written in the SAME edit as the values (atomic — a
+     * crash can never re-migrate), and once it stands the
+     * migration never runs again. Per-book overrides
+     * (BookReaderPrefs) are NOT touched: a book's own size
+     * is deliberate and wins (option-scope rule). The new
+     * indent fields have no stored keys anywhere yet, so
+     * the code default (on, 2 em) reaches everyone without
+     * overriding any prior choice — there is none to
+     * override. Runs AFTER the Part 4 migration at startup,
+     * so a pre-Part-4 store holding the old 10 dp lands on
+     * 4 dp there and then on 0 dp here — the untouched end
+     * state either way.
+     */
+    suspend fun migrateTypographyDefaultsOnce() {
+        store.edit { prefs ->
+            if (prefs[KEY_TYPO_MOONPLUS_MIGRATED] != true) {
+                if (prefs[KEY_FONT] ==
+                    ReaderFontChoice.LITERATA.name
+                ) {
+                    prefs[KEY_FONT] =
+                        ReaderFontChoice.NOTO_SERIF.name
+                }
+                if (prefs[KEY_FONT_SIZE] == 19f) {
+                    prefs[KEY_FONT_SIZE] = 17f
+                }
+                if (prefs[KEY_LINE_HEIGHT] == 1.55f) {
+                    prefs[KEY_LINE_HEIGHT] = 1.43f
+                }
+                if (prefs[KEY_PARA_SPACING] ==
+                    ParagraphSpacing.COMPACT.dp
+                ) {
+                    prefs[KEY_PARA_SPACING] = 0f
+                }
+                if (prefs[KEY_ALIGNMENT] ==
+                    ReaderAlignment.LEFT.name
+                ) {
+                    prefs[KEY_ALIGNMENT] =
+                        ReaderAlignment.JUSTIFY.name
+                }
+                if (prefs[KEY_MARGIN_H] == 24f) {
+                    prefs[KEY_MARGIN_H] = 26f
+                }
+                if (prefs[KEY_MARGIN_V] == 20f) {
+                    prefs[KEY_MARGIN_V] = 30f
+                }
+                prefs[KEY_TYPO_MOONPLUS_MIGRATED] = true
+            }
+        }
+    }
+
     suspend fun update(transform: (ReaderConfig) -> ReaderConfig) {
         store.edit { prefs ->
             val next = ReaderValidation.validate(transform(prefs.toConfig()))
@@ -91,6 +154,8 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
             prefs[KEY_FONT_SIZE] = next.fontSizeSp
             prefs[KEY_LINE_HEIGHT] = next.lineHeightMultiplier
             prefs[KEY_PARA_SPACING] = next.paragraphSpacingDp
+            prefs[KEY_INDENT] = next.paragraphIndent
+            prefs[KEY_INDENT_EM] = next.paragraphIndentEm
             prefs[KEY_MARGIN_H] = next.marginHorizontalDp
             prefs[KEY_MARGIN_V] = next.marginVerticalDp
             prefs[KEY_ALIGNMENT] = next.alignment.name
@@ -151,18 +216,19 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
             highContrastText = this[KEY_HIGH_CONTRAST] ?: false,
             fontChoice = ReaderValidation.parseEnum(
                 this[KEY_FONT], ReaderFontChoice.entries.toTypedArray(),
-                ReaderFontChoice.LITERATA
+                ReaderFontChoice.NOTO_SERIF
             ),
             userFontName = this[KEY_USER_FONT],
-            fontSizeSp = this[KEY_FONT_SIZE] ?: 19f,
-            lineHeightMultiplier = this[KEY_LINE_HEIGHT] ?: 1.55f,
-            paragraphSpacingDp = this[KEY_PARA_SPACING]
-                ?: ParagraphSpacing.COMPACT.dp,
-            marginHorizontalDp = this[KEY_MARGIN_H] ?: 24f,
-            marginVerticalDp = this[KEY_MARGIN_V] ?: 20f,
+            fontSizeSp = this[KEY_FONT_SIZE] ?: 17f,
+            lineHeightMultiplier = this[KEY_LINE_HEIGHT] ?: 1.43f,
+            paragraphSpacingDp = this[KEY_PARA_SPACING] ?: 0f,
+            paragraphIndent = this[KEY_INDENT] ?: true,
+            paragraphIndentEm = this[KEY_INDENT_EM] ?: 2f,
+            marginHorizontalDp = this[KEY_MARGIN_H] ?: 26f,
+            marginVerticalDp = this[KEY_MARGIN_V] ?: 30f,
             alignment = ReaderValidation.parseEnum(
                 this[KEY_ALIGNMENT], ReaderAlignment.entries.toTypedArray(),
-                ReaderAlignment.LEFT
+                ReaderAlignment.JUSTIFY
             ),
             bionicReading = this[KEY_BIONIC] ?: false,
             brightness = this[KEY_BRIGHTNESS],
@@ -254,6 +320,15 @@ class ReaderPrefs(private val store: DataStore<Preferences>) {
         // every pre-fix store by construction).
         val KEY_PARA_SPACING_MIGRATED =
             booleanPreferencesKey("reader.paragraph_spacing_default_migrated")
+        // Code 106's one-time Moon+ typography-default
+        // migration flag (absent in every pre-106 store by
+        // construction).
+        val KEY_TYPO_MOONPLUS_MIGRATED =
+            booleanPreferencesKey("reader.typography_moonplus_migrated")
+        // Code 106: the first-line indent (absent = the
+        // Moon+ default, on at 2 em, in every pre-106 store).
+        val KEY_INDENT = booleanPreferencesKey("reader.paragraph_indent")
+        val KEY_INDENT_EM = floatPreferencesKey("reader.paragraph_indent_em")
         // v1.7 OE-4: the "CBZ opens in" choice (absent = the
         // Komikku default in every pre-OE-4 store).
         val KEY_CBZ_OPENS_IN_KOMIKKU =

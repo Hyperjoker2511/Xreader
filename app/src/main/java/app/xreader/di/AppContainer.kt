@@ -1402,6 +1402,14 @@ class AppContainer(
             runCatching {
                 readerPrefs.migrateParagraphSpacingDefaultOnce()
             }
+            // v1.7 (code 106): the one-time Moon+ typography-
+            // default migration, in the SAME launch and after
+            // the Part 4 call, so a store still holding the
+            // pre-Part-4 10 dp settles 10 → 4 → 0 in order.
+            // Flag-gated and idempotent inside ReaderPrefs.
+            runCatching {
+                readerPrefs.migrateTypographyDefaultsOnce()
+            }
         }
         // AppInfo first (an extension may read the host version from
         // its very first class load), then the Injekt registration.

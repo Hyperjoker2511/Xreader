@@ -28,6 +28,7 @@ import app.xreader.di.AppContainer
 import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.reader.BookDocument
+import app.xreader.domain.reader.ChapterEndWall
 import app.xreader.domain.reader.ChapterText
 import app.xreader.domain.reader.FocusState
 import app.xreader.domain.reader.FocusTimer
@@ -781,6 +782,16 @@ class ReaderViewModel(
                     // v1.7 OE-1 (R17): the PDF feeder advances
                     // itself — page-as-unit, never the wall.
                     pdfSpeech?.onChapterFinished()
+                } else if (chapterWallActive()) {
+                    // v1.6.2-mr10 (audit B1): the chapter-end
+                    // wall stays closed to auto-crossing in
+                    // listening as in reading — narration ENDS
+                    // at this chapter's end instead of advancing
+                    // across it. No pendingAutoplayTts, no
+                    // advanceNarration: the end state is the
+                    // same as finishing the book's last chapter,
+                    // and the reader's place stays at the
+                    // chapter's end.
                 } else if (_state.value.hasNext) {
                     pendingAutoplayTts = true
                     // v1.7 document engine (B2): the advance is
@@ -2177,6 +2188,29 @@ class ReaderViewModel(
             )
             readAloud.setRate(_config.value.speechRate)
             readAloud.play()
+        }
+    }
+
+    /**
+     * v1.6.2-mr10 (audit B1): the chapter-end wall's gate,
+     * computed from exactly the inputs the screen's own
+     * wall gate uses (ReaderScreen's `wallActive`): the
+     * Chapter-by-chapter transition mode, the wall scope
+     * setting, and — for the FOR_EPUB_BOOKS scope — whether
+     * this book is an EPUB book. Listening consults the
+     * same gate reading does.
+     */
+    private fun chapterWallActive(): Boolean {
+        val config = _config.value
+        if (config.chapterTransition !=
+            ChapterTransition.CHAPTER_BY_CHAPTER
+        ) {
+            return false
+        }
+        return when (config.chapterEndWall) {
+            ChapterEndWall.EVERY_BOOK -> true
+            ChapterEndWall.OFF -> false
+            ChapterEndWall.FOR_EPUB_BOOKS -> _state.value.isEpubBook
         }
     }
 

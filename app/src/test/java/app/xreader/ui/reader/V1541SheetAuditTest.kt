@@ -106,11 +106,13 @@ class V1541SheetAuditTest {
         assertEquals(4f, ParagraphSpacing.COMPACT.dp, 0f)
         assertEquals(10f, ParagraphSpacing.NORMAL.dp, 0f)
         assertEquals(18f, ParagraphSpacing.RELAXED.dp, 0f)
-        // The fresh-install default is the COMPACT stop itself
-        // (v1.7 Moon+ standard fix, Part 4 — the owner's word
-        // moved the default; the preset pins above stand).
+        // The fresh-install default paragraph spacing is 0 dp
+        // (2026-11-22 typography ruling — Moon+ "same to same":
+        // paragraphs separate by first-line indent, not by a
+        // gap; owner-authorised pin change. The preset pins
+        // above stand — every stop remains a user option).
         assertEquals(
-            ParagraphSpacing.COMPACT.dp,
+            0f,
             ReaderConfig().paragraphSpacingDp,
             0f
         )
