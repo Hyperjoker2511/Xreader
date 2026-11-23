@@ -832,6 +832,7 @@ fun ReaderScreen(
                 bottomInset = readerBottomInset,
                 spokenRange = spokenRange,
                 reflowHighlights = pdfReflowHighlights,
+                pageHighlights = pdfPageHighlights,
                 searchMark = pdfSearchMark,
                 onToggleControls = { chromeVisible = !chromeVisible },
                 onBack = onBack
@@ -1619,6 +1620,9 @@ fun ReaderScreen(
                         onDeleteBookmark = { viewModel.deleteBookmark(it) },
                         onRemoveReflowHighlight = {
                             viewModel.removePdfReflowHighlight(it)
+                        },
+                        onRemovePageHighlight = {
+                            viewModel.removePdfPageHighlight(it)
                         }
                     )
                 } else {
@@ -2309,6 +2313,8 @@ private fun PdfReaderHost(
     spokenRange: IntRange?,
     reflowHighlights: List<
         app.xreader.ui.localreader.StoredSelectionHighlight>,
+    pageHighlights: List<
+        app.xreader.ui.localreader.StoredSelectionHighlight>,
     searchMark: PdfSearchMark?,
     onToggleControls: () -> Unit,
     onBack: () -> Unit
@@ -2412,6 +2418,20 @@ private fun PdfReaderHost(
                             onToggleControls = onToggleControls,
                             onResolvedFilter = { page, filter ->
                                 viewModel.onPdfResolvedFilter(page, filter)
+                            },
+                            pageHighlights = pageHighlights,
+                            searchMark = searchMark,
+                            textAvailable = s.textAvailable,
+                            onAddPageHighlight = { highlight ->
+                                viewModel.addPdfPageHighlight(highlight)
+                            },
+                            onRemovePageHighlight = { highlight ->
+                                viewModel.removePdfPageHighlight(highlight)
+                            },
+                            onUpdatePageNote = { highlight, note ->
+                                viewModel.updatePdfPageHighlightNote(
+                                    highlight, note
+                                )
                             }
                         )
                         PdfReadMode.REFLOW -> when {
@@ -2525,6 +2545,9 @@ private fun PdfContentsSheet(
     onDeleteBookmark: (app.xreader.data.db.Bookmark) -> Unit,
     onRemoveReflowHighlight: (
         app.xreader.ui.localreader.StoredSelectionHighlight
+    ) -> Unit,
+    onRemovePageHighlight: (
+        app.xreader.ui.localreader.StoredSelectionHighlight
     ) -> Unit
 ) {
     Column(
@@ -2619,23 +2642,29 @@ private fun PdfContentsSheet(
             Spacer(Modifier.height(8.dp))
             pagesForm.forEach { highlight ->
                 val page = highlight.page ?: 0
-                Column(
-                    Modifier
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onJumpPagesForm(page) }
                         .padding(vertical = 6.dp)
                 ) {
-                    Text(
-                        highlight.selectedText,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 2
-                    )
-                    Text(
-                        "p. ${page + 1}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme
-                            .colorScheme.onSurfaceVariant
-                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            highlight.selectedText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2
+                        )
+                        Text(
+                            "p. ${page + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme
+                                .colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(
+                        onClick = { onRemovePageHighlight(highlight) }
+                    ) { Text("Remove") }
                 }
             }
         }

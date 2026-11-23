@@ -327,6 +327,244 @@ object PdfStripperLoop {
         return text to stripper.pageBounds
     }
 
+    /**
+     * v1.7 MR-2b: ONE page's per-char geometry — the same
+     * per-page strip [stripPage] runs (same configuration:
+     * no sortByPosition, no separator setters, so the text
+     * is the strip's own text byte for byte), observed by
+     * [GeometryStripper], which records one rect per OUTPUT
+     * character. Null on either A3 refusal: the recording's
+     * size disagrees with the text's length (the invariant
+     * is checked, never assumed — a page whose geometry
+     * cannot be trusted index-for-index is a page selection
+     * is unavailable on), or the page's text is BLANK (a
+     * textless page strips to "" — measured by the MR-2b
+     * harness; blankness is judged on the text, never on
+     * emptiness; a scanned page has NO geometry).
+     * The caller owns the document's lifetime and
+     * serialisation, exactly as for [stripPage].
+     */
+    fun stripPageGeometry(
+        document: PDDocument,
+        pageIndex: Int
+    ): PageCharGeometry? {
+        val stripper = GeometryStripper()
+        stripper.startPage = pageIndex + 1
+        stripper.endPage = pageIndex + 1
+        val text = stripper.getText(document)
+        if (text.isBlank()) return null
+        val rects = stripper.charRects
+        if (rects.size != text.length) return null
+        return PageCharGeometry(text, rects)
+    }
+
+    /**
+     * MR-2b: the collecting stripper — records one
+     * [PdfCharRect] per character the superclass WRITES, in
+     * write order, then lets the superclass write it (the
+     * output text is the superclass's, untouched, exactly as
+     * [BoundsStripper] leaves it).
+     *
+     * Why the override set is this wide (verified against
+     * the shipped pdfbox-android 2.0.27.0 binary, javap over
+     * its PDFTextStripper): in this version the separator
+     * writes go DIRECTLY to the output Writer and never pass
+     * through writeString — writeWordSeparator writes the
+     * word separator (" "), writeLineSeparator the line
+     * separator ("\n"), writePageEnd the page end ("\n");
+     * writeParagraphStart/End, writePageStart and
+     * startArticle/endArticle write their strings the same
+     * way (all "" under the default configuration, but
+     * recorded by their getters' lengths so the count holds
+     * by construction, not by assumption). A writeString-only
+     * collector — the BoundsStripper shape — silently loses
+     * ~15–20% of the page's characters (every separator) and
+     * every index after the first loss drifts.
+     *
+     * Word walk (writeString): the callback delivers a
+     * whole LINE at a time, space glyphs included as
+     * positions (measured against the shipped binary by the
+     * MR-2b harness probe — a per-word assumption would
+     * misalign everything after a ligature). The segment is
+     * therefore split into words on its spaces, the
+     * positions into groups on their space glyphs, and the
+     * two sides paired word by word; the space chars pair
+     * with the space positions. A word whose positions'
+     * concatenated unicode EQUALS the emitted word walks
+     * sequentially, each position's rect repeated over its
+     * own unicode length. A word that DIVERGES — NFKC
+     * expansion (a ligature glyph whose raw unicode is one
+     * char emitting two) or a bidi word reordered against
+     * its positions — takes the word's UNION rect on every
+     * char: anchors stay exact, drawing is slightly wide on
+     * that word only. If the word/group counts themselves
+     * disagree, the whole segment takes its union — the
+     * count is preserved on every path; only precision
+     * degrades. Separator chars take the most recent glyph's rect
+     * ([lastRect]): they are never drawn or pressed, they
+     * only hold their index.
+     */
+    private class GeometryStripper : PDFTextStripper() {
+        val charRects = ArrayList<PdfCharRect>()
+        private var lastRect: PdfCharRect? = null
+
+        private fun rectOf(
+            position: com.tom_roush.pdfbox.text.TextPosition
+        ): PdfCharRect = PdfCharRect(
+            left = position.xDirAdj,
+            top = position.yDirAdj,
+            right = position.xDirAdj + position.widthDirAdj,
+            bottom = position.yDirAdj + position.heightDir
+        )
+
+        private fun record(rect: PdfCharRect, count: Int) {
+            if (count <= 0) return
+            repeat(count) { charRects += rect }
+            lastRect = rect
+        }
+
+        /** A separator's chars: the nearest glyph's rect, or
+         * a zero rect at the origin before the page's first
+         * glyph (a position no default-configuration page
+         * reaches — page start writes "" and precedes all
+         * glyphs only as an empty string). */
+        private fun recordSeparator(count: Int) {
+            if (count <= 0) return
+            record(lastRect ?: PdfCharRect(0f, 0f, 0f, 0f), count)
+        }
+
+        override fun writeString(
+            text: String?,
+            textPositions: List<com.tom_roush.pdfbox.text.TextPosition>
+        ) {
+            val segment = text ?: ""
+            if (segment.isNotEmpty()) {
+                recordSegment(segment, textPositions)
+            }
+            super.writeString(text, textPositions)
+        }
+
+        /** One writeString segment (a line, in practice):
+         * word-scoped pairing per the class doc. The char
+         * count is preserved on every path. */
+        private fun recordSegment(
+            segment: String,
+            positions: List<com.tom_roush.pdfbox.text.TextPosition>
+        ) {
+            val words = segment.split(' ')
+            val groups =
+                ArrayList<ArrayList<
+                    com.tom_roush.pdfbox.text.TextPosition>>()
+            val spaces =
+                ArrayList<com.tom_roush.pdfbox.text.TextPosition>()
+            var group =
+                ArrayList<com.tom_roush.pdfbox.text.TextPosition>()
+            for (position in positions) {
+                if (position.unicode == " ") {
+                    groups += group
+                    group = ArrayList()
+                    spaces += position
+                } else {
+                    group += position
+                }
+            }
+            groups += group
+            if (words.size != groups.size) {
+                // The two sides cannot be paired word by
+                // word — the whole segment takes its union.
+                val union = unionOf(positions) ?: lastRect
+                if (union != null) record(union, segment.length)
+                return
+            }
+            words.forEachIndexed { index, word ->
+                if (index > 0) {
+                    record(rectOf(spaces[index - 1]), 1)
+                }
+                if (word.isEmpty()) return@forEachIndexed
+                val wordPositions = groups[index]
+                val posText = buildString {
+                    for (position in wordPositions) {
+                        append(position.unicode ?: "")
+                    }
+                }
+                if (posText == word) {
+                    for (position in wordPositions) {
+                        val length =
+                            (position.unicode ?: "").length
+                        if (length > 0) {
+                            record(rectOf(position), length)
+                        }
+                    }
+                } else {
+                    val union = unionOf(wordPositions) ?: lastRect
+                    if (union != null) record(union, word.length)
+                }
+            }
+        }
+
+        private fun unionOf(
+            positions: List<com.tom_roush.pdfbox.text.TextPosition>
+        ): PdfCharRect? {
+            var union: PdfCharRect? = null
+            for (position in positions) {
+                val rect = rectOf(position)
+                union = union?.union(rect) ?: rect
+            }
+            return union
+        }
+
+        override fun writeCharacters(
+            textPosition: com.tom_roush.pdfbox.text.TextPosition
+        ) {
+            // Not called anywhere in this version's strip
+            // flow (a subclass hook) — recorded anyway so no
+            // write path can bypass the count.
+            val length = (textPosition.unicode ?: "").length
+            if (length > 0) record(rectOf(textPosition), length)
+            super.writeCharacters(textPosition)
+        }
+
+        override fun writeWordSeparator() {
+            recordSeparator(wordSeparator.length)
+            super.writeWordSeparator()
+        }
+
+        override fun writeLineSeparator() {
+            recordSeparator(lineSeparator.length)
+            super.writeLineSeparator()
+        }
+
+        override fun writeParagraphStart() {
+            recordSeparator(paragraphStart.length)
+            super.writeParagraphStart()
+        }
+
+        override fun writeParagraphEnd() {
+            recordSeparator(paragraphEnd.length)
+            super.writeParagraphEnd()
+        }
+
+        override fun writePageStart() {
+            recordSeparator(pageStart.length)
+            super.writePageStart()
+        }
+
+        override fun writePageEnd() {
+            recordSeparator(pageEnd.length)
+            super.writePageEnd()
+        }
+
+        override fun startArticle() {
+            recordSeparator(articleStart.length)
+            super.startArticle()
+        }
+
+        override fun endArticle() {
+            recordSeparator(articleEnd.length)
+            super.endArticle()
+        }
+    }
+
     /** Accumulates the union of TextPosition bounds for the page
      * currently being stripped. Text output is the superclass's,
      * untouched — this only watches it go by. */

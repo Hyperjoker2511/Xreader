@@ -1081,6 +1081,24 @@ internal class PdfLazyTextExtractor(
             }.getOrNull()
         }
 
+    /** MR-2b: page [page]'s per-char geometry — the
+     * collecting stripper's pass over the SAME kept document,
+     * serialised on the same [lock]; null when the document
+     * cannot be opened, the page is out of range, or the
+     * strip's index-integrity check fails. Blankness is the
+     * session door's judgement, not this one's. */
+    fun extractGeometry(
+        page: Int
+    ): app.xreader.data.parse.PageCharGeometry? =
+        synchronized(lock) {
+            val doc = openLocked() ?: return@synchronized null
+            if (page !in 0 until doc.numberOfPages) return@synchronized null
+            runCatching {
+                app.xreader.data.parse.PdfStripperLoop
+                    .stripPageGeometry(doc, page)
+            }.getOrNull()
+        }
+
     override fun close() {
         synchronized(lock) {
             runCatching { document?.close() }
@@ -1687,6 +1705,60 @@ class PdfSession private constructor(
      * (landed strip or an earlier per-page extraction); null
      * when neither has it yet. Never extracts. */
     fun pageTextOrNull(page: Int): String? = strip.pageTextOrNull(page)
+
+    // ── MR-2b: per-char page geometry (on-page selection) ──
+
+    /** The geometry cache: an access-ordered LRU of the last
+     * [GEOMETRY_CACHE_PAGES] pages' char geometry, guarded
+     * by its own lock. Deliberately small — a geometry is a
+     * rect per char of a page's text; the visible page, its
+     * neighbours and a page being read closely are the whole
+     * working set. An ACTIVE selection never depends on this
+     * cache: the selection state holds its own copy (B3). */
+    private val geometryLock = Any()
+    private val geometryCache =
+        object : LinkedHashMap<Int, app.xreader.data.parse.PageCharGeometry>(
+            GEOMETRY_CACHE_PAGES + 1, 0.75f, true
+        ) {
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<
+                    Int, app.xreader.data.parse.PageCharGeometry>?
+            ): Boolean = size > GEOMETRY_CACHE_PAGES
+        }
+
+    /**
+     * MR-2b (Revision 1, Part B): page [page]'s per-char
+     * geometry, or null when selection is unavailable on that
+     * page — no extractor wired (harness sessions), the
+     * document cannot open, extraction failed the strip's
+     * index-integrity check, or the page is BLANK. Blankness
+     * is judged on the stripped text: a textless page's strip
+     * text is "\n" (the page-end separator alone), never "",
+     * so the test is [String.isBlank], not emptiness. The
+     * extraction itself runs on the IO dispatcher through the
+     * lazy extractor's serialised document — never on the
+     * caller's (composition) thread.
+     */
+    suspend fun pageGeometry(
+        page: Int
+    ): app.xreader.data.parse.PageCharGeometry? {
+        synchronized(geometryLock) { geometryCache[page] }
+            ?.let { return it }
+        val extractor = textExtractor ?: return null
+        val geometry = kotlinx.coroutines.withContext(
+            kotlinx.coroutines.Dispatchers.IO
+        ) {
+            runCatching { extractor.extractGeometry(page) }
+                .getOrNull()
+        } ?: return null
+        if (geometry.pageText.isBlank() ||
+            geometry.rects.size != geometry.pageText.length
+        ) {
+            return null
+        }
+        synchronized(geometryLock) { geometryCache[page] = geometry }
+        return geometry
+    }
 
     /** The outline title nearest at-or-before [page] — the anchor
      * label progress rows carry (§3.2 contract). */
@@ -2401,6 +2473,11 @@ class PdfSession private constructor(
 
         /** v1.5.9 (A-2): the refine pass's pixel ceiling. */
         const val REFINE_MAX_PIXELS = 4_000_000
+
+        /** MR-2b (Revision 1, Part B): the per-char geometry
+         * cache's page cap — the visible page, its neighbours
+         * and the pages a reader is actively marking. */
+        const val GEOMETRY_CACHE_PAGES = 5
 
         /** v1.5.9 (A-2): zoom past this, once settled ~150 ms,
          * earns a refine render; double-tap refines at once. */

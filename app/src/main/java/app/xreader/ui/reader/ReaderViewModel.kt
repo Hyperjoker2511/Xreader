@@ -105,8 +105,10 @@ data class PdfSearchHit(
 /** v1.7 OE-1 (R18): a search hit's mark on the current
  * page — page + [start, end) char range in the searched
  * representation. The Reflow surface renders it on its
- * page; Pages mode carries it unrendered (on-page
- * selection is MR-2b, not this build). */
+ * page; since MR-2b the Pages surface draws it too, via
+ * the page's char geometry — and [setPdfMode] clears the
+ * mark on every switch, because the offsets belong to the
+ * representation that was searched. */
 data class PdfSearchMark(
     val page: Int,
     val start: Int,
@@ -4029,6 +4031,13 @@ class ReaderViewModel(
         // R22: a book with no text layer has no Reflow to
         // enter (the switch itself carries the line).
         if (reflow && ready.textAvailable == false) return
+        // MR-2b (Revision 1, Part F): a mode switch clears
+        // the search mark in BOTH directions — a mark's char
+        // offsets belong to the representation that was
+        // searched (Reflow's cleaned text ≠ Pages' strip
+        // text), so a carried mark could draw on the wrong
+        // words in the other mode.
+        _pdfSearchMark.value = null
         _pdfReader.value = if (target == PdfReadMode.PAGES) {
             ready.copy(
                 mode = target,
@@ -4270,6 +4279,51 @@ class ReaderViewModel(
                         app.xreader.ui.localreader
                             .encodeSelectionHighlights(next)
                 }
+            }
+        }
+    }
+
+    // ── PDF highlights, Pages form (R20 / MR-2b) ─────────
+
+    /** MR-2b (Revision 1, D2): ALL Pages-form writes go
+     * through the selection kit's store — the same
+     * [app.xreader.ui.localreader.SelectionHighlightStore]
+     * (and the same per-book key) the EPUB road and this
+     * book's Pages collector above read. No hand-rolled
+     * DataStore edits for this form: one writer shape, so
+     * the forms can never drift apart in encoding. The
+     * _pdfPageHighlights flow republishes on its own. */
+    private fun pdfPageHighlightStore() =
+        app.xreader.ui.localreader.SelectionHighlightStore(
+            container.applicationContext.settingsDataStore
+        )
+
+    fun addPdfPageHighlight(
+        highlight: app.xreader.ui.localreader.StoredSelectionHighlight
+    ) {
+        viewModelScope.launch(container.ioDispatcher) {
+            runCatching { pdfPageHighlightStore().add(bookId, highlight) }
+        }
+    }
+
+    fun removePdfPageHighlight(
+        highlight: app.xreader.ui.localreader.StoredSelectionHighlight
+    ) {
+        viewModelScope.launch(container.ioDispatcher) {
+            runCatching {
+                pdfPageHighlightStore().remove(bookId, highlight.id)
+            }
+        }
+    }
+
+    fun updatePdfPageHighlightNote(
+        highlight: app.xreader.ui.localreader.StoredSelectionHighlight,
+        note: String
+    ) {
+        viewModelScope.launch(container.ioDispatcher) {
+            runCatching {
+                pdfPageHighlightStore()
+                    .updateNote(bookId, highlight.id, note)
             }
         }
     }

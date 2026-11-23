@@ -3,6 +3,7 @@ package app.xreader.ui.reader
 import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -47,11 +48,13 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,6 +74,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
@@ -81,10 +85,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
@@ -99,6 +106,11 @@ import app.xreader.data.engine.PdfProbeState
 import app.xreader.data.engine.PdfRenderSlot
 import app.xreader.data.engine.PdfSession
 import app.xreader.data.engine.PdfStripState
+import app.xreader.data.parse.PageCharGeometry
+import app.xreader.data.parse.PdfCharRect
+import app.xreader.data.parse.pdfCharIndexAt
+import app.xreader.data.parse.pdfMergedLineRects
+import app.xreader.data.parse.resolvePdfWordRange
 import app.xreader.ui.localreader.AutoScrollController
 import app.xreader.ui.localreader.AutoScrollEngine
 import app.xreader.ui.localreader.NormalizedRect
@@ -116,6 +128,10 @@ import app.xreader.ui.localreader.PdfScrollModel
 import app.xreader.ui.localreader.PdfSpreadMath
 import app.xreader.ui.localreader.PdfSurfaceZoomState
 import app.xreader.ui.localreader.ReaderViolet
+import app.xreader.ui.localreader.SelectionActionRow
+import app.xreader.ui.localreader.SelectionHighlightMenu
+import app.xreader.ui.localreader.SelectionNoteEditor
+import app.xreader.ui.localreader.StoredSelectionHighlight
 import app.xreader.ui.localreader.TapLayoutPreset
 import app.xreader.ui.localreader.TapZoneAction
 import app.xreader.ui.localreader.pdfBaseSlotWidthPx
@@ -130,9 +146,11 @@ import app.xreader.ui.localreader.resolvedForDisplay
 import app.xreader.ui.localreader.smartScrollLockConsumesHorizontal
 import app.xreader.ui.localreader.tapActionFor
 import app.xreader.ui.localreader.withFilter
+import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * v1.7 OE-1 (R4, R5): the Pages-mode surface of a PDF
@@ -164,8 +182,29 @@ class PdfPagesHandlers(
     val onUpdateSettings: ((PdfDocSettings) -> PdfDocSettings) -> Unit
 )
 
+/** MR-2b (Revision 1, Part G): the scanned-book line —
+ * shown once per book per session when the whole book has
+ * no text layer. Plain words, said once, never a toast
+ * channel (the app has none). */
+private const val PDF_SCANNED_LINE =
+    "This book is scanned pictures — there's no text to select."
+
+/** MR-2b (Revision 1, C3): the trim stand-down line — the
+ * first time per session the trim hides selection on a book
+ * that has something to hide (or a long-press meets it). */
+private const val PDF_TRIM_LINE =
+    "Page trim is on — selection and highlights are hidden " +
+        "until it's off."
+
 /** Pages mode: the printed pages, in the book's chosen
- * scroll model — the shipped bodies, unaltered. */
+ * scroll model — the shipped bodies, unaltered.
+ *
+ * MR-2b: the surface also owns the one transient banner
+ * both of this build's plain lines ride (the scanned-book
+ * line and the trim stand-down line) — top-centred over
+ * the page, state-driven, dismissed on page turn. There is
+ * no capsule toast anywhere in the app to reuse; this is
+ * the honest local shape, not a new channel. */
 @Composable
 fun PdfPagesSurface(
     session: PdfSession,
@@ -175,28 +214,586 @@ fun PdfPagesSurface(
     handlers: PdfPagesHandlers,
     autoScroll: AutoScrollController,
     onToggleControls: () -> Unit,
-    onResolvedFilter: (Int, PdfPageFilter) -> Unit
+    onResolvedFilter: (Int, PdfPageFilter) -> Unit,
+    pageHighlights: List<StoredSelectionHighlight> = emptyList(),
+    searchMark: PdfSearchMark? = null,
+    textAvailable: Boolean? = null,
+    onAddPageHighlight: (StoredSelectionHighlight) -> Unit = {},
+    onRemovePageHighlight: (StoredSelectionHighlight) -> Unit = {},
+    onUpdatePageNote: (StoredSelectionHighlight, String) -> Unit =
+        { _, _ -> }
 ) {
-    when (settings.scrollModel) {
-        PdfScrollModel.PAGED -> PdfPagedBody(
-            handlers = handlers,
-            session = session,
-            initialPage = initialPage,
-            currentPage = currentPage,
-            settings = settings,
-            autoScroll = autoScroll,
-            onToggleControls = onToggleControls,
-            onResolvedFilter = onResolvedFilter
+    var bannerText by remember(session) { mutableStateOf<String?>(null) }
+    var bannerPage by remember(session) { mutableStateOf<Int?>(null) }
+    var scannedLineShown by remember(session) { mutableStateOf(false) }
+    var trimLineShown by remember(session) { mutableStateOf(false) }
+    // A page turn dismisses whatever line is up (the shown
+    // flags persist — each line is once per book per
+    // session, not once per page).
+    fun noteVisiblePage(page: Int) {
+        if (bannerPage != page) {
+            bannerPage = page
+            bannerText = null
+        }
+    }
+    LaunchedEffect(currentPage) { noteVisiblePage(currentPage) }
+    LaunchedEffect(textAvailable) {
+        if (textAvailable == false && !scannedLineShown) {
+            scannedLineShown = true
+            bannerText = PDF_SCANNED_LINE
+        }
+    }
+    val onTrimStandDown = {
+        if (!trimLineShown) {
+            trimLineShown = true
+            bannerText = PDF_TRIM_LINE
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+        when (settings.scrollModel) {
+            PdfScrollModel.PAGED -> PdfPagedBody(
+                handlers = handlers,
+                session = session,
+                initialPage = initialPage,
+                currentPage = currentPage,
+                settings = settings,
+                autoScroll = autoScroll,
+                onToggleControls = onToggleControls,
+                onResolvedFilter = onResolvedFilter,
+                pageHighlights = pageHighlights,
+                searchMark = searchMark,
+                onAddPageHighlight = onAddPageHighlight,
+                onRemovePageHighlight = onRemovePageHighlight,
+                onUpdatePageNote = onUpdatePageNote,
+                onTrimStandDown = onTrimStandDown
+            )
+            PdfScrollModel.CONTINUOUS -> PdfContinuousBody(
+                handlers = handlers,
+                session = session,
+                initialPage = initialPage,
+                settings = settings,
+                autoScroll = autoScroll,
+                onToggleControls = onToggleControls,
+                onResolvedFilter = onResolvedFilter,
+                pageHighlights = pageHighlights,
+                searchMark = searchMark,
+                onAddPageHighlight = onAddPageHighlight,
+                onRemovePageHighlight = onRemovePageHighlight,
+                onUpdatePageNote = onUpdatePageNote,
+                onPageVisible = { page -> noteVisiblePage(page) }
+            )
+        }
+        val line = bannerText
+        if (line != null) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(start = 24.dp, end = 24.dp, top = 12.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 6.dp
+            ) {
+                Text(
+                    line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(
+                        horizontal = 14.dp, vertical = 8.dp
+                    )
+                )
+            }
+        }
+    }
+}
+
+// ── MR-2b: on-page selection (shared by both bodies) ────────────
+
+/**
+ * A live Pages-form selection on one page: [start, end)
+ * char offsets into the page's strip text — the stored
+ * form's own shape (StoredSelectionHighlight.charStart /
+ * charEnd) — over the selection's OWN copy of the page
+ * geometry (Revision 1, B3: the session cache may evict; a
+ * live selection never loses the ground under its handles).
+ */
+private class PdfPageSelection(
+    val geometry: PageCharGeometry,
+    start: Int,
+    end: Int
+) {
+    var start by mutableStateOf(start)
+    var end by mutableStateOf(end)
+
+    val text: String
+        get() {
+            val length = geometry.pageText.length
+            val s = start.coerceIn(0, length)
+            val e = end.coerceIn(s, length)
+            return geometry.pageText.substring(s, e)
+        }
+}
+
+/** The follow-on surfaces a page's selection can open —
+ * one holder per page host (paged cell / continuous item),
+ * rendered by [PdfSelectionDialogs]. */
+private class PdfSelectionDialogState {
+    var menuHighlight by mutableStateOf<StoredSelectionHighlight?>(null)
+    var noteDraft by mutableStateOf<PdfPageSelection?>(null)
+    var editing by mutableStateOf<StoredSelectionHighlight?>(null)
+    var dictionary by mutableStateOf<Pair<String, String?>?>(null)
+
+    fun clearAll() {
+        menuHighlight = null
+        noteDraft = null
+        editing = null
+        dictionary = null
+    }
+}
+
+/** The selection's start from a press at page point
+ * ([xPt], [yPt]): hit char → its word (A4's outward snap
+ * with the whitespace scan), or null when the press lands
+ * on a wordless line. Shared by both bodies' entries. */
+private fun pdfSelectionAt(
+    geometry: PageCharGeometry,
+    xPt: Float,
+    yPt: Float
+): PdfPageSelection? {
+    val index = pdfCharIndexAt(geometry, xPt, yPt) ?: return null
+    val word = resolvePdfWordRange(geometry.pageText, index)
+        ?: return null
+    return PdfPageSelection(geometry, word.first, word.last + 1)
+}
+
+/**
+ * The geometry overlay for one page — drawn exactly over
+ * the page's displayed rect (the caller sizes and positions
+ * this composable into that frame; inside it, coordinates
+ * are displayed-page pixels, which Compose delivers already
+ * mapped through whatever transform carries the frame).
+ *
+ * Draws, back to front: the page's stored highlights (each
+ * in its own record tint — today always the one violet,
+ * Q5), the search mark (amber, the Reflow precedent), the
+ * live selection (the Reflow live-selection tint), and the
+ * selection's two handle dots at its first char's
+ * bottom-left and its last char's bottom-right.
+ *
+ * Gestures (its own pointerInput, Main pass): a press
+ * inside a handle's grab radius drags that edge — changes
+ * are consumed from the down, so the paged body's transform
+ * loop sees them already-consumed (and its C4 guard applies
+ * nothing) and the pager/list is locked by the hosts'
+ * selection reports. A clean tap (short, unmoved — a long
+ * hold belongs to the hosts' long-press entry) with a live
+ * selection dismisses it ([onTapAway]); with no selection,
+ * a tap inside a drawn highlight's merged rects opens its
+ * menu (overlaps: the most recently created wins). Anything
+ * else is watch-only: nothing is consumed, so the shipped
+ * tap/pan/scroll behaviour proceeds untouched.
+ */
+@Composable
+private fun PdfPageGeometryOverlay(
+    geometry: PageCharGeometry,
+    pageWidthPt: Float,
+    pageHeightPt: Float,
+    highlights: List<StoredSelectionHighlight>,
+    searchMark: PdfSearchMark?,
+    selection: PdfPageSelection?,
+    onHighlightTap: (StoredSelectionHighlight) -> Unit,
+    onTapAway: () -> Unit,
+    onDragStateChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier) {
+        Canvas(Modifier.fillMaxSize()) {
+            if (pageWidthPt <= 0f || pageHeightPt <= 0f) {
+                return@Canvas
+            }
+            val sx = size.width / pageWidthPt
+            val sy = size.height / pageHeightPt
+            fun drawRects(rects: List<PdfCharRect>, color: Color) {
+                for (rect in rects) {
+                    drawRect(
+                        color = color,
+                        topLeft = Offset(rect.left * sx, rect.top * sy),
+                        size = Size(
+                            (rect.right - rect.left) * sx,
+                            (rect.bottom - rect.top) * sy
+                        )
+                    )
+                }
+            }
+            for (highlight in highlights) {
+                val start = highlight.charStart ?: continue
+                val end = highlight.charEnd ?: continue
+                if (end <= start) continue
+                val clampedStart = start.coerceIn(0, geometry.pageText.length)
+                val clampedEnd = end.coerceIn(
+                    clampedStart, geometry.pageText.length
+                )
+                if (clampedEnd <= clampedStart) continue
+                drawRects(
+                    pdfMergedLineRects(
+                        geometry, clampedStart..clampedEnd - 1
+                    ),
+                    Color(highlight.tintArgb)
+                )
+            }
+            if (searchMark != null && searchMark.end > searchMark.start) {
+                val clampedStart = searchMark.start
+                    .coerceIn(0, geometry.pageText.length)
+                val clampedEnd = searchMark.end
+                    .coerceIn(clampedStart, geometry.pageText.length)
+                if (clampedEnd > clampedStart) {
+                    drawRects(
+                        pdfMergedLineRects(
+                            geometry, clampedStart..clampedEnd - 1
+                        ),
+                        Color(0x99FFB020)
+                    )
+                }
+            }
+            val live = selection
+            if (live != null && live.end > live.start) {
+                drawRects(
+                    pdfMergedLineRects(
+                        geometry, live.start..live.end - 1
+                    ),
+                    Color(0x558B5CF6)
+                )
+                val first = geometry.rects.getOrNull(live.start)
+                val last = geometry.rects.getOrNull(live.end - 1)
+                val radius = 9.dp.toPx()
+                if (first != null) {
+                    drawCircle(
+                        color = ReaderViolet,
+                        radius = radius,
+                        center = Offset(
+                            first.left * sx, first.bottom * sy
+                        )
+                    )
+                }
+                if (last != null) {
+                    drawCircle(
+                        color = ReaderViolet,
+                        radius = radius,
+                        center = Offset(
+                            last.right * sx, last.bottom * sy
+                        )
+                    )
+                }
+            }
+        }
+        Box(
+            Modifier.fillMaxSize().pointerInput(
+                geometry, selection, highlights
+            ) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val width = size.width
+                    val height = size.height
+                    if (width <= 0 || height <= 0 ||
+                        pageWidthPt <= 0f || pageHeightPt <= 0f
+                    ) {
+                        return@awaitEachGesture
+                    }
+                    val sx = width / pageWidthPt
+                    val sy = height / pageHeightPt
+                    fun pointOf(position: Offset) = Offset(
+                        position.x / sx, position.y / sy
+                    )
+                    val live = selection
+                    if (live != null && live.end > live.start) {
+                        val first = geometry.rects.getOrNull(live.start)
+                        val last = geometry.rects.getOrNull(live.end - 1)
+                        if (first != null && last != null) {
+                            val grab = 24.dp.toPx()
+                            val startCentre = Offset(
+                                first.left * sx, first.bottom * sy
+                            )
+                            val endCentre = Offset(
+                                last.right * sx, last.bottom * sy
+                            )
+                            val handle = when {
+                                (down.position - startCentre)
+                                    .getDistance() <= grab -> 0
+                                (down.position - endCentre)
+                                    .getDistance() <= grab -> 1
+                                else -> null
+                            }
+                            if (handle != null) {
+                                down.consume()
+                                onDragStateChange(true)
+                                try {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes
+                                            .firstOrNull {
+                                                it.id == down.id
+                                            } ?: continue
+                                        if (change.positionChanged()) {
+                                            change.consume()
+                                            val point = pointOf(
+                                                change.position
+                                            )
+                                            val index = pdfCharIndexAt(
+                                                geometry, point.x, point.y
+                                            )
+                                            if (index != null) {
+                                                if (handle == 0) {
+                                                    live.start = index
+                                                        .coerceIn(
+                                                            0,
+                                                            (live.end - 1)
+                                                                .coerceAtLeast(0)
+                                                        )
+                                                } else {
+                                                    live.end = (index + 1)
+                                                        .coerceIn(
+                                                            live.start + 1,
+                                                            geometry.pageText
+                                                                .length
+                                                        )
+                                                }
+                                            }
+                                        }
+                                        if (!change.pressed) break
+                                    }
+                                } finally {
+                                    onDragStateChange(false)
+                                }
+                                return@awaitEachGesture
+                            }
+                        }
+                    }
+                    // Tap routing: wait for the up without
+                    // consuming anything; a drag or a long
+                    // hold is not a tap (the hold is the
+                    // hosts' long-press entry). The up is
+                    // consumed only once the tap is confirmed
+                    // as one this overlay handles.
+                    var upChange:
+                        androidx.compose.ui.input.pointer
+                            .PointerInputChange? = null
+                    var moved = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull {
+                            it.id == down.id
+                        } ?: continue
+                        if ((change.position - down.position)
+                                .getDistance() >
+                            viewConfiguration.touchSlop
+                        ) {
+                            moved = true
+                        }
+                        if (!change.pressed) {
+                            upChange = change
+                            break
+                        }
+                    }
+                    val tap = upChange ?: return@awaitEachGesture
+                    if (moved ||
+                        tap.uptimeMillis - down.uptimeMillis >
+                        viewConfiguration.longPressTimeoutMillis
+                    ) {
+                        return@awaitEachGesture
+                    }
+                    if (live != null) {
+                        tap.consume()
+                        onTapAway()
+                        return@awaitEachGesture
+                    }
+                    val point = pointOf(tap.position)
+                    val hit = highlights.filter { highlight ->
+                        val start = highlight.charStart
+                            ?: return@filter false
+                        val end = highlight.charEnd
+                            ?: return@filter false
+                        if (end <= start) return@filter false
+                        val clampedStart = start
+                            .coerceIn(0, geometry.pageText.length)
+                        val clampedEnd = end.coerceIn(
+                            clampedStart, geometry.pageText.length
+                        )
+                        if (clampedEnd <= clampedStart) {
+                            return@filter false
+                        }
+                        pdfMergedLineRects(
+                            geometry, clampedStart..clampedEnd - 1
+                        ).any { rect -> rect.contains(point.x, point.y) }
+                    }.maxByOrNull { it.createdAtEpochMillis }
+                    if (hit != null) {
+                        tap.consume()
+                        onHighlightTap(hit)
+                    }
+                }
+            }
         )
-        PdfScrollModel.CONTINUOUS -> PdfContinuousBody(
-            handlers = handlers,
-            session = session,
-            initialPage = initialPage,
-            settings = settings,
-            autoScroll = autoScroll,
-            onToggleControls = onToggleControls,
-            onResolvedFilter = onResolvedFilter
+    }
+}
+
+/** The selection's action pill (Revision 1, D1): the
+ * existing [SelectionActionRow] in a floating surface,
+ * hosted by the page host's outer box — outside any zoom
+ * layer, so it never scales — bottom-centred, 16 dp above
+ * the host's bottom edge, visible only while a selection
+ * is active. The host supplies the [modifier] placement. */
+@Composable
+private fun PdfSelectionActionPill(
+    selection: PdfPageSelection,
+    onCopy: () -> Unit,
+    onHighlight: () -> Unit,
+    onNote: () -> Unit,
+    onDictionary: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 6.dp
+    ) {
+        SelectionActionRow(
+            selectedText = selection.text,
+            onCopy = onCopy,
+            onHighlight = onHighlight,
+            onNote = onNote,
+            onDictionary = onDictionary,
+            onDismiss = onDismiss
         )
+    }
+}
+
+/** The selection's follow-on dialogs (the kit's own
+ * surfaces, shared with Reflow): a tapped highlight's menu
+ * (note view/edit + Remove — NO colour row, Q5), the note
+ * editor in its new-note and edit-note seats, and the
+ * dictionary result. */
+@Composable
+private fun PdfSelectionDialogs(
+    state: PdfSelectionDialogState,
+    onMenuRemove: () -> Unit,
+    onMenuEditNote: () -> Unit,
+    onNoteDraftSave: (String) -> Unit,
+    onEditNoteSave: (String) -> Unit
+) {
+    val menuHighlight = state.menuHighlight
+    if (menuHighlight != null) {
+        SelectionHighlightMenu(
+            highlight = menuHighlight,
+            onRemove = onMenuRemove,
+            onEditNote = onMenuEditNote,
+            onDismiss = { state.menuHighlight = null }
+        )
+    }
+    val draft = state.noteDraft
+    if (draft != null) {
+        SelectionNoteEditor(
+            selectedText = draft.text,
+            initialNote = "",
+            onSave = onNoteDraftSave,
+            onCancel = { state.noteDraft = null }
+        )
+    }
+    val editing = state.editing
+    if (editing != null) {
+        SelectionNoteEditor(
+            selectedText = editing.selectedText,
+            initialNote = editing.note,
+            onSave = onEditNoteSave,
+            onCancel = { state.editing = null }
+        )
+    }
+    val lookup = state.dictionary
+    if (lookup != null) {
+        AlertDialog(
+            onDismissRequest = { state.dictionary = null },
+            title = { Text(lookup.first) },
+            text = {
+                Text(
+                    lookup.second
+                        ?: "No definition found on this device."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { state.dictionary = null }
+                ) { Text("Close") }
+            }
+        )
+    }
+}
+
+/**
+ * A watch-only long-press observer (Initial pass, consumes
+ * NOTHING) in the shipped tap observers' pattern — the
+ * continuous body's per-item entry, where a Main-pass
+ * tap detector on the item could starve the surface's own
+ * double-tap detector of its events. Fires once when a
+ * press stays down past the platform long-press timeout
+ * without moving past the touch slop; the position reported
+ * is the DOWN's, in the observed composable's local
+ * coordinates (for a list item: already un-transformed by
+ * Compose, per Revision 1 C5).
+ */
+private fun Modifier.pdfLongPressObserver(
+    onLongPress: (Offset) -> Unit
+): Modifier = pointerInput(onLongPress) {
+    awaitEachGesture {
+        val down = awaitFirstDown(
+            requireUnconsumed = false,
+            pass = PointerEventPass.Initial
+        )
+        val downPosition = down.position
+        var moved = false
+        var fired = false
+        var released = false
+        while (!released) {
+            val event = withTimeoutOrNull(
+                viewConfiguration.longPressTimeoutMillis
+            ) {
+                awaitPointerEvent(PointerEventPass.Initial)
+            }
+            if (event == null) {
+                // No event inside the window: the press is
+                // still down and (no move arrived) unmoved.
+                if (!moved && !fired) {
+                    fired = true
+                    onLongPress(downPosition)
+                }
+                // Drain to the release, bounded — watch-only
+                // to the end, whatever the stream does.
+                withTimeoutOrNull(2_000L) {
+                    while (true) {
+                        val drain =
+                            awaitPointerEvent(PointerEventPass.Initial)
+                        if (drain.changes.all { !it.pressed }) break
+                    }
+                }
+                released = true
+                continue
+            }
+            for (change in event.changes) {
+                if ((change.position - downPosition).getDistance() >
+                    viewConfiguration.touchSlop
+                ) {
+                    moved = true
+                }
+                if (change.pressed &&
+                    change.uptimeMillis - down.uptimeMillis >=
+                    viewConfiguration.longPressTimeoutMillis &&
+                    !moved && !fired
+                ) {
+                    fired = true
+                    onLongPress(downPosition)
+                }
+                if (!change.pressed) released = true
+            }
+            if (event.changes.all { !it.pressed }) released = true
+        }
     }
 }
 
@@ -427,7 +1024,16 @@ private fun PdfPagedBody(
     tapPreset: TapLayoutPreset = TapLayoutPreset.MOON_DEFAULT,
     // MR-2 (A12): the cells report the filter they
     // resolved smart contrast to, per page (see PdfDocumentReader).
-    onResolvedFilter: (Int, PdfPageFilter) -> Unit = { _, _ -> }
+    onResolvedFilter: (Int, PdfPageFilter) -> Unit = { _, _ -> },
+    // MR-2b: the Pages-form selection seam (highlights in,
+    // writes out through the ViewModel's store doors).
+    pageHighlights: List<StoredSelectionHighlight> = emptyList(),
+    searchMark: PdfSearchMark? = null,
+    onAddPageHighlight: (StoredSelectionHighlight) -> Unit = {},
+    onRemovePageHighlight: (StoredSelectionHighlight) -> Unit = {},
+    onUpdatePageNote: (StoredSelectionHighlight, String) -> Unit =
+        { _, _ -> },
+    onTrimStandDown: () -> Unit = {}
 ) {
     val pageCount = session.sectionCount.coerceAtLeast(1)
     val scope = rememberCoroutineScope()
@@ -481,17 +1087,40 @@ private fun PdfPagedBody(
             var zoomReports by remember {
                 mutableStateOf<Map<Int, Pair<Boolean, () -> Unit>>>(emptyMap())
             }
+            // MR-2b (Revision 1, C4): selection activity is
+            // reported PER PAGE on its OWN channel — never
+            // through the zoom reports — and the pager's
+            // scroll-enable derives from the settled unit's
+            // pages exactly as the zoom derivation does: a
+            // live selection on a settled page locks the
+            // swipe (the handles own the drags) until a clear
+            // site (page change, mode exit, dismiss) reports
+            // it away. Edge taps and jumps still turn.
+            var selectionReports by remember {
+                mutableStateOf<Map<Int, Boolean>>(emptyMap())
+            }
             var settledUnit by remember {
                 mutableStateOf(pagerState.currentPage)
             }
             val settledPagesNow = PdfSpreadMath.pagesForUnit(
                 settledUnit, pageCount, spreadActive
             )
-            val pagerScrollEnabled = pdfPagerUserScrollEnabled(
+            val zoomScrollEnabled = pdfPagerUserScrollEnabled(
                 settledPages = settledPagesNow,
                 zoomedPages = zoomReports.filterValues { it.first }.keys
             )
-            val activeZoomed = !pagerScrollEnabled
+            // The swipe is enabled only when NEITHER a settled
+            // page's zoom NOR a settled page's live selection
+            // owns the drags. (activeZoomed keeps its shipped
+            // meaning — the jump road resets zoom handles —
+            // and reads the zoom derivation alone.)
+            val pagerScrollEnabled = zoomScrollEnabled &&
+                pdfPagerUserScrollEnabled(
+                    settledPages = settledPagesNow,
+                    zoomedPages = selectionReports
+                        .filterValues { it }.keys
+                )
+            val activeZoomed = !zoomScrollEnabled
 
             LaunchedEffect(pagerState, session) {
                 var lastSettledUnit = -1
@@ -778,6 +1407,20 @@ private fun PdfPagedBody(
                                 zoomReports = zoomReports +
                                     (reportedPage to (zoomed to reset))
                             },
+                            pageHighlights = pageHighlights,
+                            searchMark = searchMark,
+                            isSettledPage = when (unit) {
+                                pagerState.currentPage -> true
+                                else -> false
+                            },
+                            onSelectionActivity = { reportedPage, active ->
+                                selectionReports = selectionReports +
+                                    (reportedPage to active)
+                            },
+                            onAddPageHighlight = onAddPageHighlight,
+                            onRemovePageHighlight = onRemovePageHighlight,
+                            onUpdatePageNote = onUpdatePageNote,
+                            onTrimStandDown = onTrimStandDown,
                             onToggleControls = onToggleControls,
                             tapPreset = tapPreset,
                             onResolvedFilter = onResolvedFilter,
@@ -860,9 +1503,71 @@ private fun PdfPageCell(
      * smart contrast to for its page (the stored filter itself when the mode is off, or for every
      * filter) — the reader's night toggle reads the
      * current page's value. */
-    onResolvedFilter: (Int, PdfPageFilter) -> Unit = { _, _ -> }
+    onResolvedFilter: (Int, PdfPageFilter) -> Unit = { _, _ -> },
+    // MR-2b: the on-page selection seam — this book's
+    // Pages-form highlights (all pages; the cell filters to
+    // its own), the search mark, the settled-page flag the
+    // selection's page-change clear site keys on, and the
+    // dedicated selection-activity report (C4 — never the
+    // zoom channel).
+    pageHighlights: List<StoredSelectionHighlight> = emptyList(),
+    searchMark: PdfSearchMark? = null,
+    isSettledPage: Boolean = true,
+    onSelectionActivity: (Int, Boolean) -> Unit = { _, _ -> },
+    onAddPageHighlight: (StoredSelectionHighlight) -> Unit = {},
+    onRemovePageHighlight: (StoredSelectionHighlight) -> Unit = {},
+    onUpdatePageNote: (StoredSelectionHighlight, String) -> Unit =
+        { _, _ -> },
+    onTrimStandDown: () -> Unit = {}
 ) {
     val cellScope = rememberCoroutineScope()
+    val cellContext = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    // MR-2b: this cell's selection state. The selection
+    // holds its own geometry copy (B3); [pageGeometry] is
+    // the cell's drawing copy for stored highlights + the
+    // search mark, fetched when either needs it (B3 i/ii).
+    var selection by remember(page) {
+        mutableStateOf<PdfPageSelection?>(null)
+    }
+    var pageGeometry by remember(page) {
+        mutableStateOf<PageCharGeometry?>(null)
+    }
+    val selectionDragActive = remember(page) { mutableStateOf(false) }
+    val dialogState = remember(page) { PdfSelectionDialogState() }
+    val myHighlights = pageHighlights.filter { it.page == page }
+    val myMark = searchMark?.takeIf { it.page == page }
+    val trimStandsDown = settings.edgeTrim > 0f
+    LaunchedEffect(page, myHighlights.isNotEmpty(), myMark != null) {
+        if ((myHighlights.isNotEmpty() || myMark != null) &&
+            pageGeometry == null
+        ) {
+            pageGeometry = session.pageGeometry(page)
+        }
+    }
+    // C3: the trim stand-down bites in this cell — the book
+    // has Pages highlights this page would draw, and the
+    // trim hides them: the surface's line is owed (once).
+    LaunchedEffect(page, trimStandsDown, myHighlights.isNotEmpty()) {
+        if (trimStandsDown && myHighlights.isNotEmpty()) {
+            onTrimStandDown()
+        }
+    }
+    // C4: the selection report — set at activation, cleared
+    // at every clear site (the dismiss paths set [selection]
+    // null; leaving the settled set clears below; dispose
+    // reports in the cell's DisposableEffect).
+    LaunchedEffect(selection != null) {
+        onSelectionActivity(page, selection != null)
+    }
+    // C4 clear site — page change: a cell that leaves the
+    // settled set drops its selection and its dialogs.
+    LaunchedEffect(isSettledPage) {
+        if (!isSettledPage) {
+            selection = null
+            dialogState.clearAll()
+        }
+    }
     // F-1 + G1: per-page view state. remember(page) — a cell
     // for a different page is a different state; it opens at
     // the remembered zoom (Q5 → B), which for a new book is
@@ -969,6 +1674,10 @@ private fun PdfPageCell(
         onDispose {
             cancelPendingSingleTap()
             onZoomActivity(page, false, resetHandle)
+            // MR-2b (C4 clear site — surface dispose): the
+            // selection report dies with the cell, so the
+            // pager's derivation can never strand on it.
+            onSelectionActivity(page, false)
             // A-2: refine entries die with the cell.
             session.evictRefinements(page)
         }
@@ -1304,6 +2013,69 @@ private fun PdfPageCell(
             )
             .pointerInput(page) {
                 detectTapGestures(
+                    onLongPress = { press ->
+                        // MR-2b (Revision 1, C1/C4): selection
+                        // entry. The offset arrives POST-
+                        // transform (this box's screen space);
+                        // invert the centre-anchored layer
+                        // transform FIRST (screen = C + (s − C)·z
+                        // + pan, PdfDisplayMath's own doc), then
+                        // the fitted rect takes layer points to
+                        // page points. Under an edge trim the
+                        // overlay stands down (C3) — the press
+                        // reports the stand-down instead. The
+                        // tap observers' 400 ms clean-tap rule
+                        // defuses the tap-zone collision: a
+                        // press this long is never a clean tap.
+                        if (trimStandsDown) {
+                            onTrimStandDown()
+                        } else if (cellSizePx != IntSize.Zero) {
+                            val slotBitmap = bitmap ?: previewBitmap
+                            val points = session.pagePointsSizePeek(page)
+                            if (slotBitmap != null && points != null) {
+                                val centre = Offset(
+                                    cellSizePx.width / 2f,
+                                    cellSizePx.height / 2f
+                                )
+                                val z = zoomState.zoom
+                                val local = if (z != 0f) {
+                                    centre + (press - centre -
+                                        zoomState.pan) / z
+                                } else {
+                                    press
+                                }
+                                val (dispW, dispH) = pdfDisplayedSizePx(
+                                    slotBitmap.width, slotBitmap.height,
+                                    cellSizePx.width, cellSizePx.height,
+                                    settings.fitMode
+                                )
+                                val originX =
+                                    (cellSizePx.width - dispW) / 2f
+                                val originY =
+                                    (cellSizePx.height - dispH) / 2f
+                                if (dispW > 0f && dispH > 0f &&
+                                    local.x in originX..(originX + dispW) &&
+                                    local.y in originY..(originY + dispH)
+                                ) {
+                                    val pointX = (local.x - originX) *
+                                        points.first / dispW
+                                    val pointY = (local.y - originY) *
+                                        points.second / dispH
+                                    cellScope.launch {
+                                        val geometry = pageGeometry
+                                            ?: session.pageGeometry(page)
+                                                ?.also {
+                                                    pageGeometry = it
+                                                }
+                                            ?: return@launch
+                                        selection = pdfSelectionAt(
+                                            geometry, pointX, pointY
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    },
                     onDoubleTap = { tap ->
                         // v1.5.29: the double-tap is a FIXED
                         // two-state toggle (Komikku semantics),
@@ -1440,8 +2212,28 @@ private fun PdfPageCell(
                                 val pointerSetChanged =
                                     pressedIds != lastPressedIds
                                 lastPressedIds = pressedIds
-                                if (zoomChange != 1f ||
-                                    panChange != Offset.Zero
+                                // MR-2b (Revision 1, C4): the ONE
+                                // narrow guard this loop gains —
+                                // it applies NOTHING to an
+                                // already-consumed change (a
+                                // selection handle drag inside
+                                // the layer consumes from its
+                                // down), and nothing while a
+                                // selection drag is active on
+                                // this page. No other behaviour
+                                // of the loop changes: the claim
+                                // edges, the settle and the
+                                // end-of-gesture consume below
+                                // are exactly as shipped.
+                                val selectionBlocksTransform =
+                                    selectionDragActive.value ||
+                                        event.changes.any {
+                                            it.isConsumed &&
+                                                it.positionChanged()
+                                        }
+                                if (!selectionBlocksTransform &&
+                                    (zoomChange != 1f ||
+                                        panChange != Offset.Zero)
                                 ) {
                                     val state = zoomStateRef.value
                                     if (state.isZoomed || zoomChange != 1f) {
@@ -1664,7 +2456,168 @@ private fun PdfPageCell(
                         }
                     }
                 }
+                // MR-2b: the geometry overlay — inside the
+                // layer, in the refine precedent's frame
+                // (exactly over the centred displayed rect),
+                // so it rides the zoom transform glued to the
+                // text at every zoom. It stands down under an
+                // edge trim (C3: the drawn page there is the
+                // GROWN page, whose rect this frame does not
+                // describe). The selection's own geometry
+                // wins over the cell's drawing copy (B3).
+                val overlayGeometry = selection?.geometry
+                    ?: pageGeometry
+                val overlayBitmap = current ?: preview
+                if (!trimStandsDown && overlayGeometry != null &&
+                    overlayBitmap != null &&
+                    cellSizePx != IntSize.Zero &&
+                    (selection != null || myHighlights.isNotEmpty() ||
+                        myMark != null)
+                ) {
+                    val points = session.pagePointsSizePeek(page)
+                    if (points != null) {
+                        val (dispW, dispH) = pdfDisplayedSizePx(
+                            overlayBitmap.width, overlayBitmap.height,
+                            cellSizePx.width, cellSizePx.height,
+                            settings.fitMode
+                        )
+                        PdfPageGeometryOverlay(
+                            geometry = overlayGeometry,
+                            pageWidthPt = points.first.toFloat(),
+                            pageHeightPt = points.second.toFloat(),
+                            highlights = myHighlights,
+                            searchMark = myMark,
+                            selection = selection,
+                            onHighlightTap = { highlight ->
+                                // The file's arbitration
+                                // pattern: a handled tap
+                                // cancels the pending confirmed
+                                // single, so the shipped tap
+                                // action never also fires.
+                                cancelPendingSingleTap()
+                                dialogState.menuHighlight = highlight
+                            },
+                            onTapAway = {
+                                cancelPendingSingleTap()
+                                selection = null
+                            },
+                            onDragStateChange = { active ->
+                                selectionDragActive.value = active
+                            },
+                            modifier = Modifier
+                                .offset(
+                                    x = with(density) {
+                                        ((cellSizePx.width - dispW) / 2f)
+                                            .toDp()
+                                    },
+                                    y = with(density) {
+                                        ((cellSizePx.height - dispH) / 2f)
+                                            .toDp()
+                                    }
+                                )
+                                .width(with(density) { dispW.toDp() })
+                                .height(with(density) { dispH.toDp() })
+                                .align(Alignment.TopStart)
+                        )
+                    }
+                }
             }
+            // MR-2b (D1): the action pill — a child of the
+            // cell's OUTER box, outside the zoom layer (it
+            // never scales), bottom-centred, 16 dp above the
+            // cell's bottom edge, only while a selection is
+            // active.
+            val liveSelection = selection
+            if (liveSelection != null) {
+                PdfSelectionActionPill(
+                    selection = liveSelection,
+                    onCopy = {
+                        clipboard.setText(
+                            AnnotatedString(liveSelection.text)
+                        )
+                        selection = null
+                    },
+                    onHighlight = {
+                        onAddPageHighlight(
+                            StoredSelectionHighlight(
+                                id = UUID.randomUUID().toString(),
+                                page = page,
+                                charStart = liveSelection.start,
+                                charEnd = liveSelection.end,
+                                selectedText = liveSelection.text,
+                                createdAtEpochMillis =
+                                    System.currentTimeMillis()
+                            )
+                        )
+                        selection = null
+                    },
+                    onNote = { dialogState.noteDraft = liveSelection },
+                    onDictionary = {
+                        val word = liveSelection.text.trim()
+                            .split(Regex("\\s+"))
+                            .firstOrNull().orEmpty()
+                        if (word.isNotBlank()) {
+                            cellScope.launch {
+                                val definition = runCatching {
+                                    app.xreader.ui.library
+                                        .DictionaryLookup.lookup(
+                                            cellContext.filesDir, word
+                                        )
+                                }.getOrNull()
+                                dialogState.dictionary =
+                                    word to definition
+                            }
+                        }
+                        selection = null
+                    },
+                    onDismiss = { selection = null },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(
+                            start = 16.dp, end = 16.dp, bottom = 16.dp
+                        )
+                )
+            }
+            PdfSelectionDialogs(
+                state = dialogState,
+                onMenuRemove = {
+                    dialogState.menuHighlight?.let {
+                        onRemovePageHighlight(it)
+                    }
+                    dialogState.menuHighlight = null
+                },
+                onMenuEditNote = {
+                    dialogState.editing = dialogState.menuHighlight
+                    dialogState.menuHighlight = null
+                },
+                onNoteDraftSave = { note ->
+                    val draft = dialogState.noteDraft
+                    if (draft != null) {
+                        onAddPageHighlight(
+                            StoredSelectionHighlight(
+                                id = UUID.randomUUID().toString(),
+                                page = page,
+                                charStart = draft.start,
+                                charEnd = draft.end,
+                                selectedText = draft.text,
+                                note = note,
+                                createdAtEpochMillis =
+                                    System.currentTimeMillis()
+                            )
+                        )
+                    }
+                    dialogState.noteDraft = null
+                    selection = null
+                },
+                onEditNoteSave = { note ->
+                    val editing = dialogState.editing
+                    if (editing != null) {
+                        onUpdatePageNote(editing, note)
+                    }
+                    dialogState.editing = null
+                }
+            )
         }
     }
 }
@@ -1716,11 +2669,29 @@ private fun PdfContinuousBody(
     smartScrollLock: Boolean = true,
     // MR-2 (A12): items report the filter they resolved
     // AUTO to, per page (see PdfDocumentReader).
-    onResolvedFilter: (Int, PdfPageFilter) -> Unit = { _, _ -> }
+    onResolvedFilter: (Int, PdfPageFilter) -> Unit = { _, _ -> },
+    // MR-2b: the Pages-form selection seam, as in the paged
+    // body — plus the visible-page report the surface's
+    // banner dismissal keys on.
+    pageHighlights: List<StoredSelectionHighlight> = emptyList(),
+    searchMark: PdfSearchMark? = null,
+    onAddPageHighlight: (StoredSelectionHighlight) -> Unit = {},
+    onRemovePageHighlight: (StoredSelectionHighlight) -> Unit = {},
+    onUpdatePageNote: (StoredSelectionHighlight, String) -> Unit =
+        { _, _ -> },
+    onPageVisible: (Int) -> Unit = {}
 ) {
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialPage.coerceAtLeast(0)
     )
+    // MR-2b (Revision 1, C5): the pages holding a live
+    // selection in this body — while any does, the list's
+    // own scroll stands down (userScrollEnabled below) and
+    // the frame observer's single-finger pan branch with it.
+    var selectionPages by remember {
+        mutableStateOf<Set<Int>>(emptySet())
+    }
+    val bodySelectionActive = selectionPages.isNotEmpty()
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     // The continuous item width, published by the layout box
@@ -1830,6 +2801,10 @@ private fun PdfContinuousBody(
                 scrolling = scrolling
             )
             handlers.onPosition(page, fraction)
+            // MR-2b: the surface's banner dismissal keys on
+            // the visible page here too (the paged body keys
+            // on its currentPage; this body has none).
+            onPageVisible(page)
             // A-4: continuous prefetch at P2 — the tier's
             // full-res window ahead of the last visible item
             // and one behind the first.
@@ -1994,7 +2969,14 @@ private fun PdfContinuousBody(
                                     )
                                 }
                             } else if (pressed.size == 1 &&
-                                surfaceZoom.isZoomed
+                                surfaceZoom.isZoomed &&
+                                // MR-2b (C5): the single-finger
+                                // pan branch stands down while a
+                                // selection is active in this
+                                // body — it consumes nothing, so
+                                // without the gate it would pan
+                                // the surface under a handle drag.
+                                selectionPages.isEmpty()
                             ) {
                                 val change = pressed.first()
                                 val delta = change.position -
@@ -2104,6 +3086,11 @@ private fun PdfContinuousBody(
         }
         LazyColumn(
             state = listState,
+            // MR-2b (C5): the list's scroll stands down while
+            // a selection drag — a selection's whole life, the
+            // C4-analogue reading for this body — is active in
+            // it; restored at the same clear sites.
+            userScrollEnabled = !bodySelectionActive,
             modifier = Modifier.fillMaxSize()
                 .nestedScroll(smartLockConnection)
                 // v1.5.28: the surface transform — the donor
@@ -2184,13 +3171,232 @@ private fun PdfContinuousBody(
                     // placeholder, not a blank reserved box.
                     PdfPagePlaceholder(spec = placeholder)
                 } else {
-                    Image(
-                        bitmap = current.asImageBitmap(),
-                        contentDescription = session.displayLabelFor(page),
-                        modifier = Modifier.fillMaxWidth(),
-                        contentScale = ContentScale.FillWidth,
-                        colorFilter = itemDrawFilter
-                    )
+                    // MR-2b (Revision 1, C5): the item's own
+                    // selection host — a per-item overlay in
+                    // the item's own composable (this body has
+                    // no per-page layer; the LazyColumn's
+                    // graphicsLayer wraps the whole list, so
+                    // the item's local coordinates arrive
+                    // already un-transformed by Compose) and a
+                    // per-item long-press entry (watch-only,
+                    // Initial pass — the surface's detectors
+                    // keep their events). No trim stand-down
+                    // exists in this body: it has no edgeTrim.
+                    val itemContext = LocalContext.current
+                    val itemClipboard = LocalClipboardManager.current
+                    var itemSelection by remember(page) {
+                        mutableStateOf<PdfPageSelection?>(null)
+                    }
+                    var itemGeometry by remember(page) {
+                        mutableStateOf<PageCharGeometry?>(null)
+                    }
+                    var itemSizePx by remember {
+                        mutableStateOf(IntSize.Zero)
+                    }
+                    val itemDialogs = remember(page) {
+                        PdfSelectionDialogState()
+                    }
+                    val itemHighlights = pageHighlights
+                        .filter { it.page == page }
+                    val itemMark = searchMark
+                        ?.takeIf { it.page == page }
+                    LaunchedEffect(
+                        page, itemHighlights.isNotEmpty(),
+                        itemMark != null
+                    ) {
+                        if ((itemHighlights.isNotEmpty() ||
+                                itemMark != null) &&
+                            itemGeometry == null
+                        ) {
+                            itemGeometry = session.pageGeometry(page)
+                        }
+                    }
+                    // The body's scroll lock (C5): report the
+                    // selection's life; dispose clears it.
+                    LaunchedEffect(itemSelection != null) {
+                        selectionPages = if (itemSelection != null) {
+                            selectionPages + page
+                        } else {
+                            selectionPages - page
+                        }
+                    }
+                    DisposableEffect(page) {
+                        onDispose {
+                            selectionPages = selectionPages - page
+                        }
+                    }
+                    Box(
+                        Modifier.fillMaxWidth()
+                            .onSizeChanged { itemSizePx = it }
+                            .pdfLongPressObserver { press ->
+                                val points =
+                                    session.pagePointsSizePeek(page)
+                                if (points != null &&
+                                    itemSizePx.width > 0 &&
+                                    itemSizePx.height > 0
+                                ) {
+                                    val pointX = press.x *
+                                        points.first / itemSizePx.width
+                                    val pointY = press.y *
+                                        points.second / itemSizePx.height
+                                    scope.launch {
+                                        val geometry = itemGeometry
+                                            ?: session.pageGeometry(page)
+                                                ?.also {
+                                                    itemGeometry = it
+                                                }
+                                            ?: return@launch
+                                        itemSelection = pdfSelectionAt(
+                                            geometry, pointX, pointY
+                                        )
+                                    }
+                                }
+                            }
+                    ) {
+                        Image(
+                            bitmap = current.asImageBitmap(),
+                            contentDescription =
+                                session.displayLabelFor(page),
+                            modifier = Modifier.fillMaxWidth(),
+                            contentScale = ContentScale.FillWidth,
+                            colorFilter = itemDrawFilter
+                        )
+                        val overlayGeometry = itemSelection?.geometry
+                            ?: itemGeometry
+                        val points = session.pagePointsSizePeek(page)
+                        if (overlayGeometry != null && points != null &&
+                            (itemSelection != null ||
+                                itemHighlights.isNotEmpty() ||
+                                itemMark != null)
+                        ) {
+                            PdfPageGeometryOverlay(
+                                geometry = overlayGeometry,
+                                pageWidthPt = points.first.toFloat(),
+                                pageHeightPt = points.second.toFloat(),
+                                highlights = itemHighlights,
+                                searchMark = itemMark,
+                                selection = itemSelection,
+                                onHighlightTap = { highlight ->
+                                    itemDialogs.menuHighlight =
+                                        highlight
+                                },
+                                onTapAway = { itemSelection = null },
+                                onDragStateChange = { },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        val liveItemSelection = itemSelection
+                        if (liveItemSelection != null) {
+                            PdfSelectionActionPill(
+                                selection = liveItemSelection,
+                                onCopy = {
+                                    itemClipboard.setText(
+                                        AnnotatedString(
+                                            liveItemSelection.text
+                                        )
+                                    )
+                                    itemSelection = null
+                                },
+                                onHighlight = {
+                                    onAddPageHighlight(
+                                        StoredSelectionHighlight(
+                                            id = UUID.randomUUID()
+                                                .toString(),
+                                            page = page,
+                                            charStart =
+                                                liveItemSelection.start,
+                                            charEnd =
+                                                liveItemSelection.end,
+                                            selectedText =
+                                                liveItemSelection.text,
+                                            createdAtEpochMillis =
+                                                System
+                                                    .currentTimeMillis()
+                                        )
+                                    )
+                                    itemSelection = null
+                                },
+                                onNote = {
+                                    itemDialogs.noteDraft =
+                                        liveItemSelection
+                                },
+                                onDictionary = {
+                                    val word = liveItemSelection.text
+                                        .trim()
+                                        .split(Regex("\\s+"))
+                                        .firstOrNull().orEmpty()
+                                    if (word.isNotBlank()) {
+                                        scope.launch {
+                                            val definition =
+                                                runCatching {
+                                                    app.xreader.ui
+                                                        .library
+                                                        .DictionaryLookup
+                                                        .lookup(
+                                                            itemContext
+                                                                .filesDir,
+                                                            word
+                                                        )
+                                                }.getOrNull()
+                                            itemDialogs.dictionary =
+                                                word to definition
+                                        }
+                                    }
+                                    itemSelection = null
+                                },
+                                onDismiss = { itemSelection = null },
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .fillMaxWidth()
+                                    .padding(
+                                        start = 16.dp, end = 16.dp,
+                                        bottom = 16.dp
+                                    )
+                            )
+                        }
+                        PdfSelectionDialogs(
+                            state = itemDialogs,
+                            onMenuRemove = {
+                                itemDialogs.menuHighlight?.let {
+                                    onRemovePageHighlight(it)
+                                }
+                                itemDialogs.menuHighlight = null
+                            },
+                            onMenuEditNote = {
+                                itemDialogs.editing =
+                                    itemDialogs.menuHighlight
+                                itemDialogs.menuHighlight = null
+                            },
+                            onNoteDraftSave = { note ->
+                                val draft = itemDialogs.noteDraft
+                                if (draft != null) {
+                                    onAddPageHighlight(
+                                        StoredSelectionHighlight(
+                                            id = UUID.randomUUID()
+                                                .toString(),
+                                            page = page,
+                                            charStart = draft.start,
+                                            charEnd = draft.end,
+                                            selectedText = draft.text,
+                                            note = note,
+                                            createdAtEpochMillis =
+                                                System
+                                                    .currentTimeMillis()
+                                        )
+                                    )
+                                }
+                                itemDialogs.noteDraft = null
+                                itemSelection = null
+                            },
+                            onEditNoteSave = { note ->
+                                val editing = itemDialogs.editing
+                                if (editing != null) {
+                                    onUpdatePageNote(editing, note)
+                                }
+                                itemDialogs.editing = null
+                            }
+                        )
+                    }
                 }
             }
         }

@@ -61,9 +61,15 @@ import kotlinx.serialization.json.Json
  * never by a loop); the note editor + highlight menu surfaces
  * survive as the follow-on dialogs those actions open. A
  * selection spanning a spine-resource boundary is still not
- * offered (toolkit limit); on-page PDF selection cannot exist
- * below API 35 (X3) — the PDF half lives in the Text view,
- * page-anchored, and shares this file's store + action row.
+ * offered (toolkit limit). On-page PDF selection was long
+ * recorded as impossible below API 35 (X3); MR-2b (code 114)
+ * retired that verdict by another road — a per-page
+ * character-geometry pass in the PDF stripper
+ * (PdfStripperLoop.stripPageGeometry + PdfSession
+ * .pageGeometry) gives Pages mode its own on-page selection,
+ * page-anchored in the same (page, char range) form, writing
+ * through this file's store and offering this file's action
+ * row + highlight menu, exactly as the Text view does.
  *
  * This file is the component layer: the persisted highlight
  * model + store (ONE per-book DataStore key serving both
