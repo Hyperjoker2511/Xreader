@@ -1,13 +1,9 @@
 package app.xreader.ui.localreader
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -163,6 +159,19 @@ class SelectionHighlightStore(private val store: DataStore<Preferences>) {
             bookId,
             current.map {
                 if (it.id == highlightId) it.copy(note = note) else it
+            }
+        )
+    }
+
+    /** SelectionBar (§7.3): re-tint an existing highlight —
+     * the colour row's apply over a stored record, mirroring
+     * [updateNote] exactly. */
+    suspend fun updateTint(bookId: Long, highlightId: String, tintArgb: Int) {
+        val current = decodeSelectionHighlights(store.dataSnapshot(bookId))
+        save(
+            bookId,
+            current.map {
+                if (it.id == highlightId) it.copy(tintArgb = tintArgb) else it
             }
         )
     }
@@ -637,53 +646,10 @@ fun highlightSpansFor(
 }
 
 // ── Popup surfaces ───────────────────────────────────────────────
-
-/**
- * The selection action popup: the four shared actions over a
- * live selection. Hosted by the reader at the selection's
- * rect (EPUB) or as the Text view's action bar (PDF) — this
- * content is identical for both (Q3 → B's shared menu).
- */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-@Composable
-internal fun SelectionActionRow(
-    selectedText: String,
-    onCopy: () -> Unit,
-    onHighlight: () -> Unit,
-    onNote: () -> Unit,
-    onDictionary: () -> Unit,
-    onDismiss: () -> Unit,
-    /** MR-4 (R1): the PDF pill seats the bar AT the selection
-     * at wrap-content width; the Reflow host keeps the shipped
-     * full-width row (the default). */
-    fillContentWidth: Boolean = true
-) {
-    Column(
-        (if (fillContentWidth) Modifier.fillMaxWidth() else Modifier)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-    ) {
-        Text(
-            selectedText,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 2,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Spacer(Modifier.height(6.dp))
-        // MR-4 (R1): a FlowRow — the shipped fixed Row crushed
-        // its last button ("Close" as a one-letter-wide stack)
-        // at wrap-content widths. The weight Spacer is dropped
-        // (FlowRow has no weight); Close follows Dictionary in
-        // flow order, and every label is one line, never
-        // crushed.
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            TextButton(onClick = onCopy) { Text("Copy", maxLines = 1) }
-            TextButton(onClick = onHighlight) { Text("Highlight", maxLines = 1) }
-            TextButton(onClick = onNote) { Text("Note", maxLines = 1) }
-            TextButton(onClick = onDictionary) { Text("Dictionary", maxLines = 1) }
-            TextButton(onClick = onDismiss) { Text("Close", maxLines = 1) }
-        }
-    }
-}
+// SelectionBar (code 116): the selection action popup is the
+// shared SelectionBar component now (ui/reader/SelectionBar.kt);
+// the shipped SelectionActionRow and SelectionHighlightMenu
+// were deleted with this build — every host seats the one bar.
 
 /** The note editor: a highlight with words attached. */
 @Composable
@@ -723,41 +689,3 @@ internal fun SelectionNoteEditor(
     )
 }
 
-/** A tapped highlight's menu: its note (if any), Remove, and
- * Edit note. */
-@Composable
-internal fun SelectionHighlightMenu(
-    highlight: StoredSelectionHighlight,
-    onRemove: () -> Unit,
-    onEditNote: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Highlight") },
-        text = {
-            Column {
-                Text(highlight.selectedText, maxLines = 3)
-                if (highlight.hasNote) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        highlight.note,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onEditNote) {
-                Text(if (highlight.hasNote) "Edit note" else "Add note")
-            }
-        },
-        dismissButton = {
-            Row {
-                TextButton(onClick = onRemove) { Text("Remove") }
-                TextButton(onClick = onDismiss) { Text("Close") }
-            }
-        }
-    )
-}

@@ -1,7 +1,10 @@
 package app.xreader.ui.reader
 
+import android.content.Intent
 import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateIntOffsetAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -63,6 +66,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -131,9 +135,9 @@ import app.xreader.ui.localreader.PdfPlaceholderSpec
 import app.xreader.ui.localreader.PdfScrollModel
 import app.xreader.ui.localreader.PdfSpreadMath
 import app.xreader.ui.localreader.PdfSurfaceZoomState
+import app.xreader.core.motion.SpringMotionEngine
+import app.xreader.core.motion.toSpec
 import app.xreader.ui.localreader.ReaderViolet
-import app.xreader.ui.localreader.SelectionActionRow
-import app.xreader.ui.localreader.SelectionHighlightMenu
 import app.xreader.ui.localreader.SelectionNoteEditor
 import app.xreader.ui.localreader.StoredSelectionHighlight
 import app.xreader.ui.localreader.TapLayoutPreset
@@ -225,7 +229,18 @@ fun PdfPagesSurface(
     onAddPageHighlight: (StoredSelectionHighlight) -> Unit = {},
     onRemovePageHighlight: (StoredSelectionHighlight) -> Unit = {},
     onUpdatePageNote: (StoredSelectionHighlight, String) -> Unit =
-        { _, _ -> }
+        { _, _ -> },
+    // SelectionBar: the tint write (§7.3), the More doors
+    // (§6.4) and the back chain's reports + clear nonce
+    // (§9.2), threaded from PdfReaderHost.
+    onUpdatePageTint: (StoredSelectionHighlight, Int) -> Unit =
+        { _, _ -> },
+    onSelectionTranslate: (String) -> Unit = {},
+    onSelectionAskAi: (String) -> Unit = {},
+    onSelectionActiveChanged: (Boolean) -> Unit = {},
+    onDialogOpenChanged: (Boolean) -> Unit = {},
+    clearSelectionSignal: Int = 0,
+    motionEnabled: Boolean = true
 ) {
     var bannerText by remember(session) { mutableStateOf<String?>(null) }
     var bannerPage by remember(session) { mutableStateOf<Int?>(null) }
@@ -269,6 +284,13 @@ fun PdfPagesSurface(
                 onAddPageHighlight = onAddPageHighlight,
                 onRemovePageHighlight = onRemovePageHighlight,
                 onUpdatePageNote = onUpdatePageNote,
+                onUpdatePageTint = onUpdatePageTint,
+                onSelectionTranslate = onSelectionTranslate,
+                onSelectionAskAi = onSelectionAskAi,
+                onSelectionActiveChanged = onSelectionActiveChanged,
+                onDialogOpenChanged = onDialogOpenChanged,
+                clearSelectionSignal = clearSelectionSignal,
+                motionEnabled = motionEnabled,
                 onTrimStandDown = onTrimStandDown
             )
             PdfScrollModel.CONTINUOUS -> PdfContinuousBody(
@@ -284,6 +306,13 @@ fun PdfPagesSurface(
                 onAddPageHighlight = onAddPageHighlight,
                 onRemovePageHighlight = onRemovePageHighlight,
                 onUpdatePageNote = onUpdatePageNote,
+                onUpdatePageTint = onUpdatePageTint,
+                onSelectionTranslate = onSelectionTranslate,
+                onSelectionAskAi = onSelectionAskAi,
+                onSelectionActiveChanged = onSelectionActiveChanged,
+                onDialogOpenChanged = onDialogOpenChanged,
+                clearSelectionSignal = clearSelectionSignal,
+                motionEnabled = motionEnabled,
                 onPageVisible = { page -> noteVisiblePage(page) }
             )
         }
@@ -341,13 +370,11 @@ private class PdfPageSelection(
  * one holder per page host (paged cell / continuous item),
  * rendered by [PdfSelectionDialogs]. */
 private class PdfSelectionDialogState {
-    var menuHighlight by mutableStateOf<StoredSelectionHighlight?>(null)
     var noteDraft by mutableStateOf<PdfPageSelection?>(null)
     var editing by mutableStateOf<StoredSelectionHighlight?>(null)
     var dictionary by mutableStateOf<Pair<String, String?>?>(null)
 
     fun clearAll() {
-        menuHighlight = null
         noteDraft = null
         editing = null
         dictionary = null
@@ -363,14 +390,33 @@ private class PdfSelectionDialogState {
  * (which keep pointing at the item's own dialogs/clipboard
  * state) — and unregisters when the selection clears or the
  * item leaves composition.
+ *
+ * SelectionBar (Revision 1, Critic F9): the bar's state
+ * travels as [MutableState] objects the OWNING ITEM creates
+ * and the surface host reads/writes directly — a state
+ * object cannot go stale by construction, where a value
+ * snapshot in the registration could. [barState] is the
+ * bar's hoisted state; [dismissing] is §9.3's post-action
+ * fade flag; [dialogOpen] is the item's follow-on-dialog
+ * report for the back chain's armed aggregate (Critic F1);
+ * [requestClear] is the back chain's clear route into the
+ * item-owned selection state (Readiness F4) — built by the
+ * owning item, invoked by the body when the screen's clear
+ * nonce bumps.
  */
 private class PdfContinuousBarRegistration(
     val page: Int,
     val selection: PdfPageSelection,
+    val barState: MutableState<SelectionBarState>,
+    val dismissing: MutableState<Boolean>,
+    val dialogOpen: MutableState<Boolean>,
+    val requestClear: () -> Unit,
     val onCopy: () -> Unit,
     val onHighlight: () -> Unit,
     val onNote: () -> Unit,
     val onDictionary: () -> Unit,
+    val onApplyHighlight: (tintArgb: Int, style: HighlightStyle) -> Unit,
+    val onRemoveHighlight: () -> Unit,
     val onDismiss: () -> Unit
 )
 
@@ -412,9 +458,10 @@ private fun pdfSelectionAt(
  * hold belongs to the hosts' long-press entry) with a live
  * selection dismisses it ([onTapAway]); with no selection,
  * a tap inside a drawn highlight's merged rects opens its
- * menu (overlaps: the most recently created wins). Anything
- * else is watch-only: nothing is consumed, so the shipped
- * tap/pan/scroll behaviour proceeds untouched.
+ * bar (overlaps: the most recently created wins), and with
+ * that bar open a tap on no highlight is a tap-away too.
+ * Anything else is watch-only: nothing is consumed, so the
+ * shipped tap/pan/scroll behaviour proceeds untouched.
  */
 @Composable
 private fun PdfPageGeometryOverlay(
@@ -427,7 +474,11 @@ private fun PdfPageGeometryOverlay(
     onHighlightTap: (StoredSelectionHighlight) -> Unit,
     onTapAway: () -> Unit,
     onDragStateChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** SelectionBar (§7.4/§9.1): the existing-highlight bar
+     * is open over this page — a clean tap that hits no
+     * highlight then counts as a tap-away. */
+    barOpen: Boolean = false
 ) {
     // MR-4 (R2.1): the held line index — built once per
     // geometry, the drag loop's hit-test no longer scans
@@ -714,6 +765,14 @@ private fun PdfPageGeometryOverlay(
                     if (hit != null) {
                         tap.consume()
                         onHighlightTap(hit)
+                    } else if (barOpen) {
+                        // SelectionBar (§9.1): with the
+                        // existing-highlight bar open and no
+                        // live selection, a clean tap on no
+                        // highlight is a tap-away — consumed,
+                        // the bar dismisses.
+                        tap.consume()
+                        onTapAway()
                     }
                 }
             }
@@ -721,46 +780,14 @@ private fun PdfPageGeometryOverlay(
     }
 }
 
-/** The selection's action pill: the existing
- * [SelectionActionRow] in a floating surface, hosted by
- * the surface's outermost box — outside any zoom layer, so
- * it never scales — seated AT the selection by the hosts
- * (MR-4, R1: the seat copies Moon+'s layoutHBar as adapted
- * there; MR-2b's bottom-centred seat is replaced). Visible
- * from the selection's entry and during drags; its text is
- * the SETTLED selection's (R2.3 — a drag writes the settled
- * selection only at release, so the bar never re-reads the
- * text per move). Wrap-content width; the host caps it at
- * surface width − 16dp and reports the measured size back
- * through [onSizeChanged] for the seat. */
-@Composable
-private fun PdfSelectionActionPill(
-    selection: PdfPageSelection,
-    onCopy: () -> Unit,
-    onHighlight: () -> Unit,
-    onNote: () -> Unit,
-    onDictionary: () -> Unit,
-    onDismiss: () -> Unit,
-    onSizeChanged: (IntSize) -> Unit = {},
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier.onSizeChanged(onSizeChanged),
-        shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 6.dp
-    ) {
-        SelectionActionRow(
-            selectedText = selection.text,
-            onCopy = onCopy,
-            onHighlight = onHighlight,
-            onNote = onNote,
-            onDictionary = onDictionary,
-            onDismiss = onDismiss,
-            fillContentWidth = false
-        )
-    }
-}
+/** SelectionBar: the hosts seat the shared [SelectionBar]
+ * AT the selection (MR-4, R1: the seat copies Moon+'s
+ * layoutHBar as adapted there) in the surface's outermost
+ * box — outside any zoom layer, so it never scales. Visible
+ * from the selection's entry and during drags. The bar
+ * never receives the selection's text (§5: its size cannot
+ * depend on the selection); the hosts report its measured
+ * size back through `onSizeChanged` for the seat. */
 
 /** MR-4 (R1): the inputs of the bar's seat, all in the
  * hosting surface's own pixel space (post-transform). */
@@ -847,27 +874,17 @@ private fun pdfBarSeatOffset(
 }
 
 /** The selection's follow-on dialogs (the kit's own
- * surfaces, shared with Reflow): a tapped highlight's menu
- * (note view/edit + Remove — NO colour row, Q5), the note
- * editor in its new-note and edit-note seats, and the
- * dictionary result. */
+ * surfaces, shared with Reflow): the note editor in its
+ * new-note and edit-note seats, and the dictionary result.
+ * (A tapped highlight's menu is gone — SelectionBar §7.4:
+ * the tap now opens the bar in its existing-highlight
+ * state, trash slot and colour row included.) */
 @Composable
 private fun PdfSelectionDialogs(
     state: PdfSelectionDialogState,
-    onMenuRemove: () -> Unit,
-    onMenuEditNote: () -> Unit,
     onNoteDraftSave: (String) -> Unit,
     onEditNoteSave: (String) -> Unit
 ) {
-    val menuHighlight = state.menuHighlight
-    if (menuHighlight != null) {
-        SelectionHighlightMenu(
-            highlight = menuHighlight,
-            onRemove = onMenuRemove,
-            onEditNote = onMenuEditNote,
-            onDismiss = { state.menuHighlight = null }
-        )
-    }
     val draft = state.noteDraft
     if (draft != null) {
         SelectionNoteEditor(
@@ -1212,6 +1229,16 @@ private fun PdfPagedBody(
     onRemovePageHighlight: (StoredSelectionHighlight) -> Unit = {},
     onUpdatePageNote: (StoredSelectionHighlight, String) -> Unit =
         { _, _ -> },
+    // SelectionBar: threaded from the surface (see
+    // PdfPagesSurface's own params).
+    onUpdatePageTint: (StoredSelectionHighlight, Int) -> Unit =
+        { _, _ -> },
+    onSelectionTranslate: (String) -> Unit = {},
+    onSelectionAskAi: (String) -> Unit = {},
+    onSelectionActiveChanged: (Boolean) -> Unit = {},
+    onDialogOpenChanged: (Boolean) -> Unit = {},
+    clearSelectionSignal: Int = 0,
+    motionEnabled: Boolean = true,
     onTrimStandDown: () -> Unit = {}
 ) {
     val pageCount = session.sectionCount.coerceAtLeast(1)
@@ -1277,6 +1304,23 @@ private fun PdfPagedBody(
             // it away. Edge taps and jumps still turn.
             var selectionReports by remember {
                 mutableStateOf<Map<Int, Boolean>>(emptyMap())
+            }
+            // SelectionBar (Critic F1): the cells' follow-on
+            // dialog reports, aggregated beside the selection
+            // reports — the body's dialog-open boolean and
+            // the ARMED selection aggregate (selection active
+            // AND no selection dialog open) the back chain
+            // consumes (§9.2 as revised).
+            var dialogReports by remember {
+                mutableStateOf<Map<Int, Boolean>>(emptyMap())
+            }
+            val anyDialogOpen = dialogReports.values.any { it }
+            val anySelectionActive = selectionReports.values.any { it }
+            LaunchedEffect(anySelectionActive, anyDialogOpen) {
+                onSelectionActiveChanged(
+                    anySelectionActive && !anyDialogOpen
+                )
+                onDialogOpenChanged(anyDialogOpen)
             }
             var settledUnit by remember {
                 mutableStateOf(pagerState.currentPage)
@@ -1596,9 +1640,18 @@ private fun PdfPagedBody(
                                 selectionReports = selectionReports +
                                     (reportedPage to active)
                             },
+                            onDialogActivity = { reportedPage, open ->
+                                dialogReports = dialogReports +
+                                    (reportedPage to open)
+                            },
                             onAddPageHighlight = onAddPageHighlight,
                             onRemovePageHighlight = onRemovePageHighlight,
                             onUpdatePageNote = onUpdatePageNote,
+                            onUpdatePageTint = onUpdatePageTint,
+                            onSelectionTranslate = onSelectionTranslate,
+                            onSelectionAskAi = onSelectionAskAi,
+                            clearSelectionSignal = clearSelectionSignal,
+                            motionEnabled = motionEnabled,
                             onTrimStandDown = onTrimStandDown,
                             onToggleControls = onToggleControls,
                             tapPreset = tapPreset,
@@ -1697,6 +1750,16 @@ private fun PdfPageCell(
     onRemovePageHighlight: (StoredSelectionHighlight) -> Unit = {},
     onUpdatePageNote: (StoredSelectionHighlight, String) -> Unit =
         { _, _ -> },
+    // SelectionBar: the per-cell dialog report (Critic F1),
+    // the tint write (§7.3), the More doors (§6.4) and the
+    // back chain's clear nonce (§9.2).
+    onDialogActivity: (Int, Boolean) -> Unit = { _, _ -> },
+    onUpdatePageTint: (StoredSelectionHighlight, Int) -> Unit =
+        { _, _ -> },
+    onSelectionTranslate: (String) -> Unit = {},
+    onSelectionAskAi: (String) -> Unit = {},
+    clearSelectionSignal: Int = 0,
+    motionEnabled: Boolean = true,
     onTrimStandDown: () -> Unit = {}
 ) {
     val cellScope = rememberCoroutineScope()
@@ -1717,6 +1780,61 @@ private fun PdfPageCell(
     // is computed from it (the bar measures, then seats).
     var pillSize by remember { mutableStateOf(IntSize.Zero) }
     val dialogState = remember(page) { PdfSelectionDialogState() }
+    // SelectionBar (§6.1): the bar's hoisted state, its
+    // §9.3 dismissing flag, and the existing-highlight
+    // record whose tap opened the bar in its §7.4 state
+    // (mutually exclusive with a live selection — the
+    // overlay only offers the tap when none is live).
+    var barState by remember(page) {
+        mutableStateOf(SelectionBarState())
+    }
+    var barDismissing by remember(page) { mutableStateOf(false) }
+    var existingBar by remember(page) {
+        mutableStateOf<StoredSelectionHighlight?>(null)
+    }
+    // §9.3 (as revised): an action tap fires its effect at
+    // once and sets [barDismissing]; the selection state
+    // clears 150ms later, as the bar's fade completes. A
+    // new selection entry cancels the fade (its write sets
+    // barDismissing = false first, which cancels this
+    // effect); tap-away / back / scroll clear immediately
+    // at their own sites.
+    LaunchedEffect(barDismissing) {
+        if (barDismissing) {
+            delay(150)
+            selection = null
+            existingBar = null
+            barDismissing = false
+        }
+    }
+    // §6.1's reset rule: the bar state resets whenever the
+    // selection clears, and a fresh selection supersedes
+    // any existing-highlight bar with a clean state.
+    LaunchedEffect(selection, existingBar) {
+        if (selection != null) {
+            if (existingBar != null) existingBar = null
+            barState = SelectionBarState()
+        } else if (existingBar == null) {
+            barState = SelectionBarState()
+        }
+    }
+    // Critic F1: this cell's follow-on-dialog report — the
+    // body aggregates it into the back chain's dialog layer.
+    val anyDialogOpen = dialogState.noteDraft != null ||
+        dialogState.editing != null || dialogState.dictionary != null
+    LaunchedEffect(anyDialogOpen) {
+        onDialogActivity(page, anyDialogOpen)
+    }
+    // §9.2: the back chain's clear nonce — one press kills
+    // this cell's selection (and its existing-highlight
+    // bar), handles and all.
+    LaunchedEffect(clearSelectionSignal) {
+        if (clearSelectionSignal > 0) {
+            selection = null
+            existingBar = null
+            barDismissing = false
+        }
+    }
     val myHighlights = pageHighlights.filter { it.page == page }
     val myMark = searchMark?.takeIf { it.page == page }
     val trimStandsDown = settings.edgeTrim > 0f
@@ -1738,15 +1856,24 @@ private fun PdfPageCell(
     // C4: the selection report — set at activation, cleared
     // at every clear site (the dismiss paths set [selection]
     // null; leaving the settled set clears below; dispose
-    // reports in the cell's DisposableEffect).
-    LaunchedEffect(selection != null) {
-        onSelectionActivity(page, selection != null)
+    // reports in the cell's DisposableEffect). The report
+    // covers the existing-highlight bar too (re-check
+    // Finding 1): an open bar is a selection layer the back
+    // chain must see, exactly as the continuous body's
+    // registration arms it — the clear nonce above already
+    // clears [existingBar], so the chain's clear route
+    // works once the layer is reported.
+    val selectionLayerOpen = selection != null || existingBar != null
+    LaunchedEffect(selectionLayerOpen) {
+        onSelectionActivity(page, selectionLayerOpen)
     }
     // C4 clear site — page change: a cell that leaves the
     // settled set drops its selection and its dialogs.
     LaunchedEffect(isSettledPage) {
         if (!isSettledPage) {
             selection = null
+            existingBar = null
+            barDismissing = false
             dialogState.clearAll()
         }
     }
@@ -1860,6 +1987,9 @@ private fun PdfPageCell(
             // selection report dies with the cell, so the
             // pager's derivation can never strand on it.
             onSelectionActivity(page, false)
+            // SelectionBar (Critic F1): the dialog report
+            // dies with the cell too, on the same rule.
+            onDialogActivity(page, false)
             // A-2: refine entries die with the cell.
             session.evictRefinements(page)
         }
@@ -2250,6 +2380,10 @@ private fun PdfPageCell(
                                                     pageGeometry = it
                                                 }
                                             ?: return@launch
+                                        // §9.3: a new selection
+                                        // entry cancels a fade
+                                        // still running.
+                                        barDismissing = false
                                         selection = pdfSelectionAt(
                                             geometry, pointX, pointY
                                         )
@@ -2677,12 +2811,25 @@ private fun PdfPageCell(
                                 // single, so the shipped tap
                                 // action never also fires.
                                 cancelPendingSingleTap()
-                                dialogState.menuHighlight = highlight
+                                // §7.4: the tap opens the bar
+                                // in its existing-highlight
+                                // state (the dialog menu is
+                                // gone) — a fresh entry, so
+                                // any running fade cancels.
+                                barDismissing = false
+                                barState = SelectionBarState(
+                                    existingHighlight = true,
+                                    activeTintArgb = highlight.tintArgb
+                                )
+                                existingBar = highlight
                             },
                             onTapAway = {
                                 cancelPendingSingleTap()
                                 selection = null
+                                existingBar = null
+                                barDismissing = false
                             },
+                            barOpen = existingBar != null,
                             onDragStateChange = { active ->
                                 selectionDragActive.value = active
                             },
@@ -2704,22 +2851,36 @@ private fun PdfPageCell(
                     }
                 }
             }
-            // MR-4 (R1): the action pill — a child of the
-            // cell's OUTER box, outside the zoom layer (it
-            // never scales), seated AT the selection by
-            // pdfBarSeatOffset: the selection's display rects
-            // run through the overlay frame offset and the
-            // centre-anchored zoom transform (the entry
-            // inversion's own forward map). The seat is
-            // computed in composition from the settled range
-            // + zoom/pan state, so it re-seats at entry, at
-            // each drag release, and on every zoom/pan change
-            // while the selection lives (zoom never dismisses
-            // it — MR-2b's rule, kept). Without seat inputs
-            // (no bitmap/points yet) the bar pins to the
-            // cell's bottom edge, the seat's own fallback.
+            // SelectionBar (MR-4 R1's seat, kept): the bar —
+            // a child of the cell's OUTER box, outside the
+            // zoom layer (it never scales), seated AT the
+            // selection by pdfBarSeatOffset: the selection's
+            // display rects run through the overlay frame
+            // offset and the centre-anchored zoom transform
+            // (the entry inversion's own forward map). The
+            // seat is computed in composition from the settled
+            // range + zoom/pan state, so it re-seats at entry,
+            // at each drag release, and on every zoom/pan
+            // change while the selection lives (zoom never
+            // dismisses it — MR-2b's rule, kept). Without seat
+            // inputs (no bitmap/points yet) the bar pins to
+            // the cell's bottom edge, the seat's own fallback.
+            // §7.4: in the existing-highlight state the seat
+            // derives from the highlight's own char range
+            // through the same pdfSeatInputs.
             val liveSelection = selection
-            if (liveSelection != null) {
+            val existingSelection = existingBar?.let { highlight ->
+                val geometry = pageGeometry
+                val start = highlight.charStart
+                val end = highlight.charEnd
+                if (geometry != null && start != null && end != null) {
+                    PdfPageSelection(geometry, start, end)
+                } else {
+                    null
+                }
+            }
+            val barSelection = liveSelection ?: existingSelection
+            if (barSelection != null) {
                 val seatBitmap = current ?: preview
                 val seatPoints = session.pagePointsSizePeek(page)
                 val seatInputs = if (seatBitmap != null &&
@@ -2742,9 +2903,9 @@ private fun PdfPageCell(
                         val sx = dispW / seatPoints.first
                         val sy = dispH / seatPoints.second
                         pdfSeatInputs(
-                            geometry = liveSelection.geometry,
-                            start = liveSelection.start,
-                            end = liveSelection.end,
+                            geometry = barSelection.geometry,
+                            start = barSelection.start,
+                            end = barSelection.end,
                             mapPoint = { xPt, yPt ->
                                 val layer = Offset(
                                     originX + xPt * sx,
@@ -2788,55 +2949,218 @@ private fun PdfPageCell(
                             .coerceAtLeast(0f)
                     )
                 }
-                PdfSelectionActionPill(
-                    selection = liveSelection,
-                    onCopy = {
-                        clipboard.setText(
-                            AnnotatedString(liveSelection.text)
-                        )
-                        selection = null
+                // §9.4 (as revised): the seat MOVES on the
+                // Spatial spring — and the animated value is
+                // clamped per frame inside the offset lambda
+                // to the same bounds pdfBarSeatOffset clamps
+                // its target to (Critic F7), so the spring's
+                // overshoot can never carry the bar off the
+                // cell's edge.
+                val animatedSeat by animateIntOffsetAsState(
+                    targetValue = IntOffset(
+                        seat.x.roundToInt(),
+                        seat.y.roundToInt()
+                    ),
+                    animationSpec = if (motionEnabled) {
+                        SpringMotionEngine.Spatial.toSpec()
+                    } else {
+                        snap()
                     },
-                    onHighlight = {
-                        onAddPageHighlight(
-                            StoredSelectionHighlight(
-                                id = UUID.randomUUID().toString(),
-                                page = page,
-                                charStart = liveSelection.start,
-                                charEnd = liveSelection.end,
-                                selectedText = liveSelection.text,
-                                createdAtEpochMillis =
-                                    System.currentTimeMillis()
-                            )
-                        )
-                        selection = null
-                    },
-                    onNote = { dialogState.noteDraft = liveSelection },
-                    onDictionary = {
-                        val word = liveSelection.text.trim()
-                            .split(Regex("\\s+"))
-                            .firstOrNull().orEmpty()
-                        if (word.isNotBlank()) {
-                            cellScope.launch {
-                                val definition = runCatching {
-                                    app.xreader.ui.library
-                                        .DictionaryLookup.lookup(
-                                            cellContext.filesDir, word
+                    label = "pdfPagedBarSeat"
+                )
+                val seatMotion = rememberSelectionBarSeatMotion(
+                    visible = true,
+                    dismissing = barDismissing,
+                    motionEnabled = motionEnabled
+                )
+                SelectionBar(
+                    state = barState,
+                    onStateChange = { barState = it },
+                    moreItems = PdfSelectionMoreItems,
+                    callbacks = SelectionBarCallbacks(
+                        onAction = { action ->
+                            if (!barDismissing) {
+                                when (action) {
+                                    SelectionBarAction.COPY -> {
+                                        clipboard.setText(
+                                            AnnotatedString(
+                                                barSelection.text
+                                            )
                                         )
-                                }.getOrNull()
-                                dialogState.dictionary =
-                                    word to definition
+                                        barDismissing = true
+                                    }
+                                    SelectionBarAction.HIGHLIGHT -> {
+                                        // Colour-row hosts never
+                                        // route Highlight here
+                                        // (the bar opens the row
+                                        // instead); this arm is
+                                        // the capability-off
+                                        // fallback — apply with
+                                        // the active tint.
+                                        onAddPageHighlight(
+                                            StoredSelectionHighlight(
+                                                id = UUID.randomUUID()
+                                                    .toString(),
+                                                page = page,
+                                                charStart =
+                                                    barSelection.start,
+                                                charEnd =
+                                                    barSelection.end,
+                                                selectedText =
+                                                    barSelection.text,
+                                                tintArgb =
+                                                    barState.activeTintArgb,
+                                                createdAtEpochMillis =
+                                                    System
+                                                        .currentTimeMillis()
+                                            )
+                                        )
+                                        barDismissing = true
+                                    }
+                                    SelectionBarAction.NOTE -> {
+                                        val existing = existingBar
+                                        if (existing != null) {
+                                            // §7.4: the note
+                                            // editor over the
+                                            // stored highlight;
+                                            // the bar closes.
+                                            dialogState.editing =
+                                                existing
+                                            barDismissing = true
+                                        } else {
+                                            // The shipped draft
+                                            // flow: the editor
+                                            // opens over the
+                                            // live selection,
+                                            // which stays until
+                                            // save/cancel.
+                                            dialogState.noteDraft =
+                                                barSelection
+                                        }
+                                    }
+                                    SelectionBarAction.DICTIONARY -> {
+                                        val word = barSelection.text
+                                            .trim()
+                                            .split(Regex("\\s+"))
+                                            .firstOrNull().orEmpty()
+                                        if (word.isNotBlank()) {
+                                            cellScope.launch {
+                                                val definition =
+                                                    runCatching {
+                                                        app.xreader.ui
+                                                            .library
+                                                            .DictionaryLookup
+                                                            .lookup(
+                                                                cellContext
+                                                                    .filesDir,
+                                                                word
+                                                            )
+                                                    }.getOrNull()
+                                                dialogState.dictionary =
+                                                    word to definition
+                                            }
+                                        }
+                                        barDismissing = true
+                                    }
+                                    SelectionBarAction.TRANSLATE -> {
+                                        onSelectionTranslate(
+                                            barSelection.text
+                                        )
+                                        barDismissing = true
+                                    }
+                                    SelectionBarAction.ASK_AI -> {
+                                        onSelectionAskAi(
+                                            barSelection.text
+                                        )
+                                        barDismissing = true
+                                    }
+                                    SelectionBarAction.SHARE -> {
+                                        val intent = Intent(
+                                            Intent.ACTION_SEND
+                                        ).apply {
+                                            type = "text/plain"
+                                            putExtra(
+                                                Intent.EXTRA_TEXT,
+                                                barSelection.text
+                                            )
+                                        }
+                                        cellContext.startActivity(
+                                            Intent.createChooser(
+                                                intent, null
+                                            )
+                                        )
+                                        barDismissing = true
+                                    }
+                                    else -> Unit
+                                }
                             }
+                        },
+                        onApplyHighlight = { tintArgb, _ ->
+                            if (!barDismissing) {
+                                val existing = existingBar
+                                if (existing != null) {
+                                    // §7.4: re-tint the stored
+                                    // highlight (§7.3's store
+                                    // door).
+                                    onUpdatePageTint(
+                                        existing, tintArgb
+                                    )
+                                } else {
+                                    onAddPageHighlight(
+                                        StoredSelectionHighlight(
+                                            id = UUID.randomUUID()
+                                                .toString(),
+                                            page = page,
+                                            charStart =
+                                                barSelection.start,
+                                            charEnd = barSelection.end,
+                                            selectedText =
+                                                barSelection.text,
+                                            tintArgb = tintArgb,
+                                            createdAtEpochMillis =
+                                                System
+                                                    .currentTimeMillis()
+                                        )
+                                    )
+                                }
+                                barDismissing = true
+                            }
+                        },
+                        onRemoveHighlight = {
+                            if (!barDismissing) {
+                                existingBar?.let {
+                                    onRemovePageHighlight(it)
+                                }
+                                barDismissing = true
+                            }
+                        },
+                        onDismiss = {
+                            selection = null
+                            existingBar = null
+                            barDismissing = false
                         }
-                        selection = null
-                    },
-                    onDismiss = { selection = null },
-                    onSizeChanged = { pillSize = it },
+                    ),
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .offset {
+                            val edge = edgePx.roundToInt()
                             IntOffset(
-                                seat.x.roundToInt(),
-                                seat.y.roundToInt()
+                                animatedSeat.x.coerceIn(
+                                    edge,
+                                    maxOf(
+                                        edge,
+                                        cellSizePx.width -
+                                            pillSize.width - edge
+                                    )
+                                ),
+                                animatedSeat.y.coerceIn(
+                                    0,
+                                    maxOf(
+                                        0,
+                                        cellSizePx.height -
+                                            pillSize.height - edge
+                                    )
+                                )
                             )
                         }
                         .widthIn(
@@ -2845,20 +3169,16 @@ private fun PdfPageCell(
                                     .coerceAtLeast(0f).toDp()
                             }
                         )
+                        .onSizeChanged { pillSize = it }
+                        .graphicsLayer {
+                            alpha = seatMotion.alpha
+                            scaleX = seatMotion.scale
+                            scaleY = seatMotion.scale
+                        }
                 )
             }
             PdfSelectionDialogs(
                 state = dialogState,
-                onMenuRemove = {
-                    dialogState.menuHighlight?.let {
-                        onRemovePageHighlight(it)
-                    }
-                    dialogState.menuHighlight = null
-                },
-                onMenuEditNote = {
-                    dialogState.editing = dialogState.menuHighlight
-                    dialogState.menuHighlight = null
-                },
                 onNoteDraftSave = { note ->
                     val draft = dialogState.noteDraft
                     if (draft != null) {
@@ -2947,6 +3267,16 @@ private fun PdfContinuousBody(
     onRemovePageHighlight: (StoredSelectionHighlight) -> Unit = {},
     onUpdatePageNote: (StoredSelectionHighlight, String) -> Unit =
         { _, _ -> },
+    // SelectionBar: threaded from the surface (see
+    // PdfPagesSurface's own params).
+    onUpdatePageTint: (StoredSelectionHighlight, Int) -> Unit =
+        { _, _ -> },
+    onSelectionTranslate: (String) -> Unit = {},
+    onSelectionAskAi: (String) -> Unit = {},
+    onSelectionActiveChanged: (Boolean) -> Unit = {},
+    onDialogOpenChanged: (Boolean) -> Unit = {},
+    clearSelectionSignal: Int = 0,
+    motionEnabled: Boolean = true,
     onPageVisible: (Int) -> Unit = {}
 ) {
     val listState = rememberLazyListState(
@@ -2976,6 +3306,26 @@ private fun PdfContinuousBody(
         mutableStateOf<PdfContinuousBarRegistration?>(null)
     }
     var surfacePillSize by remember { mutableStateOf(IntSize.Zero) }
+    // SelectionBar (§9.2 as revised): the back chain's
+    // reports for this body — the ARMED aggregate is a live
+    // registration whose item has no follow-on dialog open
+    // (the registration's dialogOpen state is read here, in
+    // composition, so this body recomposes with it); the
+    // clear nonce routes through the registration's
+    // item-built requestClear (Readiness F4).
+    val registrationDialogOpen =
+        barRegistration?.dialogOpen?.value ?: false
+    LaunchedEffect(barRegistration != null, registrationDialogOpen) {
+        onSelectionActiveChanged(
+            barRegistration != null && !registrationDialogOpen
+        )
+        onDialogOpenChanged(registrationDialogOpen)
+    }
+    LaunchedEffect(clearSelectionSignal) {
+        if (clearSelectionSignal > 0) {
+            barRegistration?.requestClear?.invoke()
+        }
+    }
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     // The continuous item width, published by the layout box
@@ -3480,6 +3830,50 @@ private fun PdfContinuousBody(
                     val itemDialogs = remember(page) {
                         PdfSelectionDialogState()
                     }
+                    // SelectionBar (Critic F9): the bar's
+                    // state objects — created HERE, in the
+                    // owning item, and carried in the
+                    // registration as MutableState so the
+                    // surface host reads/writes them directly
+                    // (no value snapshot can go stale).
+                    val itemBarState = remember(page) {
+                        mutableStateOf(SelectionBarState())
+                    }
+                    val itemBarDismissing = remember(page) {
+                        mutableStateOf(false)
+                    }
+                    val itemDialogOpen = remember(page) {
+                        mutableStateOf(false)
+                    }
+                    // §7.4: the stored highlight whose tap
+                    // opened the bar in its existing state.
+                    var existingBarHighlight by remember(page) {
+                        mutableStateOf<StoredSelectionHighlight?>(null)
+                    }
+                    // §9.3: the delayed clear — an action's
+                    // effect fires at tap; the item's
+                    // selection state clears 150ms later,
+                    // which unregisters the bar (the effect
+                    // below). A new entry cancels the fade by
+                    // setting the flag false first.
+                    LaunchedEffect(itemBarDismissing.value) {
+                        if (itemBarDismissing.value) {
+                            delay(150)
+                            itemSelection = null
+                            existingBarHighlight = null
+                            itemBarDismissing.value = false
+                        }
+                    }
+                    // Critic F1: this item's follow-on-dialog
+                    // report, written into the registration's
+                    // dialogOpen state.
+                    val itemAnyDialogOpen =
+                        itemDialogs.noteDraft != null ||
+                            itemDialogs.editing != null ||
+                            itemDialogs.dictionary != null
+                    LaunchedEffect(itemAnyDialogOpen) {
+                        itemDialogOpen.value = itemAnyDialogOpen
+                    }
                     val itemHighlights = pageHighlights
                         .filter { it.page == page }
                     val itemMark = searchMark
@@ -3504,30 +3898,61 @@ private fun PdfContinuousBody(
                             selectionPages - page
                         }
                     }
-                    // MR-4 (R1): register the live selection
-                    // with the surface-level action bar (the
-                    // bar moved out of the item — it seats in
-                    // the surface's outermost box now). The
-                    // closures read the item's CURRENT
-                    // selection at call time and drive this
-                    // item's own dialogs/clipboard, exactly
-                    // the shipped item-local pill's actions.
-                    LaunchedEffect(itemSelection) {
-                        val sel = itemSelection
+                    // MR-4 (R1) + SelectionBar: register the
+                    // live selection (or the §7.4
+                    // existing-highlight bar) with the
+                    // surface-level bar (the bar moved out of
+                    // the item — it seats in the surface's
+                    // outermost box now). The closures resolve
+                    // against the item's CURRENT state at call
+                    // time and drive this item's own
+                    // dialogs/clipboard, exactly the shipped
+                    // item-local pill's actions; the dismissal
+                    // itself is the host's §9.3 mechanism (the
+                    // host sets itemBarDismissing — the delayed
+                    // clear above then unregisters).
+                    LaunchedEffect(
+                        itemSelection, existingBarHighlight, itemGeometry
+                    ) {
+                        val existing = existingBarHighlight
+                        val sel = itemSelection ?: existing?.let { hl ->
+                            val g = itemGeometry
+                            val s = hl.charStart
+                            val e = hl.charEnd
+                            if (g != null && s != null && e != null) {
+                                PdfPageSelection(g, s, e)
+                            } else {
+                                null
+                            }
+                        }
                         if (sel != null) {
                             barRegistration =
                                 PdfContinuousBarRegistration(
                                     page = page,
                                     selection = sel,
+                                    barState = itemBarState,
+                                    dismissing = itemBarDismissing,
+                                    dialogOpen = itemDialogOpen,
+                                    requestClear = {
+                                        itemBarDismissing.value = false
+                                        itemSelection = null
+                                        existingBarHighlight = null
+                                    },
                                     onCopy = {
-                                        itemSelection?.let { live ->
+                                        val text = existing
+                                            ?.selectedText
+                                            ?: itemSelection?.text
+                                        if (text != null) {
                                             itemClipboard.setText(
-                                                AnnotatedString(live.text)
+                                                AnnotatedString(text)
                                             )
                                         }
-                                        itemSelection = null
                                     },
                                     onHighlight = {
+                                        // Capability-off fallback
+                                        // (the bar opens the
+                                        // colour row instead on
+                                        // this host).
                                         itemSelection?.let { live ->
                                             onAddPageHighlight(
                                                 StoredSelectionHighlight(
@@ -3536,23 +3961,34 @@ private fun PdfContinuousBody(
                                                     page = page,
                                                     charStart = live.start,
                                                     charEnd = live.end,
-                                                    selectedText = live.text,
+                                                    selectedText =
+                                                        live.text,
+                                                    tintArgb =
+                                                        itemBarState.value
+                                                            .activeTintArgb,
                                                     createdAtEpochMillis =
                                                         System
                                                             .currentTimeMillis()
                                                 )
                                             )
                                         }
-                                        itemSelection = null
                                     },
                                     onNote = {
-                                        itemSelection?.let { live ->
-                                            itemDialogs.noteDraft = live
+                                        if (existing != null) {
+                                            itemDialogs.editing =
+                                                existing
+                                        } else {
+                                            itemSelection?.let { live ->
+                                                itemDialogs.noteDraft =
+                                                    live
+                                            }
                                         }
                                     },
                                     onDictionary = {
-                                        val word = itemSelection
-                                            ?.text?.trim()
+                                        val word = (
+                                            existing?.selectedText
+                                                ?: itemSelection?.text
+                                            )?.trim()
                                             ?.split(Regex("\\s+"))
                                             ?.firstOrNull().orEmpty()
                                         if (word.isNotBlank()) {
@@ -3572,12 +4008,56 @@ private fun PdfContinuousBody(
                                                     word to definition
                                             }
                                         }
-                                        itemSelection = null
                                     },
-                                    onDismiss = { itemSelection = null }
+                                    onApplyHighlight = { tintArgb, _ ->
+                                        if (existing != null) {
+                                            onUpdatePageTint(
+                                                existing, tintArgb
+                                            )
+                                        } else {
+                                            itemSelection?.let { live ->
+                                                onAddPageHighlight(
+                                                    StoredSelectionHighlight(
+                                                        id = UUID
+                                                            .randomUUID()
+                                                            .toString(),
+                                                        page = page,
+                                                        charStart =
+                                                            live.start,
+                                                        charEnd = live.end,
+                                                        selectedText =
+                                                            live.text,
+                                                        tintArgb =
+                                                            tintArgb,
+                                                        createdAtEpochMillis =
+                                                            System
+                                                                .currentTimeMillis()
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    },
+                                    onRemoveHighlight = {
+                                        if (existing != null) {
+                                            onRemovePageHighlight(
+                                                existing
+                                            )
+                                        }
+                                    },
+                                    onDismiss = {
+                                        itemBarDismissing.value = false
+                                        itemSelection = null
+                                        existingBarHighlight = null
+                                    }
                                 )
-                        } else if (barRegistration?.page == page) {
-                            barRegistration = null
+                        } else {
+                            if (barRegistration?.page == page) {
+                                barRegistration = null
+                            }
+                            // §6.1's reset rule, this body's
+                            // seat: a cleared bar starts clean
+                            // next time.
+                            itemBarState.value = SelectionBarState()
                         }
                     }
                     DisposableEffect(page) {
@@ -3609,6 +4089,16 @@ private fun PdfContinuousBody(
                                                     itemGeometry = it
                                                 }
                                             ?: return@launch
+                                        // §9.3 + §6.1: a new entry
+                                        // cancels a running fade,
+                                        // supersedes any
+                                        // existing-highlight bar,
+                                        // and starts from a clean
+                                        // bar state.
+                                        itemBarDismissing.value = false
+                                        existingBarHighlight = null
+                                        itemBarState.value =
+                                            SelectionBarState()
                                         itemSelection = pdfSelectionAt(
                                             geometry, pointX, pointY
                                         )
@@ -3640,10 +4130,25 @@ private fun PdfContinuousBody(
                                 searchMark = itemMark,
                                 selection = itemSelection,
                                 onHighlightTap = { highlight ->
-                                    itemDialogs.menuHighlight =
-                                        highlight
+                                    // §7.4: the tap opens the
+                                    // bar in its
+                                    // existing-highlight state
+                                    // (the dialog menu is gone).
+                                    itemBarDismissing.value = false
+                                    itemBarState.value =
+                                        SelectionBarState(
+                                            existingHighlight = true,
+                                            activeTintArgb =
+                                                highlight.tintArgb
+                                        )
+                                    existingBarHighlight = highlight
                                 },
-                                onTapAway = { itemSelection = null },
+                                onTapAway = {
+                                    itemSelection = null
+                                    existingBarHighlight = null
+                                    itemBarDismissing.value = false
+                                },
+                                barOpen = existingBarHighlight != null,
                                 // MR-4 (R1): the drag report
                                 // is wired now (it was a no-op
                                 // in MR-2b) — into the body's
@@ -3664,17 +4169,6 @@ private fun PdfContinuousBody(
                         // the surface-level bar above.
                         PdfSelectionDialogs(
                             state = itemDialogs,
-                            onMenuRemove = {
-                                itemDialogs.menuHighlight?.let {
-                                    onRemovePageHighlight(it)
-                                }
-                                itemDialogs.menuHighlight = null
-                            },
-                            onMenuEditNote = {
-                                itemDialogs.editing =
-                                    itemDialogs.menuHighlight
-                                itemDialogs.menuHighlight = null
-                            },
                             onNoteDraftSave = { note ->
                                 val draft = itemDialogs.noteDraft
                                 if (draft != null) {
@@ -3776,20 +4270,129 @@ private fun PdfContinuousBody(
                         .coerceAtLeast(0f)
                 )
             }
-            PdfSelectionActionPill(
-                selection = registration.selection,
-                onCopy = registration.onCopy,
-                onHighlight = registration.onHighlight,
-                onNote = registration.onNote,
-                onDictionary = registration.onDictionary,
-                onDismiss = registration.onDismiss,
-                onSizeChanged = { surfacePillSize = it },
+            // §9.4 (as revised): the seat animation + the
+            // per-frame clamp, exactly as the paged seat
+            // (Critic F7) — the spring may overshoot its
+            // target, never the screen.
+            val animatedSeat by animateIntOffsetAsState(
+                targetValue = IntOffset(
+                    seat.x.roundToInt(),
+                    seat.y.roundToInt()
+                ),
+                animationSpec = if (motionEnabled) {
+                    SpringMotionEngine.Spatial.toSpec()
+                } else {
+                    snap()
+                },
+                label = "pdfContinuousBarSeat"
+            )
+            val seatMotion = rememberSelectionBarSeatMotion(
+                visible = true,
+                dismissing = registration.dismissing.value,
+                motionEnabled = motionEnabled
+            )
+            val surfaceContext = LocalContext.current
+            SelectionBar(
+                state = registration.barState.value,
+                onStateChange = { registration.barState.value = it },
+                moreItems = PdfSelectionMoreItems,
+                callbacks = SelectionBarCallbacks(
+                    onAction = { action ->
+                        if (!registration.dismissing.value) {
+                            when (action) {
+                                SelectionBarAction.COPY -> {
+                                    registration.onCopy()
+                                    registration.dismissing.value = true
+                                }
+                                SelectionBarAction.HIGHLIGHT -> {
+                                    registration.onHighlight()
+                                    registration.dismissing.value = true
+                                }
+                                SelectionBarAction.NOTE -> {
+                                    registration.onNote()
+                                    // Live state: the note
+                                    // editor opens over the
+                                    // selection, which stays
+                                    // (§6.1's draft flow).
+                                    // Existing state: the bar
+                                    // closes (§7.4).
+                                    if (registration.barState.value
+                                            .existingHighlight
+                                    ) {
+                                        registration.dismissing.value =
+                                            true
+                                    }
+                                }
+                                SelectionBarAction.DICTIONARY -> {
+                                    registration.onDictionary()
+                                    registration.dismissing.value = true
+                                }
+                                SelectionBarAction.TRANSLATE -> {
+                                    onSelectionTranslate(
+                                        registration.selection.text
+                                    )
+                                    registration.dismissing.value = true
+                                }
+                                SelectionBarAction.ASK_AI -> {
+                                    onSelectionAskAi(
+                                        registration.selection.text
+                                    )
+                                    registration.dismissing.value = true
+                                }
+                                SelectionBarAction.SHARE -> {
+                                    val intent = Intent(
+                                        Intent.ACTION_SEND
+                                    ).apply {
+                                        type = "text/plain"
+                                        putExtra(
+                                            Intent.EXTRA_TEXT,
+                                            registration.selection.text
+                                        )
+                                    }
+                                    surfaceContext.startActivity(
+                                        Intent.createChooser(intent, null)
+                                    )
+                                    registration.dismissing.value = true
+                                }
+                                else -> Unit
+                            }
+                        }
+                    },
+                    onApplyHighlight = { tintArgb, style ->
+                        if (!registration.dismissing.value) {
+                            registration.onApplyHighlight(tintArgb, style)
+                            registration.dismissing.value = true
+                        }
+                    },
+                    onRemoveHighlight = {
+                        if (!registration.dismissing.value) {
+                            registration.onRemoveHighlight()
+                            registration.dismissing.value = true
+                        }
+                    },
+                    onDismiss = { registration.requestClear() }
+                ),
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset {
+                        val edge = edgePx.roundToInt()
                         IntOffset(
-                            seat.x.roundToInt(),
-                            seat.y.roundToInt()
+                            animatedSeat.x.coerceIn(
+                                edge,
+                                maxOf(
+                                    edge,
+                                    surfaceSizePx.width -
+                                        surfacePillSize.width - edge
+                                )
+                            ),
+                            animatedSeat.y.coerceIn(
+                                0,
+                                maxOf(
+                                    0,
+                                    surfaceSizePx.height -
+                                        surfacePillSize.height - edge
+                                )
+                            )
                         )
                     }
                     .widthIn(
@@ -3798,6 +4401,12 @@ private fun PdfContinuousBody(
                                 .coerceAtLeast(0f).toDp()
                         }
                     )
+                    .onSizeChanged { surfacePillSize = it }
+                    .graphicsLayer {
+                        alpha = seatMotion.alpha
+                        scaleX = seatMotion.scale
+                        scaleY = seatMotion.scale
+                    }
             )
         }
     }

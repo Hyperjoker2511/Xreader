@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.view.WindowManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -421,8 +422,7 @@ fun ReaderScreen(
                     }
                 }
                 ReaderSelectionAction.ASK_AI -> {
-                    aiViewModel.askAboutPassage(text)
-                    onOpenAiPage()
+                    askAiAboutSelection(text)
                 }
             }
         }
@@ -433,6 +433,40 @@ fun ReaderScreen(
     // into another one before saving.
     var pendingNoteHighlight by remember { mutableStateOf<Triple<Int, Int, Int>?>(null) }
     var noteText by remember { mutableStateOf("") }
+
+    // SelectionBar §9.2 (Revision 1): the reader back chain.
+    // The dialog layer outranks the selection layer: while
+    // any follow-on dialog state is open, BOTH the selection
+    // handlers and the exit handler stand down and the
+    // dialog's own dismissal (its onDismissRequest, back
+    // included) handles the press — exactly one layer per
+    // press, never a dialog closed AND the reader exited by
+    // the same press.
+    val coreDialogOpen = pendingNoteHighlight != null ||
+        editingNoteFor != null || dictionaryResult != null ||
+        selectionTranslation != null || replaceText != null
+    var coreSelectionOpen by remember { mutableStateOf(false) }
+    var pdfSelectionOpen by remember { mutableStateOf(false) }
+    var pdfDialogOpen by remember { mutableStateOf(false) }
+    var clearCoreSelection by remember { mutableIntStateOf(0) }
+    var clearPdfSelection by remember { mutableIntStateOf(0) }
+    // Exit handler FIRST, selection handlers SECOND: among
+    // enabled BackHandlers the most recently composed wins,
+    // so an armed selection consumes the press before exit
+    // is reached; with no selection armed only exit is
+    // enabled. (Composed here, ahead of the surface branch
+    // and the plateFile block, so the plateFile BackHandler
+    // further down still composes later and keeps winning
+    // while the plate sheet is open — Revision 1, F2.)
+    BackHandler(enabled = !coreDialogOpen && !pdfDialogOpen) {
+        onBack()
+    }
+    BackHandler(enabled = coreSelectionOpen && !coreDialogOpen) {
+        clearCoreSelection++
+    }
+    BackHandler(enabled = pdfSelectionOpen && !pdfDialogOpen) {
+        clearPdfSelection++
+    }
 
     LaunchedEffect(aiViewModel) {
         aiViewModel.translationDone.collect { chapterId ->
@@ -835,7 +869,13 @@ fun ReaderScreen(
                 pageHighlights = pdfPageHighlights,
                 searchMark = pdfSearchMark,
                 onToggleControls = { chromeVisible = !chromeVisible },
-                onBack = onBack
+                onBack = onBack,
+                onSelectionTranslate = translateSelection,
+                onSelectionAskAi = askAiAboutSelection,
+                onSelectionActiveChanged = { pdfSelectionOpen = it },
+                onDialogOpenChanged = { pdfDialogOpen = it },
+                clearSelectionSignal = clearPdfSelection,
+                motionEnabled = !reduceMotion
             )
 
             // v1.2.0 (Wave 3): the full-screen spinner shows ONLY
@@ -1122,6 +1162,9 @@ fun ReaderScreen(
                     onCenterTap = { chromeVisible = !chromeVisible },
                     onChromeWanted = { wanted -> chromeVisible = wanted },
                     onSelectionAction = handleSelectionAction,
+                    onSelectionOpenChanged = { coreSelectionOpen = it },
+                    clearSelectionSignal = clearCoreSelection,
+                    motionEnabled = !reduceMotion,
                     onDownloadChapter = { chapterId ->
                         viewModel.downloadSegmentChapter(chapterId)
                     },
@@ -2318,7 +2361,19 @@ private fun PdfReaderHost(
         app.xreader.ui.localreader.StoredSelectionHighlight>,
     searchMark: PdfSearchMark?,
     onToggleControls: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    // SelectionBar (Revision 1, Readiness F3 — this list is
+    // closed): the More doors, the back chain's reports and
+    // clear nonce, and the motion gate, threaded to the
+    // surfaces. onUpdatePageTint is built INSIDE this host
+    // (beside onUpdatePageNote) and passed to PdfPagesSurface
+    // only — Reflow has no tint-update path (§7.4).
+    onSelectionTranslate: (String) -> Unit,
+    onSelectionAskAi: (String) -> Unit,
+    onSelectionActiveChanged: (Boolean) -> Unit,
+    onDialogOpenChanged: (Boolean) -> Unit,
+    clearSelectionSignal: Int,
+    motionEnabled: Boolean
 ) {
     when (val s = state) {
         PdfReaderState.Loading -> Column(
@@ -2433,7 +2488,19 @@ private fun PdfReaderHost(
                                 viewModel.updatePdfPageHighlightNote(
                                     highlight, note
                                 )
-                            }
+                            },
+                            onUpdatePageTint = { highlight, tintArgb ->
+                                viewModel.updatePdfPageHighlightTint(
+                                    highlight, tintArgb
+                                )
+                            },
+                            onSelectionTranslate = onSelectionTranslate,
+                            onSelectionAskAi = onSelectionAskAi,
+                            onSelectionActiveChanged =
+                                onSelectionActiveChanged,
+                            onDialogOpenChanged = onDialogOpenChanged,
+                            clearSelectionSignal = clearSelectionSignal,
+                            motionEnabled = motionEnabled
                         )
                         PdfReadMode.REFLOW -> when {
                             s.reflowContent != null -> PdfReflowSurface(
@@ -2455,7 +2522,16 @@ private fun PdfReaderHost(
                                     viewModel.addPdfReflowHighlight(
                                         highlight
                                     )
-                                }
+                                },
+                                onSelectionTranslate =
+                                    onSelectionTranslate,
+                                onSelectionAskAi = onSelectionAskAi,
+                                onSelectionActiveChanged =
+                                    onSelectionActiveChanged,
+                                onDialogOpenChanged = onDialogOpenChanged,
+                                clearSelectionSignal =
+                                    clearSelectionSignal,
+                                motionEnabled = motionEnabled
                             )
                             s.textAvailable == false -> Column(
                                 Modifier.fillMaxSize(),

@@ -1,5 +1,6 @@
 package app.xreader.ui.reader
 
+import android.content.Intent
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,9 +20,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -42,12 +45,12 @@ import app.xreader.domain.reader.ChapterText
 import app.xreader.domain.reader.ReaderConfig
 import app.xreader.ui.localreader.HIGHLIGHT_TINT_ARGB
 import app.xreader.ui.localreader.PdfTextSelection
-import app.xreader.ui.localreader.SelectionActionRow
 import app.xreader.ui.localreader.SelectionNoteEditor
 import app.xreader.ui.localreader.StoredSelectionHighlight
 import app.xreader.ui.localreader.expandWordRange
 import app.xreader.ui.localreader.highlightSpansFor
 import java.util.UUID
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -66,12 +69,13 @@ import kotlinx.coroutines.launch
  * (R14): nothing finer is carried.
  *
  * Selection is the local reader's own: long-press a word,
- * then Copy / Highlight / Note / Dictionary from the
- * shared action row. Highlights made here are the Reflow
- * form (R20): page + offset within THIS page's Reflow
- * text — the same string Listen speaks in this mode, so
- * the spoken range and the search mark land on the very
- * offsets the reader sees.
+ * then the shared SelectionBar (SelectionBar §6.3 — the
+ * same component the Pages bodies host, seated here at the
+ * foot of the text column). Highlights made here are the
+ * Reflow form (R20): page + offset within THIS page's
+ * Reflow text — the same string Listen speaks in this
+ * mode, so the spoken range and the search mark land on
+ * the very offsets the reader sees.
  */
 @Composable
 fun PdfReflowSurface(
@@ -86,7 +90,16 @@ fun PdfReflowSurface(
     onBoundaryCross: (direction: Int) -> Unit,
     onToggleControls: () -> Unit,
     onAddHighlight: (StoredSelectionHighlight) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // SelectionBar: the More doors (§6.4) and the back
+    // chain's reports + clear nonce (§9.2), threaded from
+    // PdfReaderHost.
+    onSelectionTranslate: (String) -> Unit = {},
+    onSelectionAskAi: (String) -> Unit = {},
+    onSelectionActiveChanged: (Boolean) -> Unit = {},
+    onDialogOpenChanged: (Boolean) -> Unit = {},
+    clearSelectionSignal: Int = 0,
+    motionEnabled: Boolean = true
 ) {
     val chapterText = remember(content) { ChapterText(content) }
     val fullText = chapterText.text
@@ -107,6 +120,46 @@ fun PdfReflowSurface(
     }
     var dictionary by remember(page, content) {
         mutableStateOf<Pair<String, String?>?>(null)
+    }
+    // SelectionBar (§6.3): the bar's hoisted state + its
+    // §9.3 dismissing flag, in this surface's own seat.
+    var barState by remember(page, content) {
+        mutableStateOf(SelectionBarState())
+    }
+    var barDismissing by remember(page, content) {
+        mutableStateOf(false)
+    }
+    // §9.3 (as revised): an action's effect fires at tap;
+    // the selection state clears 150ms later, as the bar's
+    // fade completes. A new entry cancels the fade (its
+    // write sets barDismissing = false first).
+    LaunchedEffect(barDismissing) {
+        if (barDismissing) {
+            delay(150)
+            selection = null
+            barDismissing = false
+        }
+    }
+    // §6.1's reset rule: a cleared selection resets the bar.
+    LaunchedEffect(selection) {
+        if (selection == null) barState = SelectionBarState()
+    }
+    // §9.2 (Critic F1): the armed/dialog conditions,
+    // computed in place — this surface's dialog state is
+    // local (noteDraft / dictionary).
+    val reflowDialogOpen = noteDraft != null || dictionary != null
+    val reflowArmed = selection != null && !reflowDialogOpen
+    LaunchedEffect(reflowArmed, reflowDialogOpen) {
+        onSelectionActiveChanged(reflowArmed)
+        onDialogOpenChanged(reflowDialogOpen)
+    }
+    // §9.2: the back chain's clear nonce — one press kills
+    // the selection, bar and all.
+    LaunchedEffect(clearSelectionSignal) {
+        if (clearSelectionSignal > 0) {
+            selection = null
+            barDismissing = false
+        }
     }
     val layouts = remember(page, content) {
         mutableMapOf<Int, TextLayoutResult>()
@@ -201,6 +254,9 @@ fun PdfReflowSurface(
                                     val word = expandWordRange(
                                         fullText, global
                                     )
+                                    // §9.3: a new entry cancels
+                                    // a fade still running.
+                                    barDismissing = false
                                     selection = if (word.isEmpty()) {
                                         null
                                     } else {
@@ -230,42 +286,139 @@ fun PdfReflowSurface(
             val selectedText = fullText.substring(
                 activeStart, activeEnd
             )
-            SelectionActionRow(
-                selectedText = selectedText,
-                onCopy = {
-                    clipboard.setText(AnnotatedString(selectedText))
-                    selection = null
-                },
-                onHighlight = {
-                    onAddHighlight(
-                        StoredSelectionHighlight(
-                            id = UUID.randomUUID().toString(),
-                            page = page,
-                            charStart = activeStart,
-                            charEnd = activeEnd,
-                            selectedText = selectedText,
-                            createdAtEpochMillis =
-                                System.currentTimeMillis()
-                        )
-                    )
-                    selection = null
-                },
-                onNote = { noteDraft = active },
-                onDictionary = {
-                    val word = selectedText.trim()
-                        .split(Regex("\\s+")).firstOrNull().orEmpty()
-                    if (word.isNotBlank()) {
-                        scope.launch {
-                            val definition = runCatching {
-                                app.xreader.ui.library.DictionaryLookup
-                                    .lookup(context.filesDir, word)
-                            }.getOrNull()
-                            dictionary = word to definition
+            // §6.3: the shared SelectionBar in the SAME
+            // in-flow seat the action row occupied (foot of
+            // the text column), centred — same component,
+            // same rows, same actions; the seat is this
+            // host's choice, as with every host. (Reflow has
+            // no per-block position tracking to derive a
+            // floating seat from — §11 OQ-6.)
+            val seatMotion = rememberSelectionBarSeatMotion(
+                visible = true,
+                dismissing = barDismissing,
+                motionEnabled = motionEnabled
+            )
+            SelectionBar(
+                state = barState,
+                onStateChange = { barState = it },
+                moreItems = PdfSelectionMoreItems,
+                callbacks = SelectionBarCallbacks(
+                    onAction = { action ->
+                        if (!barDismissing) {
+                            when (action) {
+                                SelectionBarAction.COPY -> {
+                                    clipboard.setText(
+                                        AnnotatedString(selectedText)
+                                    )
+                                    barDismissing = true
+                                }
+                                SelectionBarAction.HIGHLIGHT -> {
+                                    // Capability-off fallback
+                                    // (the bar opens the colour
+                                    // row instead on this host).
+                                    onAddHighlight(
+                                        StoredSelectionHighlight(
+                                            id = UUID.randomUUID()
+                                                .toString(),
+                                            page = page,
+                                            charStart = activeStart,
+                                            charEnd = activeEnd,
+                                            selectedText = selectedText,
+                                            tintArgb =
+                                                barState.activeTintArgb,
+                                            createdAtEpochMillis =
+                                                System
+                                                    .currentTimeMillis()
+                                        )
+                                    )
+                                    barDismissing = true
+                                }
+                                SelectionBarAction.NOTE -> {
+                                    // The shipped draft flow:
+                                    // the editor opens over
+                                    // the live selection, which
+                                    // stays until save/cancel.
+                                    noteDraft = active
+                                }
+                                SelectionBarAction.DICTIONARY -> {
+                                    val word = selectedText.trim()
+                                        .split(Regex("\\s+"))
+                                        .firstOrNull().orEmpty()
+                                    if (word.isNotBlank()) {
+                                        scope.launch {
+                                            val definition =
+                                                runCatching {
+                                                    app.xreader.ui
+                                                        .library
+                                                        .DictionaryLookup
+                                                        .lookup(
+                                                            context.filesDir,
+                                                            word
+                                                        )
+                                                }.getOrNull()
+                                            dictionary =
+                                                word to definition
+                                        }
+                                    }
+                                    barDismissing = true
+                                }
+                                SelectionBarAction.TRANSLATE -> {
+                                    onSelectionTranslate(selectedText)
+                                    barDismissing = true
+                                }
+                                SelectionBarAction.ASK_AI -> {
+                                    onSelectionAskAi(selectedText)
+                                    barDismissing = true
+                                }
+                                SelectionBarAction.SHARE -> {
+                                    val intent = Intent(
+                                        Intent.ACTION_SEND
+                                    ).apply {
+                                        type = "text/plain"
+                                        putExtra(
+                                            Intent.EXTRA_TEXT,
+                                            selectedText
+                                        )
+                                    }
+                                    context.startActivity(
+                                        Intent.createChooser(intent, null)
+                                    )
+                                    barDismissing = true
+                                }
+                                else -> Unit
+                            }
                         }
+                    },
+                    onApplyHighlight = { tintArgb, _ ->
+                        if (!barDismissing) {
+                            onAddHighlight(
+                                StoredSelectionHighlight(
+                                    id = UUID.randomUUID().toString(),
+                                    page = page,
+                                    charStart = activeStart,
+                                    charEnd = activeEnd,
+                                    selectedText = selectedText,
+                                    tintArgb = tintArgb,
+                                    createdAtEpochMillis =
+                                        System.currentTimeMillis()
+                                )
+                            )
+                            barDismissing = true
+                        }
+                    },
+                    onRemoveHighlight = {},
+                    onDismiss = {
+                        selection = null
+                        barDismissing = false
                     }
-                    selection = null
-                },
-                onDismiss = { selection = null }
+                ),
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .graphicsLayer {
+                        alpha = seatMotion.alpha
+                        scaleX = seatMotion.scale
+                        scaleY = seatMotion.scale
+                    }
             )
         }
     }

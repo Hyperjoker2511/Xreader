@@ -10,7 +10,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,14 +24,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextSelectionColors
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -276,6 +276,17 @@ fun DocumentReader(
     onParagraphAction: (chapterIndex: Int, blockIndex: Int, action: ParagraphAction) -> Unit,
     /** Patch 11: the selection menu's screen-level actions. */
     onSelectionAction: (ReaderSelectionAction, String) -> Unit = { _, _ -> },
+    /** SelectionBar (§9.2): the back chain's selection-layer
+     * report — true while a selection-menu episode is open
+     * in this surface. */
+    onSelectionOpenChanged: (Boolean) -> Unit = {},
+    /** SelectionBar (§9.2): the back chain's clear nonce —
+     * a bump from the screen hides the selection menu
+     * immediately. */
+    clearSelectionSignal: Int = 0,
+    /** SelectionBar (§9.4): the motion gate, fulfilled by
+     * the screen as `!reduceMotion`. */
+    motionEnabled: Boolean = true,
     onCenterTap: () -> Unit,
     onChromeWanted: (Boolean) -> Unit,
     onDownloadChapter: (chapterId: Long) -> Unit,
@@ -1491,6 +1502,32 @@ fun DocumentReader(
         }
     }
 
+    // ── SelectionBar (§8.3): the selection episode's
+    // anchor — the (chapter, block) whose long-press began
+    // the current selection episode, written by the block's
+    // own long-press (onBlockLongPressed, threaded to the
+    // items below). The bar's passage arms (Highlight ·
+    // Note · Bookmark here) resolve against it through
+    // onParagraphAction. The anchor is EPISODE-SCOPED
+    // (Critic F3): it is cleared the moment the episode
+    // ends — the host's open report drives the flag — so a
+    // later episode that no long-press began (a double-tap
+    // word pick, a Select all) has NO anchor and the bar
+    // hides the passage arms for it (the hiddenActions set
+    // at the host call below). A wrong-passage highlight is
+    // worse than an absent action; absent is the rule.
+    var selectionAnchor by remember {
+        mutableStateOf<Pair<Int, Int>?>(null)
+    }
+    var selectionEpisodeOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(selectionEpisodeOpen) {
+        if (!selectionEpisodeOpen) selectionAnchor = null
+    }
+    val onBlockLongPressed: (Int, Int) -> Unit =
+        { chapterIndex, blockIndex ->
+            selectionAnchor = chapterIndex to blockIndex
+        }
+
     Box(
         modifier
             .fillMaxSize()
@@ -1511,7 +1548,44 @@ fun DocumentReader(
             // watcher on the same root; it consumes nothing.
             .then(wallReleaseObserver)
     ) {
-        ReaderSelectionMenuHost(onAction = onSelectionAction) {
+        ReaderSelectionMenuHost(
+            onAction = onSelectionAction,
+            onParagraphAction = { action ->
+                // The bar shows the passage arms only while
+                // an anchor exists (hiddenActions below);
+                // the let is the belt over that braces.
+                selectionAnchor?.let { (chapterIndex, blockIndex) ->
+                    onParagraphAction(chapterIndex, blockIndex, action)
+                }
+            },
+            hiddenActions = if (selectionAnchor == null) {
+                setOf(
+                    SelectionBarAction.HIGHLIGHT,
+                    SelectionBarAction.NOTE,
+                    SelectionBarAction.BOOKMARK
+                )
+            } else {
+                emptySet()
+            },
+            onSelectionOpenChanged = { open ->
+                selectionEpisodeOpen = open
+                onSelectionOpenChanged(open)
+            },
+            clearSelectionSignal = clearSelectionSignal,
+            motionEnabled = motionEnabled
+        ) {
+        // §8.4: the selection handles + tint in the app
+        // accent — the framework draws the handles from the
+        // layout results; what the app controls is this
+        // configuration (the conviction found NO app
+        // handle/tint configuration anywhere in the tree).
+        CompositionLocalProvider(
+            LocalTextSelectionColors provides TextSelectionColors(
+                handleColor = MaterialTheme.colorScheme.primary,
+                backgroundColor =
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
+            )
+        ) {
         SelectionContainer {
             LazyColumn(
                 state = listState,
@@ -1621,6 +1695,7 @@ fun DocumentReader(
                                         overlayBlockId,
                                     assetFile = assetFile,
                                     onParagraphAction = onParagraphAction,
+                                    onBlockLongPressed = onBlockLongPressed,
                                     onZoomActiveChanged = { active ->
                                         val itemKey =
                                             "b-${chapter.id}-$blockIndex"
@@ -1692,6 +1767,7 @@ fun DocumentReader(
                 }
             }
         }
+        } // TextSelectionColors provider (§8.4)
         } // ReaderSelectionMenuHost
         if (config.readingLine) {
             ReadingLineOverlay(palette = palette)
@@ -1998,6 +2074,12 @@ private fun DocumentBlock(
     overlayActive: Boolean,
     assetFile: (String) -> File,
     onParagraphAction: (chapterIndex: Int, blockIndex: Int, action: ParagraphAction) -> Unit,
+    /** SelectionBar (§8.3): this block's long-press records
+     * the selection episode's anchor (its own chapter +
+     * block indices) with the reader — the passage menu
+     * that used to open here is gone; its three actions
+     * live in the selection bar now. */
+    onBlockLongPressed: (chapterIndex: Int, blockIndex: Int) -> Unit,
     onZoomActiveChanged: (Boolean) -> Unit = {}
 ) {
     val range = chapterText.rangeOf(blockIndex) ?: return
@@ -2051,10 +2133,6 @@ private fun DocumentBlock(
             onZoomActiveChanged = onZoomActiveChanged
         )
         else -> {
-            // The paragraph long-press menu (Highlight / Note /
-            // Bookmark) — the action reports THIS block's
-            // chapter (A5).
-            var menuOpen by remember(blockIndex) { mutableStateOf(false) }
             // Remembered per block — keyed by the block, its
             // range, the highlights and the rendering inputs
             // (bionic, palette, and the spoken/overlay washes).
@@ -2084,65 +2162,39 @@ private fun DocumentBlock(
                     backgrounds = backgrounds
                 )
             }
-            Box {
-                Text(
-                    annotated,
-                    style = blockTextStyle(block, config, fontFamily),
-                    color = palette.text,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .combinedClickable(
-                            onClick = {},
-                            onLongClick = { menuOpen = true }
-                        )
-                        .padding(
-                            // Stage 2's inset authority: a
-                            // heading's rendered top padding
-                            // is THIS 16.dp (body blocks: 0).
-                            top = if (block is ChapterBlock.Heading) 16.dp else 0.dp,
-                            bottom = config.paragraphSpacingDp.dp
-                        )
-                )
-                // MR-4 Part 3: this menu is composed INSIDE the
-                // reader's SelectionContainer — as a Popup its
-                // labels would otherwise register as selectables
-                // in a different layout hierarchy and crash the
-                // selection sort ("layouts are not part of the
-                // same hierarchy", owner's 2026-11-23 crash).
-                // DisableSelection keeps them out of the
-                // registrar; the menu itself is unchanged.
-                DisableSelection {
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Highlight passage") },
-                        onClick = {
-                            menuOpen = false
-                            onParagraphAction(
-                                chapterIndex, blockIndex, ParagraphAction.HIGHLIGHT
-                            )
+            // SelectionBar (§8.3): the paragraph DropdownMenu
+            // that used to open on this long-press is REMOVED
+            // — its three actions (Highlight passage · Add
+            // note to passage · Bookmark here) are in the
+            // selection bar now, and a second long-press
+            // surface beside the bar re-created the exact
+            // pile-up the MR-4 conviction named (and, composed
+            // inside the SelectionContainer, the code-114
+            // crash's trigger). The long-press now only
+            // RECORDS this block as the selection episode's
+            // anchor; the framework's own selection starts
+            // from the same press, and the bar that follows
+            // resolves its passage arms against the anchor.
+            Text(
+                annotated,
+                style = blockTextStyle(block, config, fontFamily),
+                color = palette.text,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = {
+                            onBlockLongPressed(chapterIndex, blockIndex)
                         }
                     )
-                    DropdownMenuItem(
-                        text = { Text("Add note to passage") },
-                        onClick = {
-                            menuOpen = false
-                            onParagraphAction(
-                                chapterIndex, blockIndex, ParagraphAction.NOTE
-                            )
-                        }
+                    .padding(
+                        // Stage 2's inset authority: a
+                        // heading's rendered top padding
+                        // is THIS 16.dp (body blocks: 0).
+                        top = if (block is ChapterBlock.Heading) 16.dp else 0.dp,
+                        bottom = config.paragraphSpacingDp.dp
                     )
-                    DropdownMenuItem(
-                        text = { Text("Bookmark here") },
-                        onClick = {
-                            menuOpen = false
-                            onParagraphAction(
-                                chapterIndex, blockIndex, ParagraphAction.BOOKMARK
-                            )
-                        }
-                    )
-                }
-                }
-            }
+            )
         }
     }
 }

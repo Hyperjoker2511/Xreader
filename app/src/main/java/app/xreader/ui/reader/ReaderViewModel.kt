@@ -4351,6 +4351,21 @@ class ReaderViewModel(
         }
     }
 
+    /** SelectionBar (§7.3): the colour row's re-tint of an
+     * existing Pages highlight — the mirror of
+     * [updatePdfPageHighlightNote] over the same store. */
+    fun updatePdfPageHighlightTint(
+        highlight: app.xreader.ui.localreader.StoredSelectionHighlight,
+        tintArgb: Int
+    ) {
+        viewModelScope.launch(container.ioDispatcher) {
+            runCatching {
+                pdfPageHighlightStore()
+                    .updateTint(bookId, highlight.id, tintArgb)
+            }
+        }
+    }
+
     // ── PDF Listen (R17, OQ5: page-as-unit) ──────────────
 
     private fun togglePdfListen() {

@@ -1,26 +1,26 @@
 package app.xreader.ui.reader
 
 import android.content.Intent
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalTextToolbar
@@ -40,6 +40,8 @@ import app.xreader.data.ai.LanguageDetect
 import app.xreader.data.ai.SourceLanguage
 import app.xreader.data.prefs.AiFeature
 import app.xreader.di.AppContainer
+import kotlin.math.abs
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 
 /**
@@ -68,18 +70,20 @@ import kotlinx.coroutines.flow.first
  * manager itself is not exposed), and the end state is the
  * same as the EPUB pattern's: one fetch, at tap time.
  *
- * The menu (owner's order): Copy · Replace · Translate ·
- * Dictionary · Save word · Ask AI · Share · Select all.
- * Copy and Select all are the manager's own callbacks.
- * Replace is an OFFER only — it opens a dialog and nothing
- * is written until that dialog's Save (see ReplaceTermDialog).
- * Translate / Dictionary / Save word / Ask AI are reported to
- * the host screen, which runs them through the app's existing
- * machinery. Highlight / Note are deliberately NOT here: the
- * novel reader's highlights are anchored to chapter char
- * offsets, this surface yields the selected TEXT only (no
- * offsets), and passage-level Highlight / Note already live
- * on the paragraph long-press menu in this same reader.
+ * The menu is the shared [SelectionBar] (SelectionBar
+ * build): Copy · Highlight · Note · Dictionary · More, one
+ * component with the PDF surfaces. Copy and Select all are
+ * the manager's own callbacks. Highlight / Note / Bookmark
+ * here are the PASSAGE actions: this surface yields the
+ * selected TEXT only (no offsets), so they route through
+ * the host's paragraph anchor — the block whose long-press
+ * began the selection episode (DocumentReader §8.3) — and
+ * are hidden when no anchor exists. Replace is an OFFER
+ * only — it opens a dialog and nothing is written until
+ * that dialog's Save (see ReplaceTermDialog). Translate /
+ * Dictionary / Save word / Ask AI are reported to the host
+ * screen, which runs them through the app's existing
+ * machinery.
  */
 
 /** The selection actions the host screen performs (they need
@@ -92,7 +96,22 @@ enum class ReaderSelectionAction {
 /** A state-driven [TextToolbar]: [showMenu] records the
  * request, the host composable renders it as a Compose popup,
  * [hide] clears it. The SelectionManager calls both on the
- * composition thread, so plain snapshot state is the bridge. */
+ * composition thread, so plain snapshot state is the bridge.
+ *
+ * SelectionBar (§8.2, as revised — the churn fix): the
+ * toolbar keeps TWO channels. The manager's callbacks live
+ * in a PLAIN holder, overwritten unconditionally on every
+ * [showMenu] — writing it recomposes nothing, and the host
+ * reads the callbacks through `rememberUpdatedState`
+ * delegates over it. The state channel is [request] (the
+ * episode marker: non-null while a menu episode lives) +
+ * [anchorRect] (the Popup's live anchor). A rect-only
+ * [showMenu] — the manager re-reporting the same selection
+ * mid-drag — writes [anchorRect] ONLY (and only when the
+ * rect moved ≥ 1px on either axis), so the Popup's CONTENT
+ * never recomposes for a rect update; the guard compares
+ * rects, never callback identity (callback equality is a
+ * library internal this design does not depend on). */
 private class ReaderTextToolbar : TextToolbar {
 
     class Request(
@@ -101,7 +120,19 @@ private class ReaderTextToolbar : TextToolbar {
         val onSelectAllRequested: (() -> Unit)?
     )
 
+    /** The latest manager callbacks — plain fields, NOT
+     * snapshot state: overwritten on every [showMenu],
+     * read by the host through `rememberUpdatedState`. */
+    var latestOnCopyRequested: (() -> Unit)? = null
+    var latestOnSelectAllRequested: (() -> Unit)? = null
+
     var request by mutableStateOf<Request?>(null)
+        private set
+
+    /** The Popup's live anchor rect — the position provider
+     * reads this state, so a write here re-seats the Popup
+     * without recomposing its content. */
+    var anchorRect by mutableStateOf(Rect.Zero)
         private set
 
     override val status: TextToolbarStatus
@@ -120,7 +151,23 @@ private class ReaderTextToolbar : TextToolbar {
     ) {
         // Read-only text: paste/cut are never offered by the
         // selection manager here, and are not part of the menu.
-        request = Request(rect, onCopyRequested, onSelectAllRequested)
+        latestOnCopyRequested = onCopyRequested
+        latestOnSelectAllRequested = onSelectAllRequested
+        if (request == null) {
+            // Episode opens: the marker + the anchor.
+            request = Request(rect, onCopyRequested, onSelectAllRequested)
+            anchorRect = rect
+        } else if (abs(rect.left - anchorRect.left) >= 1f ||
+            abs(rect.top - anchorRect.top) >= 1f ||
+            abs(rect.right - anchorRect.right) >= 1f ||
+            abs(rect.bottom - anchorRect.bottom) >= 1f
+        ) {
+            // Rect-only update: the anchor moves; the
+            // episode marker (and the Popup's content) is
+            // untouched.
+            anchorRect = rect
+        }
+        // Sub-pixel / identical rect: write nothing.
     }
 
     override fun hide() {
@@ -131,9 +178,11 @@ private class ReaderTextToolbar : TextToolbar {
 /** Positions the menu above the selection rect (below it when
  * the top has no room), clamped inside the window. The rect
  * arrives in the compose view's root coordinates, which are
- * the window coordinates the popup positions in. */
+ * the window coordinates the popup positions in. One
+ * instance per host composition; [calculatePosition] reads
+ * the LIVE anchor rect through [anchorRect] (§8.2). */
 private class SelectionMenuPositionProvider(
-    private val anchorRect: Rect
+    private val anchorRect: () -> Rect
 ) : PopupPositionProvider {
     override fun calculatePosition(
         anchorBounds: IntRect,
@@ -141,14 +190,15 @@ private class SelectionMenuPositionProvider(
         layoutDirection: LayoutDirection,
         popupContentSize: IntSize
     ): IntOffset {
+        val rect = anchorRect()
         val gap = 10
         val maxX = maxOf(0, windowSize.width - popupContentSize.width)
-        val x = anchorRect.left.toInt().coerceIn(0, maxX)
-        val above = anchorRect.top.toInt() - popupContentSize.height - gap
+        val x = rect.left.toInt().coerceIn(0, maxX)
+        val above = rect.top.toInt() - popupContentSize.height - gap
         val y = if (above >= 0) {
             above
         } else {
-            (anchorRect.bottom.toInt() + gap)
+            (rect.bottom.toInt() + gap)
                 .coerceAtMost(maxOf(0, windowSize.height - popupContentSize.height))
         }
         return IntOffset(x, y)
@@ -158,128 +208,268 @@ private class SelectionMenuPositionProvider(
 /**
  * Wraps one scroll reader's SelectionContainer: provides the
  * custom [TextToolbar] to that subtree and renders the menu
- * popup while the selection manager asks for it.
+ * popup while the selection manager asks for it. The popup's
+ * content is the shared [SelectionBar] (SelectionBar §8.1) —
+ * the same component the PDF surfaces host.
+ *
+ * Action routing (§8.1, as revised — two groups):
+ * - Group A, the ANCHOR arms (Highlight · Note · Bookmark
+ *   here): no fetch, no clipboard — they fire
+ *   [onParagraphAction] immediately; the caller resolves
+ *   the passage from its episode anchor. They are visible
+ *   only when the caller passes no [hiddenActions] for
+ *   them (the anchor-null rule lives with the caller).
+ * - Group B, the TEXT arms: fetch the selected text on
+ *   demand (below), then run. Copy is the manager's own
+ *   callback (no fetch); Select all likewise.
  */
 @Composable
 fun ReaderSelectionMenuHost(
     onAction: (ReaderSelectionAction, String) -> Unit,
+    /** The passage arms, fulfilled by the caller from its
+     * selection-episode anchor (§8.3). */
+    onParagraphAction: (ParagraphAction) -> Unit = {},
+    /** Actions this episode cannot run (the anchor-null
+     * set), forwarded to the bar verbatim. */
+    hiddenActions: Set<SelectionBarAction> = emptySet(),
+    /** The back chain's report (§9.2): true while a menu
+     * episode is open. */
+    onSelectionOpenChanged: (Boolean) -> Unit = {},
+    /** The back chain's clear nonce (§9.2): a bump hides
+     * the menu immediately. */
+    clearSelectionSignal: Int = 0,
+    motionEnabled: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val toolbar = remember { ReaderTextToolbar() }
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
 
+    // §8.2 (Critic F2): the manager's callbacks, read
+    // through rememberUpdatedState delegates over the
+    // toolbar's plain holder — a composed bar never acts on
+    // a stale copy callback, even though the Popup was
+    // composed at episode start.
+    val currentOnCopyRequested by rememberUpdatedState(
+        toolbar.latestOnCopyRequested
+    )
+    val currentOnSelectAllRequested by rememberUpdatedState(
+        toolbar.latestOnSelectAllRequested
+    )
+
+    // §9.3 (as revised): a dismissal that follows an ACTION
+    // fades the bar over 150ms before the toolbar hides —
+    // the action's effect fires at tap time; only the hide
+    // is delayed. The Popup's own dismiss paths (back,
+    // click-outside) hide IMMEDIATELY and reset the flag.
+    var menuDismissing by remember { mutableStateOf(false) }
+    LaunchedEffect(menuDismissing) {
+        if (menuDismissing) {
+            delay(150)
+            toolbar.hide()
+            menuDismissing = false
+        }
+    }
+    // §9.2: the screen's back chain clears this layer
+    // through the nonce — immediate, no fade.
+    LaunchedEffect(clearSelectionSignal) {
+        if (clearSelectionSignal > 0) {
+            menuDismissing = false
+            toolbar.hide()
+        }
+    }
+    val episodeOpen = toolbar.request != null
+    LaunchedEffect(episodeOpen) { onSelectionOpenChanged(episodeOpen) }
+
+    // The bar's state, hoisted here (§8.1): the colour row
+    // is DISABLED in this host — the core reader's
+    // Highlight model carries no per-highlight tint — so
+    // Highlight routes straight to the anchor arm. The
+    // state resets whenever an episode ends (Readiness
+    // F6.3), the capability flag preserved across resets.
+    var barState by remember {
+        mutableStateOf(SelectionBarState(colourRowEnabled = false))
+    }
+    LaunchedEffect(episodeOpen) {
+        if (!episodeOpen) {
+            barState = SelectionBarState(colourRowEnabled = false)
+        }
+    }
+
     // The on-demand fetch (see the file header): run the
     // manager's copy, then read the selection back off the
-    // clipboard. Blank means the fetch failed — the action is
-    // dropped rather than run on a guess.
-    fun fetchSelectedText(request: ReaderTextToolbar.Request): String? {
-        request.onCopyRequested?.invoke()
+    // clipboard. Blank means the fetch failed — the action
+    // is dropped rather than run on a guess.
+    fun fetchSelectedText(): String? {
+        currentOnCopyRequested?.invoke()
         return clipboardManager.getText()?.text?.takeIf { it.isNotBlank() }
+    }
+
+    // Group B: fetch first, then dismiss, then run — a
+    // blank fetch drops the action and hides at once
+    // (today's rule); a good fetch starts the §9.3 fade
+    // and the effect fires NOW.
+    fun fetchArm(action: ReaderSelectionAction) {
+        val text = fetchSelectedText()
+        if (text == null) {
+            toolbar.hide()
+        } else {
+            menuDismissing = true
+            onAction(action, text)
+        }
+    }
+
+    fun barAction(action: SelectionBarAction) {
+        when (action) {
+            // Copy: today's arm — the manager's own copy,
+            // no fetch needed; the dismissal fades (§9.3).
+            SelectionBarAction.COPY -> {
+                currentOnCopyRequested?.invoke()
+                menuDismissing = true
+            }
+            // Group A: the anchor arms — no fetch, no
+            // clipboard; dismissal starts, the passage
+            // action fires at once.
+            SelectionBarAction.HIGHLIGHT -> {
+                menuDismissing = true
+                onParagraphAction(ParagraphAction.HIGHLIGHT)
+            }
+            SelectionBarAction.NOTE -> {
+                menuDismissing = true
+                onParagraphAction(ParagraphAction.NOTE)
+            }
+            SelectionBarAction.BOOKMARK -> {
+                menuDismissing = true
+                onParagraphAction(ParagraphAction.BOOKMARK)
+            }
+            SelectionBarAction.DICTIONARY ->
+                fetchArm(ReaderSelectionAction.DICTIONARY)
+            SelectionBarAction.TRANSLATE ->
+                fetchArm(ReaderSelectionAction.TRANSLATE)
+            SelectionBarAction.ASK_AI ->
+                fetchArm(ReaderSelectionAction.ASK_AI)
+            SelectionBarAction.REPLACE ->
+                fetchArm(ReaderSelectionAction.REPLACE)
+            SelectionBarAction.SAVE_WORD ->
+                fetchArm(ReaderSelectionAction.SAVE_WORD)
+            SelectionBarAction.SHARE -> {
+                val text = fetchSelectedText()
+                if (text == null) {
+                    toolbar.hide()
+                } else {
+                    menuDismissing = true
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, text)
+                    }
+                    context.startActivity(
+                        Intent.createChooser(intent, null)
+                    )
+                }
+            }
+            // Select all RE-SEATS rather than dismisses: the
+            // manager re-shows the menu for the widened
+            // selection, so this arm keeps today's immediate
+            // hide — a delayed hide would land after the
+            // re-show and kill the live menu.
+            SelectionBarAction.SELECT_ALL -> {
+                currentOnSelectAllRequested?.invoke()
+                toolbar.hide()
+            }
+        }
     }
 
     CompositionLocalProvider(LocalTextToolbar provides toolbar) {
         content()
-        val request = toolbar.request ?: return@CompositionLocalProvider
-        val positionProvider = remember(request.rect) {
-            SelectionMenuPositionProvider(request.rect)
+        if (toolbar.request == null) return@CompositionLocalProvider
+        // §8.2: ONE position provider per host composition,
+        // reading the live anchorRect — a rect-only update
+        // re-seats the Popup without recomposing its content.
+        val positionProvider = remember {
+            SelectionMenuPositionProvider { toolbar.anchorRect }
         }
         Popup(
             popupPositionProvider = positionProvider,
-            onDismissRequest = { toolbar.hide() },
+            onDismissRequest = {
+                menuDismissing = false
+                toolbar.hide()
+            },
             properties = PopupProperties(
                 focusable = true,
                 dismissOnBackPress = true,
                 dismissOnClickOutside = true
             )
         ) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shadowElevation = 8.dp,
-                tonalElevation = 3.dp
-            ) {
-                Column(Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        SelectionMenuItem("Copy") {
-                            request.onCopyRequested?.invoke()
-                            toolbar.hide()
-                        }
-                        SelectionMenuItem("Replace") {
-                            val text = fetchSelectedText(request)
-                            toolbar.hide()
-                            if (text != null) {
-                                onAction(ReaderSelectionAction.REPLACE, text)
-                            }
-                        }
-                        SelectionMenuItem("Translate") {
-                            val text = fetchSelectedText(request)
-                            toolbar.hide()
-                            if (text != null) {
-                                onAction(ReaderSelectionAction.TRANSLATE, text)
-                            }
-                        }
-                        SelectionMenuItem("Dictionary") {
-                            val text = fetchSelectedText(request)
-                            toolbar.hide()
-                            if (text != null) {
-                                onAction(ReaderSelectionAction.DICTIONARY, text)
-                            }
-                        }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        SelectionMenuItem("Save word") {
-                            val text = fetchSelectedText(request)
-                            toolbar.hide()
-                            if (text != null) {
-                                onAction(ReaderSelectionAction.SAVE_WORD, text)
-                            }
-                        }
-                        SelectionMenuItem("Ask AI") {
-                            val text = fetchSelectedText(request)
-                            toolbar.hide()
-                            if (text != null) {
-                                onAction(ReaderSelectionAction.ASK_AI, text)
-                            }
-                        }
-                        SelectionMenuItem("Share") {
-                            val text = fetchSelectedText(request)
-                            toolbar.hide()
-                            if (text != null) {
-                                val intent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_TEXT, text)
-                                }
-                                context.startActivity(
-                                    Intent.createChooser(intent, null)
-                                )
-                            }
-                        }
-                        if (request.onSelectAllRequested != null) {
-                            SelectionMenuItem("Select all") {
-                                request.onSelectAllRequested.invoke()
-                                toolbar.hide()
-                            }
-                        }
-                    }
+            val seatMotion = rememberSelectionBarSeatMotion(
+                visible = true,
+                dismissing = menuDismissing,
+                motionEnabled = motionEnabled
+            )
+            // §3.3 (as revised): the owner's surviving items
+            // keep HIS relative order — Translate · Ask AI ·
+            // Share — and the legacy items follow.
+            val moreItems = buildList {
+                add(
+                    SelectionBarMoreItem(
+                        SelectionBarAction.TRANSLATE, "Translate"
+                    )
+                )
+                add(
+                    SelectionBarMoreItem(
+                        SelectionBarAction.ASK_AI, "Ask AI"
+                    )
+                )
+                add(
+                    SelectionBarMoreItem(
+                        SelectionBarAction.SHARE, "Share"
+                    )
+                )
+                add(
+                    SelectionBarMoreItem(
+                        SelectionBarAction.REPLACE, "Replace"
+                    )
+                )
+                add(
+                    SelectionBarMoreItem(
+                        SelectionBarAction.SAVE_WORD, "Save word"
+                    )
+                )
+                if (currentOnSelectAllRequested != null) {
+                    add(
+                        SelectionBarMoreItem(
+                            SelectionBarAction.SELECT_ALL, "Select all"
+                        )
+                    )
                 }
+                add(
+                    SelectionBarMoreItem(
+                        SelectionBarAction.BOOKMARK, "Bookmark here"
+                    )
+                )
             }
+            SelectionBar(
+                state = barState,
+                onStateChange = { barState = it },
+                moreItems = moreItems,
+                callbacks = SelectionBarCallbacks(
+                    onAction = { action ->
+                        if (!menuDismissing) barAction(action)
+                    },
+                    // The colour row is disabled in this host
+                    // (colourRowEnabled = false), so this
+                    // never fires.
+                    onApplyHighlight = { _, _ -> },
+                    onDismiss = { toolbar.hide() }
+                ),
+                hiddenActions = hiddenActions,
+                modifier = Modifier.graphicsLayer {
+                    alpha = seatMotion.alpha
+                    scaleX = seatMotion.scale
+                    scaleY = seatMotion.scale
+                }
+            )
         }
     }
-}
-
-/** One compact menu entry — a plain tappable label, sized
- * like the stock floating toolbar's items. */
-@Composable
-private fun SelectionMenuItem(label: String, onClick: () -> Unit) {
-    Text(
-        label,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 9.dp)
-    )
 }
 
 /**
