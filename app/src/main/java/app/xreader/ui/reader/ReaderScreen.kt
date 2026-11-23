@@ -94,7 +94,6 @@ import app.xreader.core.motion.sharedAxisYEnter
 import app.xreader.core.motion.sharedAxisYExit
 import app.xreader.data.db.Highlight
 import app.xreader.di.AppContainer
-import app.xreader.diag.DiagLog
 import androidx.compose.ui.text.rememberTextMeasurer
 import app.xreader.domain.reader.ChapterEndWall
 import app.xreader.domain.reader.ChapterLayoutCache
@@ -282,34 +281,6 @@ fun ReaderScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
-
-    // DIAGNOSTIC (code 109): session header (build version,
-    // then wallActive + reading mode once known), and the
-    // dump on reader close — the screen's dispose is the
-    // catch-all exit (back navigation removes the screen).
-    LaunchedEffect(Unit) {
-        @Suppress("DEPRECATION")
-        val version = runCatching {
-            val info = context.packageManager
-                .getPackageInfo(context.packageName, 0)
-            "${info.versionName} (${info.versionCode})"
-        }.getOrDefault("unknown")
-        DiagLog.init(version)
-        DiagLog.log("SCR", "reader screen open bookId=$bookId version=$version")
-    }
-    LaunchedEffect(wallActive, config.mode) {
-        DiagLog.log(
-            "SESSION",
-            "wallActive=$wallActive mode=${config.mode} " +
-                "transition=${config.chapterTransition}"
-        )
-    }
-    DisposableEffect(Unit) {
-        onDispose {
-            DiagLog.log("SCR", "reader screen disposed -> dumping to Downloads")
-            DiagLog.dumpToDownloads(context)
-        }
-    }
 
     val basePalette = if (config.paletteName == "Custom" && !config.eInkMode) {
         // v1.0.1 custom colour pair (QuickNovel lesson): the user's
@@ -876,7 +847,13 @@ fun ReaderScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                CircularProgressIndicator(color = palette.accent)
+                // OE-3 (code-111 proof): the default 48dp spinner
+                // read as "somewhat big" — 26dp everywhere here.
+                CircularProgressIndicator(
+                    modifier = Modifier.size(26.dp),
+                    color = palette.accent,
+                    strokeWidth = 2.5.dp
+                )
                 // v1.5.10 (B4): past the bound the surface stops
                 // being inert — it says the chapter is taking
                 // long. Back works as always (leaving cancels
@@ -898,7 +875,11 @@ fun ReaderScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                CircularProgressIndicator(color = palette.accent)
+                CircularProgressIndicator(
+                    modifier = Modifier.size(26.dp),
+                    color = palette.accent,
+                    strokeWidth = 2.5.dp
+                )
                 androidx.compose.material3.Text(
                     text = "Preparing chapter…",
                     modifier = Modifier.padding(top = 16.dp)
@@ -1071,21 +1052,6 @@ fun ReaderScreen(
             // per-segment state; there is no window and no
             // activation gap.
             config.mode == ReaderMode.SCROLL && state.chapterText != null -> {
-                // DIAGNOSTIC (code 109): the surface's
-                // creation and every RE-creation (this branch
-                // leaving and re-entering composition), with
-                // the initial place it is handed.
-                DisposableEffect(Unit) {
-                    DiagLog.log(
-                        "SCR-SURFACE",
-                        "surface create place segment=${state.chapterIndex} " +
-                            "offset=${state.restoreOffset} hint=${state.restoreHint} " +
-                            "gen=${state.restoreGeneration} wallActive=$wallActive"
-                    )
-                    onDispose {
-                        DiagLog.log("SCR-SURFACE", "surface disposed")
-                    }
-                }
                 DocumentReader(
                     chapters = state.chapters,
                     segmentStates = state.segmentStates,
@@ -2353,7 +2319,11 @@ private fun PdfReaderHost(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            CircularProgressIndicator(color = palette.accent)
+            CircularProgressIndicator(
+                modifier = Modifier.size(26.dp),
+                color = palette.accent,
+                strokeWidth = 2.5.dp
+            )
             androidx.compose.material3.Text(
                 text = "Opening…",
                 modifier = Modifier.padding(top = 16.dp)
@@ -2488,7 +2458,9 @@ private fun PdfReaderHost(
                                     Alignment.CenterHorizontally
                             ) {
                                 CircularProgressIndicator(
-                                    color = palette.accent
+                                    modifier = Modifier.size(26.dp),
+                                    color = palette.accent,
+                                    strokeWidth = 2.5.dp
                                 )
                                 androidx.compose.material3.Text(
                                     text = "Preparing text…",
@@ -2756,7 +2728,7 @@ private fun PdfSearchSheet(
                 modifier = Modifier.padding(vertical = 12.dp)
             ) {
                 CircularProgressIndicator(
-                    Modifier.padding(end = 12.dp)
+                    Modifier.padding(end = 12.dp).size(20.dp)
                 )
                 Text("Searching page by page…")
             }

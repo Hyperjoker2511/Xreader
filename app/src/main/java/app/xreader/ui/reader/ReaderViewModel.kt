@@ -25,7 +25,6 @@ import app.xreader.data.reader.OverlayPlayer
 import app.xreader.data.reader.ReadAloudController
 import app.xreader.data.reader.SoundscapePlayer
 import app.xreader.di.AppContainer
-import app.xreader.diag.DiagLog
 import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.reader.BookDocument
@@ -392,15 +391,6 @@ class ReaderViewModel(
         ReaderUiState(chapterIndex = initialChapterIndex)
     )
     val state: StateFlow<ReaderUiState> = _state
-
-    // DIAGNOSTIC (code 109): the anchor as constructed, before
-    // the open reads the saved place.
-    init {
-        DiagLog.log(
-            "VM-INIT",
-            "constructed initialChapterIndex=$initialChapterIndex bookId=$bookId"
-        )
-    }
 
     private val _config = MutableStateFlow(ReaderConfig())
     val config: StateFlow<ReaderConfig> = _config
@@ -1366,15 +1356,6 @@ class ReaderViewModel(
             } else {
                 0 to 0f
             }
-            // DIAGNOSTIC (code 109): the place the book opens
-            // from — the saved row and the start it resolves to.
-            DiagLog.log(
-                "VM-OPEN",
-                "savedChapter=${saved?.chapterIndex} savedOffset=${saved?.charOffset} " +
-                    "savedFraction=${saved?.scrollFraction} initialParam=$initialChapterIndex " +
-                    "resumeIndex=$resumeIndex startIndex=$startIndex " +
-                    "restore=(${restore.first}, ${restore.second})"
-            )
             loadChapter(startIndex, restore.first, restore.second)
             // v1.7 document engine (Item 3, row 10 + Item 6):
             // the book opens exactly as it always has — the
@@ -1408,14 +1389,6 @@ class ReaderViewModel(
                     ) {
                         return@collectLatest
                     }
-                    // DIAGNOSTIC (code 109): the mode flip and
-                    // the live place it carries.
-                    DiagLog.log(
-                        "VM-FLIP",
-                        "mode $previous -> $mode carries anchor=" +
-                            "${_state.value.chapterIndex} offset=" +
-                            "${_state.value.positionOffset}"
-                    )
                     if (mode == ReaderMode.SCROLL) {
                         moveAnchor(
                             _state.value.chapterIndex,
@@ -1595,12 +1568,6 @@ class ReaderViewModel(
      * early return below is unchanged.
      */
     fun openChapter(index: Int) {
-        // DIAGNOSTIC (code 109): door attribution.
-        DiagLog.log(
-            "VM-DOOR",
-            "openChapter index=$index from=${_state.value.chapterIndex} " +
-                "mode=${_config.value.mode}"
-        )
         if (_config.value.mode == ReaderMode.SCROLL) {
             moveAnchor(index, 0, PageHint.FIRST)
             return
@@ -1613,12 +1580,6 @@ class ReaderViewModel(
      * (Contents, search, bookmarks) — an anchor move in
      * scroll, the shipped load in paged. */
     fun openChapterAt(index: Int, charOffset: Int) {
-        // DIAGNOSTIC (code 109): door attribution.
-        DiagLog.log(
-            "VM-DOOR",
-            "openChapterAt index=$index offset=$charOffset " +
-                "from=${_state.value.chapterIndex} mode=${_config.value.mode}"
-        )
         if (_config.value.mode == ReaderMode.SCROLL) {
             moveAnchor(index, charOffset, PageHint.OFFSET)
             return
@@ -1651,13 +1612,6 @@ class ReaderViewModel(
      */
     fun moveAnchor(index: Int, charOffset: Int, hint: PageHint) {
         val stateNow = _state.value
-        // DIAGNOSTIC (code 109): EVERY anchor move funnels
-        // through here — from, to, and the restore it publishes.
-        DiagLog.log(
-            "VM-MOVE",
-            "moveAnchor from=${stateNow.chapterIndex} to=$index " +
-                "offset=$charOffset hint=$hint gen=${stateNow.restoreGeneration}"
-        )
         val chapter = stateNow.chapters.getOrNull(index) ?: return
         val chapterChanges = index != stateNow.chapterIndex
         // Smoothness fix (§1): the persistence chain's inputs,
@@ -1671,14 +1625,6 @@ class ReaderViewModel(
         }
         viewModelScope.launch {
             val display = segmentDisplay[chapter.id]
-            // DIAGNOSTIC (code 109): the write itself, inside
-            // the launched block that performs it.
-            DiagLog.log(
-                "VM-MOVE",
-                "moveAnchor PUBLISH chapterIndex=${_state.value.chapterIndex} -> $index " +
-                    "gen=${_state.value.restoreGeneration} -> " +
-                    "${_state.value.restoreGeneration + 1} resident=${display != null}"
-            )
             _state.value = _state.value.copy(
                 chapterIndex = index,
                 restoreOffset = charOffset,
@@ -1820,13 +1766,6 @@ class ReaderViewModel(
     }
 
     fun nextChapter() {
-        // DIAGNOSTIC (code 109): door attribution (the wall
-        // swap doors also arrive here).
-        DiagLog.log(
-            "VM-DOOR",
-            "nextChapter from=${_state.value.chapterIndex} " +
-                "hasNext=${_state.value.hasNext} mode=${_config.value.mode}"
-        )
         if (!_state.value.hasNext) return
         markCurrentChapterFinished()
         val target = _state.value.chapterIndex + 1
@@ -1860,13 +1799,6 @@ class ReaderViewModel(
     }
 
     fun previousChapter() {
-        // DIAGNOSTIC (code 109): door attribution (the wall
-        // swap doors also arrive here).
-        DiagLog.log(
-            "VM-DOOR",
-            "previousChapter from=${_state.value.chapterIndex} " +
-                "hasPrevious=${_state.value.hasPrevious} mode=${_config.value.mode}"
-        )
         if (!_state.value.hasPrevious) return
         val target = _state.value.chapterIndex - 1
         if (_config.value.mode == ReaderMode.SCROLL) {
@@ -1969,14 +1901,6 @@ class ReaderViewModel(
                 if (anchorDisplay !== stateNow.chapterText) {
                     _state.value = stateNow.copy(chapterText = anchorDisplay)
                 }
-                // DIAGNOSTIC (code 109): same-anchor re-assert
-                // attribution — this call re-publishes the
-                // restore for the CURRENT anchor.
-                DiagLog.log(
-                    "VM-REASSERT",
-                    "reapplyTerms anchor=${stateNow.chapterIndex} " +
-                        "offset=${stateNow.positionOffset}"
-                )
                 moveAnchor(
                     stateNow.chapterIndex,
                     stateNow.positionOffset.coerceAtMost(anchorDisplay.length),
@@ -2056,14 +1980,6 @@ class ReaderViewModel(
         restoreScrollFraction: Float,
         hint: PageHint = PageHint.OFFSET
     ) {
-        // DIAGNOSTIC (code 109): every loadChapter-mediated
-        // anchor write funnels through here.
-        DiagLog.log(
-            "VM-LOAD",
-            "loadChapter enter index=$index restoreOffset=$restoreOffset " +
-                "restoreFraction=$restoreScrollFraction hint=$hint " +
-                "anchorNow=${_state.value.chapterIndex}"
-        )
         // v1.7 document engine: the windowed build's Fix-1
         // stream close stood here. It is retired WITH the
         // machinery it patched — there is no stream to close
@@ -2154,12 +2070,6 @@ class ReaderViewModel(
         // the success copy, in the same state emission that sets
         // the new chapterText — a stale restore can therefore
         // never anchor into the previous chapter's text.
-        // DIAGNOSTIC (code 109): the early publish — the
-        // anchor moves here, before the fetch lands.
-        DiagLog.log(
-            "VM-LOAD",
-            "loadChapter PUBLISH chapterIndex=${_state.value.chapterIndex} -> $index"
-        )
         _state.value = _state.value.copy(
             chapterIndex = index,
             loading = _state.value.chapterText == null,
@@ -2337,14 +2247,6 @@ class ReaderViewModel(
         tracker.begin()
         currentChapterMaxOffset = restoreOffset
         visibleTextChapterIndex = index
-        // DIAGNOSTIC (code 109): the landing publish — the
-        // copy below writes chapterIndex with the landed text.
-        DiagLog.log(
-            "VM-LAND",
-            "performNarrationLanding chapterIndex=${_state.value.chapterIndex} -> $index " +
-                "restoreOffset=$restoreOffset fraction=$restoreScrollFraction " +
-                "hint=$hint bumpGeneration=$bumpGeneration"
-        )
         val displayCopy = displayText(original, chapter.id)
         // v1.7 Patch 2 (item 1a): feed the char map the DISPLAY
         // length — every offset the map serves is reported
@@ -3437,14 +3339,6 @@ class ReaderViewModel(
             if (pendingSwapReassertIds.remove(chapterId)) {
                 val display = segmentDisplay[chapterId]
                 if (display != null) {
-                    // DIAGNOSTIC (code 109): same-anchor
-                    // re-assert attribution — a pending content
-                    // swap on the anchor re-publishes its place.
-                    DiagLog.log(
-                        "VM-REASSERT",
-                        "onSegmentLanded pendingSwap anchor=$index " +
-                            "offset=${_state.value.positionOffset}"
-                    )
                     moveAnchor(
                         index,
                         _state.value.positionOffset
@@ -3479,33 +3373,12 @@ class ReaderViewModel(
     fun onDocumentPosition(chapterIndex: Int, charOffset: Int, chapterFraction: Float) {
         val stateNow = _state.value
         if (chapterIndex != stateNow.chapterIndex) {
-            // DIAGNOSTIC (code 109): a report naming another
-            // chapter — refused, with the anchor it met.
-            DiagLog.log(
-                "VM-POS-REFUSED",
-                "report chapter=$chapterIndex offset=$charOffset " +
-                    "fraction=$chapterFraction anchor=${stateNow.chapterIndex} " +
-                    "reason=non-anchor"
-            )
             return
         }
         val chapter = stateNow.chapter ?: return
         if (segmentDisplay[chapter.id] == null) {
-            // DIAGNOSTIC (code 109): the resident backstop.
-            DiagLog.log(
-                "VM-POS-REFUSED",
-                "report chapter=$chapterIndex offset=$charOffset " +
-                    "fraction=$chapterFraction anchor=${stateNow.chapterIndex} " +
-                    "reason=anchor-not-resident"
-            )
             return
         }
-        // DIAGNOSTIC (code 109): an accepted delivery.
-        DiagLog.log(
-            "VM-POS",
-            "delivered chapter=$chapterIndex offset=$charOffset " +
-                "fraction=$chapterFraction anchor=${stateNow.chapterIndex}"
-        )
         reportedFractions[chapterIndex] = chapterFraction
         onPosition(charOffset, chapterFraction)
         // The anchor reporting its own place spends any
@@ -3544,35 +3417,17 @@ class ReaderViewModel(
     fun onChapterCrossed(targetIndex: Int) {
         val stateNow = _state.value
         val previousIndex = stateNow.chapterIndex
-        // DIAGNOSTIC (code 109): the one scroll-side anchor
-        // writer — every call and its outcome.
         if (targetIndex == previousIndex) {
-            DiagLog.log(
-                "VM-CROSS",
-                "onChapterCrossed target=$targetIndex anchor=$previousIndex -> refused(same)"
-            )
             return
         }
         val chapter = stateNow.chapters.getOrNull(targetIndex)
         if (chapter == null) {
-            DiagLog.log(
-                "VM-CROSS",
-                "onChapterCrossed target=$targetIndex anchor=$previousIndex -> refused(no-chapter)"
-            )
             return
         }
         val text = segmentDisplay[chapter.id]
         if (text == null) {
-            DiagLog.log(
-                "VM-CROSS",
-                "onChapterCrossed target=$targetIndex anchor=$previousIndex -> refused(not-resident)"
-            )
             return
         }
-        DiagLog.log(
-            "VM-CROSS",
-            "onChapterCrossed target=$targetIndex anchor=$previousIndex -> FIRED"
-        )
         val leftFraction = reportedFractions[previousIndex] ?: 0f
         visibleTextChapterIndex = targetIndex
         _state.value = stateNow.copy(
@@ -3912,13 +3767,6 @@ class ReaderViewModel(
         // the incoming chapter's row. The incoming chapter's own
         // onPosition resumes saves the moment its text lands.
         if (outgoing.visibleTextChapterIndex != outgoing.chapterIndex) {
-            // DIAGNOSTIC (code 109): a save suppressed by the
-            // keep-previous guard.
-            DiagLog.log(
-                "VM-SAVE",
-                "skipped visibleText=${outgoing.visibleTextChapterIndex} " +
-                    "anchor=${outgoing.chapterIndex} reason=keep-previous"
-            )
             return
         }
         val now = System.currentTimeMillis()
@@ -3936,12 +3784,6 @@ class ReaderViewModel(
             storedChapterIndex = storedRow?.chapterIndex,
             storedCharOffset = storedRow?.charOffset,
             storedFraction = storedRow?.fraction
-        )
-        // DIAGNOSTIC (code 109): the place actually written.
-        DiagLog.log(
-            "VM-SAVE",
-            "upsert chapter=${outgoing.chapterIndex} offset=${outgoing.positionOffset} " +
-                "fraction=$writeFraction scrollFraction=${outgoing.chapterFraction}"
         )
         container.database.readingProgressDao().upsert(
             ReadingProgress(
@@ -4233,9 +4075,6 @@ class ReaderViewModel(
      * variable moves, the status follows, the save is
      * debounced exactly as the local surface's was. */
     fun onPdfPosition(page: Int, inPageFraction: Float) {
-        // DIAGNOSTIC (code 109): the one PDF line — the PDF
-        // writers themselves stay uninstrumented per spec.
-        DiagLog.log("VM-PDF", "onPdfPosition page=$page fraction=$inPageFraction closing=$pdfClosing")
         // v1.7 OE-4 patch (Fix B): teardown-time reports (the
         // surface leaving composition during the exit transition)
         // must never move the saved place past the page the user
