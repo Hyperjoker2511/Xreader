@@ -66,10 +66,10 @@ class UrlChapterFetcher(
         val text = bytes.toString(Charsets.UTF_8)
         val content = if (looksLikeHtml(text)) {
             val imageNames = downloadImages(text, candidate)
-            val converted = XhtmlConverter { src ->
+            val converted = XhtmlConverter(imageResolver = { src ->
                 resolveImageKey(src, candidate.locator)
                     ?.let { key -> imageNames[key] }
-            }.convert(text.byteInputStream(Charsets.UTF_8))
+            }).convert(text.byteInputStream(Charsets.UTF_8))
             ChapterContent(converted.blocks)
         } else {
             TxtParser.textToContent(text)

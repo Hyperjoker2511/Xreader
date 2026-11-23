@@ -27,7 +27,7 @@ class HtmlParser : BookParser {
             val assetsDir = File(workDir, "assets").apply { mkdirs() }
             val usedNames = mutableSetOf<String>()
             val baseDir = staged.parentFile
-            val converter = XhtmlConverter { src ->
+            val converter = XhtmlConverter(imageResolver = { src ->
                 val clean = src.substringBefore('#').substringBefore('?')
                 if (clean.startsWith("http", ignoreCase = true) ||
                     clean.startsWith("data:", ignoreCase = true)
@@ -43,7 +43,7 @@ class HtmlParser : BookParser {
                         name
                     }
                 }
-            }
+            })
             val result = staged.inputStream().buffered().use { converter.convert(it) }
             if (result.blocks.isEmpty()) {
                 return AppResult.Err(AppError.ParseFailed("HTML", "the file has no readable text"))
