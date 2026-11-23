@@ -8,6 +8,7 @@ import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.content.TextSpan
 import java.io.File
 import java.io.InputStream
+import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
@@ -90,15 +91,57 @@ private fun newOfficePullParser(input: InputStream): XmlPullParser {
     return parser
 }
 
+/**
+ * OE-5 (part D): normalised-name → entry map for one archive,
+ * built once per parse. [resolve] finds an entry by its exact
+ * normalised name first, else by the UNIQUE entry whose
+ * normalised name ends with `"/" + target`; ambiguous (≥2
+ * suffix matches) counts as absent. This is the parser-side
+ * half of the wrapped-archive rule the sniffer applies: a DOCX
+ * zipped inside one folder, or written with leading-slash
+ * entry names, parses exactly like the flat shape.
+ */
+private class ZipIndex(zip: ZipFile) {
+
+    private val byName: Map<String, ZipEntry>
+
+    init {
+        val map = LinkedHashMap<String, ZipEntry>()
+        val entries = zip.entries()
+        while (entries.hasMoreElements()) {
+            val entry = entries.nextElement()
+            if (entry.isDirectory) continue
+            val key = ZipNames.normalise(entry.name).lowercase()
+            if (key.isNotEmpty()) map.putIfAbsent(key, entry)
+        }
+        byName = map
+    }
+
+    fun resolve(target: String): ZipEntry? {
+        val wanted = ZipNames.normalise(target).lowercase()
+        byName[wanted]?.let { return it }
+        val suffix = "/$wanted"
+        val matches = byName.entries.filter { it.key.endsWith(suffix) }
+        return if (matches.size == 1) matches.single().value else null
+    }
+
+    /** The normalised name [entry] lives under — the base for
+     * resolving that entry's relative references. */
+    fun nameOf(entry: ZipEntry): String = ZipNames.normalise(entry.name)
+}
+
 /** Copies one zip entry into the assets dir under a flat,
- * collision-free name (the FB2 image discipline). */
+ * collision-free name (the FB2 image discipline). The entry is
+ * found through [index], so wrapped/leading-slash packings
+ * stage their pictures exactly like flat ones. */
 private fun stageZipImage(
     zip: ZipFile,
+    index: ZipIndex,
     entryPath: String,
     assetsDir: File,
     usedNames: MutableSet<String>
 ): String? {
-    val entry = zip.getEntry(entryPath) ?: return null
+    val entry = index.resolve(entryPath) ?: return null
     val name = ZipPaths.assetFileName(entryPath, usedNames)
     zip.getInputStream(entry).use { input ->
         File(assetsDir, name).outputStream().buffered().use { input.copyTo(it) }
@@ -188,11 +231,17 @@ private object DocxDocument {
 
     fun parse(file: File, assetsDir: File): OfficeDocument? {
         ZipFile(file).use { zip ->
-            val documentEntry = zip.getEntry("word/document.xml") ?: return null
+            val index = ZipIndex(zip)
+            val documentEntry = index.resolve("word/document.xml") ?: return null
+            // Relationship targets resolve against the directory
+            // the document entry actually lives in (under a
+            // wrapper folder that is the wrapped directory, not
+            // the literal "word").
+            val documentDir = index.nameOf(documentEntry).substringBeforeLast('/', "")
 
             // Image relationships: id → archive path of the picture.
             val imageRels = mutableMapOf<String, String>()
-            zip.getEntry("word/_rels/document.xml.rels")?.let { relsEntry ->
+            index.resolve("word/_rels/document.xml.rels")?.let { relsEntry ->
                 val parser = newOfficePullParser(zip.getInputStream(relsEntry))
                 var event = parser.eventType
                 while (event != XmlPullParser.END_DOCUMENT) {
@@ -201,11 +250,12 @@ private object DocxDocument {
                         val type = attr(parser, "Type") ?: ""
                         val target = attr(parser, "Target")
                         if (id != null && target != null && type.endsWith("/image")) {
-                            imageRels[id] = if (target.startsWith("/")) {
-                                target.trimStart('/')
-                            } else {
-                                ZipPaths.resolve("word", target)
-                            }
+                            // ZipPaths.resolve treats a leading
+                            // '/' as archive-root-relative and
+                            // anything else as relative to the
+                            // document's own directory.
+                            imageRels[id] =
+                                ZipPaths.resolve(documentDir, target.replace('\\', '/'))
                         }
                     }
                     event = parser.next()
@@ -214,7 +264,7 @@ private object DocxDocument {
 
             var title: String? = null
             var author: String? = null
-            zip.getEntry("docProps/core.xml")?.let { coreEntry ->
+            index.resolve("docProps/core.xml")?.let { coreEntry ->
                 val parser = newOfficePullParser(zip.getInputStream(coreEntry))
                 var event = parser.eventType
                 while (event != XmlPullParser.END_DOCUMENT) {
@@ -271,7 +321,7 @@ private object DocxDocument {
                             val entryPath = embed?.let { imageRels[it] }
                             if (entryPath != null) {
                                 val name = stagedImages[entryPath] ?: run {
-                                    stageZipImage(zip, entryPath, assetsDir, usedNames)
+                                    stageZipImage(zip, index, entryPath, assetsDir, usedNames)
                                         ?.also { stagedImages[entryPath] = it }
                                 }
                                 if (name != null) {
@@ -307,11 +357,15 @@ private object OdtDocument {
 
     fun parse(file: File, assetsDir: File): OfficeDocument? {
         ZipFile(file).use { zip ->
-            val contentEntry = zip.getEntry("content.xml") ?: return null
+            val index = ZipIndex(zip)
+            val contentEntry = index.resolve("content.xml") ?: return null
+            // Picture hrefs resolve against the directory the
+            // content entry actually lives in ("" in flat files).
+            val contentDir = index.nameOf(contentEntry).substringBeforeLast('/', "")
 
             var title: String? = null
             var author: String? = null
-            zip.getEntry("meta.xml")?.let { metaEntry ->
+            index.resolve("meta.xml")?.let { metaEntry ->
                 val parser = newOfficePullParser(zip.getInputStream(metaEntry))
                 var event = parser.eventType
                 while (event != XmlPullParser.END_DOCUMENT) {
@@ -420,9 +474,11 @@ private object OdtDocument {
                         "line-break" -> if (inBody) builder.lineBreak()
                         "image" -> if (inBody) {
                             val href = attr(parser, "href")
-                            val entryPath = href?.trimStart('.', '/')
+                            val entryPath = href?.let {
+                                ZipPaths.resolve(contentDir, it.replace('\\', '/'))
+                            }
                             if (entryPath != null) {
-                                val name = stageZipImage(zip, entryPath, assetsDir, usedNames)
+                                val name = stageZipImage(zip, index, entryPath, assetsDir, usedNames)
                                 if (name != null) {
                                     builder.image(name)
                                     builder.beginParagraph()

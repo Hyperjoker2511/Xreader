@@ -84,7 +84,9 @@ object BookEngine {
             // OE-3: the office/web-archive doors land as
             // converted chapters like every format above.
             BookFormat.DOCX, BookFormat.ODT, BookFormat.RTF,
-            BookFormat.MHTML -> true
+            BookFormat.MHTML,
+            // OE-5: CHM/UMD convert to chapters the same way.
+            BookFormat.CHM, BookFormat.UMD -> true
             BookFormat.EPUB, BookFormat.PDF,
             BookFormat.UNKNOWN -> false
         }

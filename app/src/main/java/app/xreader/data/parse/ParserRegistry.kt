@@ -24,6 +24,8 @@ class ParserRegistry(private val pdfExtractor: PdfTextExtractor?) {
         BookFormat.ODT -> OfficeXmlParser(BookFormat.ODT)
         BookFormat.RTF -> RtfParser()
         BookFormat.MHTML -> MhtmlParser()
+        BookFormat.CHM -> ChmParser()
+        BookFormat.UMD -> UmdParser()
         BookFormat.PDF -> pdfExtractor?.let { PdfBookParser(it) }
         BookFormat.UNKNOWN -> null
     }

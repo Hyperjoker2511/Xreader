@@ -69,7 +69,11 @@ class MhtmlParser : BookParser {
 
             val tempHtml = File(workDir, "mhtml-content.html")
             tempHtml.writeBytes(htmlBytes)
-            val fromHtml = HtmlParser().parse(tempHtml, File(workDir, "html-stage")) { }
+            // OE-5: the part's own declared charset rides into
+            // the HTML normalisation as the hint (a BOM/meta in
+            // the part still wins inside jsoup).
+            val fromHtml = HtmlParser(charsetHint = htmlPart.charset().name())
+                .parse(tempHtml, File(workDir, "html-stage")) { }
             when (fromHtml) {
                 is AppResult.Err -> fromHtml
                 is AppResult.Ok -> AppResult.Ok(
