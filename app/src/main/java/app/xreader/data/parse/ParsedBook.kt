@@ -81,7 +81,17 @@ data class ParsedBook(
      * Counted, never silent, exactly the way
      * [droppedImages] is.
      */
-    val droppedOverlays: Int = 0
+    val droppedOverlays: Int = 0,
+    /**
+     * MR-4: the Contents depth of each emitted chapter,
+     * parallel to [chapters] (0 = top level). Only the FB2
+     * parser emits a non-empty list in MR-4 (its section
+     * tree's depth); the importer persists it per book (see
+     * LocalReaderPrefs' chapter-levels record) and the
+     * Contents sheet indents by it. Empty = flat, which is
+     * every other parser's truth.
+     */
+    val chapterLevels: List<Int> = emptyList()
 )
 
 /**

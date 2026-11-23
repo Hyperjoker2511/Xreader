@@ -300,7 +300,21 @@ class XhtmlConverter(
                             }
                             "hr" -> {
                                 flushParagraph()
-                                blocks += ChapterBlock.Rule
+                                // MR-4 (R7): the MOBI pre-pass's
+                                // pagebreak marker class — a split
+                                // signal for the HTML splitter,
+                                // never a visible rule. The class
+                                // only ever appears when that
+                                // pre-pass ran (the MOBI flag), so
+                                // every other parse is unchanged.
+                                if (parser.getAttributeValue(null, "class")
+                                        ?.split(' ', '\t')
+                                        ?.contains("xreader-pagebreak") == true
+                                ) {
+                                    blocks += ChapterBlock.PageBreak
+                                } else {
+                                    blocks += ChapterBlock.Rule
+                                }
                             }
                             "img", "image" -> {
                                 flushParagraph()

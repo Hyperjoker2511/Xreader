@@ -1628,6 +1628,7 @@ fun ReaderScreen(
                 } else {
                     TocSheet(
                     chapters = state.chapters,
+                    chapterLevels = state.chapterLevels,
                     currentChapterIndex = state.chapterIndex,
                     tocEntries = state.tocEntries,
                     currentTocEntryIndex = currentTocIndex,

@@ -45,7 +45,15 @@ class HtmlParser(
      * the CHM norm — resolve from the extraction root, never as
      * an absolute filesystem path). Existing callers pass nothing
      * and behave exactly as before. */
-    private val extraImageRoots: List<File> = emptyList()
+    private val extraImageRoots: List<File> = emptyList(),
+    /** MR-4 (Revision 1, R7): the MOBI carrier. When true, the
+     * jsoup pre-pass rewrites every `<mbp:pagebreak>` element
+     * into `<hr class="xreader-pagebreak"/>`, the converter
+     * turns that into a [ChapterBlock.PageBreak] marker, and
+     * the splitter treats markers as chapter split points.
+     * Only MobiParser passes true; HTML/MHTML/CHM callers pass
+     * nothing and behave byte-identically to before. */
+    private val pagebreakSplit: Boolean = false
 ) : BookParser {
 
     override val format: BookFormat = BookFormat.HTML
@@ -86,9 +94,10 @@ class HtmlParser(
                 return AppResult.Err(AppError.ParseFailed("HTML", "the file has no readable text"))
             }
             val writer = ChapterFileWriter(File(workDir, "chapters"))
-            splitIntoChapters(result.blocks).forEach { (title, blocks) ->
-                writer.add(title, ChapterContent(blocks))
-            }
+            splitIntoChapters(result.blocks, pagebreakSplit)
+                .forEach { (title, blocks) ->
+                    writer.add(title, ChapterContent(blocks))
+                }
             AppResult.Ok(
                 ParsedBook(
                     title = result.titleTag,
@@ -113,6 +122,19 @@ class HtmlParser(
     private fun normaliseToXhtml(bytes: ByteArray): ByteArray {
         val doc = Jsoup.parse(ByteArrayInputStream(bytes), charsetHint, "")
         doc.select("script, style, noscript").remove()
+        if (pagebreakSplit) {
+            // R7 step 2: the pagebreak's ride through the
+            // strict converter — a marker <hr> whose class the
+            // converter recognises. Without the flag the
+            // element names no block and is dropped exactly as
+            // before (an unknown element in the XHTML walk).
+            doc.select("mbp|pagebreak").forEach { element ->
+                element.replaceWith(
+                    org.jsoup.nodes.Element("hr")
+                        .attr("class", "xreader-pagebreak")
+                )
+            }
+        }
         stripComments(doc)
         doc.outputSettings()
             .syntax(Document.OutputSettings.Syntax.xml)
@@ -158,7 +180,100 @@ class HtmlParser(
     companion object {
         /** h1 (else h2) headings start new chapters; leading content
          * becomes an untitled first chapter. */
-        fun splitIntoChapters(blocks: List<ChapterBlock>): List<Pair<String, List<ChapterBlock>>> {
+        fun splitIntoChapters(blocks: List<ChapterBlock>): List<Pair<String, List<ChapterBlock>>> =
+            splitIntoChapters(blocks, pagebreakSplit = false)
+
+        /**
+         * MR-4 (R7 step 4): with [pagebreakSplit] on, the split
+         * set is the split-level headings ∪ [ChapterBlock.PageBreak]
+         * markers, in document order. A PageBreak is consumed,
+         * never landed. A chapter begun by a PageBreak whose
+         * first non-blank block is a heading takes that heading's
+         * text as its title (the heading stays as its first
+         * block); a split-level heading immediately following a
+         * PageBreak (nothing between but the break) titles that
+         * chapter instead of splitting again. In the no-headings
+         * case PageBreaks alone split, and chapters are emitted
+         * with BLANK titles so ChapterFileWriter substitutes
+         * "Chapter N" (the splitter must not pre-title them
+         * "Part 1" in this mode). With the flag off the behaviour
+         * is the shipped one, byte-identical.
+         */
+        fun splitIntoChapters(
+            blocks: List<ChapterBlock>,
+            pagebreakSplit: Boolean
+        ): List<Pair<String, List<ChapterBlock>>> {
+            if (!pagebreakSplit) return splitIntoChaptersShipped(blocks)
+            val splitLevel = when {
+                blocks.any { it is ChapterBlock.Heading && it.level == 1 } -> 1
+                blocks.any { it is ChapterBlock.Heading && it.level == 2 } -> 2
+                else -> -1
+            }
+            val chapters = mutableListOf<Pair<String, List<ChapterBlock>>>()
+            var title: String? = null
+            var current = mutableListOf<ChapterBlock>()
+            // True while the current chapter was begun by a
+            // PageBreak and nothing but the break precedes the
+            // next block — a split heading in this seat titles
+            // the chapter instead of splitting it.
+            var breakFresh = false
+            // True while the current chapter was begun by a
+            // PageBreak (at any point in its filling): such a
+            // chapter with no heading title of its own is
+            // emitted BLANK so the writer substitutes
+            // "Chapter N" — a second "Part 1" mid-book would
+            // be a false title (R7's no-pre-title rule,
+            // applied to break-begun chapters in every mode).
+            var breakBegun = false
+            fun flush() {
+                if (current.isEmpty()) {
+                    title = null
+                    return
+                }
+                // R7: a pagebreak-begun chapter takes its
+                // title from its first NON-BLANK block when
+                // that block is a heading.
+                val firstContent = current.firstOrNull {
+                    it !is ChapterBlock.Paragraph || it.text.isNotBlank()
+                }
+                val chapterTitle = title
+                    ?: (firstContent as? ChapterBlock.Heading)?.text
+                    ?: if (breakBegun || splitLevel < 0) "" else "Part 1"
+                chapters += chapterTitle to current.toList()
+                current = mutableListOf()
+                title = null
+            }
+            for (block in blocks) {
+                when {
+                    block is ChapterBlock.PageBreak -> {
+                        flush()
+                        breakFresh = true
+                        breakBegun = true
+                    }
+                    block is ChapterBlock.Heading &&
+                        block.level == splitLevel -> {
+                        if (breakFresh && current.isEmpty()) {
+                            title = block.text
+                            current += block
+                        } else {
+                            flush()
+                            title = block.text
+                            current += block
+                        }
+                        breakFresh = false
+                        breakBegun = false
+                    }
+                    else -> {
+                        current += block
+                        breakFresh = false
+                    }
+                }
+            }
+            flush()
+            return chapters.ifEmpty { listOf("Part 1" to blocks) }
+        }
+
+        private fun splitIntoChaptersShipped(blocks: List<ChapterBlock>): List<Pair<String, List<ChapterBlock>>> {
             val splitLevel = when {
                 blocks.any { it is ChapterBlock.Heading && it.level == 1 } -> 1
                 blocks.any { it is ChapterBlock.Heading && it.level == 2 } -> 2

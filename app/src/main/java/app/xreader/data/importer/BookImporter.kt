@@ -162,6 +162,16 @@ class BookImporter(
     private val readingProgressDao: ReadingProgressDao? = null,
     private val bookmarkDao: BookmarkDao? = null,
     private val highlightDao: HighlightDao? = null,
+    /** MR-4 (R5): the chapter-levels record's store — the
+     * importer writes the record at every land site from the
+     * parse's chapterLevels, keyed by the landed book's id
+     * with the Book row's fingerprint inside the record.
+     * Nullable like the other optional stores: embeddings
+     * that never exercise Contents depth keep constructing
+     * the importer as before; production (AppContainer)
+     * always wires it. */
+    private val localReaderPrefs:
+        app.xreader.ui.localreader.LocalReaderPrefs? = null,
     /** v1.5.5 (§4): the completion jobs' scope — importer-owned
      * and supervisor-rooted, so a job outlives whichever screen
      * started the import. AppContainer's importer is a
@@ -180,6 +190,34 @@ class BookImporter(
         { block -> block() },
     private val clock: () -> Long = System::currentTimeMillis
 ) {
+
+    /** MR-4 (R5): persist a landed parse's chapter levels —
+     * the record for [bookId] under the Book row's
+     * [fingerprint]. An empty level list writes NO record and
+     * clears any stale one (a re-import under a changed
+     * parser must not keep the old shape). A null fingerprint
+     * likewise clears: without the row's fingerprint the
+     * record could never be validated at read. Best-effort —
+     * a levels failure never fails an import. */
+    private suspend fun persistChapterLevels(
+        bookId: Long,
+        fingerprint: String?,
+        levels: List<Int>
+    ) {
+        val prefs = localReaderPrefs ?: return
+        runCatching {
+            if (levels.isNotEmpty() && fingerprint != null) {
+                prefs.saveChapterLevelsRecord(
+                    bookId,
+                    app.xreader.ui.localreader.ChapterLevelsRecord(
+                        fingerprint, levels
+                    )
+                )
+            } else {
+                prefs.clearChapterLevelsRecord(bookId)
+            }
+        }
+    }
 
     /** A staged file larger than this is refused and its staging
      * dir deleted again (production value:
@@ -478,6 +516,8 @@ class BookImporter(
             }
             // v1.5.6 (§3.7): re-add = resume, on this path too.
             restoreReadingMemory(book.id, fingerprint, now)
+            // MR-4 (R5): land site 1 of 3 — the main import.
+            persistChapterLevels(book.id, fingerprint, parsed.chapterLevels)
             AppResult.Ok(bookDao.getById(book.id) ?: book)
         } catch (e: CancellationException) {
             throw e
@@ -1218,6 +1258,13 @@ class BookImporter(
                 }
                 landing.finish()
             }
+            // MR-4 (R5): land sites 2 and 3 of 3 — both parse
+            // branches above (the progressive PDF branch and
+            // the plain branch) converge here, under the Book
+            // row's own fingerprint.
+            persistChapterLevels(
+                bookId, book.fileFingerprint, parsed.chapterLevels
+            )
             // Finalise: totals, the description the completion
             // learned, and the cover when registration had none
             // (a PDF whose dominant plate only the full image

@@ -14,9 +14,26 @@ import org.xmlpull.v1.XmlPullParserFactory
 /**
  * FB2 (FictionBook) parser (PLAN §4): description/title-info for
  * metadata + coverpage, body sections as chapters, `<binary>` images
- * (base64) extracted to assets. Nested sections flatten: a top-level
- * section is a chapter; deeper sections become heading blocks inside
- * it. Inline emphasis/strong map to spans, like the other parsers.
+ * (base64) extracted to assets. Inline emphasis/strong map to spans,
+ * like the other parsers.
+ *
+ * MR-4 (Revision 1, R4): the section walk is an explicit STACK,
+ * copying Moon+'s Fb2 chapter-building. Every TITLED section is a
+ * chapter at any depth (its level rides [ParsedBook.chapterLevels]);
+ * a chapter holds its section's OWN blocks in document order —
+ * before its first child section, between children, and after its
+ * last child. An UNTITLED section reserves no chapter: on its
+ * close its blocks append to the enclosing section (or, at top
+ * level, to the previous chapter; before any chapter, to the
+ * front-matter accumulator). A titled chapter is emitted even
+ * with zero blocks of its own (R3 — a Part divider whose text
+ * lives in its children still gets its Contents row). Content
+ * before the first titled section, when non-blank, forms a first
+ * chapter titled with the book title. A `<body name="notes">` is
+ * diverted whole into ONE final chapter titled "Footnotes"
+ * (Moon+'s string), its inner sections flattened into it; any
+ * other named body is sliced as ordinary content in place, so
+ * no text is ever lost.
  */
 class Fb2Parser : BookParser {
 
@@ -51,7 +68,8 @@ class Fb2Parser : BookParser {
                     coverFile = coverFile,
                     chapters = writer.metas,
                     chaptersDir = File(workDir, "chapters"),
-                    assetsDir = assetsDir.takeIf { it.list()?.isNotEmpty() == true }
+                    assetsDir = assetsDir.takeIf { it.list()?.isNotEmpty() == true },
+                    chapterLevels = document.levels
                 )
             )
         } catch (e: Exception) {
@@ -73,8 +91,23 @@ object Fb2Document {
         val coverBinaryId: String?,
         /** binary id → staged asset file name. */
         val imageNames: Map<String, String>,
-        val chapters: List<Chapter>
+        val chapters: List<Chapter>,
+        /** MR-4: Contents depth per chapter, parallel to
+         * [chapters] (0 = top level). */
+        val levels: List<Int> = emptyList()
     )
+
+    /** One open `<section>` on the stack (R4): its title (null
+     * until its `<title>` closes — an untitled section is only
+     * known at its close), its tree level, and its OWN blocks
+     * in document order. A titled frame IS its chapter slot:
+     * [parse] keeps every frame in a slot list in document
+     * order, and an untitled frame's slot is revoked at close,
+     * its blocks absorbed upward. */
+    private class SectionFrame(val level: Int) {
+        var title: String? = null
+        val blocks = mutableListOf<ChapterBlock>()
+    }
 
     fun parse(file: File, assetsDir: File): Document? {
         val factory = XmlPullParserFactory.newInstance()
@@ -92,14 +125,23 @@ object Fb2Document {
         var coverBinaryId: String? = null
         val imageNames = mutableMapOf<String, String>()
         val usedNames = mutableSetOf<String>()
-        val chapters = mutableListOf<Chapter>()
+
+        // MR-4 (R4): the section stack + chapter slots.
+        val slots = mutableListOf<SectionFrame>()
+        val stack = ArrayDeque<SectionFrame>()
+        /** Blocks before the first titled section (Moon+'s
+         * leftover-text home): slotted as chapter 0, titled
+         * with the book title, the moment the first section
+         * opens — or at the end if no section ever opens. */
+        val frontFrame = SectionFrame(0)
+        var frontSlotted = false
+        /** The notes body's flattened blocks (R4). */
+        val notesBlocks = mutableListOf<ChapterBlock>()
 
         // State machine over the flat event stream.
         var inTitleInfo = false
         var inBody = false
-        var sectionDepth = 0
-        var currentBlocks: MutableList<ChapterBlock>? = null
-        var currentTitle: String? = null
+        var inNotesBody = false
         var sectionTitleCapture: StringBuilder? = null
         var inSectionTitle = false
         var binaryId: String? = null
@@ -113,6 +155,18 @@ object Fb2Document {
         var italicDepth = 0
         val spans = mutableListOf<TextSpan>()
         var paragraphOpen = false
+
+        /** Where body content lands right now: the notes sink
+         * inside the notes body; the innermost open section's
+         * own blocks inside a section; the previous chapter's
+         * blocks between top-level sections; the front-matter
+         * accumulator before the first section. */
+        fun currentTarget(): MutableList<ChapterBlock> = when {
+            inNotesBody -> notesBlocks
+            stack.isNotEmpty() -> stack.last().blocks
+            slots.isNotEmpty() -> slots.last().blocks
+            else -> frontFrame.blocks
+        }
 
         fun appendText(raw: String) {
             if (!paragraphOpen) return
@@ -139,20 +193,29 @@ object Fb2Document {
             if (cleaned.isNotEmpty()) {
                 cleaned[0] = cleaned.first().copy(text = cleaned.first().text.trimStart())
                 cleaned[cleaned.lastIndex] = cleaned.last().copy(text = cleaned.last().text.trimEnd())
-                currentBlocks?.add(ChapterBlock.Paragraph(cleaned.toList()))
+                currentTarget().add(ChapterBlock.Paragraph(cleaned.toList()))
             }
             spans.clear()
             paragraphOpen = false
         }
 
-        fun closeChapter() {
-            flushParagraph()
-            val blocks = currentBlocks
-            if (blocks != null && blocks.isNotEmpty()) {
-                chapters += Chapter(currentTitle ?: "Chapter ${chapters.size + 1}", blocks.toList())
+        /** R4: an untitled frame's slot is revoked and its
+         * blocks absorbed — into the enclosing frame, or at
+         * top level into the previous chapter (Moon+'s
+         * absorption), or into the front matter when no
+         * chapter exists yet. A titled frame simply keeps
+         * its slot; its chapter is emitted even with zero
+         * blocks (R3). */
+        fun finaliseFrame(frame: SectionFrame) {
+            if (!frame.title.isNullOrBlank()) return
+            slots.remove(frame)
+            val dest = when {
+                stack.isNotEmpty() -> stack.last().blocks
+                slots.isNotEmpty() -> slots.last().blocks
+                else -> frontFrame.blocks
             }
-            currentBlocks = null
-            currentTitle = null
+            dest.addAll(frame.blocks)
+            frame.blocks.clear()
         }
 
         var event = parser.eventType
@@ -160,7 +223,15 @@ object Fb2Document {
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "title-info" -> inTitleInfo = true
-                    "body" -> inBody = true
+                    "body" -> {
+                        inBody = true
+                        // R4: Moon+ searches the body `name`
+                        // attribute, "notes" preferred — that
+                        // body is diverted whole; every other
+                        // body slices in place.
+                        inNotesBody =
+                            parser.getAttributeValue(null, "name") == "notes"
+                    }
                     "book-title" -> if (inTitleInfo) {
                         title = parser.nextText()?.trim()?.takeIf { it.isNotEmpty() } ?: title
                     }
@@ -193,7 +264,7 @@ object Fb2Document {
                                 ZipPaths.assetFileName(guessed, usedNames)
                             }
                             flushParagraph()
-                            currentBlocks?.add(ChapterBlock.Image(name))
+                            currentTarget().add(ChapterBlock.Image(name))
                         }
                     }
                     "binary" -> {
@@ -202,16 +273,23 @@ object Fb2Document {
                         binaryType = parser.getAttributeValue(null, "content-type")
                         binaryText.setLength(0)
                     }
-                    "section" -> if (inBody) {
-                        sectionDepth++
-                        if (sectionDepth == 1) {
-                            closeChapter()
-                            currentBlocks = mutableListOf()
-                            currentTitle = null
+                    "section" -> if (inBody && !inNotesBody) {
+                        flushParagraph()
+                        // The front matter, if any has
+                        // collected, takes chapter 0's slot
+                        // before the first section's own.
+                        if (!frontSlotted && stack.isEmpty() &&
+                            slots.isEmpty() && frontFrame.blocks.isNotEmpty()
+                        ) {
+                            slots += frontFrame
+                            frontSlotted = true
                         }
+                        val frame = SectionFrame(stack.size)
+                        stack.addLast(frame)
+                        slots += frame
                     }
                     "title" -> {
-                        if (inBody && sectionDepth >= 1) {
+                        if (inBody && (stack.isNotEmpty() || inNotesBody)) {
                             inSectionTitle = true
                             sectionTitleCapture = StringBuilder()
                         }
@@ -236,8 +314,14 @@ object Fb2Document {
                 XmlPullParser.END_TAG -> when (parser.name) {
                     "title-info" -> inTitleInfo = false
                     "body" -> {
-                        closeChapter()
+                        flushParagraph()
+                        // Unwind any section left open by a
+                        // malformed file, innermost first.
+                        while (stack.isNotEmpty()) {
+                            finaliseFrame(stack.removeLast())
+                        }
                         inBody = false
+                        inNotesBody = false
                     }
                     "annotation" -> {
                         inAnnotation = false
@@ -266,19 +350,38 @@ object Fb2Document {
                         }
                         binaryId = null
                     }
-                    "section" -> if (inBody) {
-                        if (sectionDepth == 1) closeChapter()
-                        if (sectionDepth > 0) sectionDepth--
+                    "section" -> if (inBody && !inNotesBody) {
+                        flushParagraph()
+                        val frame = stack.removeLastOrNull()
+                        if (frame != null) finaliseFrame(frame)
                     }
                     "title" -> if (inSectionTitle) {
                         inSectionTitle = false
                         val text = sectionTitleCapture?.toString()
                             ?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
                         sectionTitleCapture = null
-                        if (sectionDepth == 1) {
-                            currentTitle = text.takeIf { it.isNotEmpty() } ?: currentTitle
-                        } else if (text.isNotEmpty()) {
-                            currentBlocks?.add(ChapterBlock.Heading(2, text))
+                        when {
+                            inNotesBody -> if (text.isNotEmpty()) {
+                                // R4: the notes chapter is ONE
+                                // chapter — its sections' titles
+                                // flatten into heading blocks.
+                                notesBlocks += ChapterBlock.Heading(2, text)
+                            }
+                            else -> {
+                                val frame = stack.lastOrNull()
+                                if (frame != null) {
+                                    if (frame.title == null) {
+                                        frame.title =
+                                            text.takeIf { it.isNotEmpty() }
+                                    } else if (text.isNotEmpty()) {
+                                        // A second title inside one
+                                        // section is a heading in it
+                                        // (the pre-MR-4 shape).
+                                        frame.blocks +=
+                                            ChapterBlock.Heading(2, text)
+                                    }
+                                }
+                            }
                         }
                     }
                     "p", "subtitle", "text-author" -> if (inBody) flushParagraph()
@@ -286,9 +389,41 @@ object Fb2Document {
                     "strong" -> if (boldDepth > 0) boldDepth--
                 }
             }
-            // Author name parts arrive as nextText of specific tags; the
-            // flat walker handles them via dedicated reads below.
             event = parser.next()
+        }
+
+        // A book with no titled section at all: the front
+        // matter, if it collected anything, is the book's one
+        // chapter (Moon+'s leftover-text chapter).
+        if (slots.isEmpty() && frontFrame.blocks.isNotEmpty()) {
+            slots += frontFrame
+            frontSlotted = true
+        }
+        if (frontSlotted) {
+            frontFrame.title = title
+        }
+        val chapters = mutableListOf<Chapter>()
+        val levels = mutableListOf<Int>()
+        slots.forEachIndexed { index, frame ->
+            chapters += Chapter(
+                frame.title?.takeIf { it.isNotBlank() }
+                    ?: "Chapter ${index + 1}",
+                frame.blocks.toList()
+            )
+            levels += frame.level
+        }
+        // Moon+ (Fb2.java): a lone chapter titled "..." is
+        // renamed to the book title.
+        if (chapters.size == 1 && chapters[0].title == "..." &&
+            !title.isNullOrBlank()
+        ) {
+            chapters[0] = chapters[0].copy(title = title)
+        }
+        // R4: the notes body lands as ONE final chapter,
+        // Moon+'s "Footnotes" string, level 0.
+        if (notesBlocks.isNotEmpty()) {
+            chapters += Chapter("Footnotes", notesBlocks.toList())
+            levels += 0
         }
 
         val author = listOfNotNull(authorFirst, authorLast).joinToString(" ").trim()
@@ -299,7 +434,8 @@ object Fb2Document {
             language = language,
             coverBinaryId = coverBinaryId,
             imageNames = imageNames,
-            chapters = chapters
+            chapters = chapters,
+            levels = levels
         )
     }
 }

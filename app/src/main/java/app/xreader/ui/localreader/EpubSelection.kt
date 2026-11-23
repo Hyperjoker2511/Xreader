@@ -2,6 +2,7 @@ package app.xreader.ui.localreader
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -643,6 +644,7 @@ fun highlightSpansFor(
  * rect (EPUB) or as the Text view's action bar (PDF) — this
  * content is identical for both (Q3 → B's shared menu).
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 internal fun SelectionActionRow(
     selectedText: String,
@@ -650,10 +652,14 @@ internal fun SelectionActionRow(
     onHighlight: () -> Unit,
     onNote: () -> Unit,
     onDictionary: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** MR-4 (R1): the PDF pill seats the bar AT the selection
+     * at wrap-content width; the Reflow host keeps the shipped
+     * full-width row (the default). */
+    fillContentWidth: Boolean = true
 ) {
     Column(
-        Modifier.fillMaxWidth()
+        (if (fillContentWidth) Modifier.fillMaxWidth() else Modifier)
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Text(
@@ -663,13 +669,18 @@ internal fun SelectionActionRow(
             color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            TextButton(onClick = onCopy) { Text("Copy") }
-            TextButton(onClick = onHighlight) { Text("Highlight") }
-            TextButton(onClick = onNote) { Text("Note") }
-            TextButton(onClick = onDictionary) { Text("Dictionary") }
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = onDismiss) { Text("Close") }
+        // MR-4 (R1): a FlowRow — the shipped fixed Row crushed
+        // its last button ("Close" as a one-letter-wide stack)
+        // at wrap-content widths. The weight Spacer is dropped
+        // (FlowRow has no weight); Close follows Dictionary in
+        // flow order, and every label is one line, never
+        // crushed.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = onCopy) { Text("Copy", maxLines = 1) }
+            TextButton(onClick = onHighlight) { Text("Highlight", maxLines = 1) }
+            TextButton(onClick = onNote) { Text("Note", maxLines = 1) }
+            TextButton(onClick = onDictionary) { Text("Dictionary", maxLines = 1) }
+            TextButton(onClick = onDismiss) { Text("Close", maxLines = 1) }
         }
     }
 }

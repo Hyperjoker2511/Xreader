@@ -193,6 +193,76 @@ fun pdfCharIndexAt(geometry: PageCharGeometry, xPt: Float, yPt: Float): Int? {
 }
 
 /**
+ * MR-4 (R2.1): a held line index over one page's geometry —
+ * built ONCE per held geometry (the selection drag loop
+ * holds it for the drag's life), replacing the shipped
+ * per-move O(chars) full-page scan of [pdfCharIndexAt] with
+ * a band lookup plus a scan of ONE line's chars. Semantics
+ * are the free function's, unchanged: exact containment
+ * first (within the line whose y-band holds the point),
+ * else the vertically nearest line's horizontally nearest
+ * char. The full scan stays as the fallback for callers
+ * without a held index and for any point the index answers
+ * null on (defensive parity).
+ */
+class PdfLineIndex(private val geometry: PageCharGeometry) {
+
+    private class Line(
+        val span: IntRange,
+        val top: Float,
+        val bottom: Float
+    )
+
+    private val lines: List<Line> = run {
+        val rects = geometry.rects
+        if (geometry.pageText.isEmpty() || rects.size != geometry.pageText.length) {
+            emptyList()
+        } else {
+            pdfLineSpans(geometry.pageText).map { span ->
+                var top = Float.MAX_VALUE
+                var bottom = -Float.MAX_VALUE
+                for (i in span) {
+                    val r = rects[i]
+                    if (r.top < top) top = r.top
+                    if (r.bottom > bottom) bottom = r.bottom
+                }
+                Line(span, top, bottom)
+            }
+        }
+    }
+
+    fun charIndexAt(xPt: Float, yPt: Float): Int? {
+        if (lines.isEmpty()) return null
+        val text = geometry.pageText
+        val rects = geometry.rects
+        // Exact containment, in the band that holds the point.
+        for (line in lines) {
+            if (yPt < line.top || yPt > line.bottom) continue
+            for (i in line.span) {
+                if (text[i] == '\n') continue
+                if (rects[i].contains(xPt, yPt)) return i
+            }
+        }
+        // The vertically nearest line, its nearest char.
+        fun bandDistance(line: Line): Float = when {
+            yPt < line.top -> line.top - yPt
+            yPt > line.bottom -> yPt - line.bottom
+            else -> 0f
+        }
+        val line = lines.minByOrNull { bandDistance(it) } ?: return null
+        fun xDistance(i: Int): Float {
+            val r = rects[i]
+            return when {
+                xPt < r.left -> r.left - xPt
+                xPt > r.right -> xPt - r.right
+                else -> 0f
+            }
+        }
+        return line.span.minByOrNull { xDistance(it) }
+    }
+}
+
+/**
  * MR-2b: [range]'s draw rects — one union rect per LINE the
  * range touches (Moon+ draws a selection as per-line rects,
  * never one big box across a line break). Newline chars

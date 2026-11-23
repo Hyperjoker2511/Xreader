@@ -744,6 +744,11 @@ class AppContainer(
         readingProgressDao = database.readingProgressDao(),
         bookmarkDao = database.bookmarkDao(),
         highlightDao = database.highlightDao(),
+        // MR-4 (R5): the chapter-levels record's store.
+        localReaderPrefs =
+            app.xreader.ui.localreader.LocalReaderPrefs(
+                appContext.settingsDataStore
+            ),
         // D9: an import's thousands of chapter writes commit once.
         inTransaction = { block -> database.withTransaction(block) }
     )

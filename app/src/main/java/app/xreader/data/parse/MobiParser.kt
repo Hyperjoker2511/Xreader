@@ -61,7 +61,11 @@ class MobiParser(private val formatWanted: BookFormat = BookFormat.MOBI) : BookP
             // v0.2 (noted in the phase report); text is the deliverable.
             val tempHtml = File(workDir, "kindle-content.html")
             tempHtml.writeText(html)
-            val fromHtml = HtmlParser().parse(tempHtml, File(workDir, "html-stage")) { }
+            // MR-4 (R7): the MOBI path rides the pagebreak
+            // carrier — Kindle flows mark chapter starts with
+            // <mbp:pagebreak>, which becomes a split point.
+            val fromHtml = HtmlParser(pagebreakSplit = true)
+                .parse(tempHtml, File(workDir, "html-stage")) { }
             when (fromHtml) {
                 is AppResult.Err -> fromHtml
                 is AppResult.Ok -> AppResult.Ok(

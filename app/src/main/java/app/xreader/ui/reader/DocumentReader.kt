@@ -10,6 +10,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -2035,6 +2036,11 @@ private fun DocumentBlock(
         // prepare time. Rendered whole (it is a fixed
         // block in the chapter's text coordinate system,
         // like an image); its own text carries no marks.
+        // MR-4 (R7): a pagebreak marker renders as nothing —
+        // it is a split signal for the MOBI flow, consumed by
+        // the splitter; this branch is the belt-and-braces for
+        // one that somehow lands in a chapter.
+        is ChapterBlock.PageBreak -> Unit
         is ChapterBlock.FootnoteBox -> FootnoteBoxView(
             block = block,
             config = config,
@@ -2097,6 +2103,15 @@ private fun DocumentBlock(
                             bottom = config.paragraphSpacingDp.dp
                         )
                 )
+                // MR-4 Part 3: this menu is composed INSIDE the
+                // reader's SelectionContainer — as a Popup its
+                // labels would otherwise register as selectables
+                // in a different layout hierarchy and crash the
+                // selection sort ("layouts are not part of the
+                // same hierarchy", owner's 2026-11-23 crash).
+                // DisableSelection keeps them out of the
+                // registrar; the menu itself is unchanged.
+                DisableSelection {
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
                         text = { Text("Highlight passage") },
@@ -2125,6 +2140,7 @@ private fun DocumentBlock(
                             )
                         }
                     )
+                }
                 }
             }
         }

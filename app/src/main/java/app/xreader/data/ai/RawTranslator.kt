@@ -200,6 +200,9 @@ class RawTranslator(
                 }
                 is ChapterBlock.Image -> outBlocks += block
                 ChapterBlock.Rule -> outBlocks += block
+                // MR-4 (R7): a pagebreak marker passes through
+                // whole, like a rule — it carries no text.
+                ChapterBlock.PageBreak -> outBlocks += block
                 // D13: a footnote box passes through whole —
                 // the note keeps the book's own words (the
                 // same choice TermReplacer makes), so the

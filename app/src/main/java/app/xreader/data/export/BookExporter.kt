@@ -267,6 +267,9 @@ class BookExporter(
                 sb.append("<p><img src=\"").append(escapeAttr(hrefOf(block.fileName)))
                     .append("\" alt=\"").append(escapeAttr(block.alt)).append("\"/></p>")
             is ChapterBlock.Rule -> sb.append("<hr/>")
+            // MR-4 (R7): a pagebreak marker exports as nothing —
+            // it is a split signal, not content.
+            is ChapterBlock.PageBreak -> Unit
             is ChapterBlock.FootnoteBox -> {
                 sb.append("<aside class=\"footnote-box\">")
                 for (entry in block.entries) {

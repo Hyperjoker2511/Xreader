@@ -59,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1949,6 +1950,12 @@ private fun formatClock(totalSeconds: Double): String {
 @Composable
 fun TocSheet(
     chapters: List<Chapter>,
+    /** MR-4 (R5/R8): the chapters' Contents depth, parallel
+     * to [chapters] — FB2 books only today. A size mismatch
+     * renders flat. The indent pads the TITLE only (R8:
+     * level × 15dp); a chapter is bold when the NEXT chapter
+     * is deeper (Moon+'s hasSubChapter seat). */
+    chapterLevels: List<Int> = emptyList(),
     currentChapterIndex: Int,
     /** Part 2: the book's own TOC, bridged to chapter
      * positions — when non-empty, the Chapters tab lists
@@ -2067,6 +2074,12 @@ fun TocSheet(
                         }
                     }
                 } else {
+                // MR-4 (R8): levels apply only when parallel.
+                val levels = if (chapterLevels.size == chapters.size) {
+                    chapterLevels
+                } else {
+                    emptyList()
+                }
                 itemsIndexed(chapters, key = { _, ch -> ch.id }) { index, chapter ->
                     Row(
                         Modifier
@@ -2089,9 +2102,26 @@ fun TocSheet(
                             } else {
                                 MaterialTheme.colorScheme.onSurface
                             },
+                            // MR-4 (R8): bold when the next
+                            // chapter sits deeper (it has
+                            // sub-chapters).
+                            fontWeight = if (
+                                (levels.getOrNull(index + 1) ?: 0) >
+                                (levels.getOrNull(index) ?: 0)
+                            ) {
+                                FontWeight.Bold
+                            } else {
+                                null
+                            },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                // R8: the indent pads the
+                                // TITLE only — level × 15dp.
+                                .padding(
+                                    start = ((levels.getOrNull(index) ?: 0) * 15).dp
+                                )
                         )
                         if (chapter.read) {
                             Icon(

@@ -262,6 +262,13 @@ data class ReaderUiState(
      * which is exactly the signal the Contents sheet and
      * the counters use to stay on today's behaviour. */
     val tocEntries: List<ReaderTocEntry> = emptyList(),
+    /** MR-4 (R5): the landed chapters' Contents depth
+     * (parallel to `chapters`), read from the importer's
+     * chapter-levels record at open. Empty = flat (every
+     * book today except FB2); published only when the
+     * record's fingerprint matches the Book row's AND its
+     * size matches the landed chapter count. */
+    val chapterLevels: List<Int> = emptyList(),
     /** Part 3: the open book is a local EPUB (prepared or
      * not — the document surface only ever serves the
      * prepared ones, and the chapter-end wall's FOR_EPUB
@@ -1344,10 +1351,26 @@ class ReaderViewModel(
             // note per source per session, so slower chapter turns
             // never read as the app hanging.
             val sourceNotice = browserViewNoticeFor(book)
+            // MR-4 (R5): the chapter-levels record, read once
+            // at open. Published only when the record's
+            // fingerprint is the Book row's own AND the list
+            // is parallel to the landed chapters — any
+            // mismatch renders the Contents flat.
+            val levelsRecord = runCatching {
+                localReaderPrefs.chapterLevelsRecord(bookId)
+            }.getOrNull()
+            val chapterLevels = levelsRecord
+                ?.takeIf { record ->
+                    book?.fileFingerprint != null &&
+                        record.fingerprint == book.fileFingerprint &&
+                        record.levels.size == chapters.size
+                }
+                ?.levels ?: emptyList()
             _state.value = _state.value.copy(
                 bookTitle = book?.title ?: "",
                 chapters = chaptersUpdated(chapters),
                 tocEntries = emptyList(),
+                chapterLevels = chapterLevels,
                 isEpubBook = epubBook,
                 pageTurnTier = computeTier(_config.value),
                 browserViewNotice = sourceNotice ?: _state.value.browserViewNotice

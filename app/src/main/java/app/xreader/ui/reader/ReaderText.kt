@@ -318,6 +318,9 @@ private fun FootnoteEntryView(
                 assetFile = assetFile,
                 onZoomActiveChanged = onZoomActiveChanged
             )
+            // MR-4 (R7): a pagebreak marker inside a note
+            // renders as nothing, as everywhere else.
+            is ChapterBlock.PageBreak -> Unit
         }
     }
     if (headerPending) {

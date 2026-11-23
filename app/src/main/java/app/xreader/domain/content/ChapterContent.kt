@@ -56,6 +56,20 @@ sealed interface ChapterBlock {
     data object Rule : ChapterBlock
 
     /**
+     * MR-4 (Revision 1, R7): a MOBI flow pagebreak marker.
+     * Emitted ONLY by the XhtmlConverter when an `<hr>` carries
+     * the `xreader-pagebreak` class — a class the MOBI-gated
+     * jsoup pre-pass stamps in place of `<mbp:pagebreak>`, so
+     * unflagged parses never produce it. The HTML splitter
+     * consumes it as a chapter split point and never lands it;
+     * if one ever survives into a landed chapter, the reader
+     * renders it as nothing.
+     */
+    @Serializable
+    @SerialName("pageBreak")
+    data object PageBreak : ChapterBlock
+
+    /**
      * D13 (Moon+ copy): a footnote box — the notes one
      * paragraph referred to, inlined at the END of that
      * paragraph (Moon+'s FB2-proven placement), rendered as

@@ -260,6 +260,44 @@ internal fun decodeEpubPositionsIndex(raw: String?): EpubPositionsIndex? {
 // nothing reads a cached bridge any more. Values already stored
 // under the old key are simply never read again.
 
+// ── Chapter levels record (MR-4, Revision 1 R5) ──────────
+
+/**
+ * The Contents depth of a converted book's landed chapters,
+ * written by the importer at land time from
+ * [app.xreader.data.parse.ParsedBook.chapterLevels] (MR-4:
+ * only FB2 emits a non-empty list). [fingerprint] is the Book
+ * row's own fingerprint — `ReadingMemoryCodec.fingerprintOf(
+ * displayName, size, sha256)`, the value stored on the row as
+ * `fileFingerprint` — carried INSIDE the record and compared
+ * at read (the EpubPrepareRecord pattern), so a changed or
+ * re-imported file never shows a stale level list. The reader
+ * additionally requires `levels.size == chapters.size`
+ * before publishing; any mismatch renders the sheet flat.
+ */
+data class ChapterLevelsRecord(
+    val fingerprint: String,
+    val levels: List<Int>
+)
+
+/** One string per book: "fingerprint|level,level,…". */
+internal fun encodeChapterLevelsRecord(record: ChapterLevelsRecord): String =
+    record.fingerprint + "|" + record.levels.joinToString(",")
+
+/** Strict decode — anything malformed reads as null (no
+ * record: the Contents renders flat), never a half record. */
+internal fun decodeChapterLevelsRecord(raw: String?): ChapterLevelsRecord? {
+    if (raw.isNullOrBlank()) return null
+    val parts = raw.split("|")
+    if (parts.size != 2) return null
+    if (parts[0].isBlank()) return null
+    if (parts[1].isEmpty()) return null
+    val levels = parts[1].split(",").map { token ->
+        token.toIntOrNull()?.takeIf { it >= 0 } ?: return null
+    }
+    return ChapterLevelsRecord(parts[0], levels)
+}
+
 // ── EPUB prepare record (v1.7 Patch 3, Item 1e) ─────────────
 
 /**
@@ -592,6 +630,21 @@ class LocalReaderPrefs(private val store: DataStore<Preferences>) {
         }
     }
 
+    // ── Chapter levels record (MR-4, R5) ─────────────────
+
+    suspend fun chapterLevelsRecord(bookId: Long): ChapterLevelsRecord? =
+        decodeChapterLevelsRecord(store.data.first()[chapterLevelsKey(bookId)])
+
+    suspend fun saveChapterLevelsRecord(bookId: Long, record: ChapterLevelsRecord) {
+        store.edit { prefs ->
+            prefs[chapterLevelsKey(bookId)] = encodeChapterLevelsRecord(record)
+        }
+    }
+
+    suspend fun clearChapterLevelsRecord(bookId: Long) {
+        store.edit { prefs -> prefs.remove(chapterLevelsKey(bookId)) }
+    }
+
     /** Whether this book carries ANY stored EPUB book-mode
      * settings (the theme key is written by every saveEpub) —
      * Item 4g's mapping runs only for books the owner actually
@@ -632,6 +685,8 @@ class LocalReaderPrefs(private val store: DataStore<Preferences>) {
     )
     private fun epubPrepareKey(id: Long) =
         stringPreferencesKey("localreader.$id.epub.prepare")
+    private fun chapterLevelsKey(id: Long) =
+        stringPreferencesKey("localreader.$id.chapterLevels")
     private fun epubPositionsKey(id: Long) =
         stringPreferencesKey("localreader.$id.epub.positions")
 

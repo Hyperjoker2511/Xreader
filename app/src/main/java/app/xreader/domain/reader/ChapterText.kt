@@ -45,6 +45,12 @@ class ChapterText(val content: ChapterContent) {
                 }
                 is ChapterBlock.Image -> built += BlockRange(index, start, start, null)
                 is ChapterBlock.Rule -> built += BlockRange(index, start, start, null)
+                // MR-4 (R7): a pagebreak marker carries no text —
+                // a zero-width range, exactly like a rule. It is
+                // consumed by the HTML splitter and never lands;
+                // this branch is the belt-and-braces for one
+                // that somehow survives.
+                is ChapterBlock.PageBreak -> built += BlockRange(index, start, start, null)
                 // D13: a footnote box's text IS chapter text
                 // (Moon+'s inlined boxes are chapter text) —
                 // it occupies its flattened range so search,
