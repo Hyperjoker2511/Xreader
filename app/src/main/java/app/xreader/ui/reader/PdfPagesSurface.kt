@@ -3742,8 +3742,8 @@ private fun PdfContinuousBody(
                     end = registration.selection.end,
                     mapPoint = { xPt, yPt ->
                         val layout = Offset(
-                            itemInfo.offset.x + xPt * isx,
-                            itemInfo.offset.y + yPt * isy
+                            xPt * isx,
+                            itemInfo.offset + yPt * isy
                         )
                         centre + (layout - centre) * scale +
                             surfaceZoom.pan
