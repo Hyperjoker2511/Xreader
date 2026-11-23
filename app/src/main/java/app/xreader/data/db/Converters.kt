@@ -5,8 +5,11 @@ import androidx.room.TypeConverter
 /** Where a book came from (PLAN §1.3). */
 enum class SourceType { LOCAL_FILE, EXTENSION, OPDS }
 
-/** On-disk formats the import pipeline recognises (PLAN §4). */
-enum class BookFormat { EPUB, PDF, TXT, MARKDOWN, FB2, HTML, CBZ, MOBI, AZW3, CBR, UNKNOWN }
+/** On-disk formats the import pipeline recognises (PLAN §4).
+ * OE-3 (v1.7): DOCX/ODT/RTF/MHTML — the office/web-archive doors,
+ * stored by name like every value here, so older builds degrade
+ * them to UNKNOWN on read. */
+enum class BookFormat { EPUB, PDF, TXT, MARKDOWN, FB2, HTML, CBZ, MOBI, AZW3, CBR, DOCX, ODT, RTF, MHTML, UNKNOWN }
 
 enum class DownloadState { NONE, QUEUED, DOWNLOADING, READY, FAILED,
     /** Manga programme (M3): an image chapter whose page files

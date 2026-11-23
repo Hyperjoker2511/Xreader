@@ -80,7 +80,11 @@ object BookEngine {
         when (format) {
             BookFormat.TXT, BookFormat.FB2, BookFormat.MARKDOWN,
             BookFormat.HTML, BookFormat.MOBI, BookFormat.AZW3,
-            BookFormat.CBR, BookFormat.CBZ -> true
+            BookFormat.CBR, BookFormat.CBZ,
+            // OE-3: the office/web-archive doors land as
+            // converted chapters like every format above.
+            BookFormat.DOCX, BookFormat.ODT, BookFormat.RTF,
+            BookFormat.MHTML -> true
             BookFormat.EPUB, BookFormat.PDF,
             BookFormat.UNKNOWN -> false
         }

@@ -20,6 +20,10 @@ class ParserRegistry(private val pdfExtractor: PdfTextExtractor?) {
         BookFormat.CBR -> CbrParser()
         BookFormat.MOBI -> MobiParser(BookFormat.MOBI)
         BookFormat.AZW3 -> MobiParser(BookFormat.AZW3)
+        BookFormat.DOCX -> OfficeXmlParser(BookFormat.DOCX)
+        BookFormat.ODT -> OfficeXmlParser(BookFormat.ODT)
+        BookFormat.RTF -> RtfParser()
+        BookFormat.MHTML -> MhtmlParser()
         BookFormat.PDF -> pdfExtractor?.let { PdfBookParser(it) }
         BookFormat.UNKNOWN -> null
     }

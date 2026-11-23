@@ -30,6 +30,8 @@ object FormatSniffer {
         if (startsWith(head, "%PDF-")) return BookFormat.PDF
         // RAR: Rar!
         if (startsWith(head, "Rar!")) return BookFormat.CBR
+        // RTF (OE-3): every RTF file opens with the {\rtf header.
+        if (startsWith(head, "{\\rtf")) return BookFormat.RTF
         // MOBI/AZW3: "BOOKMOBI" at offset 60 of the PalmDB header.
         if (head.size > 68 && String(head, 60, 8, Charsets.US_ASCII) == "BOOKMOBI") {
             return if (displayName?.endsWith(".azw3", ignoreCase = true) == true) {
@@ -44,6 +46,9 @@ object FormatSniffer {
         }
         // Text family: XML/HTML dialects, else plain text.
         val text = decodeHead(head)
+        // MHTML (OE-3): a web archive opens with MIME headers, the
+        // HTML part riding later — headers decide, not extension.
+        if (isMhtmlHead(text)) return BookFormat.MHTML
         val trimmed = text.trimStart('﻿', ' ', '\t', '\r', '\n')
         if (trimmed.startsWith("<?xml") || trimmed.startsWith("<FictionBook")) {
             return if (text.contains("<FictionBook")) BookFormat.FB2 else BookFormat.TXT
@@ -64,7 +69,20 @@ object FormatSniffer {
         return BookFormat.UNKNOWN
     }
 
-    /** EPUB (has META-INF/container.xml) vs CBZ (images, no container). */
+    /** The MHTML header shape: a multipart/related content type,
+     * or a MIME-Version line together with a part boundary. */
+    private fun isMhtmlHead(text: String): Boolean {
+        val head = text.take(4096)
+        return head.contains("Content-Type: multipart/related", ignoreCase = true) ||
+            (head.contains("MIME-Version:", ignoreCase = true) &&
+                head.contains("boundary=", ignoreCase = true))
+    }
+
+    /** ZIP family by marker entries: EPUB (container.xml) vs DOCX
+     * (word/document.xml) vs ODT (content.xml + ODF manifest, or
+     * the stored ODF text mimetype) vs CBZ (images, no container).
+     * The office arms sit BEFORE the CBZ arm on purpose: a DOCX or
+     * ODT carrying pictures would otherwise read as a comic. */
     private fun zipProbe(file: File): BookFormat? = runCatching {
         ZipFile(file).use { zip ->
             val names = zip.entries().asSequence().map { it.name.replace('\\', '/') }.toList()
@@ -79,6 +97,19 @@ object FormatSniffer {
                             .toString(Charsets.US_ASCII)
                     }.startsWith("application/epub") } ->
                     BookFormat.EPUB
+                names.any { it.equals("word/document.xml", ignoreCase = true) } ->
+                    BookFormat.DOCX
+                names.any { it.equals("content.xml", ignoreCase = true) } &&
+                    names.any { it.equals("META-INF/manifest.xml", ignoreCase = true) } ->
+                    BookFormat.ODT
+                names.any { it.equals("mimetype", ignoreCase = true) &&
+                    zip.getInputStream(zip.getEntry(it)).use { stream ->
+                        val head = ByteArray(64)
+                        val read = stream.read(head)
+                        (if (read > 0) head.copyOf(read) else ByteArray(0))
+                            .toString(Charsets.US_ASCII)
+                    }.startsWith("application/vnd.oasis.opendocument.text") } ->
+                    BookFormat.ODT
                 names.count { name ->
                     IMAGE_EXTENSIONS.any { name.lowercase().endsWith(it) }
                 } >= 1 && names.none { it.endsWith(".opf", ignoreCase = true) } ->
