@@ -379,6 +379,27 @@ fun ReaderScreen(
         mutableStateOf<Pair<String, String?>?>(null)
     }
 
+    // SelectionBar §6.4: the TRANSLATE / ASK_AI arms of
+    // handleSelectionAction, extracted as local lambdas so
+    // the PDF host's callbacks (PdfReaderHost's
+    // onSelectionTranslate / onSelectionAskAi) run the SAME
+    // code — one handler, one code path. Bodies verbatim
+    // from the former arms.
+    val translateSelection: (String) -> Unit = { text ->
+        selectionTranslation = text to null
+        scope.launch {
+            val result = translateSelectionText(container, text)
+            val open = selectionTranslation
+            if (open != null && open.first == text) {
+                selectionTranslation = text to result
+            }
+        }
+    }
+    val askAiAboutSelection: (String) -> Unit = { text ->
+        aiViewModel.askAboutPassage(text)
+        onOpenAiPage()
+    }
+
     // Patch 11: the selection menu's screen-level actions,
     // each with the text the menu fetched at tap time.
     val handleSelectionAction: (ReaderSelectionAction, String) -> Unit =
@@ -386,14 +407,7 @@ fun ReaderScreen(
             when (action) {
                 ReaderSelectionAction.REPLACE -> replaceText = text
                 ReaderSelectionAction.TRANSLATE -> {
-                    selectionTranslation = text to null
-                    scope.launch {
-                        val result = translateSelectionText(container, text)
-                        val open = selectionTranslation
-                        if (open != null && open.first == text) {
-                            selectionTranslation = text to result
-                        }
-                    }
+                    translateSelection(text)
                 }
                 ReaderSelectionAction.DICTIONARY -> {
                     scope.launch {
