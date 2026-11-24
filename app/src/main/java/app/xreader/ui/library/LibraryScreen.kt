@@ -3212,7 +3212,7 @@ private fun EditorialLibraryContent(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         contentPadding = PaddingValues(end = 4.dp)
                     ) {
-                        androidx.compose.foundation.lazy.itemsIndexed(
+                        itemsIndexed(
                             carousel,
                             key = { _, it -> "paper-cont-${it.book.id}" }
                         ) { index, shelf ->

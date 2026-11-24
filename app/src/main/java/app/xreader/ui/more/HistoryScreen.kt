@@ -1181,7 +1181,7 @@ private fun EditorialHistoryContent(
                     }
                 }
                 if (!byDay) {
-                    androidx.compose.foundation.lazy.itemsIndexed(
+                    itemsIndexed(
                         entries, key = { _, it -> "ed-hist-${it.bookKey}" }
                     ) { index, entry ->
                         EditorialHistoryRow(
@@ -1225,7 +1225,7 @@ private fun EditorialHistoryContent(
                                 )
                             }
                         }
-                        androidx.compose.foundation.lazy.itemsIndexed(
+                        itemsIndexed(
                             dayEntries,
                             key = { _, it -> "ed-hist-${it.bookKey}" }
                         ) { index, entry ->
