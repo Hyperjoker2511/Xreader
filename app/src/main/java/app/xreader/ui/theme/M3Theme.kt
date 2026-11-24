@@ -207,3 +207,18 @@ private fun ColorScheme.withAmoledFloor(): ColorScheme = copy(
  * is Material 3 — the branch condition surfaces use. */
 @Composable
 fun isMaterial3Design(): Boolean = LocalDesignState.current.design == AppDesign.MATERIAL3
+
+/** Code 123: true when the active design is Editorial. */
+@Composable
+fun isEditorialDesign(): Boolean = LocalDesignState.current.design == AppDesign.EDITORIAL
+
+/** Code 123: true for the whole M3 family — Material 3 and
+ * Editorial share their surface structure (the same screens,
+ * sheets and chrome serve both); the designs differ in theme
+ * (palette, serif, shapes), in their hero pages, and in their
+ * shells. Surfaces that predate Editorial branch on this when
+ * their M3 form is also their Editorial form. M3-only
+ * behaviour (colour resolution, the colour bar's effects)
+ * keeps branching on [isMaterial3Design] exactly. */
+@Composable
+fun isM3FamilyDesign(): Boolean = LocalDesignState.current.design != AppDesign.NOCTURNE

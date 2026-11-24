@@ -24,7 +24,8 @@ import kotlinx.coroutines.flow.map
  * honoured exactly as found. [primeDesignDefault] is the only
  * place a design value is ever written without the user's hand:
  * it runs once, only where NO design state exists, and it writes
- * [AppDesign.MATERIAL3] only for a genuinely fresh install
+ * the new-user default design (code 120–122: MATERIAL3; code 123:
+ * EDITORIAL, the owner's ruling) only for a genuinely fresh install
  * (no database file at first container construction — the same
  * signal [AppearancePrefs.primeDefaultScheme] uses). For an
  * established install it records [AppDesign.NOCTURNE], which is
@@ -33,7 +34,7 @@ import kotlinx.coroutines.flow.map
  * never switch an existing user to Material 3, and can never
  * switch a Material 3 user back.
  */
-enum class AppDesign { NOCTURNE, MATERIAL3 }
+enum class AppDesign { NOCTURNE, MATERIAL3, EDITORIAL }
 
 /** The M3 colour source (§2.11 Colour theme): the phone's dynamic
  * colour, or a colour the user picked. */
@@ -379,8 +380,14 @@ class DesignPrefs(
      * choice) is left byte-identical; where no design state
      * exists, an established install is recorded as NOCTURNE
      * (the design it is already running) and only a genuinely
-     * fresh install is seeded with MATERIAL3, the design default
-     * for new users. After this runs once it never runs again.
+     * fresh install is seeded with the current new-user default.
+     * After this runs once it never runs again.
+     *
+     * Code 123: the new-user default is EDITORIAL (the owner's
+     * ruling, 2026-11-24: "Default is editorial"). Installs that
+     * already primed under codes 120–122 keep the flag and are
+     * never re-primed — their stored design stands untouched,
+     * so no existing user is switched by this change.
      */
     suspend fun primeDesignDefault() {
         store.edit { prefs ->
@@ -390,7 +397,7 @@ class DesignPrefs(
                 prefs[KEY_DESIGN] = if (establishedInstall) {
                     AppDesign.NOCTURNE.name
                 } else {
-                    AppDesign.MATERIAL3.name
+                    AppDesign.EDITORIAL.name
                 }
             }
         }

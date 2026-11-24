@@ -28,6 +28,19 @@ val InterSans = FontFamily(
     Font(R.font.inter_semibold, FontWeight.Bold)
 )
 
+/** Code 123 (Editorial design): Fraunces — the Editorial face's
+ * display serif (SIL Open Font Licence 1.1; static Medium /
+ * SemiBold / Bold instances, Latin subset, from Google Fonts).
+ * It belongs to the Editorial design alone, exactly as Jakarta +
+ * Inter belong to Nocturne: no other design's typography reads
+ * this family. */
+val FrauncesSerif = FontFamily(
+    Font(R.font.fraunces_medium, FontWeight.Medium),
+    Font(R.font.fraunces_semibold, FontWeight.SemiBold),
+    Font(R.font.fraunces_bold, FontWeight.Bold),
+    Font(R.font.fraunces_semibold, FontWeight.Normal)
+)
+
 /** The reader's serif. Literata ships as a variable font; the reader's
  * typography engine (Phase 4) drives weight/size from it. */
 val LiterataSerif = FontFamily(

@@ -325,14 +325,21 @@ fun XreaderTheme(
     // does (its AMOLED floor never touches onBackground, so the
     // plain resolved value is the matching one).
     val m3Dark = m3DarkTheme(design)
-    val activeOnBackground = if (
-        design.design == app.xreader.data.prefs.AppDesign.MATERIAL3
-    ) {
-        remember(context, design, m3Dark) {
-            resolveM3ColorScheme(context, design, m3Dark).onBackground
+    val activeOnBackground = when (design.design) {
+        app.xreader.data.prefs.AppDesign.MATERIAL3 -> {
+            remember(context, design, m3Dark) {
+                resolveM3ColorScheme(context, design, m3Dark).onBackground
+            }
         }
-    } else {
-        colors.onBackground
+        // Code 123: Editorial resolves its own scheme the same
+        // way EditorialThemeRoot does (fixed palette; the dark
+        // form generated from the sage seed).
+        app.xreader.data.prefs.AppDesign.EDITORIAL -> {
+            remember(m3Dark) {
+                resolveEditorialColorScheme(m3Dark).onBackground
+            }
+        }
+        else -> colors.onBackground
     }
     val hazeState = remember { HazeState() }
     // v1.6.2 (App size): the ONE size number IS the density's
@@ -372,6 +379,15 @@ fun XreaderTheme(
         ProvideUiMetrics(appearance.appSize) {
             if (design.design == app.xreader.data.prefs.AppDesign.MATERIAL3) {
                 M3ThemeRoot(
+                    design = design,
+                    reduceMotion = appearance.reduceMotion,
+                    content = content
+                )
+            } else if (design.design == app.xreader.data.prefs.AppDesign.EDITORIAL) {
+                // Code 123: the Editorial design's own root —
+                // its fixed palette, Fraunces display type and
+                // 24–28dp shapes (EditorialTheme.kt).
+                EditorialThemeRoot(
                     design = design,
                     reduceMotion = appearance.reduceMotion,
                     content = content
