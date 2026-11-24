@@ -718,6 +718,7 @@ fun MainScaffold(
         // Read at this scope: inside the nested Box the constraints
         // receiver is no longer implicit under Kotlin 2.2.
         val isWideLayout = maxWidth >= 840.dp
+        val isM3RailLayout = maxWidth >= 600.dp
         Box(Modifier.fillMaxSize()) {
         if (designState.design == app.xreader.data.prefs.AppDesign.MATERIAL3) {
             // Code 120, corrected in code 121 (scratch §2.6):
@@ -725,7 +726,7 @@ fun MainScaffold(
             // pin a form; Auto follows the M3 width classes —
             // rail from Medium (600dp), NOT the Nocturne shells'
             // 840dp split (their isWideLayout is untouched).
-            if (m3UseRail(designState, maxWidth >= 600.dp)) {
+            if (m3UseRail(designState, isM3RailLayout)) {
                 M3RailShell(
                     navController, snackbar, appearance, container, onPhaseNote,
                     libraryViewModel, downloadsViewModel, opdsViewModel,

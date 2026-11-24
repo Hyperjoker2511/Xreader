@@ -400,7 +400,9 @@ fun SourcesScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
             )
-            if (searchBarState.isExpanded) {
+            if (searchBarState.currentValue ==
+                androidx.compose.material3.SearchBarValue.Expanded
+            ) {
                 ExpandedFullScreenSearchBar(
                     state = searchBarState,
                     inputField = inputField
