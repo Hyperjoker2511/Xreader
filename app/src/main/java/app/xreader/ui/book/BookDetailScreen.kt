@@ -223,6 +223,27 @@ fun BookDetailScreen(
     val designState = app.xreader.ui.theme.LocalDesignState.current
     val isM3Book = designState.design ==
         app.xreader.data.prefs.AppDesign.MATERIAL3
+    // Code 123: the Editorial book page — the approved Paper &
+    // Sage Details copy, alive, in its own composition
+    // (EditorialBookDetail). The shared dialogs it needs
+    // (story recap, un-favourite prompt) render inside it.
+    if (designState.design ==
+        app.xreader.data.prefs.AppDesign.EDITORIAL
+    ) {
+        EditorialBookDetail(
+            state = state,
+            localOutline = localOutline,
+            viewModel = viewModel,
+            coverFile = coverFile,
+            onBack = onBack,
+            onReadChapter = onReadChapter,
+            onReadLocalTarget = onReadLocalTarget,
+            onOpenLore = onOpenLore,
+            onExportEpub = onExportEpub,
+            onExportCbz = onExportCbz
+        )
+        return
+    }
     // Code 122 (conviction §0): NO scroll behavior is created
     // here any more. The 121 build attached an orphaned
     // exitUntilCollapsed connection to the M3 list while no

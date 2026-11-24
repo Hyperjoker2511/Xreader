@@ -132,6 +132,12 @@ fun DesignPageContent(
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
     DesignChoiceCard(
+        name = "Editorial",
+        line = "Paper & sage — warm paper, Fraunces serif, " +
+            "and its own colours in light and dark.",
+        selected = state.design == AppDesign.EDITORIAL
+    ) { viewModel.setDesign(AppDesign.EDITORIAL) }
+    DesignChoiceCard(
         name = "Nocturne",
         line = "Violet on black glass — Xreader's own design.",
         selected = state.design == AppDesign.NOCTURNE
@@ -142,6 +148,37 @@ fun DesignPageContent(
             "colour and the official components.",
         selected = state.design == AppDesign.MATERIAL3
     ) { viewModel.setDesign(AppDesign.MATERIAL3) }
+
+    if (state.design == AppDesign.EDITORIAL) {
+        // Code 123: Editorial's own small set — its colours are
+        // its own (the colour bar below belongs to Material 3);
+        // Mode and the launch intro are shared machinery the
+        // Editorial theme root genuinely reads.
+        Text(
+            "Editorial wears its own colours — paper & sage in " +
+                "light, generated from the same sage in dark. " +
+                "The colour bar belongs to Material 3.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        DesignChoice(
+            label = "Mode",
+            options = listOf(
+                M3ThemeMode.DARK to "Dark",
+                M3ThemeMode.LIGHT to "Light",
+                M3ThemeMode.FOLLOW_SYSTEM to "Follow system"
+            ),
+            selected = state.themeMode,
+            onPick = viewModel::setM3ThemeMode
+        )
+        DesignSwitch(
+            label = "Launch intro",
+            description = "The short intro when the app opens.",
+            checked = state.launchIntro,
+            onChange = viewModel::setLaunchIntro
+        )
+        return
+    }
 
     if (state.design != AppDesign.MATERIAL3) {
         Text(
@@ -716,11 +753,19 @@ fun M3CustomisePage(
                         icon = Icons.Filled.Palette,
                         title = "Design",
                         summary = m3DoorSummary(
-                            "Material 3" to true,
+                            when (design.design) {
+                                AppDesign.EDITORIAL -> "Editorial"
+                                AppDesign.MATERIAL3 -> "Material 3"
+                                AppDesign.NOCTURNE -> "Nocturne"
+                            } to true,
                             " · " to false,
-                            when (design.colourSource) {
-                                M3ColourSource.DYNAMIC -> "Dynamic colour"
-                                M3ColourSource.PICKED -> "Picked colour"
+                            when {
+                                design.design == AppDesign.EDITORIAL ->
+                                    "Paper & sage"
+                                design.colourSource ==
+                                    M3ColourSource.DYNAMIC ->
+                                    "Dynamic colour"
+                                else -> "Picked colour"
                             } to true,
                             " · Motion: " to false,
                             when (design.motionChoice) {
@@ -899,10 +944,29 @@ fun M3CustomisePage(
                     // card, empty radio. The Nocturne card is TEXT
                     // ONLY — scheme colours, no violet drawn (T2).
                     M3DesignDoorCard(
+                        name = "Editorial",
+                        line = "Paper & sage — warm paper and " +
+                            "Fraunces serif. It wears its own " +
+                            "colours, in light and dark." +
+                            if (design.design == AppDesign.EDITORIAL) {
+                                " This is the design you are " +
+                                    "looking at now."
+                            } else {
+                                ""
+                            },
+                        selected = design.design == AppDesign.EDITORIAL,
+                        onClick = { viewModel.setDesign(AppDesign.EDITORIAL) }
+                    )
+                    M3DesignDoorCard(
                         name = "Material 3",
                         line = "Google's design language. Colours from " +
-                            "your phone, or any colour you pick. This " +
-                            "is the design you are looking at now.",
+                            "your phone, or any colour you pick." +
+                            if (design.design == AppDesign.MATERIAL3) {
+                                " This is the design you are " +
+                                    "looking at now."
+                            } else {
+                                ""
+                            },
                         selected = design.design == AppDesign.MATERIAL3,
                         onClick = { viewModel.setDesign(AppDesign.MATERIAL3) }
                     )
@@ -915,7 +979,43 @@ fun M3CustomisePage(
                         selected = design.design == AppDesign.NOCTURNE,
                         onClick = { viewModel.setDesign(AppDesign.NOCTURNE) }
                     )
-                    Card(
+                    // Code 123: under Editorial the colour bar
+                    // would be a dead control — Editorial's
+                    // colours are its own. A plain note stands
+                    // in its place; Material 3's bar is unchanged.
+                    if (design.design == AppDesign.EDITORIAL) {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor =
+                                    MaterialTheme.colorScheme
+                                        .surfaceContainerLow
+                            ),
+                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 10.dp)
+                        ) {
+                            Column(Modifier.padding(18.dp)) {
+                                Text(
+                                    "Colour",
+                                    style = MaterialTheme.typography
+                                        .bodyLarge
+                                )
+                                Text(
+                                    "Editorial wears its own " +
+                                        "colours — paper & sage in " +
+                                        "light, generated from the " +
+                                        "same sage in dark. The " +
+                                        "colour bar belongs to " +
+                                        "Material 3.",
+                                    style = MaterialTheme.typography
+                                        .bodySmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else Card(
                         colors = CardDefaults.cardColors(
                             containerColor =
                                 MaterialTheme.colorScheme.surfaceContainerLow

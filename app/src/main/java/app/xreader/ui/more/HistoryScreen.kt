@@ -42,8 +42,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import app.xreader.ui.theme.FrauncesSerif
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -397,6 +400,30 @@ fun HistoryScreen(
             coverFile = coverFile,
             compact = historyCompact,
             byDay = historyByDay,
+            onBack = onBack,
+            onOpenBook = onOpenBook
+        )
+        return
+    }
+    // Code 123: the Editorial History — the approved extension
+    // (DESIGN-M3-HISTORY-DOWNLOADS-V6-EXTENSION): the Pulse
+    // kept, "Clear history" visible in the header, day-grouped
+    // rows when the same grouping knob says BY_DAY (the flat
+    // §15 form one knob-step away), both remove mechanics
+    // (button → the confirm dialog; swipe → snackbar Undo).
+    if (designState.design ==
+        app.xreader.data.prefs.AppDesign.EDITORIAL
+    ) {
+        EditorialHistoryContent(
+            entries = entriesNow,
+            pulse = pulseNow,
+            booksToday = booksToday,
+            viewModel = viewModel,
+            coverFile = coverFile,
+            compact = designState.historyDensity ==
+                app.xreader.data.prefs.M3DensityChoice.COMPACT,
+            byDay = designState.historyGrouping ==
+                app.xreader.data.prefs.M3HistoryGrouping.BY_DAY,
             onBack = onBack,
             onOpenBook = onOpenBook
         )
@@ -1342,5 +1369,521 @@ private fun M3HistoryRow(
                 .background(MaterialTheme.colorScheme.surface)
                 .clickable(enabled = entry.bookExists, onClick = onOpen)
         )
+    }
+}
+
+
+// ── Code 123: the Editorial History ────────────────────────
+// The approved extension alive: kicker + serif headline with
+// "Clear history" visible in the header, the Reading Pulse
+// card, day-grouped rows when the grouping knob says BY_DAY
+// (flat otherwise — presentation only, §15 order and actions
+// unchanged), the full action rail on every row, both remove
+// mechanics (the Remove button opens the §15 confirm dialog;
+// a swipe removes with a snackbar Undo), and the shared
+// book-delete sheet behind "Delete book…".
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class
+)
+@Composable
+private fun EditorialHistoryContent(
+    entries: List<HistoryEntryUi>,
+    pulse: ReadingPulse,
+    booksToday: Int,
+    viewModel: HistoryViewModel,
+    coverFile: (String?) -> File?,
+    compact: Boolean,
+    byDay: Boolean,
+    onBack: () -> Unit,
+    onOpenBook: (bookId: Long, chapterIndex: Int) -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    val snackbarHostState = remember {
+        androidx.compose.material3.SnackbarHostState()
+    }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var confirmClear by remember { mutableStateOf(false) }
+    var confirmRemove by remember { mutableStateOf<HistoryEntryUi?>(null) }
+    var deleteTarget by remember {
+        mutableStateOf<app.xreader.data.db.Book?>(null)
+    }
+
+    fun removeWithUndo(entry: HistoryEntryUi) {
+        viewModel.removeEntryWithUndo(entry.bookKey) { record ->
+            if (record != null) {
+                scope.launch {
+                    val result = snackbarHostState.showSnackbar(
+                        message = "Removed “${entry.title}” from history",
+                        actionLabel = "Undo",
+                        duration = androidx.compose.material3
+                            .SnackbarDuration.Short
+                    )
+                    if (result == androidx.compose.material3
+                            .SnackbarResult.ActionPerformed
+                    ) {
+                        viewModel.restoreEntry(record)
+                    }
+                }
+            }
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        if (entries.isEmpty()) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Spacer(Modifier.height(48.dp))
+                Text(
+                    "YOUR READING",
+                    style = MaterialTheme.typography.labelSmall,
+                    letterSpacing = 1.6.sp,
+                    color = colors.primary
+                )
+                Text(
+                    "Nothing read yet",
+                    fontFamily = FrauncesSerif,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 28.sp,
+                    color = colors.onSurface
+                )
+                Text(
+                    "Books you read will show up here, newest first.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Surface(
+                    color = colors.primary,
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier.clickable(onClick = onBack)
+                ) {
+                    Text(
+                        "Library",
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.onPrimary,
+                        modifier = Modifier.padding(
+                            horizontal = 22.dp, vertical = 12.dp
+                        )
+                    )
+                }
+            }
+        } else {
+            val nowMs = System.currentTimeMillis()
+            val grouped = entries.groupBy {
+                historyDayLabel(it.recordedAt, nowMs)
+            }
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 112.dp)
+            ) {
+                item(key = "ed-hist-head") {
+                    Column(
+                        Modifier.padding(
+                            start = 20.dp, end = 20.dp, top = 16.dp
+                        )
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "NEWEST FIRST",
+                                    style = MaterialTheme.typography
+                                        .labelSmall,
+                                    letterSpacing = 1.6.sp,
+                                    color = colors.primary
+                                )
+                                Text(
+                                    "History",
+                                    fontFamily = FrauncesSerif,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 34.sp,
+                                    color = colors.onSurface
+                                )
+                            }
+                            Surface(
+                                color = colors.surfaceContainerHigh,
+                                shape = RoundedCornerShape(20.dp),
+                                modifier = Modifier.clickable {
+                                    confirmClear = true
+                                }
+                            ) {
+                                Text(
+                                    "Clear history",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colors.onSurface,
+                                    modifier = Modifier.padding(
+                                        horizontal = 14.dp, vertical = 9.dp
+                                    )
+                                )
+                            }
+                        }
+                        // The Reading Pulse.
+                        Surface(
+                            color = colors.surfaceContainerLow,
+                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 16.dp)
+                        ) {
+                            Column(Modifier.padding(18.dp)) {
+                                Text(
+                                    "TODAY",
+                                    style = MaterialTheme.typography
+                                        .labelSmall,
+                                    letterSpacing = 1.6.sp,
+                                    color = colors.primary
+                                )
+                                Text(
+                                    "Reading pulse",
+                                    fontFamily = FrauncesSerif,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 19.sp,
+                                    color = colors.onSurface
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                Row(Modifier.fillMaxWidth()) {
+                                    PulseCell(
+                                        value = formatMinutes(
+                                            pulse.minutesToday
+                                        ),
+                                        label = "read today",
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    PulseCell(
+                                        value = "$booksToday",
+                                        label = "books today",
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    PulseCell(
+                                        value = "${pulse.chaptersToday}",
+                                        label = "chapters",
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    PulseCell(
+                                        value = "${pulse.expToday}",
+                                        label = "EXP today",
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!byDay) {
+                    items(entries, key = { "ed-hist-${it.bookKey}" }) { entry ->
+                        EditorialHistoryRow(
+                            entry = entry,
+                            coverFile = coverFile,
+                            compact = compact,
+                            onOpen = {
+                                entry.bookId?.let {
+                                    onOpenBook(it, entry.chapterIndex)
+                                }
+                            },
+                            onAddBack = {
+                                entry.bookId?.let {
+                                    viewModel.addBackToLibrary(it)
+                                }
+                            },
+                            onRemoveAsk = { confirmRemove = entry },
+                            onRemoveSwipe = { removeWithUndo(entry) },
+                            onDeleteBook = { deleteTarget = entry.book }
+                        )
+                    }
+                } else {
+                    grouped.forEach { (label, dayEntries) ->
+                        stickyHeader(key = "ed-hist-day-$label") {
+                            Surface(
+                                color = colors.surface,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    label,
+                                    fontFamily = FrauncesSerif,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 16.sp,
+                                    color = colors.onSurface,
+                                    modifier = Modifier.padding(
+                                        start = 20.dp, end = 20.dp,
+                                        top = 14.dp, bottom = 6.dp
+                                    )
+                                )
+                            }
+                        }
+                        items(
+                            dayEntries,
+                            key = { "ed-hist-${it.bookKey}" }
+                        ) { entry ->
+                            EditorialHistoryRow(
+                                entry = entry,
+                                coverFile = coverFile,
+                                compact = compact,
+                                onOpen = {
+                                    entry.bookId?.let {
+                                        onOpenBook(it, entry.chapterIndex)
+                                    }
+                                },
+                                onAddBack = {
+                                    entry.bookId?.let {
+                                        viewModel.addBackToLibrary(it)
+                                    }
+                                },
+                                onRemoveAsk = { confirmRemove = entry },
+                                onRemoveSwipe = { removeWithUndo(entry) },
+                                onDeleteBook = {
+                                    deleteTarget = entry.book
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        androidx.compose.material3.SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 104.dp)
+        )
+    }
+
+    val removeTarget = confirmRemove
+    if (removeTarget != null) {
+        AlertDialog(
+            onDismissRequest = { confirmRemove = null },
+            title = { Text("Remove from History?") },
+            text = {
+                Text(
+                    "Remove “${removeTarget.title}” from History? " +
+                        "This deletes only its History entry — the " +
+                        "book, your place in it and your downloads " +
+                        "stay exactly as they are."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRemove = null
+                    viewModel.removeEntry(removeTarget.bookKey)
+                }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRemove = null }) {
+                    Text("Keep it")
+                }
+            }
+        )
+    }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Clear history?") },
+            text = {
+                Text(
+                    "This clears the list on this screen only. " +
+                        "Clearing history never removes downloads " +
+                        "or books — your place in every book and " +
+                        "your bookmarks stay exactly as they are."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = false
+                    viewModel.clearAll()
+                }) { Text("Clear history") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) {
+                    Text("Keep it")
+                }
+            }
+        )
+    }
+    app.xreader.ui.common.BookDeleteDialogs(
+        book = deleteTarget,
+        downloadedSizeBytes = { viewModel.downloadedSizeBytes(it) },
+        onDismiss = { deleteTarget = null },
+        onRemoveBook = { book, deleteFiles ->
+            viewModel.removeBook(book, deleteFiles)
+        },
+        onRemoveLocalBook = { book, mode, context ->
+            viewModel.removeLocalBook(book, mode, context)
+        }
+    )
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun EditorialHistoryRow(
+    entry: HistoryEntryUi,
+    coverFile: (String?) -> File?,
+    compact: Boolean,
+    onOpen: () -> Unit,
+    onAddBack: () -> Unit,
+    onRemoveAsk: () -> Unit,
+    onRemoveSwipe: () -> Unit,
+    onDeleteBook: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    val dismissState = androidx.compose.material3
+        .rememberSwipeToDismissBoxState(
+            confirmValueChange = { value ->
+                if (value == androidx.compose.material3
+                        .SwipeToDismissBoxValue.EndToStart
+                ) {
+                    onRemoveSwipe()
+                    true
+                } else {
+                    false
+                }
+            }
+        )
+    androidx.compose.material3.SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        backgroundContent = {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(colors.errorContainer)
+                    .padding(horizontal = 20.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "Remove from history",
+                    tint = colors.onErrorContainer
+                )
+            }
+        }
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(colors.surface)
+                .clickable(enabled = entry.bookExists, onClick = onOpen)
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                app.xreader.ui.common.M3CoverThumbnail(
+                    title = entry.title,
+                    author = null,
+                    coverModel = coverFile(entry.coverPath)
+                        ?.takeIf { it.exists() }
+                        ?: entry.coverUrl?.takeIf { it.isNotBlank() },
+                    modifier = Modifier.size(
+                        width = if (compact) 32.dp else 40.dp,
+                        height = if (compact) 46.dp else 58.dp
+                    )
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        entry.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        entry.chapterTitle?.takeIf { it.isNotBlank() }
+                            ?: "Chapter ${entry.chapterIndex + 1}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        timeAgo(
+                            entry.recordedAt,
+                            System.currentTimeMillis()
+                        ) + " · ${(entry.fraction * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant
+                    )
+                    if (entry.fraction > 0f) {
+                        Spacer(Modifier.height(6.dp))
+                        androidx.compose.material3
+                            .LinearProgressIndicator(
+                                progress = {
+                                    entry.fraction.coerceIn(0f, 1f)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp)),
+                                color = colors.primary,
+                                trackColor = colors.surfaceContainerHighest
+                            )
+                    }
+                }
+            }
+            // The action rail — every door visible (F-H2/F-H6).
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (entry.bookExists) {
+                    Surface(
+                        color = colors.primary,
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier.clickable(onClick = onOpen)
+                    ) {
+                        Text(
+                            "Continue · Ch. ${entry.chapterIndex + 1}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.onPrimary,
+                            modifier = Modifier.padding(
+                                horizontal = 12.dp, vertical = 7.dp
+                            )
+                        )
+                    }
+                }
+                if (entry.bookExists && !entry.inLibrary) {
+                    Surface(
+                        color = colors.secondaryContainer,
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier.clickable(onClick = onAddBack)
+                    ) {
+                        Text(
+                            "Add back to Library",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.onSecondaryContainer,
+                            modifier = Modifier.padding(
+                                horizontal = 12.dp, vertical = 7.dp
+                            )
+                        )
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onRemoveAsk) {
+                    Text("Remove", fontSize = 13.sp)
+                }
+                if (entry.bookExists) {
+                    TextButton(onClick = onDeleteBook) {
+                        Text(
+                            "Delete book…",
+                            fontSize = 13.sp,
+                            color = colors.error
+                        )
+                    }
+                }
+            }
+        }
     }
 }

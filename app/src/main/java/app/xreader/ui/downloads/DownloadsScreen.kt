@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,7 +45,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import app.xreader.ui.theme.FrauncesSerif
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.animateProgressAsState
 import app.xreader.core.motion.listPlacementSpec
@@ -138,6 +143,26 @@ fun DownloadsScreen(
             designState = designState,
             onMakeEpub = onMakeEpub,
             onOpenBook = onOpenBook,
+            onDownloadsSortChange = onDownloadsSortChange
+        )
+        return
+    }
+    // Code 123: the Editorial Downloads — the approved
+    // extension (DESIGN-M3-HISTORY-DOWNLOADS-V6-EXTENSION):
+    // the storage card always present, counted connected
+    // segments, visible delete doors (F-D3), the Wi-Fi chip's
+    // dot in the design's tertiary rust (F-D5).
+    if (designState.design ==
+        app.xreader.data.prefs.AppDesign.EDITORIAL
+    ) {
+        EditorialDownloadsContent(
+            state = stateNow,
+            viewModel = viewModel,
+            coverFile = coverFile,
+            designState = designState,
+            onMakeEpub = onMakeEpub,
+            onOpenBook = onOpenBook,
+            onOpenCustomise = onOpenCustomise,
             onDownloadsSortChange = onDownloadsSortChange
         )
         return
@@ -1367,6 +1392,906 @@ private fun M3ActiveDownloadRow(
             }
             IconButton(onClick = onCancel) {
                 Icon(Icons.Filled.Close, contentDescription = "Cancel download")
+            }
+        }
+    }
+}
+
+
+// ── Code 123: the Editorial Downloads ──────────────────────
+// The approved extension alive: kicker + serif headline, the
+// Offline Storage card ALWAYS present (F-D4 — it is the
+// page's metering home), the failures banner on both
+// segments, counted connected segments, active cards with
+// the wavy live progress (F-D2) and the Wi-Fi chip's rust dot
+// (F-D5), finished rows with the delete doors VISIBLE
+// (F-D3 — never in a ⋮), hidden for in-place local books,
+// behind the code's own confirm dialog.
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+private fun EditorialDownloadsContent(
+    state: DownloadsUiState,
+    viewModel: DownloadsViewModel,
+    coverFile: (String?) -> File?,
+    designState: app.xreader.data.prefs.DesignState,
+    onMakeEpub: (BookDownloads) -> Unit,
+    onOpenBook: (Long) -> Unit,
+    onOpenCustomise: () -> Unit,
+    onDownloadsSortChange: (app.xreader.data.prefs.M3DownloadsSort) -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    var tab by remember { mutableStateOf(0) }
+    var pendingDelete by remember {
+        mutableStateOf<Pair<Long, Boolean>?>(null)
+    }
+    val usedBytes = state.storageBytes + state.coverCacheBytes +
+        state.imageCacheBytes
+    val finishedSorted = when (designState.downloadsSort) {
+        app.xreader.data.prefs.M3DownloadsSort.RECENT ->
+            state.finished.sortedByDescending { it.book.updatedAt }
+        app.xreader.data.prefs.M3DownloadsSort.TITLE ->
+            state.finished.sortedBy { it.book.title.lowercase() }
+        app.xreader.data.prefs.M3DownloadsSort.SIZE ->
+            state.finished.sortedByDescending {
+                if (it.isLocalFile) it.localFileBytes else it.bytesOnDisk
+            }
+    }
+
+    if (state.loading) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            EditorialDownloadsHead()
+            LoadingState(
+                whatIsHappening = "Counting your downloads and storage…"
+            )
+        }
+        return
+    }
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = 20.dp, end = 20.dp, top = 16.dp, bottom = 112.dp
+        ),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item(key = "ed-dl-head") { EditorialDownloadsHead() }
+
+        // ── Offline Storage (always — F-D4) ───────────────────
+        item(key = "ed-dl-storage") {
+            Surface(
+                color = colors.surfaceContainerLow,
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(18.dp)) {
+                    Text(
+                        "Offline storage",
+                        fontFamily = FrauncesSerif,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 19.sp,
+                        color = colors.onSurface
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    if (state.deviceTotalBytes > 0L) {
+                        androidx.compose.material3
+                            .LinearProgressIndicator(
+                                progress = {
+                                    (usedBytes.toFloat() /
+                                        state.deviceTotalBytes.toFloat())
+                                        .coerceIn(0f, 1f)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(RoundedCornerShape(4.dp)),
+                                color = colors.primary,
+                                trackColor = colors.surfaceContainerHighest,
+                                strokeCap = androidx.compose.ui.graphics
+                                    .StrokeCap.Round
+                            )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "${formatBytes(usedBytes)} of " +
+                                "${formatBytes(state.deviceTotalBytes)} " +
+                                "on this device",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    EditorialMeterLine(
+                        "Novels", formatBytes(state.storageBytes)
+                    )
+                    EditorialMeterLine(
+                        "Stored covers",
+                        formatBytes(state.coverCacheBytes)
+                    )
+                    EditorialMeterLine(
+                        "Reading cache",
+                        formatBytes(state.readCacheBytes)
+                    )
+                    EditorialMeterLine(
+                        "Image cache",
+                        formatBytes(state.imageCacheBytes)
+                    )
+                    EditorialMeterLine(
+                        "Auto-clean",
+                        if (state.autoCleanCapMb > 0) {
+                            "On · trims over ${state.autoCleanCapMb} MB"
+                        } else {
+                            "Off"
+                        }
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (state.cacheMessage != null) {
+                            Text(
+                                state.cacheMessage!!,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.primary,
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
+                        Surface(
+                            color = colors.surfaceContainerHigh,
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.clickable(
+                                enabled = (state.imageCacheBytes +
+                                    state.readCacheBytes) > 0L,
+                                onClick = { viewModel.clearCaches() }
+                            )
+                        ) {
+                            Text(
+                                "Clean cache",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (
+                                    (state.imageCacheBytes +
+                                        state.readCacheBytes) > 0L
+                                ) {
+                                    colors.onSurface
+                                } else {
+                                    colors.onSurfaceVariant
+                                },
+                                modifier = Modifier.padding(
+                                    horizontal = 14.dp, vertical = 9.dp
+                                )
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onOpenCustomise)
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            color = colors.secondaryContainer,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Filled.Settings,
+                                    contentDescription = null,
+                                    tint = colors.onSecondaryContainer,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            "Storage & download settings",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            Icons.Filled.ChevronRight,
+                            contentDescription = null,
+                            tint = colors.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        // ── Failures banner (both segments) ───────────────────
+        if (state.failedCount > 0) {
+            item(key = "ed-dl-failed") {
+                Surface(
+                    color = colors.errorContainer,
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Filled.ErrorOutline,
+                            contentDescription = null,
+                            tint = colors.onErrorContainer
+                        )
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .padding(horizontal = 12.dp)
+                        ) {
+                            Text(
+                                "${state.failedCount} couldn't download",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = colors.onErrorContainer
+                            )
+                            Text(
+                                "Retry puts them back in the queue.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.onErrorContainer
+                            )
+                        }
+                        Surface(
+                            color = colors.error,
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.clickable {
+                                viewModel.retryAllFailed()
+                            }
+                        ) {
+                            Text(
+                                "Retry all",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.onError,
+                                modifier = Modifier.padding(
+                                    horizontal = 14.dp, vertical = 9.dp
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Counted connected segments ────────────────────────
+        item(key = "ed-dl-segments") {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                val segments = listOf(
+                    "In Progress (${state.active.size})",
+                    "Downloaded (${state.finished.size})"
+                )
+                segments.forEachIndexed { index, label ->
+                    val picked = tab == index
+                    val shape = if (index == 0) {
+                        RoundedCornerShape(
+                            topStart = 24.dp, bottomStart = 24.dp,
+                            topEnd = 6.dp, bottomEnd = 6.dp
+                        )
+                    } else {
+                        RoundedCornerShape(
+                            topStart = 6.dp, bottomStart = 6.dp,
+                            topEnd = 24.dp, bottomEnd = 24.dp
+                        )
+                    }
+                    Surface(
+                        color = if (picked) {
+                            colors.primary
+                        } else {
+                            colors.surfaceContainer
+                        },
+                        shape = shape,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .clickable { tab = index }
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                label,
+                                fontSize = 13.sp,
+                                fontWeight = if (picked) {
+                                    FontWeight.SemiBold
+                                } else {
+                                    FontWeight.Medium
+                                },
+                                color = if (picked) {
+                                    colors.onPrimary
+                                } else {
+                                    colors.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (state.active.isEmpty() && state.finished.isEmpty()) {
+            item(key = "ed-dl-empty") {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "Nothing downloading",
+                        fontFamily = FrauncesSerif,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 22.sp,
+                        color = colors.onSurface
+                    )
+                    Text(
+                        "Chapters you queue will download here in " +
+                            "the background, with progress you can " +
+                            "check any time.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style
+                            .TextAlign.Center
+                    )
+                }
+            }
+        } else if (tab == 0) {
+            item(key = "ed-dl-queue-head") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Transfer queue",
+                        fontFamily = FrauncesSerif,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 19.sp,
+                        color = colors.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (state.hasPausable) {
+                        TextButton(onClick = { viewModel.pauseAll() }) {
+                            Text("Pause all")
+                        }
+                    }
+                    if (state.hasResumable) {
+                        TextButton(onClick = { viewModel.resumeAll() }) {
+                            Text("Resume all")
+                        }
+                    }
+                }
+            }
+            if (state.active.isEmpty()) {
+                item(key = "ed-dl-queue-empty") {
+                    Text(
+                        "Nothing in progress right now. Downloads " +
+                            "you start from a book page will show " +
+                            "here while they run.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant
+                    )
+                }
+            }
+            items(state.active, key = { "ed-active-${it.book.id}" }) { group ->
+                EditorialActiveDownloadCard(
+                    group = group,
+                    coverFile = coverFile,
+                    errorText = viewModel.firstError(group),
+                    waitingForWifi = group.waitingForWifi(state),
+                    onPause = { viewModel.pauseBook(group) },
+                    onResume = {
+                        group.activeItems.forEach { viewModel.resume(it) }
+                        viewModel.retryFailed(group)
+                    },
+                    onCancel = { viewModel.cancelBook(group) }
+                )
+            }
+        } else {
+            item(key = "ed-dl-finished-head") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Downloaded",
+                        fontFamily = FrauncesSerif,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 19.sp,
+                        color = colors.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = {
+                            onDownloadsSortChange(
+                                when (designState.downloadsSort) {
+                                    app.xreader.data.prefs
+                                        .M3DownloadsSort.RECENT ->
+                                        app.xreader.data.prefs
+                                            .M3DownloadsSort.TITLE
+                                    app.xreader.data.prefs
+                                        .M3DownloadsSort.TITLE ->
+                                        app.xreader.data.prefs
+                                            .M3DownloadsSort.SIZE
+                                    app.xreader.data.prefs
+                                        .M3DownloadsSort.SIZE ->
+                                        app.xreader.data.prefs
+                                            .M3DownloadsSort.RECENT
+                                }
+                            )
+                        }
+                    ) {
+                        Text(
+                            "Sort: " + when (designState.downloadsSort) {
+                                app.xreader.data.prefs
+                                    .M3DownloadsSort.RECENT -> "Recent"
+                                app.xreader.data.prefs
+                                    .M3DownloadsSort.TITLE -> "Title"
+                                app.xreader.data.prefs
+                                    .M3DownloadsSort.SIZE -> "Size"
+                            }
+                        )
+                    }
+                }
+            }
+            if (state.finished.isEmpty()) {
+                item(key = "ed-dl-finished-empty") {
+                    Text(
+                        "No finished downloads yet. When a download " +
+                            "completes, the book waits here, ready " +
+                            "to read offline.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant
+                    )
+                }
+            }
+            items(
+                finishedSorted,
+                key = { "ed-finished-${it.book.id}" }
+            ) { group ->
+                EditorialFinishedDownloadRow(
+                    group = group,
+                    coverFile = coverFile,
+                    showSize = designState.downloadsChapterSize,
+                    onOpen = { onOpenBook(group.book.id) },
+                    onMakeEpub = { onMakeEpub(group) },
+                    onDeleteChapters = {
+                        pendingDelete = group.book.id to false
+                    },
+                    onDeleteBookDownloads = {
+                        pendingDelete = group.book.id to true
+                    }
+                )
+            }
+        }
+    }
+
+    // The delete confirm — the code's own words (S5 pattern).
+    pendingDelete?.let { (bookId, wholeBook) ->
+        val title = (state.active + state.finished)
+            .firstOrNull { it.book.id == bookId }
+            ?.book?.title ?: "this book"
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = {
+                Text(
+                    if (wholeBook) {
+                        "Delete this book's downloads?"
+                    } else {
+                        "Delete downloaded chapters?"
+                    }
+                )
+            },
+            text = {
+                Text(
+                    if (wholeBook) {
+                        "Every downloaded chapter and download " +
+                            "record for “$title” is deleted. " +
+                            "The book and your place in it are kept."
+                    } else {
+                        "The downloaded chapters of “$title” " +
+                            "are deleted. The book and your " +
+                            "place in it are kept."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDelete = null
+                        if (wholeBook) {
+                            viewModel.deleteBookDownloads(bookId)
+                        } else {
+                            viewModel.deleteDownloadedChapters(bookId)
+                        }
+                    }
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun EditorialDownloadsHead() {
+    val colors = MaterialTheme.colorScheme
+    Column {
+        Text(
+            "QUEUE",
+            style = MaterialTheme.typography.labelSmall,
+            letterSpacing = 1.6.sp,
+            color = colors.primary
+        )
+        Text(
+            "Downloads",
+            fontFamily = FrauncesSerif,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 34.sp,
+            color = colors.onSurface
+        )
+    }
+}
+
+@Composable
+private fun EditorialMeterLine(label: String, value: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun EditorialActiveDownloadCard(
+    group: BookDownloads,
+    coverFile: (String?) -> File?,
+    errorText: String?,
+    waitingForWifi: Boolean,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    val progress = animateProgressAsState(
+        group.fraction, label = "edDownloadProgress"
+    )
+    val paused = group.activeItems.any {
+        it.state == QueueState.PAUSED
+    } && group.activeItems.none {
+        it.state == QueueState.RUNNING
+    }
+    Surface(
+        color = colors.surfaceContainerLow,
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            app.xreader.ui.common.M3CoverThumbnail(
+                title = group.book.title,
+                author = group.book.author.takeIf { it.isNotBlank() },
+                coverModel = coverFile(group.book.coverPath)
+                    ?.takeIf { it.exists() }
+                    ?: group.book.coverUrl?.takeIf { it.isNotBlank() },
+                modifier = Modifier.size(width = 48.dp, height = 68.dp)
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    group.book.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style
+                        .TextOverflow.Ellipsis
+                )
+                Text(
+                    if (group.isLocalFile) {
+                        group.statusLine
+                    } else if (group.totalChapters > 0) {
+                        "${group.readyChapters} of " +
+                            "${group.totalChapters} chapters"
+                    } else {
+                        group.statusLine
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant
+                )
+                if (waitingForWifi) {
+                    Row(
+                        Modifier.padding(top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(colors.tertiary)
+                        )
+                        Text(
+                            "Waiting for Wi-Fi",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.onSurface
+                        )
+                    }
+                }
+                Row(
+                    Modifier.padding(top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    androidx.compose.material3
+                        .LinearWavyProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.weight(1f)
+                        )
+                    Text(
+                        "${(progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.onSurface
+                    )
+                }
+                val detailLine = when {
+                    group.failedItems.isNotEmpty() ->
+                        "${group.failedItems.size} couldn't " +
+                            "download — tap play to retry"
+                    paused && group.totalChapters > 0 -> "Paused"
+                    else -> null
+                }
+                if (detailLine != null) {
+                    Text(
+                        detailLine,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (group.failedItems.isNotEmpty()) {
+                            colors.error
+                        } else {
+                            colors.onSurfaceVariant
+                        }
+                    )
+                }
+                if (errorText != null && group.failedItems.isNotEmpty()) {
+                    Text(
+                        errorText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant
+                    )
+                }
+            }
+            Column {
+                Surface(
+                    color = colors.primaryContainer,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clickable(
+                            onClick = if (
+                                paused || group.failedItems.isNotEmpty()
+                            ) {
+                                onResume
+                            } else {
+                                onPause
+                            }
+                        )
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            if (
+                                paused || group.failedItems.isNotEmpty()
+                            ) {
+                                Icons.Filled.PlayArrow
+                            } else {
+                                Icons.Filled.Pause
+                            },
+                            contentDescription = if (paused) {
+                                "Resume"
+                            } else {
+                                "Pause"
+                            },
+                            tint = colors.onPrimaryContainer,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Surface(
+                    color = colors.surfaceContainerHigh,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clickable(onClick = onCancel)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Cancel download",
+                            tint = colors.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditorialFinishedDownloadRow(
+    group: BookDownloads,
+    coverFile: (String?) -> File?,
+    showSize: Boolean,
+    onOpen: () -> Unit,
+    onMakeEpub: () -> Unit,
+    onDeleteChapters: () -> Unit,
+    onDeleteBookDownloads: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    val sizeBytes = if (group.isLocalFile) {
+        group.localFileBytes
+    } else {
+        group.bytesOnDisk
+    }
+    Surface(
+        color = colors.surfaceContainerLow,
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box {
+                    app.xreader.ui.common.M3CoverThumbnail(
+                        title = group.book.title,
+                        author = group.book.author
+                            .takeIf { it.isNotBlank() },
+                        coverModel = coverFile(group.book.coverPath)
+                            ?.takeIf { it.exists() }
+                            ?: group.book.coverUrl
+                                ?.takeIf { it.isNotBlank() },
+                        modifier = Modifier
+                            .size(width = 48.dp, height = 68.dp)
+                    )
+                    Surface(
+                        color = colors.primary,
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(18.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = "Downloaded",
+                                tint = colors.onPrimary,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+                    }
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        group.book.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.onSurface,
+                        maxLines = 2,
+                        overflow = androidx.compose.ui.text.style
+                            .TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Surface(
+                        color = colors.secondaryContainer,
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            if (group.isLocalFile) {
+                                group.statusLine
+                            } else {
+                                "Downloaded • " +
+                                    "${group.readyChapters} chapters"
+                            },
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.onSecondaryContainer,
+                            modifier = Modifier.padding(
+                                horizontal = 8.dp, vertical = 4.dp
+                            )
+                        )
+                    }
+                    if (showSize && !group.isLocalFile) {
+                        Text(
+                            formatBytes(sizeBytes),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+            // Doors — all visible (F-D3).
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    color = colors.primary,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.clickable(onClick = onOpen)
+                ) {
+                    Text(
+                        "Read offline",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.onPrimary,
+                        modifier = Modifier.padding(
+                            horizontal = 12.dp, vertical = 7.dp
+                        )
+                    )
+                }
+                Surface(
+                    color = colors.surfaceContainerHigh,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.clickable(onClick = onMakeEpub)
+                ) {
+                    Text(
+                        "Make EPUB",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.onSurface,
+                        modifier = Modifier.padding(
+                            horizontal = 12.dp, vertical = 7.dp
+                        )
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                if (!group.isLocalFile) {
+                    TextButton(onClick = onDeleteChapters) {
+                        Text(
+                            "Delete chapters",
+                            fontSize = 12.sp,
+                            color = colors.error
+                        )
+                    }
+                    TextButton(onClick = onDeleteBookDownloads) {
+                        Text(
+                            "Delete book's downloads",
+                            fontSize = 12.sp,
+                            color = colors.error
+                        )
+                    }
+                }
             }
         }
     }
