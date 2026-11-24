@@ -2,6 +2,7 @@ package app.xreader.ui.theme
 
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
@@ -314,6 +315,25 @@ fun XreaderTheme(
     val colors = scheme.colors(darkTheme).let {
         if (darkTheme && appearance.trueBlack) it.withTrueBlack() else it
     }
+    // Code 122: the LocalContentColor seam — provided HERE, above
+    // the design branch, so BOTH designs inherit the active
+    // scheme's onBackground as the default content colour. It is
+    // a root provider only: nearer providers (Scaffold, Surface,
+    // cards) still win wherever they set their own content colour.
+    // Nocturne reads its resolved scheme's onBackground ([colors]);
+    // Material 3 resolves its own scheme the same way M3ThemeRoot
+    // does (its AMOLED floor never touches onBackground, so the
+    // plain resolved value is the matching one).
+    val m3Dark = m3DarkTheme(design)
+    val activeOnBackground = if (
+        design.design == app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        remember(context, design, m3Dark) {
+            resolveM3ColorScheme(context, design, m3Dark).onBackground
+        }
+    } else {
+        colors.onBackground
+    }
     val hazeState = remember { HazeState() }
     // v1.6.2 (App size): the ONE size number IS the density's
     // fontScale. The layout metrics scale by the same number
@@ -340,6 +360,7 @@ fun XreaderTheme(
     CompositionLocalProvider(
         LocalGlassSettings provides glass,
         LocalAppScheme provides scheme,
+        LocalContentColor provides activeOnBackground,
         LocalHazeState provides if (hazeReady) hazeState else null,
         androidx.compose.ui.platform.LocalDensity provides scaledDensity
     ) {

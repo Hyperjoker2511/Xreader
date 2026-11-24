@@ -510,7 +510,17 @@ fun ReaderSelectionMenuHost(
 fun DictionaryResultDialog(
     word: String,
     definition: String?,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Code 122 (S25, audit #21): "Save to vocabulary" — the
+     * host wires the reader's existing vocabulary save path
+     * (ReaderViewModel.saveWord, the SAVE_WORD selection arm's
+     * call). Null = no save door is drawn (no dead button).
+     * NOTE (audit #21, pronunciation half): the dictionary
+     * result carries NO pronunciation — DictionaryLookup
+     * returns the definition String only (its file format is
+     * `word<TAB>definition`) — so no pronunciation line can be
+     * rendered; that half is reported DEVIATED, not faked. */
+    onSaveToVocabulary: (() -> Unit)? = null
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -518,6 +528,18 @@ fun DictionaryResultDialog(
         text = { Text(definition ?: "No dictionary entry for this word yet.") },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        dismissButton = if (onSaveToVocabulary != null) {
+            {
+                TextButton(
+                    onClick = {
+                        onSaveToVocabulary()
+                        onDismiss()
+                    }
+                ) { Text("Save to vocabulary") }
+            }
+        } else {
+            null
         }
     )
 }
@@ -529,7 +551,14 @@ fun DictionaryResultDialog(
 fun SelectionTranslateDialog(
     original: String,
     translated: String?,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Code 122 (S26, audit #22): the provider that answered,
+     * carried from the translation result's `modelUsed`
+     * ("Provider · model" — the provider is its head). Shown
+     * as the spec's provenance AssistChip once a translation
+     * lands; null while running and for verdict/error lines
+     * (no provider answered, so no chip is claimed). */
+    providerName: String? = null
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -553,7 +582,19 @@ fun SelectionTranslateDialog(
                         Text("Translating…")
                     }
                 } else {
-                    Text(translated)
+                    // Code 122 (S26): the translated line is
+                    // bodyLarge, with the provider provenance
+                    // as an assist chip beneath it.
+                    Text(
+                        translated,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    if (providerName != null) {
+                        androidx.compose.material3.AssistChip(
+                            onClick = {},
+                            label = { Text(providerName) }
+                        )
+                    }
                 }
             }
         },
@@ -580,15 +621,37 @@ fun SelectionTranslateDialog(
  * Returns the text to SHOW: the translation, or the verdict
  * / error line.
  */
-suspend fun translateSelectionText(container: AppContainer, text: String): String {
+/** Code 122 (S26): a selection translation plus the provider
+ * that answered — the hub's result `modelUsed` is
+ * "Provider · model", so the provider is its head. Null when
+ * no provider answered (feature off, already-English verdict,
+ * or an error line). */
+data class SelectionTranslationResult(
+    val text: String,
+    val providerName: String?
+)
+
+suspend fun translateSelectionText(container: AppContainer, text: String): String =
+    translateSelectionWithProvenance(container, text).text
+
+suspend fun translateSelectionWithProvenance(
+    container: AppContainer,
+    text: String
+): SelectionTranslationResult {
     val settings = container.aiPrefs.settings.first()
     if (!settings.enabled(AiFeature.RAW_TRANSLATION)) {
-        return "RAW translation is turned off — switch it on in " +
-            "Providers & keys."
+        return SelectionTranslationResult(
+            "RAW translation is turned off — switch it on in " +
+                "Providers & keys.",
+            null
+        )
     }
     val language = LanguageDetect.detect(text)
     if (language == SourceLanguage.ENGLISH) {
-        return "This already reads as English — nothing to translate."
+        return SelectionTranslationResult(
+            "This already reads as English — nothing to translate.",
+            null
+        )
     }
     val system = if (language == SourceLanguage.OTHER) {
         "You are a literary translator. Translate the following " +
@@ -606,8 +669,15 @@ suspend fun translateSelectionText(container: AppContainer, text: String): Strin
             temperature = 0.2f
         )
     ) {
-        is AppResult.Ok -> result.value.text.trim()
-            .ifBlank { "The translator returned nothing for this passage." }
-        is AppResult.Err -> ErrorText.displayText(result.error)
+        is AppResult.Ok -> SelectionTranslationResult(
+            result.value.text.trim()
+                .ifBlank { "The translator returned nothing for this passage." },
+            result.value.modelUsed.substringBefore(" · ")
+                .trim().ifBlank { null }
+        )
+        is AppResult.Err -> SelectionTranslationResult(
+            ErrorText.displayText(result.error),
+            null
+        )
     }
 }

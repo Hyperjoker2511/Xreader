@@ -47,6 +47,7 @@ import app.xreader.domain.reader.TermPair
  * the display re-derives instantly (ReaderViewModel's
  * reapplyTerms), with no engine change.
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun ReplaceTermDialog(
     target: ReplaceTarget,
@@ -59,8 +60,26 @@ fun ReplaceTermDialog(
     onRemove: (List<TermPair>) -> Unit,
     /** The book's current pairs — the base the saved list is
      * built from. */
-    bookPairs: List<TermPair>
+    bookPairs: List<TermPair>,
+    /** Code 122 (S27, audit #23): the GLOBAL pairs + their
+     * save door (TermsPrefs.setGlobalPairs — the machinery
+     * CAN honour All books: pairsForBook merges global pairs
+     * into every book). The scope segmented row is drawn
+     * ONLY when [onSaveGlobal] is supplied; without it the
+     * dialog stays honestly book-scoped (no dead toggle).
+     * HOST WIRING STILL NEEDED: ReaderViewModel has no
+     * setGlobalTerms and its state carries no global pair
+     * list — the host must add both and pass them here. */
+    globalPairs: List<TermPair> = emptyList(),
+    onSaveGlobal: ((List<TermPair>) -> Unit)? = null
 ) {
+    // Scope: 0 = This book, 1 = All books. An Existing target
+    // is a BOOK pair by construction (resolveReplaceTarget
+    // resolves against the book list), so its scope is fixed
+    // to This book — the All-books segment is disabled there
+    // rather than silently duplicating the pair globally.
+    var scopeAllBooks by remember(target) { mutableStateOf(false) }
+    val scopeRowVisible = onSaveGlobal != null
     val existing = target as? ReplaceTarget.Existing
     val initial = when (target) {
         is ReplaceTarget.Existing -> target.pair
@@ -125,9 +144,38 @@ fun ReplaceTermDialog(
                         onCheckedChange = { draftWholeWord = it }
                     )
                 }
+                if (scopeRowVisible) {
+                    androidx.compose.material3
+                        .SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            androidx.compose.material3.SegmentedButton(
+                                selected = !scopeAllBooks,
+                                onClick = { scopeAllBooks = false },
+                                shape = androidx.compose.material3
+                                    .SegmentedButtonDefaults.itemShape(
+                                        index = 0, count = 2
+                                    )
+                            ) { Text("This book") }
+                            androidx.compose.material3.SegmentedButton(
+                                selected = scopeAllBooks,
+                                onClick = { scopeAllBooks = true },
+                                enabled = existing == null,
+                                shape = androidx.compose.material3
+                                    .SegmentedButtonDefaults.itemShape(
+                                        index = 1, count = 2
+                                    )
+                            ) { Text("All books") }
+                        }
+                }
                 Text(
-                    "Applies to this book only, and only to what " +
-                        "you see — the book's own text is never changed.",
+                    if (scopeRowVisible && scopeAllBooks) {
+                        "Applies to every book, and only to what " +
+                            "you see — a book's own text is never changed."
+                    } else {
+                        "Applies to this book only, and only to what " +
+                            "you see — the book's own text is never changed."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -143,15 +191,24 @@ fun ReplaceTermDialog(
                         matchCase = draftMatchCase,
                         wholeWord = draftWholeWord
                     )
-                    onSave(
-                        if (existing != null) {
-                            bookPairs.mapIndexed { index, old ->
-                                if (index == existing.index) pair else old
+                    if (scopeRowVisible && scopeAllBooks &&
+                        onSaveGlobal != null
+                    ) {
+                        // All-books scope: a New pair appended
+                        // to the GLOBAL list (Existing never
+                        // reaches here — its segment is disabled).
+                        onSaveGlobal(globalPairs + pair)
+                    } else {
+                        onSave(
+                            if (existing != null) {
+                                bookPairs.mapIndexed { index, old ->
+                                    if (index == existing.index) pair else old
+                                }
+                            } else {
+                                bookPairs + pair
                             }
-                        } else {
-                            bookPairs + pair
-                        }
-                    )
+                        )
+                    }
                 }
             ) { Text("Save") }
         },

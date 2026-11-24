@@ -29,6 +29,22 @@ import kotlinx.coroutines.launch
 /** One shelf row: the book plus its reading fraction (0 when unstarted). */
 data class ShelfBook(val book: Book, val fraction: Float)
 
+/**
+ * Code 122: a book's resolved place — the chapter entity at
+ * the book's saved progress index (the chapter whose stored
+ * `index` equals the progress row's chapterIndex, the same
+ * resolution the book page's Continue pill uses), labelled
+ * from the chapter's OWN identity via ChapterDisplayOrder:
+ * [chapterNumber] is its parsed number ("12", "10.5"), null
+ * when the chapter carries no number; [chapterTitle] is its
+ * own title. Never a list position — a place that cannot be
+ * resolved honestly is absent from the state's map instead.
+ */
+data class PlaceLabel(
+    val chapterNumber: String?,
+    val chapterTitle: String?
+)
+
 data class LibraryUiState(
     val books: List<ShelfBook> = emptyList(),
     /** v1.0.1: per-book metadata (status/track/new chapters). */
@@ -41,6 +57,13 @@ data class LibraryUiState(
     /** The most recently read book, for the Continue Reading hero. */
     val continueReading: ShelfBook? = null,
     val continueChapterIndex: Int = 0,
+    /** Code 122: bookId → the resolved place label of the
+     * book's current chapter (see [PlaceLabel]). Carries an
+     * entry only for shelf books that have a progress row AND
+     * a resolvable chapter at that progress index — the
+     * Editorial's Cover-Story byline and Manga Desk lines read
+     * their chapter places from here. */
+    val placeLabels: Map<Long, PlaceLabel> = emptyMap(),
     val loading: Boolean = true,
     /** Phase 6: the reader's pace + identity for the header avatar
      * and the cards' time-to-read lines. */
@@ -256,12 +279,28 @@ class LibraryViewModel(
     private val bookKindsFlow =
         MutableStateFlow<Map<Long, app.xreader.data.extension.MediaKind>>(emptyMap())
 
+    /** Code 122: bookId → resolved place label, kept current
+     * by the init collector below (shelf books with a progress
+     * row only; cached per (book, chapterIndex) so a progress
+     * emission re-resolves only the books whose place moved). */
+    private val placeLabelsFlow =
+        MutableStateFlow<Map<Long, PlaceLabel>>(emptyMap())
+
     val state: StateFlow<LibraryUiState> = combine(
         baseState, checkingUpdatesFlow, orgState,
-        bookKindsFlow, container.libraryPrefs.librarySide
-    ) { base, checking, org, kinds, side ->
+        bookKindsFlow, container.libraryPrefs.librarySide,
+        placeLabelsFlow
+    ) { values ->
+        @Suppress("UNCHECKED_CAST")
+        val base = values[0] as LibraryUiState
+        val checking = values[1] as Boolean
+        val org = values[2] as OrgData
+        val kinds = values[3] as Map<Long, app.xreader.data.extension.MediaKind>
+        val side = values[4] as app.xreader.data.extension.MediaKind
+        val placeLabels = values[5] as Map<Long, PlaceLabel>
         base.copy(
             checkingUpdates = checking,
+            placeLabels = placeLabels,
             favourites = org.favourites,
             userShelves = org.userShelves,
             memberships = org.memberships,
@@ -323,6 +362,58 @@ class LibraryViewModel(
                     runCatching {
                         container.bookKindResolver.kindsOf(books)
                     }.getOrDefault(emptyMap())
+            }
+        }
+        // Code 122: keep the place labels current — for every
+        // SHELF book with a progress row, resolve the chapter
+        // entity at the progress index through the chapter DAO
+        // (getByIndex: the row whose stored index equals the
+        // progress chapterIndex — the book page's own
+        // resolution) and label it from the chapter's own
+        // parsed number + title via ChapterDisplayOrder. A
+        // book whose chapter cannot be resolved gets NO entry:
+        // the Editorial then omits the place rather than
+        // printing a position. Cached per (book, chapterIndex)
+        // so unchanged places are not re-read per emission.
+        viewModelScope.launch {
+            val resolved = HashMap<Pair<Long, Int>, PlaceLabel?>()
+            combine(
+                container.database.bookDao().observeShelf(),
+                container.database.readingProgressDao().observeRecent()
+            ) { shelfBooks, progresses ->
+                shelfBooks.map { it.id }.toSet() to
+                    progresses.associateBy { it.bookId }
+            }.collect { (shelfIds, progressByBook) ->
+                val labels = HashMap<Long, PlaceLabel>()
+                for (bookId in shelfIds) {
+                    val progress = progressByBook[bookId] ?: continue
+                    val key = bookId to progress.chapterIndex
+                    val label = if (resolved.containsKey(key)) {
+                        resolved[key]
+                    } else {
+                        val chapter = runCatching {
+                            container.database.chapterDao()
+                                .getByIndex(bookId, progress.chapterIndex)
+                        }.getOrNull()
+                        val built = chapter?.let {
+                            PlaceLabel(
+                                chapterNumber =
+                                    app.xreader.domain.reader
+                                        .ChapterDisplayOrder
+                                        .displayNumber(it),
+                                chapterTitle = it.title.trim()
+                                    .takeIf { title -> title.isNotBlank() }
+                            )
+                        }?.takeIf {
+                            it.chapterNumber != null ||
+                                it.chapterTitle != null
+                        }
+                        resolved[key] = built
+                        built
+                    }
+                    if (label != null) labels[bookId] = label
+                }
+                placeLabelsFlow.value = labels
             }
         }
     }

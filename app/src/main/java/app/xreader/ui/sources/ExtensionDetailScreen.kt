@@ -94,10 +94,12 @@ fun ExtensionDetailScreen(
     // permission), Sign in (the R23 door, only where the source
     // supports it), the source's own doors (open, instances,
     // parser rules, search setup), and Remove in the error
-    // role. The deeper Nocturne sections (cleaner rules,
-    // Bring-my-library, AI matches) are not carried into this
-    // branch — see D-121-W4-6. Under Nocturne the shipped page
-    // below renders byte-identically.
+    // role. Code 122 (audit item #10): the deeper sections
+    // ARE carried into this branch now — page shape (in
+    // Health), Bring-my-library with its AI match proposals,
+    // and the Text cleaners editor — on the same viewModel
+    // (D-121-W4-6). Under Nocturne the shipped page below
+    // renders byte-identically.
     if (isM3Design()) {
         if (ext != null && state.parserEditorOpen &&
             state.linkConfig != null
@@ -446,6 +448,28 @@ fun ExtensionDetailScreen(
                         }
                     )
                 }
+                state.pageShapeSummary?.let { summary ->
+                    item(key = "m3ext-pageshape") {
+                        Column(
+                            Modifier.padding(horizontal = 16.dp),
+                            verticalArrangement =
+                                Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                "Page shape",
+                                style = MaterialTheme
+                                    .typography.titleSmall
+                            )
+                            Text(
+                                summary,
+                                style = MaterialTheme
+                                    .typography.bodySmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                        }
+                    }
+                }
                 item(key = "m3ext-repair") {
                     ListItem(
                         headlineContent = { Text("Repair") },
@@ -647,6 +671,302 @@ fun ExtensionDetailScreen(
                                 viewModel.setupSearch()
                             }
                         )
+                    }
+                }
+                // ── Code 122 (R22): Bring my library + AI match ──
+                item(key = "m3ext-bring-head") {
+                    M3GroupHeader(
+                        "Bring my library",
+                        Modifier.padding(horizontal = 16.dp)
+                    )
+                }
+                item(key = "m3ext-bring") {
+                    Column(
+                        Modifier.padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (!state.hasBookshelf) {
+                            Text(
+                                "This source doesn't know its account " +
+                                    "bookshelf yet, so there's nothing " +
+                                    "to bring over. When its rules learn " +
+                                    "the bookshelf page, this section " +
+                                    "will offer the import.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                        } else {
+                            Text(
+                                "Reads your bookshelf on this site (you " +
+                                    "must be logged in) and adds the " +
+                                    "books that aren't in your Library " +
+                                    "yet. Nothing is downloaded — just " +
+                                    "the books themselves.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                            val preview = state.bringPreview
+                            if (preview == null) {
+                                Button(
+                                    onClick = { viewModel.scanBookshelf() },
+                                    enabled = !state.bringBusy && ext.enabled,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        if (state.bringBusy) {
+                                            "Looking…"
+                                        } else {
+                                            "Scan my bookshelf"
+                                        }
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    preview.summaryLine(),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                if (preview.newBooks > 0) {
+                                    Row(
+                                        verticalAlignment =
+                                            Alignment.CenterVertically,
+                                        horizontalArrangement =
+                                            Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        TextButton(
+                                            onClick = {
+                                                viewModel.checkAiMatches()
+                                            },
+                                            enabled = !state.aiMatchBusy &&
+                                                !state.bringBusy
+                                        ) {
+                                            Text(
+                                                if (state.aiMatchBusy) {
+                                                    "AI is checking…"
+                                                } else {
+                                                    "Ask AI to spot matches"
+                                                }
+                                            )
+                                        }
+                                        app.xreader.ui.ai.EngineChip(
+                                            label = engineLabel
+                                        )
+                                    }
+                                    Text(
+                                        "Some \"new\" books may already be " +
+                                            "in your Library under a " +
+                                            "slightly different title. The " +
+                                            "AI can propose matches — " +
+                                            "nothing counts as a match " +
+                                            "until you confirm it.",
+                                        style = MaterialTheme
+                                            .typography.bodySmall,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                }
+                                state.aiMatchNote?.let { note ->
+                                    Text(
+                                        note,
+                                        style = MaterialTheme
+                                            .typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                }
+                                state.aiProposals.forEach { (remoteKey, proposal) ->
+                                    val confirmed =
+                                        remoteKey in state.aiConfirmedMatches
+                                    Column(
+                                        verticalArrangement =
+                                            Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            "AI thinks “${proposal.account.title}” " +
+                                                "is your copy of " +
+                                                "“${proposal.existing.title}”.",
+                                            style = MaterialTheme
+                                                .typography.bodyMedium
+                                        )
+                                        Row(
+                                            horizontalArrangement =
+                                                Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            if (confirmed) {
+                                                Text(
+                                                    "✓ Confirmed — it won't " +
+                                                        "be added again",
+                                                    style = MaterialTheme
+                                                        .typography.bodyMedium,
+                                                    color = MaterialTheme
+                                                        .colorScheme.secondary
+                                                )
+                                            } else {
+                                                TextButton(
+                                                    onClick = {
+                                                        viewModel.confirmAiMatch(
+                                                            remoteKey
+                                                        )
+                                                    },
+                                                    enabled = !state.bringBusy
+                                                ) { Text("Yes, same book") }
+                                                TextButton(
+                                                    onClick = {
+                                                        viewModel.rejectAiMatch(
+                                                            remoteKey
+                                                        )
+                                                    },
+                                                    enabled = !state.bringBusy
+                                                ) { Text("No, different book") }
+                                            }
+                                        }
+                                    }
+                                }
+                                Row(
+                                    horizontalArrangement =
+                                        Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            viewModel.importBookshelf()
+                                        },
+                                        enabled = !state.bringBusy &&
+                                            preview.newBooks > 0
+                                    ) {
+                                        Text(
+                                            if (state.bringBusy) {
+                                                "Bringing over…"
+                                            } else {
+                                                "Bring them over"
+                                            }
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.dismissBringPreview()
+                                        },
+                                        enabled = !state.bringBusy
+                                    ) { Text("Not now") }
+                                }
+                            }
+                            state.bringMessage?.let { message ->
+                                Text(
+                                    message,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
+                // ── Code 122 (R22): the Text cleaners editor ──
+                item(key = "m3ext-cleaners-head") {
+                    M3GroupHeader(
+                        "Text cleaners",
+                        Modifier.padding(horizontal = 16.dp)
+                    )
+                }
+                item(key = "m3ext-cleaners") {
+                    Column(
+                        Modifier.padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "Search-and-replace rules applied to this " +
+                                "source's chapters as they download — " +
+                                "for site footers, watermarks and " +
+                                "repeated announcements. Rules that run " +
+                                "too long are switched off automatically.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                        state.cleanerRules.forEachIndexed { index, rule ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        rule.pattern,
+                                        style = MaterialTheme
+                                            .typography.bodyMedium,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                    Text(
+                                        if (rule.replacement.isEmpty()) {
+                                            "→ removed"
+                                        } else {
+                                            "→ ${rule.replacement}"
+                                        },
+                                        style = MaterialTheme
+                                            .typography.bodySmall,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = rule.enabled,
+                                    onCheckedChange = {
+                                        viewModel.toggleRule(index, it)
+                                    }
+                                )
+                                TextButton(
+                                    onClick = { viewModel.deleteRule(index) }
+                                ) { Text("Delete") }
+                            }
+                        }
+                        OutlinedTextField(
+                            value = newPattern,
+                            onValueChange = { newPattern = it },
+                            label = { Text("Find (pattern)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = newReplacement,
+                            onValueChange = { newReplacement = it },
+                            label = { Text("Replace with (blank removes)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        TextButton(
+                            onClick = {
+                                viewModel.addRule(newPattern, newReplacement)
+                                newPattern = ""
+                                newReplacement = ""
+                            },
+                            enabled = newPattern.isNotBlank()
+                        ) { Text("Add rule") }
+                        Text(
+                            "Try your rules",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        OutlinedTextField(
+                            value = testSample,
+                            onValueChange = { testSample = it },
+                            label = { Text("Sample chapter text") },
+                            minLines = 3,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        TextButton(
+                            onClick = { viewModel.testRules(testSample) },
+                            enabled = testSample.isNotBlank()
+                        ) { Text("Test rules") }
+                        state.testOutput?.let { output ->
+                            Text(
+                                output,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        state.testNotes.forEach { note ->
+                            Text(
+                                note,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
                     }
                 }
                 item(key = "m3ext-remove") {

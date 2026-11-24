@@ -118,6 +118,7 @@ import app.xreader.ui.theme.maxContrast
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import uy.kohesive.injekt.api.get
@@ -201,6 +202,20 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
             design = values[10] as app.xreader.data.prefs.DesignState
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
+
+    /** Code 122 (Settings B door hub): the LIVE count of sources
+     * whose persisted health verdict says they need repair
+     * (BROKEN or NEEDS_SETUP) — the Sources & repairs door's
+     * summary line reads this, and nothing else invents a count. */
+    val repairCount: StateFlow<Int> =
+        container.sourcePrefs.sourceHealth.map { health ->
+            health.values.count { record ->
+                record.state ==
+                    app.xreader.data.extension.SourceHealthState.BROKEN ||
+                    record.state ==
+                    app.xreader.data.extension.SourceHealthState.NEEDS_SETUP
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     /** Storage sizes load off the main thread and refresh after a
      * cache clear; kept out of [state] so a slow disk walk never

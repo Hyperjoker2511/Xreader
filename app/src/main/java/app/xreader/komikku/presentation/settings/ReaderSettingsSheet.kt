@@ -43,11 +43,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SegmentedButton
@@ -55,8 +62,10 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -95,27 +104,38 @@ fun M3SwitchRow(label: String, pref: KPreference<Boolean>) {
     M3SwitchRow(label = label, checked = checked, onCheckedChange = { pref.set(it) })
 }
 
-/** A boolean setting as a list row: label + switch. */
+/** A boolean setting as a list row: label + spec switch
+ * (check thumb when on — Code 122, Settings V2 sheet language). */
 @Composable
 fun M3SwitchRow(
     label: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable { onCheckedChange(!checked) }
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.weight(1f)
-        )
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
+    ListItem(
+        headlineContent = { Text(label) },
+        trailingContent = {
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                thumbContent = if (checked) {
+                    {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(
+                                SwitchDefaults.IconSize
+                            )
+                        )
+                    }
+                } else {
+                    null
+                }
+            )
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.clickable { onCheckedChange(!checked) }
+    )
 }
 
 /**
@@ -132,27 +152,24 @@ fun M3PickRow(
     onSelect: (Int) -> Unit
 ) {
     var open by remember { mutableStateOf(false) }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable { open = true }
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
+    ListItem(
+        headlineContent = { Text(label) },
+        supportingContent = {
             Text(
                 options.getOrNull(selectedIndex) ?: "",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.primary
             )
-        }
-        Icon(
-            Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
+        },
+        trailingContent = {
+            Icon(
+                Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.clickable { open = true }
+    )
     if (open) {
         ModeSelectionDialog(
             title = label,
@@ -183,6 +200,17 @@ fun M3SegmentedRow(
                     selected = selectedIndex == index,
                     onClick = { onSelect(index) },
                     shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor =
+                            MaterialTheme.colorScheme.secondaryContainer,
+                        activeContentColor =
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                    ),
+                    icon = {
+                        SegmentedButtonDefaults.Icon(
+                            active = selectedIndex == index
+                        )
+                    },
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(option, maxLines = 1)
@@ -215,6 +243,28 @@ fun M3SliderRow(
             valueRange = valueRange.first.toFloat()..valueRange.last.toFloat(),
             steps = (valueRange.last - valueRange.first - 1).coerceAtLeast(0)
         )
+    }
+}
+
+/** Code 122: one settings group as a filled tonal card —
+ * the sheet sits on surfaceContainerLow, its group cards ride
+ * one rung up on surfaceContainer. */
+@Composable
+fun M3SheetGroupCard(content: @Composable () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ),
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+    ) {
+        Column(
+            Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            content()
+        }
     }
 }
 
@@ -268,9 +318,20 @@ fun ReaderSettingsSheet(
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
             }
-            item { M3ReadingModeGroup(viewModel) }
-            item { M3GeneralGroup(viewModel) }
-            item { M3ColorFilterGroup(viewModel) }
+            // Code 122 (Settings V2 sheet language): each group
+            // is a tonal card one rung above the sheet
+            // (sheet surfaceContainerLow → cards
+            // surfaceContainer). Groups, order and every
+            // setting inside them are unchanged.
+            item {
+                M3SheetGroupCard { M3ReadingModeGroup(viewModel) }
+            }
+            item {
+                M3SheetGroupCard { M3GeneralGroup(viewModel) }
+            }
+            item {
+                M3SheetGroupCard { M3ColorFilterGroup(viewModel) }
+            }
             item {
                 androidx.compose.foundation.layout.Spacer(
                     Modifier.padding(bottom = 24.dp)
@@ -484,19 +545,17 @@ private fun M3GeneralGroup(viewModel: KomikkuReaderViewModel) {
         }
     )
     M3SwitchRow("Show page number", prefs.showPageNumber())
-    val forceHorz by prefs.forceHorizontalSeekbar().changes()
-        .collectAsState(initial = false)
-    M3SwitchRow("Force horizontal seek bar", prefs.forceHorizontalSeekbar())
-    if (!forceHorz) {
-        M3SwitchRow(
-            "Vertical seek bar in landscape",
-            prefs.landscapeVerticalSeekbar()
-        )
-        M3SwitchRow(
-            "Left-handed vertical seek bar",
-            prefs.leftVerticalSeekbar()
-        )
-    }
+    // Code 122 (S13/S32, audit #26): the seekbar-FORM prefs are
+    // NOT homed in this M3 sheet — the fixed M3 chrome's one
+    // form is the horizontal floating toolbar (the vertical
+    // scrubber is a Nocturne-form surface:
+    // KomikkuReaderScreen's useVerticalScrubber is !m3-gated),
+    // so "Force horizontal seek bar", "Vertical seek bar in
+    // landscape" and "Left-handed vertical seek bar" cannot be
+    // honoured here and are hidden rather than drawn inert.
+    // The Nocturne dialog (ReaderSettingsDialog) keeps all
+    // three, untouched. "Show page number" stays: it is
+    // honoured via the centred page indicator / page chip.
     val fullscreen by prefs.fullscreen().changes().collectAsState(initial = true)
     M3SwitchRow("Fullscreen", prefs.fullscreen())
     if (fullscreen) {

@@ -206,10 +206,10 @@ fun MoreScreen(
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        "Shelves and tags, a source health checker with " +
-                            "repairs, “Bring my library”, an endless reader, " +
-                            "and this new Me card. The full list lives in " +
-                            "About.",
+                        "The Editorial Library, The Stage book page, " +
+                            "settings rebuilt as a door hub, and sources " +
+                            "restored and repaired. The full list lives " +
+                            "in About.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -664,34 +664,45 @@ private fun M3MeHub(
                 modifier = Modifier.clickable(onClick = onProfile)
             )
             if (whatsNewVisible) {
-                androidx.compose.material3.ListItem(
-                    headlineContent = {
-                        Text("What's new in this version")
-                    },
-                    supportingContent = {
-                        Text("See what this update brought")
-                    },
-                    leadingContent = {
-                        Icon(
-                            Icons.Filled.SystemUpdate,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    },
-                    trailingContent = {
-                        androidx.compose.material3.Badge {
-                            Text("New")
-                        }
-                    },
-                    colors = androidx.compose.material3.ListItemDefaults
-                        .colors(
-                            containerColor = androidx.compose.ui
-                                .graphics.Color.Transparent
+                // Code 122 (Settings V2, Option A language for
+                // R5): the What's-New note is a filled card above
+                // the doors card, like the heal note — its
+                // seen-state rules are untouched.
+                androidx.compose.material3.Card(
+                    onClick = onOpenWhatsNew,
+                    colors = androidx.compose.material3.CardDefaults
+                        .cardColors(
+                            containerColor = MaterialTheme
+                                .colorScheme.surfaceContainerLow
                         ),
-                    modifier = Modifier.clickable(
-                        onClick = onOpenWhatsNew
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    androidx.compose.material3.ListItem(
+                        headlineContent = {
+                            Text("What's new in this version")
+                        },
+                        supportingContent = {
+                            Text("See what this update brought")
+                        },
+                        leadingContent = {
+                            Icon(
+                                Icons.Filled.SystemUpdate,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        trailingContent = {
+                            androidx.compose.material3.Badge {
+                                Text("New")
+                            }
+                        },
+                        colors = androidx.compose.material3
+                            .ListItemDefaults.colors(
+                                containerColor = androidx.compose.ui
+                                    .graphics.Color.Transparent
+                            )
                     )
-                )
+                }
             }
             androidx.compose.material3.HorizontalDivider(
                 color = MaterialTheme.colorScheme.outlineVariant
@@ -738,39 +749,75 @@ private fun M3MeHub(
                     onClick = onAbout
                 )
             )
-            doors.forEachIndexed { index, door ->
-                androidx.compose.material3.ListItem(
-                    headlineContent = { Text(door.title) },
-                    supportingContent = { Text(door.subtitle) },
-                    leadingContent = {
-                        Icon(
-                            door.icon,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    },
-                    trailingContent = {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme
-                                .onSurfaceVariant
-                        )
-                    },
-                    colors = androidx.compose.material3.ListItemDefaults
-                        .colors(
-                            containerColor = androidx.compose.ui
-                                .graphics.Color.Transparent
-                        ),
-                    modifier = Modifier.clickable(
-                        onClick = door.onClick
-                    )
-                )
-                if (index < doors.lastIndex) {
-                    androidx.compose.material3.HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant,
-                        modifier = Modifier.padding(start = 56.dp)
-                    )
+            // Code 122 (Settings V2, Option A language for R5):
+            // the settings doors are ONE tonal card of
+            // SegmentedListItems — tonal icon tile, name,
+            // one-line description, chevron — instead of the
+            // old flat divider list.
+            androidx.compose.material3.Card(
+                colors = androidx.compose.material3.CardDefaults
+                    .cardColors(
+                        containerColor = MaterialTheme
+                            .colorScheme.surfaceContainerLow
+                    ),
+                shape = androidx.compose.foundation.shape
+                    .RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    Modifier.padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    doors.forEachIndexed { index, door ->
+                        androidx.compose.material3.SegmentedListItem(
+                            onClick = door.onClick,
+                            shapes = androidx.compose.material3
+                                .ListItemDefaults.segmentedShapes(
+                                    index = index,
+                                    count = doors.size
+                                ),
+                            colors = androidx.compose.material3
+                                .ListItemDefaults.colors(
+                                    containerColor = MaterialTheme
+                                        .colorScheme.surfaceContainer
+                                ),
+                            leadingContent = {
+                                Box(
+                                    Modifier
+                                        .size(40.dp)
+                                        .background(
+                                            MaterialTheme.colorScheme
+                                                .primaryContainer,
+                                            androidx.compose.foundation
+                                                .shape.RoundedCornerShape(
+                                                    12.dp
+                                                )
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        door.icon,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme
+                                            .onPrimaryContainer,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            },
+                            trailingContent = {
+                                Icon(
+                                    Icons.AutoMirrored.Filled
+                                        .ArrowForward,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            },
+                            supportingContent = { Text(door.subtitle) }
+                        ) {
+                            Text(door.title)
+                        }
+                    }
                 }
             }
         }

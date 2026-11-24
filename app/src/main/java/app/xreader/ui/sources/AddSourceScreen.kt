@@ -66,7 +66,11 @@ fun AddSourceScreen(
     onOpenStore: () -> Unit,
     /** v1.3.2 (scope E): the persisted foreign repo's own
      * screen — the full site list lives there now. */
-    onOpenRepo: (Long) -> Unit = {}
+    onOpenRepo: (Long) -> Unit = {},
+    /** Code 122 (R16, audit item #8): the Built-in sources
+     * door (→R19) — the shell wires this to the repoBuiltIn
+     * route, the same callback the Source store receives. */
+    onOpenBuiltIn: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var repoName by remember { mutableStateOf("") }
@@ -109,10 +113,10 @@ fun AddSourceScreen(
 
     // ── Code 121 (W4, scratch R16): the Material 3 Add source ──
     // A doors page: door rows for each way in, with the
-    // repository form under its door. (The spec's fourth door,
-    // Built-in sources, has no callback on this route — it
-    // lives in the Source store — see D-121-W4-5.) Under
-    // Nocturne the shipped screen renders byte-identically.
+    // repository form under its door. Code 122 (audit item
+    // #8): the fourth door, Built-in sources (→R19), is drawn
+    // too, on the new onOpenBuiltIn callback (D-121-W4-5).
+    // Under Nocturne the shipped screen renders byte-identically.
     if (isM3Design()) {
         Column(Modifier.fillMaxSize()) {
             TopAppBar(
@@ -310,6 +314,24 @@ fun AddSourceScreen(
                             )
                         },
                         modifier = Modifier.clickable { onOpenStore() }
+                    )
+                }
+                item(key = "m3-door-builtin") {
+                    ListItem(
+                        headlineContent = { Text("Built-in sources") },
+                        supportingContent = {
+                            Text(
+                                "The sources that ship with Xreader — " +
+                                    "turn any of them back on, or open one."
+                            )
+                        },
+                        leadingContent = {
+                            Icon(
+                                Icons.Filled.Storage,
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier.clickable { onOpenBuiltIn() }
                     )
                 }
                 state.foreignRepo?.let { foreign ->

@@ -48,9 +48,12 @@ import app.xreader.ui.common.ScreenHeader
 import app.xreader.ui.common.SearchCapsule
 import app.xreader.ui.common.SectionHeader
 import java.io.File
+import androidx.datastore.preferences.core.edit
+import app.xreader.data.prefs.settingsDataStore
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -66,8 +69,89 @@ data class VocabUiState(
     val due: List<VocabWord> = emptyList(),
     val dictionaryName: String? = null,
     val dictionaryBytes: Long = 0,
-    val loading: Boolean = true
+    val loading: Boolean = true,
+    /** Code 122 (R10, audit item #3): book id → title for the
+     * books saved words came from, so Saved groups are headed
+     * by book TITLE. A word whose book is gone has no entry
+     * here and falls back to the provenance heading. */
+    val bookTitles: Map<Long, String> = emptyMap(),
+    /** Code 122 (R10): the lookup history, newest first —
+     * the "Looked up" tab's real list. */
+    val lookupHistory: List<LookupHistoryEntry> = emptyList()
 )
+
+/** One recorded dictionary lookup (code 122, R10). A null
+ * [definition] means the word was looked up and was NOT in
+ * the dictionary — recorded honestly, not dropped. */
+data class LookupHistoryEntry(
+    val word: String,
+    val definition: String?,
+    val lookedUpAt: Long
+)
+
+/**
+ * Code 122 (R10): the lookup-history store — the app kept no
+ * record of lookups before this. Follows the tree's DataStore
+ * discipline (the `settings` store, one string key, validated
+ * reads with safe defaults, newest first, capped). Encoding:
+ * one entry per line, tab-separated
+ * `lookedUpAt ⇥ word ⇥ found(1/0) ⇥ definition`, with tabs
+ * and newlines inside fields flattened to spaces at record
+ * time (dictionary definitions are single lines by the file's
+ * own format, so nothing real is lost).
+ */
+class LookupHistoryStore(
+    private val store: androidx.datastore.core.DataStore<
+        androidx.datastore.preferences.core.Preferences>
+) {
+    val entries: kotlinx.coroutines.flow.Flow<List<LookupHistoryEntry>> =
+        store.data.map { prefs ->
+            decode(prefs[KEY] ?: "")
+        }
+
+    suspend fun record(entry: LookupHistoryEntry) {
+        store.edit { prefs ->
+            val current = decode(prefs[KEY] ?: "")
+            val next = (listOf(entry) + current.filter {
+                !it.word.equals(entry.word, ignoreCase = true)
+            }).take(MAX_ENTRIES)
+            prefs[KEY] = encode(next)
+        }
+    }
+
+    private fun clean(field: String): String =
+        field.replace('\t', ' ').replace('\n', ' ').trim()
+
+    private fun encode(entries: List<LookupHistoryEntry>): String =
+        entries.joinToString("\n") { entry ->
+            listOf(
+                entry.lookedUpAt.toString(),
+                clean(entry.word),
+                if (entry.definition != null) "1" else "0",
+                clean(entry.definition ?: "")
+            ).joinToString("\t")
+        }
+
+    private fun decode(raw: String): List<LookupHistoryEntry> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split("\n").mapNotNull { line ->
+            val parts = line.split("\t")
+            if (parts.size < 4) return@mapNotNull null
+            val at = parts[0].toLongOrNull() ?: return@mapNotNull null
+            LookupHistoryEntry(
+                word = parts[1],
+                definition = if (parts[2] == "1") parts[3] else null,
+                lookedUpAt = at
+            )
+        }
+    }
+
+    private companion object {
+        val KEY = androidx.datastore.preferences.core
+            .stringPreferencesKey("vocab.lookup_history")
+        const val MAX_ENTRIES = 100
+    }
+}
 
 class VocabViewModel(private val container: AppContainer) : ViewModel() {
 
@@ -79,10 +163,18 @@ class VocabViewModel(private val container: AppContainer) : ViewModel() {
 
     private val refreshTick = kotlinx.coroutines.flow.MutableStateFlow(0)
 
+    /** Code 122 (R10): the lookup-history store over the
+     * settings DataStore (the GamePrefs pattern). */
+    private val lookupHistoryStore = LookupHistoryStore(
+        container.applicationContext.settingsDataStore
+    )
+
     val state: StateFlow<VocabUiState> = combine(
         container.database.vocabDao().observeAll(),
-        refreshTick
-    ) { words, _ ->
+        refreshTick,
+        container.database.bookDao().observeAllBooks(),
+        lookupHistoryStore.entries
+    ) { words, _, books, history ->
         val dict = dictionaryFile()
         VocabUiState(
             words = words,
@@ -91,7 +183,9 @@ class VocabViewModel(private val container: AppContainer) : ViewModel() {
             ),
             dictionaryName = dict?.name,
             dictionaryBytes = dict?.length() ?: 0,
-            loading = false
+            loading = false,
+            bookTitles = books.associate { it.id to it.title },
+            lookupHistory = history
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), VocabUiState())
 
@@ -149,6 +243,24 @@ class VocabViewModel(private val container: AppContainer) : ViewModel() {
      * unchanged. */
     suspend fun lookup(word: String): String? =
         DictionaryLookup.lookupInFile(dictionaryFile(), word)
+
+    /** Code 122 (R10): a lookup that also RECORDS itself in
+     * the lookup history — the M3 "Looked up" tab's surface
+     * calls this, so the tab is a real history list. A miss
+     * is recorded too (definition null), honestly. */
+    suspend fun lookupAndRecord(word: String): String? {
+        val trimmed = word.trim()
+        if (trimmed.isEmpty()) return null
+        val result = lookup(trimmed)
+        lookupHistoryStore.record(
+            LookupHistoryEntry(
+                word = trimmed,
+                definition = result,
+                lookedUpAt = System.currentTimeMillis()
+            )
+        )
+        return result
+    }
 
     /** Install the picked file as THE dictionary (replacing any
      * previous one — one dictionary, removable, per the plan). */
@@ -503,13 +615,14 @@ private fun VocabWordCard(
 }
 
 // ── Code 121 (R10): the Material 3 Vocabulary ──────────────
-// Saved tab: the word list grouped by book — VocabUiState
-// carries each word's bookId but no book titles, so groups are
-// headed by their provenance ("Saved from a book" per bookId
-// group, "Added by hand" for words with no book) rather than
-// invented titles. Looked up tab: the app keeps NO lookup
-// history store, so the tab hosts the live offline-dictionary
-// lookup itself instead of a fabricated history list.
+// Saved tab: the word list grouped by book. Code 122 (audit
+// item #3): VocabUiState now carries book titles, so groups
+// are headed by book TITLE (a word whose book is gone falls
+// back to the provenance heading — never an invented title).
+// Looked up tab: code 122 built the lookup-history store
+// (LookupHistoryStore above); lookups made on this tab are
+// recorded, and the tab lists the history under the
+// dictionary card.
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun M3VocabContent(
@@ -651,7 +764,8 @@ private fun M3VocabContent(
                                     if (bookId == null) {
                                         "Added by hand"
                                     } else {
-                                        "Saved from a book"
+                                        state.bookTitles[bookId]
+                                            ?: "Saved from a book"
                                     },
                                     style = MaterialTheme.typography.titleMedium
                                 )
@@ -723,7 +837,9 @@ private fun M3VocabContent(
                                     onClick = {
                                         scope.launch {
                                             lookupResult =
-                                                viewModel.lookup(lookupDraft)
+                                                viewModel.lookupAndRecord(
+                                                    lookupDraft
+                                                )
                                             lookupTried = true
                                         }
                                     },
@@ -752,6 +868,41 @@ private fun M3VocabContent(
                                     }
                                 ) { Text("Add dictionary file") }
                             }
+                        }
+                    }
+                    // Code 122 (R10): the history itself —
+                    // every lookup made on this tab, newest
+                    // first, misses included.
+                    if (state.lookupHistory.isEmpty()) {
+                        item(key = "m3-history-empty") {
+                            Text(
+                                "Words you look up here are kept in " +
+                                    "this list.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        item(key = "m3-history-head") {
+                            Text(
+                                "Looked up (${state.lookupHistory.size})",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+                        items(
+                            state.lookupHistory,
+                            key = { "m3-history-${it.lookedUpAt}-${it.word}" }
+                        ) { entry ->
+                            androidx.compose.material3.ListItem(
+                                headlineContent = { Text(entry.word) },
+                                supportingContent = {
+                                    Text(
+                                        entry.definition
+                                            ?: "That word isn't in this dictionary."
+                                    )
+                                }
+                            )
                         }
                     }
                 }

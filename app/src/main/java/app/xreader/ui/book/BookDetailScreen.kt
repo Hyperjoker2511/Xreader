@@ -10,8 +10,6 @@ import app.xreader.ui.theme.bottomContentPadding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
@@ -42,6 +40,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -56,7 +55,9 @@ import androidx.compose.material.icons.filled.FiberNew
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
@@ -73,17 +74,16 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FilledIconToggleButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SplitButtonDefaults
 import androidx.compose.material3.SplitButtonLayout
 import androidx.compose.material3.Surface
@@ -91,9 +91,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonDefaults
+import androidx.compose.material3.ToggleButtonShapes
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -110,8 +112,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
@@ -160,8 +162,10 @@ import java.io.File
  * okay"): the page is NOT frozen. Under the Material 3 design
  * it takes that design's layout (DESIGN-M3 §2.5 R8 — flexible
  * large app bar, cover header, ButtonGroup + SplitButton
- * actions; M3BookChrome / M3BookHero / M3BookActions at the
- * end of this file), branched on LocalDesignState. Under
+ * actions; M3BookChrome / M3BookStage / M3StageActions at
+ * the end of this file — code 122 rebuilt the M3 form as
+ * The Stage, DESIGN-M3-BOOKPAGE-V2 option B), branched on
+ * LocalDesignState. Under
  * Nocturne every branch renders exactly the shipped page; the
  * colour pin (BookDetailTheme) and the cover Content scheme
  * keep working on both paths.
@@ -219,8 +223,13 @@ fun BookDetailScreen(
     val designState = app.xreader.ui.theme.LocalDesignState.current
     val isM3Book = designState.design ==
         app.xreader.data.prefs.AppDesign.MATERIAL3
-    val m3BarScrollBehavior = TopAppBarDefaults
-        .exitUntilCollapsedScrollBehavior()
+    // Code 122 (conviction §0): NO scroll behavior is created
+    // here any more. The 121 build attached an orphaned
+    // exitUntilCollapsed connection to the M3 list while no
+    // bar ever received the behavior, so it consumed every
+    // upward scroll delta forever and the page could not
+    // scroll. The Stage's bar is static; nothing consumes
+    // the list's deltas.
     // v1.0.5 (B2/E6): the Download sheet's open state — the three
     // choices (all / next 10 / latest unread) live there, beside
     // Start reading, never only in a long-press sheet.
@@ -662,23 +671,45 @@ fun BookDetailScreen(
             ReadingStatus.DROPPED -> "Dropped"
             ReadingStatus.NONE -> null
         }
+        // Code 122 (conviction §3.4): the RESOLVED chapter's
+        // own identity — its parsed number via
+        // ChapterDisplayOrder, falling back to its title —
+        // never position+1 arithmetic on the stored row
+        // index. The hero label, the Stage line and the
+        // shared progress card all print this one derivation.
+        val continueChapterNumber =
+            app.xreader.domain.reader.ChapterDisplayOrder
+                .displayNumber(continueChapter)
+        val continuePlaceLabel = when {
+            book.localFormat ==
+                app.xreader.data.db.BookFormat.PDF ->
+                "Page ${continueChapterNumber ?: (continueChapter?.index?.plus(1))?.toString() ?: "1"}"
+            continueChapterNumber != null ->
+                "Chapter $continueChapterNumber"
+            !continueChapter?.title.isNullOrBlank() ->
+                continueChapter?.title?.trim().orEmpty()
+            else -> "Chapter 1"
+        }
+        // The Stage's kicker: "Now reading · Chapter N of M"
+        // (or "Not started yet" before any progress exists).
+        val stageKicker = if (state.progress == null) {
+            "Not started yet"
+        } else if (
+            book.localFormat ==
+            app.xreader.data.db.BookFormat.PDF
+        ) {
+            "Now reading · $continuePlaceLabel"
+        } else {
+            "Now reading · $continuePlaceLabel of " +
+                "${state.chapters.size}"
+        }
         // Code 120 completion (R8): the weighted Box exists so
         // the Read-as-FAB form has somewhere to float; under
         // Nocturne (and the button-group form) it is layout-
         // identical to the list taking the weight itself.
         Box(Modifier.weight(1f)) {
         LazyColumn(
-            Modifier
-                .fillMaxSize()
-                .then(
-                    if (isM3Book) {
-                        Modifier.nestedScroll(
-                            m3BarScrollBehavior.nestedScrollConnection
-                        )
-                    } else {
-                        Modifier
-                    }
-                ),
+            Modifier.fillMaxSize(),
             // v1.5.7 (Finding 5): the list state the chapter
             // jump scrolls (previously the column had no state,
             // so no programmatic scroll was possible at all).
@@ -695,10 +726,26 @@ fun BookDetailScreen(
         ) {
             item(key = "hero") {
                 if (isM3Book) {
-                    M3BookHero(
+                    // Code 122 (Wave 3): THE STAGE — the full-
+                    // bleed cover stage carries the hero AND
+                    // the Continue action at its foot; the CTA
+                    // item below it carries the document's
+                    // action block (the chapter-row prefix
+                    // count is 2 on both designs: hero + CTA).
+                    M3BookStage(
                         book = book,
                         state = state,
-                        coverFile = coverFile
+                        coverFile = coverFile,
+                        kicker = stageKicker,
+                        continuePlaceLabel = continuePlaceLabel,
+                        bookPercent = bookPercent,
+                        remainingLabel = remainingEstimateLabel(
+                            state = state
+                        ),
+                        onRead = {
+                            onReadChapter(state.continueChapterIndex)
+                        },
+                        onRefresh = { viewModel.refreshChapters() }
                     )
                 } else {
                 // Reference hero: violet radial halos over the
@@ -986,54 +1033,16 @@ fun BookDetailScreen(
             item(key = "cta") {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (isM3Book) {
-                        M3BookActions(
+                        // Code 122 (Wave 3, The Stage): the
+                        // document's first block below the stage
+                        // — the labelled ButtonGroup, the AI
+                        // doors, Refresh and the Remove door
+                        // (M3StageActions) — then the carry-over
+                        // notes. The Status section below stays
+                        // shared with Nocturne.
+                        M3StageActions(
                             state = state,
                             book = book,
-                            designState = designState,
-                            readLabel = if (state.progress == null) {
-                                "Read"
-                            } else {
-                                // R8: Continue carries its place
-                                // in the label itself.
-                                "Continue · Chapter " +
-                                    "${state.continueChapterIndex + 1}" +
-                                    " · $bookPercent%"
-                            },
-                            readSubLine = if (state.progress == null) {
-                                continueChapter?.let {
-                                    continuePillSubLine(
-                                        chapterNumber =
-                                            app.xreader.domain.reader
-                                                .ChapterDisplayOrder
-                                                .displayNumber(it)
-                                                ?: "${it.index + 1}",
-                                        chapterTitle = it.title,
-                                        bookPercent = null
-                                    )
-                                } ?: "Begin at chapter 1"
-                            } else {
-                                continuePillSubLine(
-                                    chapterNumber =
-                                        continueChapter?.let {
-                                            app.xreader.domain.reader
-                                                .ChapterDisplayOrder
-                                                .displayNumber(it)
-                                        } ?: "${state.continueChapterIndex + 1}",
-                                    chapterTitle = continueChapter?.title,
-                                    bookPercent = bookPercent,
-                                    unitWord = if (
-                                        book.localFormat ==
-                                        app.xreader.data.db.BookFormat.PDF
-                                    ) {
-                                        "Page"
-                                    } else {
-                                        "Chapter"
-                                    }
-                                )
-                            },
-                            onRead = {
-                                onReadChapter(state.continueChapterIndex)
-                            },
                             onToggleFavourite = {
                                 viewModel.setFavourite(!state.favourite)
                             },
@@ -1053,6 +1062,22 @@ fun BookDetailScreen(
                             onRefresh = { viewModel.refreshChapters() },
                             onRequestRemove = { confirmRemove = true }
                         )
+                        state.carriedOverNote?.let { note ->
+                            Text(
+                                note,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                        }
+                        state.progressLinkNote?.let { note ->
+                            Text(
+                                note,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                        }
                     } else {
                     // The big Continue pill (reference): play
                     // disc + label + chapter/progress sub-line +
@@ -1171,22 +1196,34 @@ fun BookDetailScreen(
                                             // by its OWN number (the
                                             // identity-first target),
                                             // never by stored position.
+                                            // Code 122: an unnumbered
+                                            // chapter falls back to
+                                            // its title inside the
+                                            // sub-line — no
+                                            // position arithmetic.
                                             continuePillSubLine(
                                                 chapterNumber = app.xreader.domain.reader
                                                     .ChapterDisplayOrder
-                                                    .displayNumber(it)
-                                                    ?: "${it.index + 1}",
+                                                    .displayNumber(it),
                                                 chapterTitle = it.title,
                                                 bookPercent = null
                                             )
                                         } ?: "Begin at chapter 1"
                                     } else {
                                         continuePillSubLine(
+                                            // Code 122: no position
+                                            // fallback — when the
+                                            // chapter's own number
+                                            // doesn't parse (or the
+                                            // chapter isn't resolved),
+                                            // the sub-line carries
+                                            // its title / the percent
+                                            // alone.
                                             chapterNumber = continueChapter?.let {
                                                 app.xreader.domain.reader
                                                     .ChapterDisplayOrder
                                                     .displayNumber(it)
-                                            } ?: "${state.continueChapterIndex + 1}",
+                                            },
                                             chapterTitle = continueChapter?.title,
                                             bookPercent = bookPercent,
                                             unitWord = if (
@@ -1439,7 +1476,7 @@ fun BookDetailScreen(
                     // the shipped behaviour). Nocturne keeps the
                     // FilterChip row in the else branch.
                     if (isM3Book) {
-                        M3StatusSegmented(
+                        M3StatusToggleGroup(
                             current = state.bookMeta.status,
                             onPick = { picked ->
                                 viewModel.setReadingStatus(
@@ -1533,7 +1570,12 @@ fun BookDetailScreen(
                         )
                         Text(
                             "Track this book — tell me when new chapters land",
-                            style = MaterialTheme.typography.bodyMedium
+                            style = MaterialTheme.typography.bodyMedium,
+                            // Code 122 (conviction §3.1): explicit
+                            // colour — bare, this label rendered
+                            // black-on-dark under M3 and the switch
+                            // read as unlabelled.
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
@@ -1661,13 +1703,18 @@ fun BookDetailScreen(
                                     // v1.7 OE-4 patch (Fix B): a PDF's
                                     // place is a page — no chapter
                                     // word, no chapter denominator.
+                                    // Code 122 (conviction §3.4): the
+                                    // number is the RESOLVED chapter's
+                                    // own parsed number (the hero
+                                    // sub-line's derivation), never
+                                    // position+1 on the stored index.
                                     if (
                                         book.localFormat ==
                                         app.xreader.data.db.BookFormat.PDF
                                     ) {
-                                        "Page ${state.continueChapterIndex + 1}"
+                                        continuePlaceLabel
                                     } else {
-                                        "Chapter ${state.continueChapterIndex + 1}" +
+                                        "$continuePlaceLabel" +
                                             " / ${state.chapters.size}"
                                     },
                                     style = MaterialTheme.typography.labelMedium
@@ -2354,6 +2401,41 @@ fun BookDetailScreen(
                                     )
                                 }
                             }
+                        }
+                        // Code 122 (Wave 3, The Stage): the
+                        // A-121-1 chapter-range bar rides INLINE
+                        // at the head of the chapter list (the
+                        // mockup's range strip — one chip for a
+                        // short book, 1–100 / 101–200… past the
+                        // threshold). It lives INSIDE this header
+                        // item so the chapter-row prefix count
+                        // above stays exact. A chip tap grows
+                        // the window to the range and queues the
+                        // same jump scroll the field uses.
+                        if (isM3Book && displayChapters.isNotEmpty()) {
+                            val rangeStartPos = displayChapters
+                                .indexOfFirst {
+                                    it.index == state.continueChapterIndex
+                                }
+                            ChapterRangeBar(
+                                totalCount = displayChapters.size,
+                                selectedRange = if (rangeStartPos >= 0) {
+                                    rangeStartPos / CHAPTER_RANGE_SIZE
+                                } else {
+                                    0
+                                },
+                                onSelectRange = { range ->
+                                    val pos = range * CHAPTER_RANGE_SIZE
+                                    if (pos < displayChapters.size) {
+                                        if (pos >= chapterWindow) {
+                                            chapterWindow = pos + 1
+                                        }
+                                        jumpTargetId =
+                                            displayChapters[pos].id
+                                        pendingJumpPos = pos
+                                    }
+                                }
+                            )
                         }
                     }
                 }
@@ -3593,11 +3675,34 @@ private fun SourcesMergeSection(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        duplicate.title,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            duplicate.title,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        // Code 122 (fix d): the row carries the
+                        // full Book entity — say WHICH copy this
+                        // is (its format and its size) before
+                        // asking for a merge.
+                        Text(
+                            duplicate.localFormat.name +
+                                if (duplicate.totalChapters > 0) {
+                                    if (
+                                        duplicate.localFormat ==
+                                        app.xreader.data.db.BookFormat.PDF
+                                    ) {
+                                        " · ${duplicate.totalChapters} pages"
+                                    } else {
+                                        " · ${duplicate.totalChapters} chapters"
+                                    }
+                                } else {
+                                    ""
+                                },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
                     TextButton(onClick = { onMerge(duplicate.id) }) {
                         Text("Merge into this book")
                     }
@@ -4360,6 +4465,12 @@ private fun AiSuggestionsSection(
     onDismiss: (String) -> Unit,
     onFind: (String) -> Unit
 ) {
+    // Code 122 (Wave 3, The Stage): under Material 3 the
+    // READY suggestions render as the mockup's cover grid;
+    // Nocturne keeps the shipped rows.
+    val isM3Suggestions =
+        app.xreader.ui.theme.LocalDesignState.current.design ==
+            app.xreader.data.prefs.AppDesign.MATERIAL3
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -4407,6 +4518,41 @@ private fun AiSuggestionsSection(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                if (isM3Suggestions && state.aiSuggestions.isNotEmpty()) {
+                    // The Stage's cover grid: three posters to
+                    // a row (generated covers — a suggestion is
+                    // a title, not a library row, so it has no
+                    // cover file of its own), tap finds the
+                    // title on the sources, Dismiss stays
+                    // under each card.
+                    state.aiSuggestions.chunked(3).forEach { rowTitles ->
+                        Row(
+                            horizontalArrangement =
+                                Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            rowTitles.forEach { title ->
+                                Column(Modifier.weight(1f)) {
+                                    app.xreader.ui.common.BookPosterCard(
+                                        title = title,
+                                        author = null,
+                                        coverModel = null,
+                                        metaLine = "AI suggestion",
+                                        onClick = { onFind(title) }
+                                    )
+                                    TextButton(
+                                        onClick = { onDismiss(title) }
+                                    ) {
+                                        Text("Dismiss")
+                                    }
+                                }
+                            }
+                            repeat(3 - rowTitles.size) {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                } else {
                 state.aiSuggestions.forEach { title ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         TextButton(
@@ -4419,6 +4565,7 @@ private fun AiSuggestionsSection(
                             Text("Dismiss")
                         }
                     }
+                }
                 }
                 Text(
                     "Suggestions from your AI engine, based on this book. " +
@@ -4606,10 +4753,28 @@ private fun BookCleanupActions(
                         )
                     } else {
                         Text(
-                            "Removing the book also removes its reading progress and " +
-                                "bookmarks. Your original file (if you imported one) " +
-                                "stays exactly where it is — only Xreader's own copies " +
-                                "can be deleted, and only if you choose that below."
+                            // Code 122 (fix e): the words match
+                            // the soft door's REAL behaviour
+                            // (AppContainer.removeFromLibrarySoft):
+                            // "Remove book only" flips the book
+                            // out of the library and keeps the
+                            // row — progress, bookmarks, History
+                            // and your downloads all survive, so
+                            // the book can be added back from
+                            // History; only the chapter copies
+                            // Xreader cached automatically while
+                            // reading are freed. The old text
+                            // promised progress and bookmarks
+                            // would be removed — they are not.
+                            "Remove book only takes the book out of your library. " +
+                                "Your reading progress, bookmarks and History are " +
+                                "kept, and you can add the book back from History " +
+                                "any time. Only the chapter copies Xreader cached " +
+                                "automatically while you were reading are freed — " +
+                                "your downloads stay. Your original file (if you " +
+                                "imported one) stays exactly where it is. The " +
+                                "second option below deletes the book and its " +
+                                "downloaded chapters for good."
                         )
                         Spacer(Modifier.height(8.dp))
                         app.xreader.ui.common.DialogDangerOption(
@@ -4657,7 +4822,11 @@ private fun BookCleanupActions(
  * The number match is word-boundary safe: chapter 1 never
  * matches a "Chapter 11…" title. */
 internal fun continuePillSubLine(
-    chapterNumber: String,
+    // Code 122: nullable — a chapter whose own number does not
+    // parse (ChapterDisplayOrder.displayNumber == null) has NO
+    // number segment; the line falls back to the chapter's
+    // title alone rather than a fabricated position.
+    chapterNumber: String?,
     chapterTitle: String?,
     bookPercent: Int?,
     // v1.7 OE-4 patch (Fix B): a PDF's place is a page, never a
@@ -4665,8 +4834,9 @@ internal fun continuePillSubLine(
     unitWord: String = "Chapter"
 ): String {
     val title = chapterTitle?.trim().orEmpty()
-    val chapterLabel = "$unitWord $chapterNumber"
+    val chapterLabel = chapterNumber?.let { "$unitWord $it" }
     val head = when {
+        chapterLabel == null -> title
         title.isEmpty() -> chapterLabel
         title.equals(chapterLabel, ignoreCase = true) -> title
         title.startsWith("$chapterLabel ", ignoreCase = true) -> title
@@ -4675,7 +4845,11 @@ internal fun continuePillSubLine(
         title.startsWith("$chapterLabel - ", ignoreCase = true) -> title
         else -> "$chapterLabel · $title"
     }
-    return if (bookPercent != null) "$head · $bookPercent%" else head
+    return when {
+        bookPercent != null && head.isNotEmpty() -> "$head · $bookPercent%"
+        bookPercent != null -> "$bookPercent%"
+        else -> head
+    }
 }
 
 /** v1.7 Patch 1 (item 3c): reading has begun exactly when
@@ -4690,6 +4864,32 @@ internal fun hasStartedReading(
     anyChapterRead: Boolean
 ): Boolean = (progressFraction ?: 0f) > 0f || anyChapterRead
 
+/** Code 122 (The Stage): the stage foot's right-hand
+ * progress line — "≈N left in book" at the reader's own
+ * pace, from the same WpmEstimator derivation the shared
+ * progress card uses. Null when the estimate is not
+ * knowable (nothing read yet / no word counts), so the
+ * stage line simply omits it. */
+private fun remainingEstimateLabel(
+    state: BookDetailUiState
+): String? {
+    val estimate = app.xreader.domain.reader.WpmEstimator
+        .estimateRemainingMinutes(
+            state.chapters.map {
+                app.xreader.domain.reader.WpmEstimator.ChapterWords(
+                    it.read, it.wordCount
+                )
+            },
+            state.wpm
+        )
+    return if (estimate.first > 0) {
+        "≈" + app.xreader.domain.reader.WpmEstimator
+            .formatMinutes(estimate.first) + " left in book"
+    } else {
+        null
+    }
+}
+
 private fun formatMb(bytes: Long): String =
     if (bytes >= 1024L * 1024L) "${bytes / (1024L * 1024L)} MB"
     else "${(bytes / 1024L).coerceAtLeast(1)} KB"
@@ -4703,36 +4903,119 @@ private fun formatMb(bytes: Long): String =
 // are the screen's own — only the forms are the design's.
 // ────────────────────────────────────────────────────────────────
 
-/** R8: the five statuses as segmented buttons (spec form of
- * the shipped status picker; tap-again-clear is the caller's
- * behaviour, preserved from the chip row). */
+/** Code 122 (Wave 3, The Stage): the five statuses as the
+ * mockup's EXPRESSIVE TOGGLE GROUP — the picked status
+ * expands into a wide filled pill carrying its icon AND its
+ * full name; the other four stand as round icon toggles,
+ * each with its full name set beneath it. Five statuses, all
+ * labelled, nothing clipped, nothing scrolled (the 121
+ * segmented row overflowed the screen — conviction §3.3).
+ * Tap-again-clear is the caller's behaviour, preserved. */
 @OptIn(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
 )
 @Composable
-private fun M3StatusSegmented(
+private fun M3StatusToggleGroup(
     current: ReadingStatus,
     onPick: (ReadingStatus) -> Unit
 ) {
-    Row(Modifier.horizontalScroll(rememberScrollState())) {
-        androidx.compose.material3.SingleChoiceSegmentedButtonRow {
-            listOf(
-                ReadingStatus.READING to "Reading",
-                ReadingStatus.ON_HOLD to "On hold",
-                ReadingStatus.PLAN_TO_READ to "Plan",
-                ReadingStatus.COMPLETED to "Completed",
-                ReadingStatus.DROPPED to "Dropped"
-            ).forEachIndexed { index, (status, label) ->
-                SegmentedButton(
-                    selected = current == status,
-                    onClick = { onPick(status) },
-                    shape = androidx.compose.material3
-                        .SegmentedButtonDefaults.itemShape(
-                            index = index,
-                            count = 5
+    val statuses = listOf(
+        Triple(ReadingStatus.READING, "Reading", Icons.Filled.PlayCircle),
+        Triple(ReadingStatus.ON_HOLD, "On hold", Icons.Filled.PauseCircle),
+        Triple(
+            ReadingStatus.PLAN_TO_READ, "Plan to read",
+            Icons.Filled.Bookmark
+        ),
+        Triple(
+            ReadingStatus.COMPLETED, "Completed",
+            Icons.Filled.CheckCircle
+        ),
+        Triple(ReadingStatus.DROPPED, "Dropped", Icons.Filled.Cancel)
+    )
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        statuses.forEach { (status, label, icon) ->
+            val picked = current == status
+            Column(
+                modifier = if (picked) {
+                    Modifier.weight(1f)
+                } else {
+                    Modifier.width(52.dp)
+                },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (picked) {
+                    ToggleButton(
+                        checked = true,
+                        onCheckedChange = { onPick(status) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        colors = ToggleButtonDefaults.colors(
+                            checkedContainerColor =
+                                MaterialTheme.colorScheme.primary,
+                            checkedContentColor =
+                                MaterialTheme.colorScheme.onPrimary
+                        )
+                    ) {
+                        Icon(
+                            icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(21.dp)
+                        )
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(start = 8.dp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                } else {
+                    ToggleButton(
+                        checked = false,
+                        onCheckedChange = { onPick(status) },
+                        modifier = Modifier.size(52.dp),
+                        shapes = ToggleButtonShapes(
+                            shape = CircleShape,
+                            pressedShape = CircleShape,
+                            checkedShape = CircleShape
                         ),
-                    label = { Text(label) }
+                        colors = ToggleButtonDefaults.colors(
+                            containerColor = Color.Transparent,
+                            contentColor =
+                                MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.outline
+                        ),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Icon(
+                            icon,
+                            contentDescription = label,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (picked) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -4920,86 +5203,598 @@ private fun M3BookCover(
     }
 }
 
-/** R8 hero (code 121): NOT a card. The hero zone sits on the
- * content-colour band (the same `surfaceContainer` tone as
- * the app bar above it, flowing into the page): cover
- * ~96x136 in the extraLarge shape at leading, the title in
- * emphasized headlineSmall, the author, and the assist chips
- * (format · chapters · source). Tags live in their own
- * section below, not here. */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+/** Code 122 (Wave 3): THE STAGE — the M3 book page's hero,
+ * a 100% copy of DESIGN-M3-BOOKPAGE-V2 option B
+ * (bookpage-v2-b.html). The book is PRESENTED, not filed: a
+ * full-bleed stage panel on the cover's own Content scheme
+ * (BookDetailTheme provides that scheme to this subtree
+ * when the cover-colour knob is on; otherwise the app
+ * scheme's tones), lit from above, with the cover at
+ * 196×278 centre stage, the kicker, the title beneath it in
+ * emphasized headline type, the publisher line and the
+ * centred assist chips — and at the stage's foot the
+ * full-width Continue button with the progress line and the
+ * wavy progress under it. The stage bleeds to the page
+ * edges: it cancels the LazyColumn's 20dp side padding and
+ * the 4dp top padding, and carries the column's 20dp item
+ * spacing inside its own bottom padding. Below the stage
+ * the document runs in the page's normal flow (the actions
+ * live in [M3StageActions], in the CTA item under the
+ * stage). The Continue/read state machine is the shipped
+ * one — a blocked or still-finding read renders the honest
+ * pill, never a live button. */
+@OptIn(
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
 @Composable
-private fun M3BookHero(
+private fun M3BookStage(
     book: app.xreader.data.db.Book,
     state: BookDetailUiState,
-    coverFile: (String?) -> File?
+    coverFile: (String?) -> File?,
+    kicker: String,
+    continuePlaceLabel: String,
+    bookPercent: Int,
+    remainingLabel: String?,
+    onRead: () -> Unit,
+    onRefresh: () -> Unit
 ) {
-    Row(
+    val stageContainer = MaterialTheme.colorScheme.surfaceContainer
+    val stageOn = MaterialTheme.colorScheme.onSurface
+    val stageOnVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val stageAccent = MaterialTheme.colorScheme.primary
+    Column(
         Modifier
-            .fillMaxWidth()
+            // Full bleed: the item slot is the column's padded
+            // content width (20dp sides, 4dp top), so the stage
+            // measures itself at slot+40dp wide, reports its
+            // height 4dp shorter, and places itself over the
+            // padding on both axes — the panel touches both
+            // screen edges and the bar above it.
+            .layout { measurable, constraints ->
+                val bleedX = 20.dp.roundToPx()
+                val bleedTop = 4.dp.roundToPx()
+                val fullWidth = constraints.maxWidth + bleedX * 2
+                val placeable = measurable.measure(
+                    constraints.copy(
+                        minWidth = fullWidth,
+                        maxWidth = fullWidth
+                    )
+                )
+                layout(fullWidth, placeable.height - bleedTop) {
+                    placeable.placeRelative(-bleedX, -bleedTop)
+                }
+            }
             .background(
-                MaterialTheme.colorScheme.surfaceContainer,
-                RoundedCornerShape(28.dp)
+                Brush.verticalGradient(
+                    listOf(
+                        stageContainer,
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                    )
+                )
             )
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+            .padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 6.dp),
+        // (bottom 6 + the closing 20dp spacer inside = the
+        // mockup's 26dp stage foot padding.)
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         M3BookCover(
             book = book,
             coverFile = coverFile,
             modifier = Modifier
-                .size(width = 96.dp, height = 136.dp)
-                .clip(MaterialTheme.shapes.extraLarge)
+                .size(width = 196.dp, height = 278.dp)
+                .clip(RoundedCornerShape(24.dp))
         )
-        Column(
-            Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
+        Text(
+            kicker.uppercase(),
+            style = MaterialTheme.typography.labelMedium,
+            color = stageAccent,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 22.dp)
+        )
+        Text(
+            book.title,
+            style = MaterialTheme.typography.headlineMediumEmphasized,
+            color = stageOn,
+            textAlign = TextAlign.Center,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 7.dp, start = 8.dp, end = 8.dp)
+        )
+        if (book.author.isNotBlank()) {
             Text(
-                book.title,
-                style = MaterialTheme.typography
-                    .headlineSmallEmphasized,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis
+                book.author,
+                style = MaterialTheme.typography.bodyMedium,
+                color = stageOnVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 7.dp)
             )
-            if (book.author.isNotBlank()) {
+        }
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(
+                8.dp, Alignment.CenterHorizontally
+            ),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 15.dp)
+        ) {
+            AssistChip(
+                onClick = {},
+                label = { Text(book.localFormat.name) }
+            )
+            AssistChip(
+                onClick = {},
+                label = {
+                    Text(
+                        "${maxOf(book.totalChapters, state.chapters.size)} chapters"
+                    )
+                }
+            )
+            AssistChip(
+                onClick = {},
+                label = {
+                    Text(
+                        if (
+                            book.sourceType ==
+                            app.xreader.data.db.SourceType.LOCAL_FILE
+                        ) {
+                            "Local file"
+                        } else {
+                            "Source book"
+                        }
+                    )
+                }
+            )
+            if (state.providerName.isNotBlank() &&
+                book.sourceType ==
+                app.xreader.data.db.SourceType.EXTENSION
+            ) {
+                AssistChip(
+                    onClick = {},
+                    label = { Text(state.providerName) }
+                )
+            }
+        }
+        // The stage's foot: the read state machine. The live
+        // form is the full-width Continue (fix b: it owns the
+        // whole stage width, its label is never starved by a
+        // group measure and never clipped without ellipsis).
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 22.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            when {
+                state.readCtaState ==
+                    ReadCtaState.CHAPTERS_UNAVAILABLE -> {
+                    ChaptersUnavailablePill(
+                        reason = state.readBlockedReason!!
+                    )
+                }
+                state.readCtaState ==
+                    ReadCtaState.FINDING_CHAPTERS -> {
+                    ChaptersUnavailablePill(
+                        title = "Finding chapters…",
+                        reason = when {
+                            state.challengePending ->
+                                "Waiting for the site's check…"
+                            state.chaptersStalled ->
+                                "Still finding — this source is slow"
+                            else ->
+                                "The chapter list is still loading " +
+                                    "from the source."
+                        }
+                    )
+                    if (state.chaptersStalled &&
+                        !state.challengePending
+                    ) {
+                        TextButton(
+                            onClick = onRefresh,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Retry")
+                        }
+                    }
+                }
+                state.readBlockedReason != null -> {
+                    ChaptersUnavailablePill(
+                        reason = state.readBlockedReason!!
+                    )
+                }
+                else -> {
+                    Button(
+                        onClick = onRead,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(ButtonDefaults.LargeContainerHeight),
+                        shapes = ButtonDefaults.shapesFor(
+                            ButtonDefaults.LargeContainerHeight
+                        ),
+                        contentPadding = ButtonDefaults.contentPaddingFor(
+                            ButtonDefaults.LargeContainerHeight,
+                            hasStartIcon = true
+                        )
+                    ) {
+                        Icon(
+                            Icons.Filled.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(
+                                ButtonDefaults.iconSizeFor(
+                                    ButtonDefaults.LargeContainerHeight
+                                )
+                            )
+                        )
+                        Text(
+                            if (state.progress == null) {
+                                "Start reading"
+                            } else {
+                                // Fix (b)+(c): the FULL label,
+                                // carrying the RESOLVED
+                                // chapter's own place — never
+                                // position+1, never clipped.
+                                "Continue · $continuePlaceLabel · $bookPercent%"
+                            },
+                            style = ButtonDefaults.textStyleFor(
+                                ButtonDefaults.LargeContainerHeight
+                            ),
+                            modifier = Modifier.padding(
+                                start = ButtonDefaults.iconSpacingFor(
+                                    ButtonDefaults.LargeContainerHeight
+                                )
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            continuePlaceLabel +
+                                if (
+                                    book.localFormat ==
+                                    app.xreader.data.db.BookFormat.PDF
+                                ) {
+                                    ""
+                                } else {
+                                    " of ${state.chapters.size}"
+                                },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = stageOnVariant
+                        )
+                        Spacer(Modifier.weight(1f))
+                        remainingLabel?.let { label ->
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = stageOnVariant
+                            )
+                        }
+                    }
+                    LinearWavyProgressIndicator(
+                        progress = { bookPercent / 100f },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+        // The stage ends at the wavy progress (mockup: the
+        // panel's own 26dp bottom padding); the document —
+        // ButtonGroup, doors, Status — runs below it in the
+        // page's own items, starting with the CTA item's
+        // M3StageActions.
+        Spacer(Modifier.height(20.dp))
+    }
+}
+
+/** Code 122 (Wave 3): the document's first block under the
+ * Stage — the mockup's labelled ButtonGroup (Download ·
+ * Favourite · Share, every one icon + word; Favourite is a
+ * LABELLED toggle, never a bare icon), the Catch me up /
+ * Lore tonal door pair, Refresh for source books, and the
+ * visible Remove door. Share has no callback of its own: it
+ * builds the same share intent the chrome's Share action
+ * builds, from the book it is given. */
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+private fun M3StageActions(
+    state: BookDetailUiState,
+    book: app.xreader.data.db.Book,
+    onToggleFavourite: () -> Unit,
+    onOpenDownloadSheet: () -> Unit,
+    onDownloadChoice: (BookDownloadChoice) -> Unit,
+    onDownloadThisChapter: () -> Unit,
+    onCatchUp: () -> Unit,
+    onOpenLore: () -> Unit,
+    onRefresh: () -> Unit,
+    onRequestRemove: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Column(
+        modifier,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        ButtonGroup(
+            overflowIndicator = {
+                ButtonGroupDefaults.OverflowIndicator(it)
+            },
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            customItem(
+                buttonGroupContent = {
+                    M3DownloadSplit(
+                        state = state,
+                        onOpenDownloadSheet = onOpenDownloadSheet,
+                        onDownloadChoice = onDownloadChoice,
+                        onDownloadThisChapter = onDownloadThisChapter,
+                        modifier = Modifier.weight(1f)
+                    )
+                },
+                menuContent = { menuState ->
+                    DropdownMenuItem(
+                        text = { Text("Download") },
+                        onClick = {
+                            menuState.dismiss()
+                            onOpenDownloadSheet()
+                        }
+                    )
+                }
+            )
+            customItem(
+                buttonGroupContent = {
+                    val favInteraction = remember {
+                        androidx.compose.foundation.interaction
+                            .MutableInteractionSource()
+                    }
+                    ToggleButton(
+                        checked = state.favourite,
+                        onCheckedChange = { onToggleFavourite() },
+                        modifier = Modifier
+                            .weight(1f)
+                            .animateWidth(favInteraction)
+                            .height(ButtonDefaults.MediumContainerHeight),
+                        interactionSource = favInteraction,
+                        shapes = ToggleButtonDefaults.shapesFor(
+                            ButtonDefaults.MediumContainerHeight
+                        ),
+                        colors = ToggleButtonDefaults.colors(
+                            containerColor =
+                                MaterialTheme.colorScheme
+                                    .surfaceContainer,
+                            contentColor =
+                                MaterialTheme.colorScheme.onSurface,
+                            checkedContainerColor =
+                                MaterialTheme.colorScheme
+                                    .primaryContainer,
+                            checkedContentColor =
+                                MaterialTheme.colorScheme
+                                    .onPrimaryContainer
+                        )
+                    ) {
+                        Icon(
+                            if (state.favourite) {
+                                Icons.Filled.Bookmark
+                            } else {
+                                Icons.Filled.BookmarkBorder
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(
+                                ButtonDefaults.iconSizeFor(
+                                    ButtonDefaults.MediumContainerHeight
+                                )
+                            )
+                        )
+                        Text(
+                            "Favourite",
+                            modifier = Modifier.padding(
+                                start = ButtonDefaults.iconSpacingFor(
+                                    ButtonDefaults.MediumContainerHeight
+                                )
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                },
+                menuContent = { menuState ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (state.favourite) {
+                                    "Favourited"
+                                } else {
+                                    "Favourite"
+                                }
+                            )
+                        },
+                        onClick = {
+                            menuState.dismiss()
+                            onToggleFavourite()
+                        }
+                    )
+                }
+            )
+            customItem(
+                buttonGroupContent = {
+                    FilledTonalButton(
+                        onClick = {
+                            val intent = android.content.Intent(
+                                android.content.Intent.ACTION_SEND
+                            ).apply {
+                                type = "text/plain"
+                                putExtra(
+                                    android.content.Intent.EXTRA_TEXT,
+                                    listOfNotNull(
+                                        book.title,
+                                        book.author.takeIf {
+                                            it.isNotBlank()
+                                        }
+                                    ).joinToString(" — ")
+                                )
+                            }
+                            runCatching {
+                                context.startActivity(
+                                    android.content.Intent
+                                        .createChooser(
+                                            intent, "Share book"
+                                        )
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(ButtonDefaults.MediumContainerHeight),
+                        shapes = ButtonDefaults.shapesFor(
+                            ButtonDefaults.MediumContainerHeight
+                        ),
+                        contentPadding = ButtonDefaults.contentPaddingFor(
+                            ButtonDefaults.MediumContainerHeight,
+                            hasStartIcon = true
+                        )
+                    ) {
+                        Icon(
+                            Icons.Filled.Share,
+                            contentDescription = null,
+                            modifier = Modifier.size(
+                                ButtonDefaults.iconSizeFor(
+                                    ButtonDefaults.MediumContainerHeight
+                                )
+                            )
+                        )
+                        Text(
+                            "Share",
+                            modifier = Modifier.padding(
+                                start = ButtonDefaults.iconSpacingFor(
+                                    ButtonDefaults.MediumContainerHeight
+                                )
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                },
+                menuContent = { menuState ->
+                    DropdownMenuItem(
+                        text = { Text("Share") },
+                        onClick = { menuState.dismiss() }
+                    )
+                }
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilledTonalButton(
+                onClick = onCatchUp,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor =
+                        MaterialTheme.colorScheme.tertiaryContainer,
+                    contentColor =
+                        MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            ) {
+                Icon(
+                    Icons.Filled.History,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
                 Text(
-                    book.author,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme
-                        .onSurfaceVariant,
+                    "Catch me up",
+                    modifier = Modifier.padding(start = 6.dp),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(top = 4.dp)
+            FilledTonalButton(
+                onClick = onOpenLore,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor =
+                        MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor =
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                )
             ) {
-                AssistChip(
-                    onClick = {},
-                    label = { Text(book.localFormat.name) }
+                Icon(
+                    Icons.Filled.MenuBook,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
                 )
-                AssistChip(
-                    onClick = {},
-                    label = {
-                        Text(
-                            "${maxOf(book.totalChapters, state.chapters.size)} chapters"
-                        )
-                    }
+                Text(
+                    "Lore",
+                    modifier = Modifier.padding(start = 6.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                if (state.providerName.isNotBlank() &&
-                    book.sourceType ==
-                    app.xreader.data.db.SourceType.EXTENSION
-                ) {
-                    AssistChip(
-                        onClick = {},
-                        label = { Text(state.providerName) }
+            }
+        }
+        if (book.sourceType ==
+            app.xreader.data.db.SourceType.EXTENSION
+        ) {
+            OutlinedButton(
+                onClick = onRefresh,
+                enabled = !state.chaptersLoading,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (state.chaptersLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        Icons.Filled.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
+                Text(
+                    if (state.chaptersLoading) {
+                        "Refreshing…"
+                    } else {
+                        "Refresh — get new chapters from the source"
+                    },
+                    modifier = Modifier.padding(start = 6.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
+        }
+        if (book.inLibrary) {
+            // The Stage's Remove door: an error-role TEXT
+            // button; it opens the shared confirmRemove
+            // dialog (BookCleanupActions hosts it).
+            TextButton(
+                onClick = onRequestRemove,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    "Remove from library",
+                    modifier = Modifier.padding(start = 6.dp)
+                )
+            }
+            Text(
+                "Takes it out of your library — your place, " +
+                    "bookmarks and downloads are kept",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -5180,341 +5975,3 @@ private fun M3DownloadSplit(
     }
 }
 
-/** The favourite toggle at the button group's medium size —
- * a filled icon toggle button (the group's third member). */
-@Composable
-private fun M3FavouriteToggle(
-    favourite: Boolean,
-    onToggleFavourite: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    FilledIconToggleButton(
-        checked = favourite,
-        onCheckedChange = { onToggleFavourite() },
-        modifier = modifier.size(ButtonDefaults.MediumContainerHeight)
-    ) {
-        Icon(
-            if (favourite) {
-                Icons.Filled.Bookmark
-            } else {
-                Icons.Filled.BookmarkBorder
-            },
-            contentDescription = if (favourite) {
-                "Remove from Favourites"
-            } else {
-                "Add to Favourites"
-            }
-        )
-    }
-}
-
-/** R8's action area (the CTA item's M3 branch): the honest
- * blocked states keep the shipped pill — a blocked read never
- * renders as a live button in either design. When the read is
- * available, the primary-action knob picks the form: the
- * button group (Read at the large size, the rest at medium —
- * addendum A4) or the download + favourite row that pairs
- * with the extended Read FAB the screen floats. Below, in
- * both forms: the resume line, the carry-over notes, the
- * Catch me up / Lore doors, Refresh (source books) and the
- * visible Remove door — the shipped action set, in M3 forms.
- * The Status chips and Track switch below this area are
- * shared with Nocturne (they are stock components already). */
-@Composable
-private fun M3BookActions(
-    state: BookDetailUiState,
-    book: app.xreader.data.db.Book,
-    designState: app.xreader.data.prefs.DesignState,
-    readLabel: String,
-    readSubLine: String,
-    onRead: () -> Unit,
-    onToggleFavourite: () -> Unit,
-    onOpenDownloadSheet: () -> Unit,
-    onDownloadChoice: (BookDownloadChoice) -> Unit,
-    onDownloadThisChapter: () -> Unit,
-    onCatchUp: () -> Unit,
-    onOpenLore: () -> Unit,
-    onRefresh: () -> Unit,
-    onRequestRemove: () -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        when {
-            state.readCtaState ==
-                ReadCtaState.CHAPTERS_UNAVAILABLE -> {
-                ChaptersUnavailablePill(
-                    reason = state.readBlockedReason!!
-                )
-            }
-            state.readCtaState ==
-                ReadCtaState.FINDING_CHAPTERS -> {
-                ChaptersUnavailablePill(
-                    title = "Finding chapters…",
-                    reason = when {
-                        state.challengePending ->
-                            "Waiting for the site's check…"
-                        state.chaptersStalled ->
-                            "Still finding — this source is slow"
-                        else ->
-                            "The chapter list is still loading " +
-                                "from the source."
-                    }
-                )
-                if (state.chaptersStalled &&
-                    !state.challengePending
-                ) {
-                    TextButton(
-                        onClick = onRefresh,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Retry")
-                    }
-                }
-            }
-            state.readBlockedReason != null -> {
-                // READY but blocked (the shipped pill renders
-                // disabled in this state): the honest pill
-                // carries the reason — never a live button.
-                ChaptersUnavailablePill(
-                    reason = state.readBlockedReason!!
-                )
-            }
-            else -> {
-                // Code 121 (R8): the button group is the ONE
-                // action form — the 120 action knob (group /
-                // Read FAB) is retired by the from-scratch spec.
-                run {
-                    ButtonGroup(
-                        overflowIndicator = {
-                            ButtonGroupDefaults.OverflowIndicator(it)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement =
-                            Arrangement.spacedBy(8.dp)
-                    ) {
-                        customItem(
-                            buttonGroupContent = {
-                            val readInteraction = remember {
-                                androidx.compose.foundation.interaction
-                                    .MutableInteractionSource()
-                            }
-                            Button(
-                                onClick = onRead,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .animateWidth(readInteraction)
-                                    .height(
-                                        ButtonDefaults
-                                            .LargeContainerHeight
-                                    ),
-                                interactionSource = readInteraction,
-                                shapes = ButtonDefaults.shapesFor(
-                                    ButtonDefaults.LargeContainerHeight
-                                ),
-                                contentPadding =
-                                    ButtonDefaults.contentPaddingFor(
-                                        ButtonDefaults
-                                            .LargeContainerHeight,
-                                        hasStartIcon = true
-                                    )
-                            ) {
-                                Icon(
-                                    Icons.Filled.PlayArrow,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(
-                                        ButtonDefaults.iconSizeFor(
-                                            ButtonDefaults
-                                                .LargeContainerHeight
-                                        )
-                                    )
-                                )
-                                Text(
-                                    readLabel,
-                                    style = ButtonDefaults
-                                        .textStyleFor(
-                                            ButtonDefaults
-                                                .LargeContainerHeight
-                                        ),
-                                    modifier = Modifier.padding(
-                                        start = ButtonDefaults
-                                            .iconSpacingFor(
-                                                ButtonDefaults
-                                                    .LargeContainerHeight
-                                            )
-                                    ),
-                                    maxLines = 1
-                                )
-                            }
-                            },
-                            menuContent = { menuState ->
-                                DropdownMenuItem(
-                                    text = { Text(readLabel) },
-                                    onClick = {
-                                        menuState.dismiss()
-                                        onRead()
-                                    }
-                                )
-                            }
-                        )
-                        customItem(
-                            buttonGroupContent = {
-                                M3DownloadSplit(
-                                    state = state,
-                                    onOpenDownloadSheet =
-                                        onOpenDownloadSheet,
-                                    onDownloadChoice = onDownloadChoice,
-                                    onDownloadThisChapter =
-                                        onDownloadThisChapter
-                                )
-                            },
-                            menuContent = { menuState ->
-                                DropdownMenuItem(
-                                    text = { Text("Download") },
-                                    onClick = {
-                                        menuState.dismiss()
-                                        onOpenDownloadSheet()
-                                    }
-                                )
-                            }
-                        )
-                        customItem(
-                            buttonGroupContent = {
-                                M3FavouriteToggle(
-                                    favourite = state.favourite,
-                                    onToggleFavourite = onToggleFavourite
-                                )
-                            },
-                            menuContent = { menuState ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            if (state.favourite) {
-                                                "Favourited"
-                                            } else {
-                                                "Favourite"
-                                            }
-                                        )
-                                    },
-                                    onClick = {
-                                        menuState.dismiss()
-                                        onToggleFavourite()
-                                    }
-                                )
-                            }
-                        )
-                    }
-                }
-
-                Text(
-                    readSubLine,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        state.carriedOverNote?.let { note ->
-            Text(
-                note,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        state.progressLinkNote?.let { note ->
-            Text(
-                note,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilledTonalButton(
-                onClick = onCatchUp,
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(
-                    Icons.Filled.History,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Text(
-                    "Catch me up",
-                    modifier = Modifier.padding(start = 6.dp),
-                    maxLines = 1
-                )
-            }
-            FilledTonalButton(
-                onClick = onOpenLore,
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(
-                    Icons.Filled.MenuBook,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Text(
-                    "Lore",
-                    modifier = Modifier.padding(start = 6.dp),
-                    maxLines = 1
-                )
-            }
-        }
-        if (book.sourceType ==
-            app.xreader.data.db.SourceType.EXTENSION
-        ) {
-            OutlinedButton(
-                onClick = onRefresh,
-                enabled = !state.chaptersLoading,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                if (state.chaptersLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Icon(
-                        Icons.Filled.Refresh,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                Text(
-                    if (state.chaptersLoading) {
-                        "Refreshing…"
-                    } else {
-                        "Refresh — get new chapters from the source"
-                    },
-                    modifier = Modifier.padding(start = 6.dp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-        if (book.inLibrary) {
-            // R8: Remove is an error-role TEXT button; it opens
-            // the S5 delete dialog (the shared confirmRemove
-            // dialog BookCleanupActions hosts).
-            TextButton(
-                onClick = onRequestRemove,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                )
-            ) {
-                Icon(
-                    Icons.Filled.Delete,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Text(
-                    "Remove from library",
-                    modifier = Modifier.padding(start = 6.dp)
-                )
-            }
-            Text(
-                "Also removes progress and bookmarks",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}

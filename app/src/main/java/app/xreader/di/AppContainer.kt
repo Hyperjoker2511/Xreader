@@ -38,6 +38,7 @@ import app.xreader.data.prefs.AppearancePrefs
 import app.xreader.data.prefs.OnboardingPrefs
 import app.xreader.data.prefs.keyVaultDataStore
 import app.xreader.data.prefs.settingsDataStore
+import androidx.glance.appwidget.updateAll
 import dev.mihon.injekt.patchInjekt
 import eu.kanade.tachiyomi.AppInfo
 import eu.kanade.tachiyomi.network.NetworkPreferences
@@ -1515,7 +1516,8 @@ class AppContainer(
     /** K3: the Keiyoushi player manager — download / verify /
      * consent / load / update / uninstall / restore for
      * Mihon-format manga extensions. Lazy like the rest of the
-     * extension stack; the shell's startup block calls
+     * extension stack; the container's startup sequence
+     * (startStartupSequence, code 122) calls
      * restoreInstalled() once per launch. Loads only ever run
      * after this container exists, so the K2 Injekt
      * registration above always precedes them. */
@@ -1548,6 +1550,145 @@ class AppContainer(
                 sourcePrefs.keiyoushiPlayerEnabled.first()
             }
         )
+    }
+
+    // ── Code 122 (source regression fix): the one-time startup
+    // sequence, hosted HERE on [appScope] instead of the shell's
+    // composition scope (CONVICTION-CODE121-SOURCE-REGRESSION).
+    // It used to ride MainScaffold's rememberCoroutineScope, so a
+    // design switch in the first seconds after launch (code 121's
+    // R39 reveal Try door) disposed the scaffold mid-restore,
+    // cancelled the load pass AFTER restoreInstalled()'s latch
+    // had flipped, and left the Keiyoushi live registry empty for
+    // the whole process. On appScope nothing in composition —
+    // recomposition, design switches, shell swaps — can cancel
+    // it. The AtomicBoolean makes the sequence run exactly once
+    // per process; [startStartupSequence] is called from
+    // MainActivity.onCreate. The calls and their order are the
+    // shell chain's, unchanged.
+
+    private val startupSequenceStarted =
+        java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 2 GB perf pass (F3): the cold-start chain's tier split,
+     * computed exactly as the shell computed it — on MINIMAL the
+     * chain's deferrable legs (update-pass deferred phase,
+     * ratings backfill, source dedupe, widget update) run in the
+     * shell's post-first-frame deferred effect instead; that
+     * effect reads this flag and awaits [startupPhase0]. */
+    val startupIsMinimalTier: Boolean
+        get() = app.xreader.data.prefs.PerformancePolicy.tierForRam(
+            totalRamMb()
+        ) == app.xreader.data.prefs.PerfTier.MINIMAL
+
+    /** Phase 0's result, handed to the shell's deferred effect
+     * (MINIMAL's moved runDeferred leg builds its summary line
+     * from it). Completed on every tier, awaited only on MINIMAL. */
+    val startupPhase0 =
+        kotlinx.coroutines.CompletableDeferred<
+            app.xreader.data.extension.UpdatePass152.Phase0Result?>()
+
+    /** The one-time startup sequence (see the section comment
+     * above). Exactly once per process; every later call is a
+     * no-op. */
+    fun startStartupSequence() {
+        if (!startupSequenceStarted.compareAndSet(false, true)) return
+        appScope.launch {
+            // v1.3.0: the built-in default sources install (or
+            // safely refresh) before anything else looks at the
+            // source list — offline, idempotent, and it never
+            // touches a row the user has changed (RepoManager).
+            runCatching { repoManager.installBundledDefaults() }
+            // Manga programme (M1): the Keiyoushi repository
+            // row is pre-registered (idempotent, offline — the
+            // row insert only; its site list loads on demand
+            // through the foreign-repo reconstruction).
+            runCatching { repoManager.registerKeiyoushiRepo() }
+            // Keiyoushi player (K3): restore the installed
+            // manga extensions — records reload, every file
+            // is re-hashed against its pin, and consented
+            // packages re-load (sequentially, on this
+            // background scope, so app open isn't slowed).
+            runCatching {
+                keiyoushiPlayerManager.restoreInstalled()
+            }
+            // v1.5.2 (§8.5 Phase 0 — offline, local, bounded):
+            // favourites re-key, body demotion, History seeding,
+            // fossil-name repair, per-provider journal.
+            val phase0 = runCatching { updatePass152.runPhase0() }
+                .getOrNull()
+            // 2 GB perf pass (F3): hand phase 0's result to the
+            // deferred effect (MINIMAL's moved runDeferred leg
+            // builds its summary from it). No-op cost elsewhere.
+            startupPhase0.complete(phase0)
+            // v1.5.2 fix (FIX-2, §1): process-start evaluation —
+            // RUNNING records return to READY and may be claimed
+            // again; terminal traces prune after 7 days.
+            runCatching { evaluatePendingOperations(processStart = true) }
+            // v1.5.2 fix (FIX-10, §8.5): the DEFERRED phase —
+            // post-interactive, per-provider, journaled: link-added
+            // re-derivation, cover backfill, rating index leg. On
+            // completion Explore shows the one-time summary once.
+            // 2 GB perf pass (F3): on MINIMAL this leg runs in the
+            // post-first-frame deferred effect instead (same code,
+            // same summary) — see startupIsMinimalTier above.
+            if (!startupIsMinimalTier) {
+                runCatching {
+                    val deferred = updatePass152.runDeferred()
+                    if (deferred.completed && !deferred.skippedOffline) {
+                        updatePassSummary.value = deferred.summaryLine(
+                            refreshedTotal = deferred.rederived +
+                                (phase0?.refreshed ?: 0),
+                            renamedTotal = phase0?.renamed ?: 0
+                        )
+                    }
+                }
+                // v1.5.2 (§8.4): rating backfill for pre-stamp records.
+                runCatching {
+                    keiyoushiPlayerManager.backfillRatings()
+                }
+            }
+            // v1.3.5 (Cycle 1): the provider-pack channel's
+            // throttled automatic check — at most once a day,
+            // silent on failure, and it can only ever touch
+            // pack-managed sources (ProviderPackManager).
+            runCatching {
+                providerPackManager.checkForUpdates(manual = false)
+            }
+            // v1.5.39 (item 4): the Keiyoushi manga-source
+            // check rides beside it — same once-a-day
+            // throttle (its own SourcePrefs stamp), silent
+            // on failure; newly flagged updates notify once
+            // per set, and the persisted flags drive the
+            // Explore badge and banner (AppContainer).
+            runCatching {
+                checkKeiyoushiSourceUpdates()
+            }
+            // v1.3.1 (item 52): one source per canonical domain
+            // — the built-in survives, older duplicates are
+            // removed and their books rebound (SourceDedupe).
+            // Removals are audit-logged, never silent.
+            // 2 GB perf pass (F3): on MINIMAL the dedupe and the
+            // widget update run in the deferred effect instead.
+            if (!startupIsMinimalTier) {
+                runCatching { sourceDedupe.runOnce() }
+                    .getOrNull()?.forEach { removed ->
+                        android.util.Log.i("XreaderDedupe", removed.logLine())
+                    }
+            }
+            runCatching { expService.settle() }
+            // Phase 6: keep the home-screen widget honest.
+            if (!startupIsMinimalTier) {
+                runCatching {
+                    app.xreader.widget.XreaderWidget()
+                        .updateAll(appContext)
+                }
+            }
+            // v1.5.34 (item 1d): the per-version sweeps (heal,
+            // stored-book repair, source migration) do not ride
+            // this sequential startup chain — they run on their
+            // own deferred effect in the shell, after first frame.
+        }
     }
 
     /** v1.3.3 (scope S6): the stored-book repair runner —
@@ -2385,16 +2526,18 @@ class AppContainer(
         // exists; a first emission fast enough to win that race
         // read the still-null delegate and NPE'd (device-caught
         // 2026-11-06, contained site "player-enabled"). Here
-        // every delegate exists, and the shell's restore is
-        // composition-driven after onCreate, so the first
-        // emission still lands before restore.
+        // every delegate exists, and the restore is triggered
+        // from MainActivity.onCreate (code 122:
+        // startStartupSequence on appScope) after the container
+        // is built, so the first emission still lands before
+        // restore.
         // Keiyoushi player (K6): the kill switch's live wire —
         // every flip of "Keiyoushi manga sources" (Customise →
         // Sources & repairs) is pushed into the player manager,
         // which empties or refills its live registry. The flow's
         // first emission also re-seeds the flag before the
-        // shell's restore runs, so a switch left off is honoured
-        // from the first lookup of the session.
+        // startup sequence's restore runs, so a switch left off
+        // is honoured from the first lookup of the session.
         appScope.launch {
             sourcePrefs.keiyoushiPlayerEnabled.collect { enabled ->
                 // v1.5.10 (A2): a bad emission is skipped + recorded

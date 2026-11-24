@@ -19,15 +19,43 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import app.xreader.ui.common.SectionHeader
+
+/**
+ * Code 122 (S20, audit #19): the snippet with its match in
+ * emphasized weight — the first case-insensitive occurrence
+ * of [query] in [snippet] is bolded; no query / no match
+ * renders the snippet plain.
+ */
+fun emphasizedSnippet(snippet: String, query: String): AnnotatedString {
+    val needle = query.trim()
+    if (needle.isEmpty()) return AnnotatedString(snippet)
+    val at = snippet.indexOf(needle, ignoreCase = true)
+    if (at < 0) return AnnotatedString(snippet)
+    return buildAnnotatedString {
+        append(snippet.substring(0, at))
+        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+            append(snippet.substring(at, at + needle.length))
+        }
+        append(snippet.substring(at + needle.length))
+    }
+}
 
 /**
  * v1.7 Patch 3 (Item 4b): the in-book search sheet on the
@@ -50,6 +78,17 @@ fun BookSearchSheet(
     onJump: (CoreSearchHit) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
+    // Code 122 (S20): the query the shown hits belong to (the
+    // match emphasized in each snippet is THIS query, even if
+    // the field has since been edited).
+    var submittedQuery by remember { mutableStateOf("") }
+    // Code 122 (S20): the field auto-focuses on open.
+    val searchFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { searchFocusRequester.requestFocus() }
+    val runSearch: () -> Unit = {
+        submittedQuery = query
+        onSearch(query)
+    }
     // Code 121 (S20): under M3 the sheet head carries the
     // result count and results are list items; the search
     // behaviour (one hit per chapter, tap lands and closes)
@@ -78,12 +117,14 @@ fun BookSearchSheet(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(
-                    onSearch = { onSearch(query) }
+                    onSearch = { runSearch() }
                 ),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(searchFocusRequester)
             )
             TextButton(
-                onClick = { onSearch(query) },
+                onClick = { runSearch() },
                 enabled = query.isNotBlank() && !busy
             ) {
                 Text("Search")
@@ -120,7 +161,13 @@ fun BookSearchSheet(
                     if (searchIsM3) {
                         ListItem(
                             headlineContent = { Text(hit.chapterTitle) },
-                            supportingContent = { Text(hit.snippet) },
+                            supportingContent = {
+                                Text(
+                                    emphasizedSnippet(
+                                        hit.snippet, submittedQuery
+                                    )
+                                )
+                            },
                             modifier = Modifier.clickable { onJump(hit) }
                         )
                     } else {

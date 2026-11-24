@@ -55,7 +55,11 @@ fun UpdatesScreen(
     viewModel: LibraryViewModel,
     coverFile: (String?) -> File?,
     onBack: () -> Unit,
-    onOpenBook: (Long) -> Unit
+    onOpenBook: (Long) -> Unit,
+    /** Code 122 (R6, audit item #2): the M3 empty state's door
+     * lands on Explore. The shell wires this to the Explore
+     * tab; the default keeps older call sites compiling. */
+    onOpenExplore: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     // Code 121 (R6): the Material 3 form — small top app bar,
@@ -68,7 +72,8 @@ fun UpdatesScreen(
             viewModel = viewModel,
             coverFile = coverFile,
             onBack = onBack,
-            onOpenBook = onOpenBook
+            onOpenBook = onOpenBook,
+            onOpenExplore = onOpenExplore
         )
         return
     }
@@ -292,7 +297,8 @@ private fun M3UpdatesContent(
     viewModel: LibraryViewModel,
     coverFile: (String?) -> File?,
     onBack: () -> Unit,
-    onOpenBook: (Long) -> Unit
+    onOpenBook: (Long) -> Unit,
+    onOpenExplore: () -> Unit
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val zone = remember { ZoneId.systemDefault() }
@@ -364,10 +370,12 @@ private fun M3UpdatesContent(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                // Code 122 (R6): the empty state's door is
+                // Explore, per the spec — "Check now" stays in
+                // the top app bar above.
                 androidx.compose.material3.Button(
-                    onClick = { viewModel.checkForUpdates() },
-                    enabled = !state.checkingUpdates
-                ) { Text("Check now") }
+                    onClick = onOpenExplore
+                ) { Text("Explore") }
             }
             return@Scaffold
         }

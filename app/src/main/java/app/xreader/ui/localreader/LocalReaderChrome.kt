@@ -1261,10 +1261,11 @@ fun LocalReaderChromeM3(
 }
 
 /** S28: the bar-customisation sheet in M3 form — the bar
- * store's actions as checklist list items (icon-less label +
- * availability line + checkbox), reordered by dragging the
- * handle. Writes go through the SAME [ReaderBarConfig]
- * toggled/moved operations the shipped sheet uses. */
+ * store's actions as checklist list items (icon + label +
+ * availability line + checkbox, Code 122), reordered by
+ * dragging the handle. Writes go through the SAME
+ * [ReaderBarConfig] toggled/moved operations the shipped
+ * sheet uses. */
 @Composable
 fun ReaderBarCustomisationSheetM3Content(
     config: ReaderBarConfig,
@@ -1312,15 +1313,23 @@ fun ReaderBarCustomisationSheetM3Content(
                 supportingContent = action.availabilityNote?.let { note ->
                     { Text(note) }
                 },
+                // Code 122 (S28, audit #24): the spec's
+                // checklist row — icon + label + checkbox.
+                // The icon is the bar's own [ReaderBarActionIcon]
+                // (the same artwork the action renders with in
+                // the bar); the checkbox rides the trailing
+                // side beside the drag handle.
                 leadingContent = {
+                    ReaderBarActionIcon(action)
+                },
+                trailingContent = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(
                         checked = action.key in config.enabledKeys,
                         onCheckedChange = { checked ->
                             onConfigChange(config.toggled(action, checked))
                         }
                     )
-                },
-                trailingContent = {
                     Icon(
                         Icons.Filled.DragHandle,
                         contentDescription = "Drag to reorder ${action.label}",
@@ -1357,6 +1366,7 @@ fun ReaderBarCustomisationSheetM3Content(
                             }
                         }
                     )
+                    }
                 }
             )
         }

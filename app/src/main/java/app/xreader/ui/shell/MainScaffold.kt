@@ -337,131 +337,17 @@ fun MainScaffold(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // 2 GB perf pass (F3): the cold-start chain's tier split.
-    // On MINIMAL, the chain's deferrable legs (update-pass
-    // deferred phase, ratings backfill, source dedupe, widget
-    // update) move OUT of the sequential chain below into the
-    // post-first-frame deferred effect further down, so they
-    // stop competing with first paint and first scroll on a
-    // 2 GB phone. Essentials stay in the chain on every tier,
-    // and STANDARD/FULL run the chain exactly as before. The
-    // deferred runDeferred leg builds its summary line from
-    // phase 0's result, which stays in the chain — the result
-    // is handed over through this signal (completed on every
-    // tier, awaited only on MINIMAL).
-    val coldStartMinimal = remember(container) {
-        app.xreader.data.prefs.PerformancePolicy.tierForRam(
-            container.totalRamMb()
-        ) == app.xreader.data.prefs.PerfTier.MINIMAL
-    }
-    val coldStartPhase0 = remember {
-        kotlinx.coroutines.CompletableDeferred<
-            app.xreader.data.extension.UpdatePass152.Phase0Result?>()
-    }
+    // Code 122 (source regression fix): the one-time startup
+    // sequence (bundled defaults → Keiyoushi repo registration
+    // → restoreInstalled() → the update passes) no longer
+    // rides this composition scope — it runs on the container's
+    // app scope (AppContainer.startStartupSequence, triggered
+    // from MainActivity.onCreate), so a design switch or shell
+    // recomposition can never cancel it mid-restore. The
+    // MINIMAL-tier deferred legs below read the container's
+    // startupIsMinimalTier / startupPhase0 instead of the local
+    // signals that used to live here.
 
-    // Phase 6: opening the app settles EXP (idempotent) and honours
-    // a home-screen widget tap that asked for a specific book.
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        scope.launch {
-            // v1.3.0: the built-in default sources install (or
-            // safely refresh) before anything else looks at the
-            // source list — offline, idempotent, and it never
-            // touches a row the user has changed (RepoManager).
-            runCatching { container.repoManager.installBundledDefaults() }
-            // Manga programme (M1): the Keiyoushi repository
-            // row is pre-registered (idempotent, offline — the
-            // row insert only; its site list loads on demand
-            // through the foreign-repo reconstruction).
-            runCatching { container.repoManager.registerKeiyoushiRepo() }
-            // Keiyoushi player (K3): restore the installed
-            // manga extensions — records reload, every file
-            // is re-hashed against its pin, and consented
-            // packages re-load (sequentially, on this
-            // background scope, so app open isn't slowed).
-            runCatching {
-                container.keiyoushiPlayerManager.restoreInstalled()
-            }
-            // v1.5.2 (§8.5 Phase 0 — offline, local, bounded):
-            // favourites re-key, body demotion, History seeding,
-            // fossil-name repair, per-provider journal.
-            val phase0 = runCatching { container.updatePass152.runPhase0() }
-                .getOrNull()
-            // 2 GB perf pass (F3): hand phase 0's result to the
-            // deferred effect (MINIMAL's moved runDeferred leg
-            // builds its summary from it). No-op cost elsewhere.
-            coldStartPhase0.complete(phase0)
-            // v1.5.2 fix (FIX-2, §1): process-start evaluation —
-            // RUNNING records return to READY and may be claimed
-            // again; terminal traces prune after 7 days.
-            runCatching { container.evaluatePendingOperations(processStart = true) }
-            // v1.5.2 fix (FIX-10, §8.5): the DEFERRED phase —
-            // post-interactive, per-provider, journaled: link-added
-            // re-derivation, cover backfill, rating index leg. On
-            // completion Explore shows the one-time summary once.
-            // 2 GB perf pass (F3): on MINIMAL this leg runs in the
-            // post-first-frame deferred effect instead (same code,
-            // same summary) — see coldStartMinimal above.
-            if (!coldStartMinimal) {
-                runCatching {
-                    val deferred = container.updatePass152.runDeferred()
-                    if (deferred.completed && !deferred.skippedOffline) {
-                        container.updatePassSummary.value = deferred.summaryLine(
-                            refreshedTotal = deferred.rederived +
-                                (phase0?.refreshed ?: 0),
-                            renamedTotal = phase0?.renamed ?: 0
-                        )
-                    }
-                }
-                // v1.5.2 (§8.4): rating backfill for pre-stamp records.
-                runCatching {
-                    container.keiyoushiPlayerManager.backfillRatings()
-                }
-            }
-            // v1.3.5 (Cycle 1): the provider-pack channel's
-            // throttled automatic check — at most once a day,
-            // silent on failure, and it can only ever touch
-            // pack-managed sources (ProviderPackManager).
-            runCatching {
-                container.providerPackManager.checkForUpdates(manual = false)
-            }
-            // v1.5.39 (item 4): the Keiyoushi manga-source
-            // check rides beside it — same once-a-day
-            // throttle (its own SourcePrefs stamp), silent
-            // on failure; newly flagged updates notify once
-            // per set, and the persisted flags drive the
-            // Explore badge and banner (AppContainer).
-            runCatching {
-                container.checkKeiyoushiSourceUpdates()
-            }
-            // v1.3.1 (item 52): one source per canonical domain
-            // — the built-in survives, older duplicates are
-            // removed and their books rebound (SourceDedupe).
-            // Removals are audit-logged, never silent.
-            // 2 GB perf pass (F3): on MINIMAL the dedupe and the
-            // widget update run in the deferred effect instead.
-            if (!coldStartMinimal) {
-                runCatching { container.sourceDedupe.runOnce() }
-                    .getOrNull()?.forEach { removed ->
-                        android.util.Log.i("XreaderDedupe", removed.logLine())
-                    }
-            }
-            runCatching { container.expService.settle() }
-            // Phase 6: keep the home-screen widget honest.
-            if (!coldStartMinimal) {
-                runCatching {
-                    app.xreader.widget.XreaderWidget()
-                        .updateAll(context)
-                }
-            }
-            // v1.5.34 (item 1d): the per-version sweeps (heal,
-            // stored-book repair, source migration) no longer
-            // ride this sequential startup chain — they run on
-            // their own deferred effect below, after first frame,
-            // so a heavy install day's first launch does no
-            // sweep network work inside the shell's opening
-            // composition chain.
-        }
-    }
     // v1.5.34 (item 1d): the per-version startup sweeps,
     // deferred until after the first frame plus a settle beat
     // (the Library is up and idle before any sweep network work
@@ -481,8 +367,8 @@ fun MainScaffold(
         // phase-0 signal await guarantees runDeferred's summary
         // is built from the chain's phase-0 result exactly as
         // when the leg lived in the chain.
-        if (coldStartMinimal) {
-            val phase0 = coldStartPhase0.await()
+        if (container.startupIsMinimalTier) {
+            val phase0 = container.startupPhase0.await()
             runCatching {
                 val deferred = container.updatePass152.runDeferred()
                 if (deferred.completed && !deferred.skippedOffline) {
@@ -772,11 +658,19 @@ fun MainScaffold(
         // centred modal over a dimmed scrim (see
         // UpdateCardOverlay), presented over the Library
         // only, at most once a day.
-        UpdateCardOverlay(
-            navController = navController,
-            viewModel = appUpdateViewModel,
-            onReadMore = { navController.navigate("whatsNew") }
-        )
+        // Code 122 (S36): under Material 3 the update card is
+        // hosted in the Library flow instead — this overlay
+        // host is Nocturne-only now. Nocturne's behaviour is
+        // exactly as before.
+        if (designState.design !=
+            app.xreader.data.prefs.AppDesign.MATERIAL3
+        ) {
+            UpdateCardOverlay(
+                navController = navController,
+                viewModel = appUpdateViewModel,
+                onReadMore = { navController.navigate("whatsNew") }
+            )
+        }
         }
     }
 }
@@ -1545,6 +1439,12 @@ internal fun XreaderNavHost(
                 .collectAsStateWithLifecycle(
                     initialValue = app.xreader.data.prefs.AppearanceState()
                 )
+            // Code 122 (S36): the update card's real state for
+            // the M3 Library's in-flow host — the same
+            // AppUpdateViewModel the Nocturne overlay reads,
+            // with the overlay's own callback wiring.
+            val libraryUpdateState by appUpdateViewModel.state
+                .collectAsStateWithLifecycle()
             LibraryScreen(
                 viewModel = libraryViewModel,
                 coverFile = coverFile,
@@ -1563,6 +1463,20 @@ internal fun XreaderNavHost(
                 // page — a plain navigate like the add-list door
                 // (NOT navigateContent: no reader-routing needed).
                 onOpenUpdates = { navController.navigate("updates") },
+                // Code 122 (S36): the in-flow update card's
+                // doors — the UpdateCardOverlay's wiring,
+                // verbatim (UpdateCard's own callback set).
+                updateState = libraryUpdateState,
+                onUpdateNow = { appUpdateViewModel.startDownload() },
+                onDismissUpdate = { appUpdateViewModel.dismissCard() },
+                onReadMoreUpdate = { navController.navigate("whatsNew") },
+                onInstallUpdate = { appUpdateViewModel.install() },
+                onCancelUpdateDownload = {
+                    appUpdateViewModel.cancelDownload()
+                },
+                onOpenUpdateInstallSettings = {
+                    appUpdateViewModel.openInstallPermissionSettings()
+                },
                 coverGlow = appearance.coverGlow &&
                     appearance.bookColours !=
                     app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_ONLY,
@@ -1582,7 +1496,10 @@ internal fun XreaderNavHost(
                 viewModel = libraryViewModel,
                 coverFile = coverFile,
                 onBack = { navController.popBackStack() },
-                onOpenBook = { bookId -> navigateContent("book/$bookId") }
+                onOpenBook = { bookId -> navigateContent("book/$bookId") },
+                // Code 122 (R6): the M3 empty state's door
+                // lands on the Explore tab.
+                onOpenExplore = { navigateToTab(navController, Tab.Browse) }
             )
         }
         composable("addList") {
@@ -1636,6 +1553,17 @@ internal fun XreaderNavHost(
                 onOpenExtension = { extId -> navController.navigate("extensions/$extId") },
                 onOpenOpdsServers = { navController.navigate("opdsServers") },
                 onAddSource = { navController.navigate("addSource") },
+                // Code 122 (R2): the M3 foot door goes DIRECTLY
+                // to Add from link — the addSource route's own
+                // link-door wiring, verbatim (the section
+                // showing is authoritative for the saved
+                // source's kind).
+                onAddFromLink = {
+                    linkAddViewModel.setIntendedKind(
+                        sourcesViewModel.state.value.librarySide
+                    )
+                    navController.navigate("addFromLink")
+                },
                 onOpenStore = { navController.navigate("sourceStore") },
                 onOpenManageSources = { navController.navigate("manageSources") },
                 // v1.5.39 (item 4): straight to the manga
@@ -1696,7 +1624,39 @@ internal fun XreaderNavHost(
                 )
             app.xreader.ui.sources.ManageSourcesScreen(
                 viewModel = manageSourcesViewModel,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                // Code 122 (R15): the per-row overflow's doors.
+                onOpenDetails = { extId ->
+                    navController.navigate("extensions/$extId")
+                },
+                onOpenPreferences = { extId ->
+                    // The extension's FIRST source's preferences
+                    // — resolved through the extension service,
+                    // the shape the catalogue's own settings door
+                    // navigates (sourcePrefs/{extId}/{sourceId}).
+                    scope.launch {
+                        val firstSourceId = container.extensionService
+                            .sourcesOf(extId).getOrNull()
+                            ?.firstOrNull()?.source?.id
+                        if (firstSourceId != null) {
+                            navController.navigate(
+                                "sourcePrefs/$extId/" +
+                                    android.net.Uri.encode(firstSourceId)
+                            )
+                        }
+                    }
+                },
+                onRemoveSource = { extId ->
+                    // The detail page's uninstall, verbatim:
+                    // resolve the row, then repoManager.
+                    scope.launch {
+                        val ext = container.database
+                            .installedExtensionDao().getById(extId)
+                        if (ext != null) {
+                            container.repoManager.uninstall(ext)
+                        }
+                    }
+                }
             )
         }
         composable("addSource") {
@@ -1717,7 +1677,11 @@ internal fun XreaderNavHost(
                 onOpenStore = { navController.navigate("sourceStore") },
                 onOpenRepo = { repoId ->
                     navController.navigate("repo/$repoId")
-                }
+                },
+                // Code 122 (R16): the Built-in sources door —
+                // the same route the Source store's own
+                // onOpenBuiltIn navigates to.
+                onOpenBuiltIn = { navController.navigate("repoBuiltIn") }
             )
         }
         composable("sourceStore") {

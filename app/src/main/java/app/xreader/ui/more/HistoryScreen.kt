@@ -396,6 +396,7 @@ fun HistoryScreen(
             viewModel = viewModel,
             coverFile = coverFile,
             compact = historyCompact,
+            byDay = historyByDay,
             onBack = onBack,
             onOpenBook = onOpenBook
         )
@@ -956,12 +957,11 @@ private fun PulseCell(value: String, label: String, modifier: Modifier = Modifie
 }
 
 // ── Code 121 (R3): the Material 3 History ──────────────────
-// Day-grouped and card-less by design (R3): sticky date
-// headers over plain list items. The grouping is this
-// design's composition, so it applies whenever the M3 design
-// is active; the DesignState historyGrouping knob's flat form
-// remains the code-120 behaviour and is superseded here (see
-// BUILD-CODE121.md, D-121-W2-06). Density follows the knob.
+// Card-less list items, day-grouped with sticky date headers
+// when the DesignState historyGrouping knob says BY_DAY —
+// code 122 (audit item #13) passes the knob in, so the flat
+// form (its stored default) exists under M3 too
+// (D-121-W2-06). Density follows the knob.
 @OptIn(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,
@@ -973,6 +973,10 @@ private fun M3HistoryContent(
     viewModel: HistoryViewModel,
     coverFile: (String?) -> File?,
     compact: Boolean,
+    /** Code 122 (R3, audit item #13): the stored grouping knob —
+     * true = day groups with sticky date headers; false = the
+     * flat form (one list, newest first, no headers). */
+    byDay: Boolean,
     onBack: () -> Unit,
     onOpenBook: (bookId: Long, chapterIndex: Int) -> Unit
 ) {
@@ -1086,7 +1090,33 @@ private fun M3HistoryContent(
                 .padding(innerPadding),
             contentPadding = PaddingValues(bottom = 88.dp)
         ) {
-            grouped.forEach { (label, dayEntries) ->
+            if (!byDay) {
+                // The flat form (the knob's stored default):
+                // one list, newest first, no date headers.
+                items(entries, key = { "m3-hist-flat-${it.bookKey}" }) { entry ->
+                    M3HistoryRow(
+                        entry = entry,
+                        coverFile = coverFile,
+                        compact = compact,
+                        onOpen = {
+                            entry.bookId?.let {
+                                onOpenBook(it, entry.chapterIndex)
+                            }
+                        },
+                        onAddBack = {
+                            entry.bookId?.let {
+                                viewModel.addBackToLibrary(it)
+                            }
+                        },
+                        onRemove = { removeWithUndo(entry) },
+                        onDeleteBook = { deleteTarget = entry.book }
+                    )
+                    androidx.compose.material3.HorizontalDivider(
+                        modifier = Modifier.padding(start = 16.dp)
+                    )
+                }
+            }
+            if (byDay) grouped.forEach { (label, dayEntries) ->
                 stickyHeader(key = "m3-hist-day-$label") {
                     androidx.compose.material3.Surface(
                         color = MaterialTheme.colorScheme.surface,

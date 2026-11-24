@@ -97,7 +97,15 @@ private fun LoreType.label(): String = when (this) {
 fun LoreScreen(
     viewModel: LoreViewModel,
     artFile: (String) -> File,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** Code 122 (R11, audit item #4): the "Ask about this
+     * book" door to the Ask AI page (R12). Null by default:
+     * the shell currently passes NO such callback — R12's
+     * route needs a live reader back-stack entry (the ai
+     * destination pops itself without one), so no working
+     * route from Lore exists yet and the FAB is drawn only
+     * when a caller supplies one. See the report. */
+    onAskAboutBook: (() -> Unit)? = null
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val engineLabel by viewModel.engineLabel.collectAsStateWithLifecycle()
@@ -121,7 +129,12 @@ fun LoreScreen(
             },
             onDeleteEntity = { viewModel.deleteEntity(it) },
             onArt = { viewModel.generateArt(it) },
-            onDeleteArt = { viewModel.deleteArt(it) }
+            onDeleteArt = { viewModel.deleteArt(it) },
+            onSaveTerm = { existing, source, translation, locked ->
+                viewModel.saveTerm(existing, source, translation, locked)
+            },
+            onDeleteTerm = { viewModel.deleteTerm(it) },
+            onAskAboutBook = onAskAboutBook
         )
         return
     }
@@ -1098,10 +1111,15 @@ private fun LoreListTab(
 // provenance assist chip (AI · provider · AUTO/manual — the
 // engine label is the live hub label; AUTO/manual is the
 // entry's own userLocked flag). All actions are the shipped
-// LoreViewModel's. The "Ask about this book" extended FAB is
-// NOT drawn: R12's page needs a live reader back-stack entry
-// and no route from Lore exists — see D-121-W8-01 in the
-// build log. Nocturne never reaches this composable.
+// LoreViewModel's. Code 122 (audit item #4): the Nocturne
+// page's Map/Glossary tabs are carried in (a PrimaryTabRow
+// over Lore · Map · Glossary, reusing the shipped MapTab /
+// GlossaryTab bodies and the TermEditor). The "Ask about
+// this book" extended FAB is drawn ONLY when the caller
+// supplies onAskAboutBook — the shell passes none today
+// because R12's route needs a live reader back-stack entry
+// (D-121-W8-01 stands for the route, not the drawing).
+// Nocturne never reaches this composable.
 // ────────────────────────────────────────────────────────────────
 
 @OptIn(
@@ -1119,11 +1137,17 @@ private fun M3LoreContent(
     onAddEntity: (String, LoreType, String) -> Unit,
     onDeleteEntity: (LoreEntity) -> Unit,
     onArt: (LoreEntity) -> Unit,
-    onDeleteArt: (LoreArt) -> Unit
+    onDeleteArt: (LoreArt) -> Unit,
+    onSaveTerm: (TerminologyEntry?, String, String, Boolean) -> Unit,
+    onDeleteTerm: (TerminologyEntry) -> Unit,
+    onAskAboutBook: (() -> Unit)?
 ) {
     var editing by remember { mutableStateOf<LoreEntity?>(null) }
     var adding by remember { mutableStateOf(false) }
     var selectedArt by remember { mutableStateOf<LoreArt?>(null) }
+    var tab by remember { mutableIntStateOf(0) }
+    var editingTerm by remember { mutableStateOf<TerminologyEntry?>(null) }
+    var addingTerm by remember { mutableStateOf(false) }
     val characters = state.entities.filter { it.type == LoreType.CHARACTER }
     val entries = state.entities.filter { it.type != LoreType.CHARACTER }
     androidx.compose.material3.Scaffold(
@@ -1146,12 +1170,45 @@ private fun M3LoreContent(
                     }
                 }
             )
+        },
+        floatingActionButton = {
+            // Code 122 (R11): drawn only when a working R12
+            // route callback reaches this screen (none does
+            // yet — see the header note).
+            val ask = onAskAboutBook
+            if (ask != null) {
+                androidx.compose.material3.ExtendedFloatingActionButton(
+                    onClick = ask,
+                    text = { Text("Ask about this book") }
+                )
+            }
         }
     ) { innerPadding ->
-        LazyColumn(
+        Column(
             Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+        ) {
+            androidx.compose.material3.PrimaryTabRow(selectedTabIndex = tab) {
+                listOf("Lore", "Map", "Glossary").forEachIndexed { index, label ->
+                    androidx.compose.material3.Tab(
+                        selected = tab == index,
+                        onClick = { tab = index },
+                        text = { Text(label) }
+                    )
+                }
+            }
+            Box(Modifier.weight(1f)) {
+                when (tab) {
+                    1 -> MapTab(state = state)
+                    2 -> GlossaryTab(
+                        state = state,
+                        onEdit = { editingTerm = it },
+                        onAdd = { addingTerm = true },
+                        onDelete = onDeleteTerm
+                    )
+                    else -> LazyColumn(
+            Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp
             ),
@@ -1413,7 +1470,24 @@ private fun M3LoreContent(
                     )
                 }
             }
+                    }
+                }
+            }
         }
+    }
+    if (editingTerm != null || addingTerm) {
+        TermEditor(
+            existing = editingTerm,
+            onDismiss = {
+                editingTerm = null
+                addingTerm = false
+            },
+            onSave = { source, translation, locked ->
+                onSaveTerm(editingTerm, source, translation, locked)
+                editingTerm = null
+                addingTerm = false
+            }
+        )
     }
     editing?.let { entity ->
         EntityEditor(

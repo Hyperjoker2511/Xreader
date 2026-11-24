@@ -61,7 +61,16 @@ import androidx.compose.material3.TopAppBar
 @Composable
 fun ManageSourcesScreen(
     viewModel: ManageSourcesViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** Code 122 (R15, audit item #7): the per-row overflow's
+     * route callbacks. Details → the extension's page (R22);
+     * Preferences → its source preferences (R21); Remove →
+     * the shell uninstalls the extension after the screen's
+     * own confirm dialog. The shell wires all three on the
+     * manageSources route. */
+    onOpenDetails: (extensionId: Long) -> Unit = {},
+    onOpenPreferences: (extensionId: Long) -> Unit = {},
+    onRemoveSource: (extensionId: Long) -> Unit = {}
 ) {
     val rows by viewModel.rows.collectAsState()
     val allRows by viewModel.allRows.collectAsState()
@@ -71,12 +80,18 @@ fun ManageSourcesScreen(
     // sources — a small top app bar over the same rows as list
     // items: avatar, name, provenance line, the enabled switch,
     // and the "Needs repair" assist chip in error tones where a
-    // source is broken. Filters are official filter chips. (The
-    // row overflow's Preferences / Details / Remove doors have
-    // no navigation callbacks on this route — the shell wires
-    // only onBack — so they are not drawn; see D-121-W4-5.)
+    // source is broken. Filters are official filter chips.
+    // Code 122 (audit item #7): the per-row overflow
+    // (Preferences →R21 · Details →R22 · Remove dialog) IS
+    // drawn now, on the route callbacks above (D-121-W4-5).
     // Under Nocturne the shipped screen renders byte-identically.
     if (isM3Design()) {
+        var menuForId by androidx.compose.runtime.remember {
+            androidx.compose.runtime.mutableStateOf<Long?>(null)
+        }
+        var removeTarget by androidx.compose.runtime.remember {
+            androidx.compose.runtime.mutableStateOf<ManagedSourceRow?>(null)
+        }
         Column(Modifier.fillMaxSize()) {
             TopAppBar(
                 title = { Text("Manage sources") },
@@ -313,20 +328,127 @@ fun ManageSourcesScreen(
                                     )
                                 },
                                 trailingContent = {
-                                    Switch(
-                                        checked = row.shown,
-                                        onCheckedChange = { enabled ->
-                                            viewModel.setEnabled(
-                                                row, enabled
-                                            )
+                                    Row(
+                                        verticalAlignment =
+                                            Alignment.CenterVertically
+                                    ) {
+                                        Switch(
+                                            checked = row.shown,
+                                            onCheckedChange = { enabled ->
+                                                viewModel.setEnabled(
+                                                    row, enabled
+                                                )
+                                            }
+                                        )
+                                        androidx.compose.foundation.layout.Box {
+                                            IconButton(
+                                                onClick = {
+                                                    menuForId =
+                                                        row.extension.id
+                                                }
+                                            ) {
+                                                Icon(
+                                                    androidx.compose.material
+                                                        .icons.Icons.Filled
+                                                        .MoreVert,
+                                                    contentDescription =
+                                                        "More for " +
+                                                            row.extension
+                                                                .displayName
+                                                )
+                                            }
+                                            androidx.compose.material3
+                                                .DropdownMenu(
+                                                    expanded = menuForId ==
+                                                        row.extension.id,
+                                                    onDismissRequest = {
+                                                        menuForId = null
+                                                    }
+                                                ) {
+                                                    androidx.compose.material3
+                                                        .DropdownMenuItem(
+                                                            text = {
+                                                                Text("Preferences")
+                                                            },
+                                                            onClick = {
+                                                                menuForId = null
+                                                                onOpenPreferences(
+                                                                    row.extension.id
+                                                                )
+                                                            }
+                                                        )
+                                                    androidx.compose.material3
+                                                        .DropdownMenuItem(
+                                                            text = {
+                                                                Text("Details")
+                                                            },
+                                                            onClick = {
+                                                                menuForId = null
+                                                                onOpenDetails(
+                                                                    row.extension.id
+                                                                )
+                                                            }
+                                                        )
+                                                    androidx.compose.material3
+                                                        .DropdownMenuItem(
+                                                            text = {
+                                                                Text(
+                                                                    "Remove",
+                                                                    color =
+                                                                        MaterialTheme
+                                                                            .colorScheme
+                                                                            .error
+                                                                )
+                                                            },
+                                                            onClick = {
+                                                                menuForId = null
+                                                                removeTarget = row
+                                                            }
+                                                        )
+                                                }
                                         }
-                                    )
+                                    }
                                 }
                             )
                         }
                     }
                 }
             }
+        }
+        removeTarget?.let { target ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { removeTarget = null },
+                title = {
+                    Text(
+                        "Remove “${target.extension.displayName}”?"
+                    )
+                },
+                text = {
+                    Text(
+                        "Books already in your library stay, but " +
+                            "chapters that haven't downloaded yet " +
+                            "won't be able to load from this source."
+                    )
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            removeTarget = null
+                            onRemoveSource(target.extension.id)
+                        }
+                    ) {
+                        Text(
+                            "Remove",
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = { removeTarget = null }
+                    ) { Text("Cancel") }
+                }
+            )
         }
         return
     }

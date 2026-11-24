@@ -114,7 +114,7 @@ internal fun M3PhoneShell(
             M3TabBar(
                 navController = navController,
                 sourcesViewModel = sourcesViewModel,
-                appUpdateViewModel = appUpdateViewModel,
+                downloadsViewModel = downloadsViewModel,
                 labelsAlways = designState.tabLabels == M3TabLabels.ALWAYS
             )
         }
@@ -153,7 +153,7 @@ internal fun M3RailShell(
                 M3TabRail(
                     navController = navController,
                     sourcesViewModel = sourcesViewModel,
-                    appUpdateViewModel = appUpdateViewModel,
+                    downloadsViewModel = downloadsViewModel,
                     labelsAlways = designState.tabLabels == M3TabLabels.ALWAYS,
                     wideRail = wideRail
                 )
@@ -210,23 +210,29 @@ private fun M3NavHostContent(
     }
 }
 
-/** The tab badges, shared by bar and rail: Explore carries the
- * pending source-update count, Profile the update dot — the
- * same signals the Nocturne dock badges. */
+/** The tab badges, shared by bar and rail — code 122 (S1,
+ * audit item #1): rebound to the scratch spec's own signals.
+ * Downloads carries the count of downloads in flight (queued,
+ * running or paused queue items across the active groups);
+ * Explore carries a plain dot while source updates are
+ * pending. The Nocturne signals (the source-update COUNT on
+ * Explore, the app-update dot on Profile) are NOT drawn on
+ * this design's bar. */
 @Composable
 private fun M3TabIcon(
     tab: Tab,
     sourcesViewModel: SourcesViewModel,
-    appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel
+    downloadsViewModel: DownloadsViewModel
 ) {
     val sourcesState by sourcesViewModel.state.collectAsStateWithLifecycle()
-    val updateState by appUpdateViewModel.state.collectAsStateWithLifecycle()
-    val count = if (tab == Tab.Browse) {
-        sourcesState.keiyoushiPendingUpdateCount
+    val downloadsState by downloadsViewModel.state.collectAsStateWithLifecycle()
+    val count = if (tab == Tab.Downloads) {
+        downloadsState.active.sumOf { it.activeItems.size }
     } else {
         0
     }
-    val dot = tab == Tab.Me && updateState.release != null
+    val dot = tab == Tab.Browse &&
+        sourcesState.keiyoushiPendingUpdateCount > 0
     BadgedBox(
         badge = {
             when {
@@ -248,7 +254,7 @@ private fun M3TabIcon(
 private fun M3TabBar(
     navController: NavHostController,
     sourcesViewModel: SourcesViewModel,
-    appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel,
+    downloadsViewModel: DownloadsViewModel,
     labelsAlways: Boolean
 ) {
     val selected = selectedTab(navController)
@@ -259,7 +265,7 @@ private fun M3TabBar(
                 selected = isSelected,
                 onClick = { navigateToTab(navController, tab) },
                 icon = {
-                    M3TabIcon(tab, sourcesViewModel, appUpdateViewModel)
+                    M3TabIcon(tab, sourcesViewModel, downloadsViewModel)
                 },
                 label = if (labelsAlways || isSelected) {
                     { Text(tab.label) }
@@ -281,7 +287,7 @@ private fun M3TabBar(
 private fun M3TabRail(
     navController: NavHostController,
     sourcesViewModel: SourcesViewModel,
-    appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel,
+    downloadsViewModel: DownloadsViewModel,
     labelsAlways: Boolean,
     wideRail: Boolean
 ) {
@@ -297,7 +303,7 @@ private fun M3TabRail(
                     selected = isSelected,
                     onClick = { navigateToTab(navController, tab) },
                     icon = {
-                        M3TabIcon(tab, sourcesViewModel, appUpdateViewModel)
+                        M3TabIcon(tab, sourcesViewModel, downloadsViewModel)
                     },
                     label = if (labelsAlways || isSelected) {
                         { Text(tab.label) }
@@ -316,7 +322,7 @@ private fun M3TabRail(
                     selected = tab == selected,
                     onClick = { navigateToTab(navController, tab) },
                     icon = {
-                        M3TabIcon(tab, sourcesViewModel, appUpdateViewModel)
+                        M3TabIcon(tab, sourcesViewModel, downloadsViewModel)
                     },
                     label = { Text(tab.label) },
                     alwaysShowLabel = labelsAlways

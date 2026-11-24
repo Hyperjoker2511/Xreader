@@ -222,6 +222,14 @@ fun M3MangaToolbar(
             IconButton(onClick = onReadingMode) {
                 Icon(Icons.Filled.MenuBook, "Reading mode")
             }
+            // Code 122 (audit #26) — DEVIATION KEPT, by the
+            // no-silent-loss rule: this door is NOT removed.
+            // The strip it opens is the ONLY door to Retry
+            // all and Boost page (KomikkuReaderViewModel
+            // .retryAllErrored / .boostCurrentPage are called
+            // from the strips alone) and to the auto-scroll
+            // toggle in this design; removing the door would
+            // silently lose all three destinations.
             IconButton(onClick = onToggleExhUtils) {
                 Icon(Icons.Filled.Build, "Reader tools")
             }
@@ -230,6 +238,41 @@ fun M3MangaToolbar(
             }
         }
     )
+}
+
+/**
+ * Code 122 (S13, audit #26): the centred page indicator for
+ * the M3 chrome — the donor ReaderPageIndicator's seat
+ * (centred, over the page) in scheme tones. It honours the
+ * "Show page number" preference: the host passes the pref's
+ * live value as [showPageNumber] and the indicator draws
+ * only when it is on (and the chapter has pages).
+ *
+ * HOST WIRING STILL NEEDED (KomikkuReaderScreen, outside
+ * this file): the screen's indicator site is currently
+ * `if (!m3 && showPageNumber && state.pageCount > 0)` — the
+ * M3 branch must compose this indicator at the same
+ * BottomCenter seat when showPageNumber is on.
+ */
+@Composable
+fun M3CentredPageIndicator(
+    currentPage: Int,
+    totalPages: Int,
+    showPageNumber: Boolean,
+    modifier: Modifier = Modifier
+) {
+    if (!showPageNumber || totalPages <= 0) return
+    androidx.compose.foundation.layout.Box(
+        modifier,
+        contentAlignment = androidx.compose.ui.Alignment.Center
+    ) {
+        Text(
+            "${currentPage + 1} / $totalPages",
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+        )
+    }
 }
 
 /** The ExhUtils strip in scheme tones (S13's reader-tools door):

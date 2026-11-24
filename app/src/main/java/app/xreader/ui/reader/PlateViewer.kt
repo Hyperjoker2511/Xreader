@@ -49,13 +49,30 @@ import java.io.File
  * deliberately inert — the explicit no-op onImageTap below
  * opts this ZoomableImage out of the subtree's plate door).
  */
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
 @Composable
 fun CorePlateViewer(
     file: File,
     filter: EpubPlateFilter,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Code 122 (S9, audit #14): the plate's caption — the
+     * host supplies the book title (the illustration's own
+     * alt text does not survive the tap handler, which
+     * carries only the asset file). Null = the bar reads
+     * "Illustration". */
+    caption: String? = null
 ) {
     BackHandler(onBack = onDismiss)
+    // Code 122 (S9): under Material 3 the viewer wears the
+    // R28 chrome family — a small top app bar above the plate
+    // and a floating toolbar at the foot carrying the caption
+    // and the Close door. Nocturne keeps the shipped black
+    // full-screen box with its steady Close chip below.
+    val plateIsM3 = app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
     Box(
         Modifier
             .fillMaxSize()
@@ -63,13 +80,64 @@ fun CorePlateViewer(
     ) {
         ZoomableImage(
             model = file,
-            contentDescription = null,
+            contentDescription = caption,
             contentScale = ContentScale.Fit,
             imageModifier = Modifier.fillMaxSize(),
             colorFilter = filter.toColorFilter(),
             onImageTap = {},
             modifier = Modifier.fillMaxSize()
         )
+        if (plateIsM3) {
+            androidx.compose.material3.TopAppBar(
+                title = {
+                    Text(
+                        caption ?: "Illustration",
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1
+                    )
+                },
+                navigationIcon = {
+                    androidx.compose.material3.IconButton(onClick = onDismiss) {
+                        Icon(
+                            androidx.compose.material.icons.Icons.AutoMirrored
+                                .Filled.ArrowBack,
+                            "Back"
+                        )
+                    }
+                },
+                colors = androidx.compose.material3.TopAppBarDefaults
+                    .topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        scrolledContainerColor =
+                            MaterialTheme.colorScheme.surfaceContainer
+                    ),
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
+            androidx.compose.material3.HorizontalFloatingToolbar(
+                expanded = false,
+                colors = androidx.compose.material3.FloatingToolbarDefaults
+                    .standardFloatingToolbarColors(
+                        toolbarContainerColor =
+                            MaterialTheme.colorScheme.surfaceContainerHigh
+                    ),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                content = {
+                    androidx.compose.material3.IconButton(onClick = onDismiss) {
+                        Icon(Icons.Filled.Close, "Close")
+                    }
+                    if (!caption.isNullOrBlank()) {
+                        Text(
+                            caption,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            modifier = Modifier.padding(end = 12.dp)
+                        )
+                    }
+                }
+            )
+        } else {
         Row(
             Modifier
                 .align(Alignment.TopStart)
@@ -104,6 +172,7 @@ fun CorePlateViewer(
                     style = MaterialTheme.typography.labelLarge
                 )
             }
+        }
         }
     }
 }

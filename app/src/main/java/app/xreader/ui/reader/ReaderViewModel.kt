@@ -297,6 +297,10 @@ data class ReaderUiState(
      * settings sheet's "Terms for this book" editor. The global
      * list is edited from Settings, not here. */
     val bookTerms: List<TermPair> = emptyList(),
+    /** Code 122 (audit #23): the GLOBAL term pairs, for the
+     * Replace dialog's "All books" scope row — its save door
+     * is [ReaderViewModel.setGlobalTerms]. */
+    val globalTerms: List<TermPair> = emptyList(),
     // ── Manga programme (slice M2) ───────────────────────────
     /** The open chapter's pages when it is an IMAGE chapter
      * (a MANGA source's chapter): ReaderScreen renders the
@@ -1156,6 +1160,11 @@ class ReaderViewModel(
             }
         }
         viewModelScope.launch {
+            container.termsPrefs.globalPairs.collectLatest { pairs ->
+                _state.value = _state.value.copy(globalTerms = pairs)
+            }
+        }
+        viewModelScope.launch {
             container.termsPrefs.pairsForBook(bookId).collectLatest { pairs ->
                 activeTerms = pairs
                 termsMaps.clear()
@@ -1949,6 +1958,16 @@ class ReaderViewModel(
     fun setBookTerms(pairs: List<TermPair>) {
         viewModelScope.launch {
             container.termsPrefs.setBookPairs(bookId, pairs)
+        }
+    }
+
+    /** Code 122 (audit #23): the Replace dialog's "All books"
+     * scope writes through here; the collectors above pick the
+     * change up (globalPairs feeds the dialog, pairsForBook
+     * re-derives the display text). */
+    fun setGlobalTerms(pairs: List<TermPair>) {
+        viewModelScope.launch {
+            container.termsPrefs.setGlobalPairs(pairs)
         }
     }
 

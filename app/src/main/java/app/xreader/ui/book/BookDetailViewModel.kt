@@ -467,6 +467,7 @@ internal class BookDuplicatesPipeline(
                 BookDuplicates(
                     duplicates = allBooks.filter { other ->
                         other.id != id && other.mergedIntoId == null &&
+                            other.inLibrary &&
                             app.xreader.data.extension.WorkMatcher.sameWork(
                                 book.title, book.author,
                                 other.title, other.author

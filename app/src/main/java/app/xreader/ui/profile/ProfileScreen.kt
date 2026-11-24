@@ -91,6 +91,16 @@ import kotlin.random.Random
 import app.xreader.ui.theme.LocalDockClearance
 import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.effectiveBottomPadding
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import app.xreader.data.prefs.settingsDataStore
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+
+/** Code 122 (R31): the persisted displayed-badge pick's key
+ * on the settings DataStore (see ProfileScreen). */
+private val DISPLAYED_BADGE_KEY =
+    stringPreferencesKey("profile.displayed_badge_id")
 
 /**
  * Profile & progress (Stitch "Xreader Profile", PLAN §8): identity
@@ -146,6 +156,22 @@ fun ProfileScreen(
         }
     }
 
+    // Code 122 (R31, audit item #28): the displayed-badge pick
+    // is PERSISTED — a string key on the settings DataStore,
+    // the GamePrefs pattern (GamePrefs itself is not this
+    // screen's to extend; the key lives with its only reader).
+    // Read as a flow so the M3 page always shows the stored
+    // pick; writing goes through the same store.
+    val badgeStore = remember(container) {
+        container.applicationContext.settingsDataStore
+    }
+    val persistedBadgeId by remember(badgeStore) {
+        badgeStore.data.map { prefs ->
+            prefs[DISPLAYED_BADGE_KEY]
+        }
+    }.collectAsStateWithLifecycle(initialValue = null)
+    val badgeScope = androidx.compose.runtime.rememberCoroutineScope()
+
     // Code 121 (R31): under Material 3 the Profile page is the
     // spec's uncarded, type-led document (M3ProfilePage at the
     // end of this file) fed by the same real state. Nocturne
@@ -191,6 +217,14 @@ fun ProfileScreen(
                 avatarLauncher.launch(arrayOf("image/*"))
             },
             onSaveName = { viewModel.setDisplayName(it) },
+            persistedBadgeId = persistedBadgeId,
+            onPickBadge = { badgeId ->
+                badgeScope.launch {
+                    badgeStore.edit { prefs ->
+                        prefs[DISPLAYED_BADGE_KEY] = badgeId
+                    }
+                }
+            },
             onBack = onBack,
             onOpenHistory = onOpenHistory,
             onOpenSync = onOpenSync,
@@ -1086,11 +1120,11 @@ private fun M3ProfileIdentity(
  * its Pick-a-badge sheet of earned badges; doors as a divider
  * list. Real data only — every number below is the VM's.
  *
- * Displayed badge: no persisted displayed-badge store exists
- * in the app yet (the VM is not this build's file), so the
- * displayed badge defaults to the most recently earned trophy
- * and a pick in the sheet is held in saveable screen state —
- * see the build log's W3 dependency note.
+ * Displayed badge: code 122 (audit item #28) persists the
+ * pick — ProfileScreen reads/writes it on the settings
+ * DataStore and passes it in; with no pick stored the
+ * displayed badge defaults to the most recently earned
+ * trophy, as before.
  */
 @OptIn(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
@@ -1104,6 +1138,11 @@ private fun M3ProfilePage(
     avatarColour: androidx.compose.ui.graphics.Color,
     onAvatarClick: () -> Unit,
     onSaveName: (String) -> Unit,
+    /** Code 122 (R31): the persisted displayed-badge pick —
+     * the stored badge id (null = none picked yet) and the
+     * writer the pick sheet calls. */
+    persistedBadgeId: String?,
+    onPickBadge: (String) -> Unit,
     onBack: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenSync: () -> Unit,
@@ -1116,9 +1155,13 @@ private fun M3ProfilePage(
     var nameDraft by remember { mutableStateOf("") }
     var badgeSheetOpen by remember { mutableStateOf(false) }
     val earned = state.achievements.filter { it.unlocked }
-    var pickedBadgeId by remember { mutableStateOf<String?>(null) }
+    // Code 122 (R31): the displayed badge is the PERSISTED
+    // pick (it survives leaving the page); with no pick
+    // stored it defaults to the most recently earned trophy,
+    // as before. A stored pick whose badge is somehow no
+    // longer earned falls back the same way.
     val displayedBadge = earned.firstOrNull {
-        it.def.id == pickedBadgeId
+        it.def.id == persistedBadgeId
     } ?: earned.maxByOrNull { it.unlockedAt ?: 0L }
     val nextUp = state.achievements
         .filter { !it.unlocked }
@@ -1497,7 +1540,7 @@ private fun M3ProfilePage(
                                     .graphics.Color.Transparent
                             ),
                         modifier = Modifier.clickable {
-                            pickedBadgeId = achievement.def.id
+                            onPickBadge(achievement.def.id)
                             badgeSheetOpen = false
                         }
                     )

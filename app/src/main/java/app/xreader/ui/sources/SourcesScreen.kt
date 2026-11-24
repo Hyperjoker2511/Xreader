@@ -116,6 +116,13 @@ fun SourcesScreen(
     onOpenOpdsServers: () -> Unit,
     /** v1.0.5 (C3): the Add-a-source screen and the Source store. */
     onAddSource: () -> Unit = {},
+    /** Code 122 (R2, audit item #6): the M3 foot door goes
+     * DIRECTLY to Add from link (R24), per the spec — the
+     * shell wires this to the addFromLink route (with the
+     * intended-kind set, exactly as the Add source route's
+     * own link door does). Defaults to [onAddSource] so older
+     * call sites keep their behaviour. */
+    onAddFromLink: () -> Unit = onAddSource,
     onOpenStore: () -> Unit = {},
     /** v1.5.2 (FIX-15): the dedicated source-management
      * screen — every source (shown + hidden), its show/hide
@@ -983,7 +990,7 @@ fun SourcesScreen(
                     }
                     item(key = "m3-door-add") {
                         Card(
-                            onClick = onAddSource,
+                            onClick = onAddFromLink,
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme
                                     .colorScheme.surfaceContainerLow
@@ -1012,7 +1019,8 @@ fun SourcesScreen(
                                             .typography.titleMedium
                                     )
                                     Text(
-                                        "A link, a repository or a Legado file",
+                                        "From a link — Xreader works out " +
+                                            "how to read the site",
                                         style = MaterialTheme
                                             .typography.bodySmall,
                                         color = MaterialTheme.colorScheme

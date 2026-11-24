@@ -38,6 +38,63 @@ fun LabsScreen(container: AppContainer, onBack: () -> Unit) {
     val config by container.readerPrefs.config
         .collectAsStateWithLifecycle(initialValue = ReaderConfig())
     val scope = rememberCoroutineScope()
+    // Code 122 (R36, audit item #31): the Material 3 form —
+    // settings-list language (small top app bar, list item with
+    // the spec Switch), the SAME single eye-tracking row with
+    // the SAME wiring (readerPrefs eyeTracking). The Nocturne
+    // form below is untouched.
+    if (app.xreader.ui.sources.isM3Design()) {
+        Column(Modifier.fillMaxSize()) {
+            androidx.compose.material3.TopAppBar(
+                title = { Text("Labs") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                }
+            )
+            Text(
+                "Experiments live here. They're real features, but their " +
+                    "quality depends on your device — if one misbehaves it " +
+                    "turns itself off and tells you why. Your reading is " +
+                    "never affected.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = {
+                    Text("Eye-tracking page turns — EXPERIMENTAL")
+                },
+                supportingContent = {
+                    Text(
+                        "Double-blink, nod, or hold your gaze down to turn " +
+                            "the page. Uses the front camera on this device " +
+                            "only: images are classified on the phone and " +
+                            "never recorded, stored, or sent anywhere. " +
+                            "Needs the camera permission, asked for only " +
+                            "when you turn this on."
+                    )
+                },
+                trailingContent = {
+                    androidx.compose.material3.Switch(
+                        checked = config.eyeTracking,
+                        onCheckedChange = { on ->
+                            scope.launch {
+                                container.readerPrefs.update {
+                                    it.copy(eyeTracking = on)
+                                }
+                            }
+                        }
+                    )
+                }
+            )
+        }
+        return
+    }
     Column(
         Modifier
             .fillMaxSize()

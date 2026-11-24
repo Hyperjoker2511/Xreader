@@ -133,6 +133,14 @@ class MainActivity : FragmentActivity() {
         handleWidgetIntent(intent, container)
         handleSourceShortcut(intent, container)
         handleSourceShelfIntent(intent, container)
+        // Code 122 (source regression fix): the one-time startup
+        // sequence (bundled defaults → Keiyoushi repo →
+        // restoreInstalled() → update passes) runs on the
+        // container's app scope, triggered here — never on a
+        // composition scope, so a design switch or recomposition
+        // can never cancel it mid-restore. Guarded inside the
+        // container: exactly once per process.
+        container.startStartupSequence()
         // A previous crash outranks onboarding (PLAN §1.5): recovery first.
         val crashNote = container.unseenCrashNote()
         setContent {

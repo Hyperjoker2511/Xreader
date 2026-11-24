@@ -187,11 +187,36 @@ fun ReaderSettingsSheet(
     // same control with the same stored value, regrouped, with
     // the explanation paragraphs cut to at most one short line.
     var page by remember(initialPage) { mutableStateOf(initialPage) }
+    // Code 122 (Settings V2, S16): under Material 3 this sheet
+    // speaks the redesign's sheet language — the index doors
+    // ride in one tonal card of segmented rows, the Scope
+    // choice is a spec segmented row in the sheet's last card,
+    // and a sub-page's groups sit on one tonal card a rung
+    // above the sheet. Every setting and every wire below is
+    // unchanged; Nocturne renders exactly as shipped.
+    val isM3Settings = app.xreader.ui.theme.LocalDesignState
+        .current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
     Column(
         Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 8.dp),
+            .padding(
+                horizontal = if (isM3Settings) 16.dp else 24.dp,
+                vertical = 8.dp
+            )
+            .then(
+                if (isM3Settings && page != "index") {
+                    Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(
+                            MaterialTheme.colorScheme.surfaceContainer
+                        )
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                } else {
+                    Modifier
+                }
+            ),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         if (page != "index") {
@@ -221,12 +246,20 @@ fun ReaderSettingsSheet(
         }
         when (page) {
             "index" -> {
-                SectionHeader(title = "Reading settings", eyebrow = "Reader",
+                if (isM3Settings) {
+                    Text(
+                        "Reading settings",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                } else {
+                    SectionHeader(title = "Reading settings", eyebrow = "Reader",
     modifier = Modifier,
     actionText = null,
     onAction = null,
 
-                )
+                    )
+                }
 
                 // v1.7 OE-1 (R21): a PDF's page settings
                 // stand at the TOP of the index — one
@@ -493,6 +526,11 @@ fun ReaderSettingsSheet(
                 }
 
                 // R18 scope: at the TOP of the index, as before.
+                // Code 122 (M3): under Material 3 the scope is
+                // the sheet's LAST card in segmented-row form
+                // (Settings V2 §2) — rendered at the end of this
+                // index branch; this top section is Nocturne's.
+                if (!isM3Settings) {
                 SheetSection("Apply colours & text size to") {
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -526,6 +564,7 @@ fun ReaderSettingsSheet(
                         }
                     }
                 }
+                }
 
                 // v1.5.40: "Text & colours" is the FIRST row —
                 // the community-feedback lesson (a reader could
@@ -534,6 +573,28 @@ fun ReaderSettingsSheet(
                 // wrong door. Text size, paragraph gap and the
                 // colours lead this page now; "Reading" below it
                 // keeps only reading behaviour.
+                // Code 122 (M3): the index doors ride in ONE
+                // tonal card (surfaceContainerLow) as a joined
+                // segmented list; Nocturne keeps the plain
+                // column, spacing unchanged.
+                Column(
+                    Modifier.then(
+                        if (isM3Settings) {
+                            Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(
+                                    MaterialTheme.colorScheme
+                                        .surfaceContainerLow
+                                )
+                                .padding(8.dp)
+                        } else {
+                            Modifier
+                        }
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(
+                        if (isM3Settings) 2.dp else 12.dp
+                    )
+                ) {
                 RowItem(
                     icon = Icons.Filled.Palette,
                     label = "Text & colours",
@@ -585,8 +646,111 @@ fun ReaderSettingsSheet(
 
                     )
                 }
+                }
                 TextButton(onClick = onOpenCustomise) {
                     Text("Open the Customise screen — colours, glass, layout and more")
+                }
+                if (isM3Settings) {
+                    // Code 122 (Settings V2 §2): the Scope choice
+                    // is the M3 sheet's LAST card — a spec
+                    // segmented row (filled picked state +
+                    // check), the stated override line intact.
+                    androidx.compose.material3.Card(
+                        colors = androidx.compose.material3
+                            .CardDefaults.cardColors(
+                                containerColor = MaterialTheme
+                                    .colorScheme.surfaceContainer
+                            ),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            Modifier.padding(16.dp),
+                            verticalArrangement =
+                                Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                "Apply colours & text size to",
+                                style = MaterialTheme.typography
+                                    .bodyLarge
+                            )
+                            androidx.compose.material3
+                                .SingleChoiceSegmentedButtonRow(
+                                    Modifier.fillMaxWidth()
+                                ) {
+                                    val scopeOptions = listOf(
+                                        ReaderSettingsScope.ALL_BOOKS
+                                            to "All books",
+                                        ReaderSettingsScope.THIS_BOOK
+                                            to "This book only"
+                                    )
+                                    scopeOptions.forEachIndexed {
+                                        index, (scope, label) ->
+                                        androidx.compose.material3
+                                            .SegmentedButton(
+                                                selected =
+                                                    settingsScope == scope,
+                                                onClick = {
+                                                    onScopeChange(scope)
+                                                },
+                                                shape = androidx
+                                                    .compose.material3
+                                                    .SegmentedButtonDefaults
+                                                    .itemShape(
+                                                        index = index,
+                                                        count =
+                                                            scopeOptions.size
+                                                    ),
+                                                colors = androidx
+                                                    .compose.material3
+                                                    .SegmentedButtonDefaults
+                                                    .colors(
+                                                        activeContainerColor =
+                                                            MaterialTheme
+                                                                .colorScheme
+                                                                .secondaryContainer,
+                                                        activeContentColor =
+                                                            MaterialTheme
+                                                                .colorScheme
+                                                                .onSecondaryContainer
+                                                    ),
+                                                icon = {
+                                                    androidx.compose
+                                                        .material3
+                                                        .SegmentedButtonDefaults
+                                                        .Icon(
+                                                            active =
+                                                                settingsScope ==
+                                                                    scope
+                                                        )
+                                                },
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                            ) {
+                                                Text(label)
+                                            }
+                                    }
+                                }
+                            if (hasBookOverride) {
+                                Text(
+                                    "This book has its own " +
+                                        "colours/text size.",
+                                    style = MaterialTheme.typography
+                                        .bodySmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                                TextButton(
+                                    onClick = onClearBookOverride
+                                ) {
+                                    Text(
+                                        "Use the global look for " +
+                                            "this book"
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1584,7 +1748,14 @@ fun ListenSheet(
     voiceHasOverride: Boolean = false,
     onVoiceEngineChange: (app.xreader.data.prefs.VoiceEngine) -> Unit = {},
     onVoicePick: (String?) -> Unit = {},
-    onVoiceReset: () -> Unit = {}
+    onVoiceReset: () -> Unit = {},
+    // Code 122 (S17, audit #16): the listening-cache line + its
+    // own Clear. The host routes the SAME call Customise →
+    // Storage's Clear makes (TtsAudioCache.clear via the
+    // container); null (the default) = the host supplied no
+    // cache door and the section is not drawn — no dead button.
+    listeningCacheBytes: Long? = null,
+    onClearListeningCache: (() -> Unit)? = null
 ) {
     // Code 121 (S17): under M3 the transport's play/pause is a
     // FAB; Nocturne keeps its shipped icon-button transport.
@@ -1904,6 +2075,33 @@ fun ListenSheet(
                 )
             }
         }
+        // Code 122 (S17): the listening cache's own line +
+        // Clear — drawn only when the host routed the cache
+        // door in (see the parameter note).
+        if (onClearListeningCache != null) {
+            SheetSection("Listening cache") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        if (listeningCacheBytes != null) {
+                            "Saved voices on this phone · " +
+                                app.xreader.data.files.StorageMeter
+                                    .formatBytes(listeningCacheBytes)
+                        } else {
+                            "Saved voices on this phone"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = onClearListeningCache) {
+                        Text("Clear")
+                    }
+                }
+            }
+        }
         Spacer(Modifier.height(8.dp))
     }
 }
@@ -2001,7 +2199,15 @@ fun TocSheet(
     onDeleteHighlight: (Highlight) -> Unit,
     onEditHighlightNote: (Highlight) -> Unit,
     /** Phase 6: share a highlight as a quote-card PNG. */
-    onQuoteCard: (Highlight) -> Unit = {}
+    onQuoteCard: (Highlight) -> Unit = {},
+    /** Code 122 (S18, audit #17): the current chapter's
+     * progress (0f..1f) — the same chapterFraction the reader
+     * state already publishes for the chrome. Rendered as the
+     * spec's progress line on the current-chapter row only.
+     * Null (the default) = the host supplied none and no line
+     * is drawn. HOST WIRING: ReaderScreen's TocSheet call must
+     * pass state.chapterFraction here. */
+    currentChapterProgress: Float? = null
 ) {
     // Code 120 (§2.11 Reader): in the Material 3 design the
     // sheet opens on the design's Contents-tab knob; Nocturne
@@ -2158,20 +2364,34 @@ fun TocSheet(
                                 modifier = Modifier
                                     .size(width = 40.dp, height = 20.dp)
                             )
-                            Text(
-                                entry.label,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (
-                                    index == currentTocEntryIndex
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    entry.label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (
+                                        index == currentTocEntryIndex
+                                    ) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                // Code 122 (S18): the current
+                                // entry's progress line.
+                                if (index == currentTocEntryIndex &&
+                                    currentChapterProgress != null
                                 ) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
+                                    Text(
+                                        "${(currentChapterProgress * 100).toInt()}%",
+                                        style = MaterialTheme.typography
+                                            .bodySmall,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                }
+                            }
                             if (segment?.read == true) {
                                 Icon(
                                     Icons.Filled.Check, "Read",
@@ -2226,35 +2446,50 @@ fun TocSheet(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(width = 40.dp, height = 20.dp)
                         )
-                        Text(
-                            chapter.title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (index == currentChapterIndex) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                            // MR-4 (R8): bold when the next
-                            // chapter sits deeper (it has
-                            // sub-chapters).
-                            fontWeight = if (
-                                (levels.getOrNull(index + 1) ?: 0) >
-                                (levels.getOrNull(index) ?: 0)
-                            ) {
-                                FontWeight.Bold
-                            } else {
-                                null
-                            },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
+                        Column(
+                            Modifier
                                 .weight(1f)
                                 // R8: the indent pads the
                                 // TITLE only — level × 15dp.
                                 .padding(
                                     start = ((levels.getOrNull(index) ?: 0) * 15).dp
                                 )
-                        )
+                        ) {
+                            Text(
+                                chapter.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (index == currentChapterIndex) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                                // MR-4 (R8): bold when the next
+                                // chapter sits deeper (it has
+                                // sub-chapters).
+                                fontWeight = if (
+                                    (levels.getOrNull(index + 1) ?: 0) >
+                                    (levels.getOrNull(index) ?: 0)
+                                ) {
+                                    FontWeight.Bold
+                                } else {
+                                    null
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            // Code 122 (S18): the current
+                            // chapter's progress line.
+                            if (index == currentChapterIndex &&
+                                currentChapterProgress != null
+                            ) {
+                                Text(
+                                    "${(currentChapterProgress * 100).toInt()}%",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            }
+                        }
                         if (chapter.read) {
                             Icon(
                                 Icons.Filled.Check, "Read",

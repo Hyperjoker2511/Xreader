@@ -436,9 +436,10 @@ fun OpdsCatalogScreen(
     // ── Code 121 (W4, scratch R26): the OPDS catalogue in ──
     // Material 3 — R20's card grid scoped to one server:
     // category entries as list rows, books as filled cards with
-    // the Acquire (Download) button. (The browse state carries
-    // no per-book in-library flag, so Acquire is the Download
-    // button the shipped row carries — see D-121-W4-7.) Under
+    // the Acquire (Download) button. Code 122 (R26): the browse
+    // state now carries the library key set (acquisition URLs
+    // of library OPDS rows), so a flagged entry's Acquire is a
+    // disabled "In library" state instead of Download. Under
     // Nocturne the shipped screen below renders byte-identically.
     if (isM3Design()) {
         Column(Modifier.fillMaxSize()) {
@@ -604,14 +605,34 @@ fun OpdsCatalogScreen(
                                             maxLines = 1
                                         )
                                     }
+                                    // Code 122 (R26): an entry
+                                    // whose acquisition URL is a
+                                    // library OPDS row's key is
+                                    // already in the library —
+                                    // a disabled "In library"
+                                    // state, never a second
+                                    // Download.
+                                    val inLibrary =
+                                        entry.acquisitions.any {
+                                            it.url in state.libraryKeys
+                                        }
                                     FilledTonalButton(
                                         onClick = {
                                             viewModel.downloadBook(entry)
                                         },
+                                        enabled = !inLibrary,
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .padding(top = 8.dp)
-                                    ) { Text("Download") }
+                                    ) {
+                                        Text(
+                                            if (inLibrary) {
+                                                "In library"
+                                            } else {
+                                                "Download"
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }

@@ -458,13 +458,22 @@ fun KomikkuReaderScreen(
         // Page indicator (R-14): centred, stroked, primary.
         val showPageNumber by prefs.showPageNumber().changes()
             .collectAsState(initial = true)
-        // Under M3 the page position lives in the toolbar's
-        // page chip (S13, with its own Show/Hide knob), so the
-        // centred Nocturne indicator does not also render.
+        // Under M3 the centred indicator is the M3 one at the
+        // same seat (audit #26); the Nocturne one stays as-is.
         if (!m3 && showPageNumber && state.pageCount > 0) {
             ReaderPageIndicator(
                 currentPage = state.currentPage,
                 totalPages = state.pageCount,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 10.dp)
+            )
+        }
+        if (m3 && state.pageCount > 0) {
+            M3CentredPageIndicator(
+                currentPage = state.currentPage,
+                totalPages = state.pageCount,
+                showPageNumber = showPageNumber,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 10.dp)

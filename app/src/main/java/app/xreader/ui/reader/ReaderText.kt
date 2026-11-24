@@ -191,8 +191,25 @@ fun FootnoteBoxView(
 ) {
     val em = (config.fontSizeSp * 0.8f).dp
     val shape = RoundedCornerShape(10.dp)
-    Column(
-        modifier = modifier
+    // Code 122 (S9, audit #14): under Material 3 the box is the
+    // spec's filled surfaceContainer card — no hard-coded grey,
+    // no dashed stroke. Its ink stays the page palette's text
+    // colour (the box is content furniture drawn from the page
+    // palette). Nocturne keeps Moon+'s shipped dashed box above
+    // exactly as before.
+    val footnoteIsM3 = app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val boxModifier = if (footnoteIsM3) {
+        modifier
+            .padding(em * 0.5f)
+            .background(
+                androidx.compose.material3.MaterialTheme.colorScheme
+                    .surfaceContainer,
+                shape
+            )
+            .padding(em * 0.5f)
+    } else {
+        modifier
             .padding(em * 0.5f)
             .drawBehind {
                 drawRoundRect(
@@ -208,6 +225,9 @@ fun FootnoteBoxView(
             }
             .background(Color(0xFF7E7E7E).copy(alpha = 0.1f), shape)
             .padding(em * 0.5f)
+    }
+    Column(
+        modifier = boxModifier
     ) {
         block.entries.forEachIndexed { index, entry ->
             if (index > 0) Spacer(Modifier.height(4.dp))

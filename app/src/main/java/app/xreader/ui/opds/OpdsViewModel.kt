@@ -26,7 +26,17 @@ data class OpdsBrowseState(
     val loading: Boolean = false,
     val errorMessage: String? = null,
     /** Navigation stack of feed URLs (root first). */
-    val stack: List<String> = emptyList()
+    val stack: List<String> = emptyList(),
+    /** Code 122 (R26): the library key set — acquisition URLs
+     * of library OPDS book rows (the URL [OpdsViewModel.downloadBook]
+     * stores as the row's remoteId). An entry whose acquisition
+     * URL is in this set is already in the library; the M3 card
+     * shows a disabled "In library" state instead of Download.
+     * Populated from the same observeAllBooks feed (and the
+     * same membership filter) as SourceCatalogViewModel's
+     * libraryKeys — keyed by URL here because an OPDS entry's
+     * identity IS its acquisition URL, not its title. */
+    val libraryKeys: Set<String> = emptySet()
 ) {
     val canGoBack: Boolean get() = stack.size > 1
 }
@@ -49,6 +59,27 @@ class OpdsViewModel(private val container: AppContainer) : ViewModel() {
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
     private var activeServer: OpdsServer? = null
+
+    init {
+        // Code 122 (R26): keep the library key set live for the
+        // OPDS cards' "In library" state.
+        viewModelScope.launch {
+            container.database.bookDao().observeAllBooks()
+                .collect { books ->
+                    _browse.value = _browse.value.copy(
+                        libraryKeys = books
+                            .filter {
+                                it.inLibrary && it.mergedIntoId == null &&
+                                    it.sourceType == SourceType.OPDS
+                            }
+                            .mapNotNull {
+                                it.remoteId?.takeIf { url -> url.isNotBlank() }
+                            }
+                            .toSet()
+                    )
+                }
+        }
+    }
 
     fun addServer(name: String, baseUrl: String, username: String, password: String) {
         viewModelScope.launch {

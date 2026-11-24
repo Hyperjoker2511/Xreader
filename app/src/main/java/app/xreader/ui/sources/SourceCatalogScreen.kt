@@ -511,11 +511,13 @@ fun SourceCatalogScreen(
  * Code 121 (W4, scratch R20): the Material 3 source catalogue.
  * The card's metadata line carries the author — the one
  * per-book datum [app.xreader.extensionapi.SourceBook] holds
- * (there is no latest-chapter field in the catalogue model;
- * see deviation D-121-W4-2 in the build log). The "In library"
- * badge renders where the book's normalised title is in the
- * library key set the catalogue does not currently expose —
- * also D-121-W4-2.
+ * (there is no latest-chapter field in the catalogue model,
+ * and no listing provides one, so the spec's latest-chapter
+ * line stays unbuilt rather than invented — D-121-W4-2,
+ * half). Code 122 (audit item #9): the "In library" badge IS
+ * rendered now — CatalogUiState carries the library key set
+ * (normalised titles, the global search's key) and the card
+ * badges a book whose normalised title is in it.
  */
 @OptIn(
     ExperimentalMaterial3Api::class,
@@ -890,6 +892,22 @@ private fun M3SourceCatalogue(
                                                         .Ellipsis
                                                 )
                                             }
+                                        if (app.xreader.data.extension
+                                                .WorkMatcher
+                                                .normaliseTitle(book.title) in
+                                            state.libraryKeys
+                                        ) {
+                                            androidx.compose.material3
+                                                .AssistChip(
+                                                    onClick = {},
+                                                    enabled = false,
+                                                    label = {
+                                                        Text("In library")
+                                                    },
+                                                    modifier = Modifier
+                                                        .padding(top = 6.dp)
+                                                )
+                                        }
                                         if (state.openingBookId == book.id) {
                                             LinearWavyProgressIndicator(
                                                 Modifier

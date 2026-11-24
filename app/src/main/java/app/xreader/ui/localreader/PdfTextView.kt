@@ -84,6 +84,95 @@ fun pdfTextViewState(
     }
 }
 
+// ── Code 122 (S15, audit #15): the local PDF text view's own
+// M3 wiring site ─────────────────────────────────────────────
+//
+// S15 is S11's composition inside R29: the same top-bar
+// subtitle and the same return toggle the main Reflow surface
+// wires in ReaderScreen (subtitle "Page N · Reflow" at its M3
+// top bar; the toggle named "View as printed"). Those strings
+// live HERE as pure values so the local view's wiring cannot
+// drift from S11's, and [LocalPdfTextViewM3TopBar] is the
+// bar that carries them in the R29 family form (the same
+// small TopAppBar + subtitle shape as LocalReaderChromeM3).
+//
+// HOST WIRING STILL NEEDED (not done — the host is outside
+// this file): no live surface composes a local PDF text view
+// today — LocalDocReaderScreen renders no PDF (OE-1/OE-2 send
+// local PDFs to the core reader, whose Reflow surface already
+// carries S11), and LocalReaderChromeM3 has no text-view
+// state. When a local text view is composed under
+// LocalReaderChromeM3, its chrome must be this bar with
+// subtitle = pdfTextViewSubtitle(page) and the toggle calling
+// the host's return-to-pages door.
+
+/** S11's subtitle for the local text view's top bar. */
+fun pdfTextViewSubtitle(page: Int): String = "Page ${page + 1} · Reflow"
+
+/** S11's return-toggle label for the local text view. */
+const val PDF_TEXT_VIEW_TOGGLE_LABEL = "View as printed"
+
+/** The local PDF text view's M3 top bar (S15's wiring site):
+ * book title, the S11 subtitle beneath it, and the
+ * "View as printed" toggle as its action — the exact
+ * composition ReaderScreen wires for the main Reflow surface,
+ * in the R29 chrome family. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@androidx.compose.runtime.Composable
+fun LocalPdfTextViewM3TopBar(
+    bookTitle: String,
+    page: Int,
+    onBack: () -> Unit,
+    onTogglePdfMode: () -> Unit,
+    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier
+) {
+    androidx.compose.material3.TopAppBar(
+        title = {
+            androidx.compose.foundation.layout.Column {
+                androidx.compose.material3.Text(
+                    bookTitle,
+                    style = androidx.compose.material3.MaterialTheme
+                        .typography.titleMedium,
+                    maxLines = 1
+                )
+                androidx.compose.material3.Text(
+                    pdfTextViewSubtitle(page),
+                    style = androidx.compose.material3.MaterialTheme
+                        .typography.bodySmall,
+                    color = androidx.compose.material3.MaterialTheme
+                        .colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+        },
+        navigationIcon = {
+            androidx.compose.material3.IconButton(onClick = onBack) {
+                androidx.compose.material3.Icon(
+                    androidx.compose.material.icons.Icons.AutoMirrored
+                        .Filled.ArrowBack,
+                    "Back"
+                )
+            }
+        },
+        actions = {
+            androidx.compose.material3.IconButton(onClick = onTogglePdfMode) {
+                androidx.compose.material3.Icon(
+                    androidx.compose.material.icons.Icons.Filled.Description,
+                    PDF_TEXT_VIEW_TOGGLE_LABEL
+                )
+            }
+        },
+        colors = androidx.compose.material3.TopAppBarDefaults
+            .topAppBarColors(
+                containerColor = androidx.compose.material3.MaterialTheme
+                    .colorScheme.surface,
+                scrolledContainerColor = androidx.compose.material3
+                    .MaterialTheme.colorScheme.surfaceContainer
+            ),
+        modifier = modifier
+    )
+}
+
 /** The one-time honest note the view carries (H5). */
 const val PDF_TEXT_VIEW_NOTE =
     "This is the document's text layer, flowing as text. " +

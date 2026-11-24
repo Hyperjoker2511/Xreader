@@ -60,11 +60,23 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.Text
@@ -81,6 +93,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.core.motion.animateProgressAsState
 import app.xreader.core.motion.itemEnter
@@ -133,6 +150,17 @@ fun LibraryScreen(
      * "New chapters" row — opens the updates page. */
     onOpenUpdates: () -> Unit = {},
     coverGlow: Boolean = false,
+    /** Code 122 (S36): the update card's state + doors, hosted
+     * IN the M3 Library's content flow (above the Cover Story)
+     * instead of the retired overlay. Null (the default) =
+     * no card; the shell wires the real AppUpdateViewModel. */
+    updateState: app.xreader.ui.update.AppUpdateViewModel.UiState? = null,
+    onUpdateNow: () -> Unit = {},
+    onDismissUpdate: () -> Unit = {},
+    onReadMoreUpdate: () -> Unit = {},
+    onInstallUpdate: () -> Unit = {},
+    onCancelUpdateDownload: () -> Unit = {},
+    onOpenUpdateInstallSettings: () -> Unit = {},
     /** Nav-bar styles (v1.6.2): the device performance tier the
      * shell resolved — the Novels↔Manga switch's indicator
      * travel shortens on MINIMAL, like the dock's. */
@@ -307,7 +335,14 @@ fun LibraryScreen(
             onOpenBook = onOpenBook,
             onContinueReading = onContinueReading,
             onOpenAddList = onOpenAddList,
-            onOpenUpdates = onOpenUpdates
+            onOpenUpdates = onOpenUpdates,
+            updateState = updateState,
+            onUpdateNow = onUpdateNow,
+            onDismissUpdate = onDismissUpdate,
+            onReadMoreUpdate = onReadMoreUpdate,
+            onInstallUpdate = onInstallUpdate,
+            onCancelUpdateDownload = onCancelUpdateDownload,
+            onOpenUpdateInstallSettings = onOpenUpdateInstallSettings
         )
         return
     }
@@ -2447,6 +2482,303 @@ private fun m3StatusLabel(
     app.xreader.data.library.ReadingStatus.NONE -> ""
 }
 
+// ── Code 122 (Wave 3): the M3 Library as THE EDITORIAL ─────
+// A front page built only from MaterialTheme.colorScheme roles
+// (DESIGN-M3-LIBRARY-V5-EDITORIAL-2026-11-24, Addendum A token
+// map governs: roles, never hex) and the completed page of
+// Addendum B: masthead → sections strip → Cover Story → Manga
+// Desk → Also in progress → departments. The Novels|Manga side
+// switch is gone from this composition: the page covers the
+// whole library, manga is found via LibrarySplit.kindOf (the
+// same signal the split uses), and the Desk is a door onto a
+// manga wall where the five statuses still organise manga.
+
+/** The sections strip's chips: All + the five statuses, in the
+ * mockup's short labels ("Plan", not "Plan to read"). Keys are
+ * the same filter keys m3StatusTabs has always used. */
+private val editorialChips: List<Pair<String, String>> = listOf(
+    "ALL" to "All",
+    "READING" to "Reading",
+    "ON_HOLD" to "On hold",
+    "PLAN_TO_READ" to "Plan",
+    "COMPLETED" to "Completed",
+    "DROPPED" to "Dropped"
+)
+
+/** A book's effective department: its set status, else the
+ * progress-derived one the M3 tabs have always used (finished
+ * → Completed; part-read → Reading). NONE + unstarted stays
+ * NONE — it belongs to no department. */
+private fun editorialStatusOf(
+    state: LibraryUiState,
+    shelf: ShelfBook
+): app.xreader.data.library.ReadingStatus {
+    val status = state.metas[shelf.book.id]?.status
+        ?: app.xreader.data.library.ReadingStatus.NONE
+    if (status != app.xreader.data.library.ReadingStatus.NONE) return status
+    return when {
+        shelf.book.finished -> app.xreader.data.library.ReadingStatus.COMPLETED
+        shelf.fraction > 0f -> app.xreader.data.library.ReadingStatus.READING
+        else -> app.xreader.data.library.ReadingStatus.NONE
+    }
+}
+
+private fun editorialIsManga(
+    state: LibraryUiState,
+    shelf: ShelfBook
+): Boolean = app.xreader.data.library.LibrarySplit.kindOf(
+    shelf.book.id, state.bookKinds
+) == app.xreader.data.extension.MediaKind.MANGA
+
+/** The standfirst: the synopsis' (Book.description's) first
+ * line, per the design's own fallback rule — null when the
+ * book carries no synopsis, and the caller then sets the
+ * byline/line alone. */
+private fun editorialStandfirst(shelf: ShelfBook): String? =
+    shelf.book.description.lines()
+        .firstOrNull { it.isNotBlank() }?.trim()?.takeIf { it.isNotBlank() }
+
+/** The small tertiary pill (COVER STORY tag / NEW / FAVOURITE /
+ * MANGA tags): tertiaryContainer fill, onTertiaryContainer ink. */
+@Composable
+private fun EditorialPill(text: String) {
+    androidx.compose.material3.Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        shape = RoundedCornerShape(6.dp)
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp
+            ),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+        )
+    }
+}
+
+@Composable
+private fun EditorialCover(
+    shelf: ShelfBook,
+    state: LibraryUiState,
+    coverFile: (String?) -> File?,
+    widthDp: Int,
+    heightDp: Int,
+    selected: Boolean,
+    mangaTag: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val scheme = MaterialTheme.colorScheme
+    Box(
+        modifier
+            .size(width = widthDp.dp, height = heightDp.dp)
+            .then(
+                if (selected) {
+                    Modifier.background(scheme.primary, RoundedCornerShape(14.dp))
+                } else {
+                    Modifier
+                }
+            )
+            .padding(if (selected) 2.5.dp else 0.dp)
+    ) {
+        app.xreader.ui.common.M3CoverThumbnail(
+            title = shelf.book.title,
+            author = shelf.book.author.takeIf { it.isNotBlank() },
+            coverModel = coverFile(shelf.book.coverPath)?.takeIf { it.exists() }
+                ?: shelf.book.coverUrl?.takeIf { it.isNotBlank() },
+            modifier = Modifier.fillMaxSize(),
+            shape = RoundedCornerShape(12.dp)
+        )
+        if (mangaTag) {
+            Box(Modifier.align(Alignment.TopEnd).padding(7.dp)) {
+                EditorialPill("MANGA")
+            }
+        }
+        if (selected) {
+            Box(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(7.dp)
+                    .size(23.dp)
+                    .background(scheme.primary, androidx.compose.foundation.shape.CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = "Selected",
+                    tint = scheme.onPrimary,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+        }
+        if (shelf.fraction > 0f && shelf.fraction < 1f) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .height(5.dp)
+                    .background(scheme.scrim.copy(alpha = 0.45f))
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(shelf.fraction.coerceIn(0f, 1f))
+                        .height(5.dp)
+                        .background(scheme.primary)
+                )
+            }
+        }
+    }
+}
+
+/** One cover card on a shelf / beneath a department feature:
+ * cover (selection ring + check + NEW pill per the design),
+ * title, and the caller's sub-line. */
+@Composable
+private fun EditorialCoverCard(
+    shelf: ShelfBook,
+    state: LibraryUiState,
+    coverFile: (String?) -> File?,
+    subLine: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val manga = editorialIsManga(state, shelf)
+    val widthDp = if (manga) 92 else 104
+    Column(
+        Modifier
+            .width(widthDp.dp)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+    ) {
+        EditorialCover(
+            shelf = shelf, state = state, coverFile = coverFile,
+            widthDp = widthDp, heightDp = 148,
+            selected = selected, mangaTag = manga
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            shelf.book.title,
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(top = 2.dp)
+        ) {
+            val newCount = state.metas[shelf.book.id]?.newChapterCount ?: 0
+            if (newCount > 0) {
+                EditorialPill("$newCount NEW")
+            }
+            Text(
+                subLine,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/** A ruled section header: letterspaced title, its count, and
+ * the primary See-all door. */
+@Composable
+private fun EditorialSectionHeader(
+    title: String,
+    countText: String,
+    onSeeAll: (() -> Unit)? = null
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge.copy(
+                fontWeight = FontWeight.ExtraBold, letterSpacing = 1.6.sp
+            )
+        )
+        Text(
+            countText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 8.dp)
+        )
+        if (onSeeAll != null) {
+            Spacer(Modifier.weight(1f))
+            Row(
+                Modifier.clickable { onSeeAll() },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "See all",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+/** The status line a department feature / beneath-row carries,
+ * from real state only: percent, status words, downloaded. */
+private fun editorialFeatureLine(
+    state: LibraryUiState,
+    shelf: ShelfBook
+): String {
+    val status = editorialStatusOf(state, shelf)
+    val pct = (shelf.fraction * 100).toInt()
+    val downloaded = (state.downloadCounts[shelf.book.id]?.downloaded ?: 0) > 0
+    return when (status) {
+        app.xreader.data.library.ReadingStatus.COMPLETED -> "Finished · 100% read"
+        app.xreader.data.library.ReadingStatus.DROPPED -> "Dropped · $pct% read"
+        app.xreader.data.library.ReadingStatus.PLAN_TO_READ ->
+            "Plan · not started" + if (downloaded) " · downloaded" else ""
+        app.xreader.data.library.ReadingStatus.ON_HOLD ->
+            if (shelf.fraction > 0f) "$pct% read · on hold" else "On hold"
+        app.xreader.data.library.ReadingStatus.READING -> "$pct% read"
+        app.xreader.data.library.ReadingStatus.NONE ->
+            if (shelf.fraction > 0f) "$pct% read" else "Not started"
+    }
+}
+
+/** A Manga Desk cover line, in the design's format, from real
+ * state only: the resolved chapter place ("Ch. <parsed>", from
+ * state.placeLabels — the chapter at the book's progress
+ * index, labelled by ChapterDisplayOrder) when the book has
+ * one, then percent / status / downloaded. A book with no
+ * resolved place prints no chapter segment — never a
+ * position. */
+private fun editorialCoverLine(
+    state: LibraryUiState,
+    shelf: ShelfBook
+): String {
+    val status = editorialStatusOf(state, shelf)
+    val pct = (shelf.fraction * 100).toInt()
+    val downloaded = (state.downloadCounts[shelf.book.id]?.downloaded ?: 0) > 0
+    val tail = when (status) {
+        app.xreader.data.library.ReadingStatus.ON_HOLD -> "on hold"
+        app.xreader.data.library.ReadingStatus.PLAN_TO_READ ->
+            "on the plan" + if (downloaded) " · downloaded" else ""
+        app.xreader.data.library.ReadingStatus.COMPLETED -> "finished"
+        app.xreader.data.library.ReadingStatus.DROPPED -> "dropped"
+        else -> if (shelf.fraction > 0f) "$pct%" else "not started"
+    }
+    val chapterSegment = state.placeLabels[shelf.book.id]
+        ?.chapterNumber?.let { "Ch. $it" }
+    return listOfNotNull(chapterSegment, tail).joinToString(" · ")
+}
+
 @OptIn(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
@@ -2462,7 +2794,14 @@ private fun M3LibraryContent(
     onOpenBook: (Long) -> Unit,
     onContinueReading: (bookId: Long, chapterIndex: Int) -> Unit,
     onOpenAddList: () -> Unit,
-    onOpenUpdates: () -> Unit
+    onOpenUpdates: () -> Unit,
+    updateState: app.xreader.ui.update.AppUpdateViewModel.UiState? = null,
+    onUpdateNow: () -> Unit = {},
+    onDismissUpdate: () -> Unit = {},
+    onReadMoreUpdate: () -> Unit = {},
+    onInstallUpdate: () -> Unit = {},
+    onCancelUpdateDownload: () -> Unit = {},
+    onOpenUpdateInstallSettings: () -> Unit = {}
 ) {
     var tabKey by remember { mutableStateOf("ALL") }
     var m3Sort by remember { mutableStateOf(M3LibSort.RECENTLY_READ) }
@@ -2477,463 +2816,436 @@ private fun M3LibraryContent(
     var removeTarget by remember { mutableStateOf<ShelfBook?>(null) }
     var bulkRemoveOpen by remember { mutableStateOf(false) }
     var bulkRemoveSize by remember { mutableStateOf<String?>(null) }
+    var mangaWall by remember { mutableStateOf(false) }
 
-    val nowMillis = remember { System.currentTimeMillis() }
-    val sideBooks = remember(state.books, state.bookKinds, state.librarySide) {
-        app.xreader.data.library.LibrarySplit.onSide(
-            state.books, state.librarySide
-        ) { shelf ->
-            app.xreader.data.library.LibrarySplit
-                .kindOf(shelf.book.id, state.bookKinds)
-        }
-    }
-    // Continue Reading: every in-progress book on this side,
-    // most recently opened first. The hero (state.continueReading)
-    // is the only book whose chapter index the state carries —
-    // its card shows the real chapter line and resumes in place;
-    // other cards show their real progress and open the book.
-    val continueBooks = remember(sideBooks, state.continueReading) {
-        val inProgress = sideBooks
-            .filter { it.fraction > 0f && it.fraction < 1f }
+    val scheme = MaterialTheme.colorScheme
+    // The Editorial covers the WHOLE library (no side split):
+    // departments organise by status, manga by kind.
+    val allBooks = state.books
+    fun statusOf(shelf: ShelfBook) = editorialStatusOf(state, shelf)
+    fun isManga(shelf: ShelfBook) = editorialIsManga(state, shelf)
+    val mangaBooks = remember(allBooks, state.bookKinds, state.metas) {
+        allBooks.filter { isManga(it) }
             .sortedByDescending { it.book.lastOpenedAt ?: 0L }
-        val hero = state.continueReading
-        if (hero != null && inProgress.any { it.book.id == hero.book.id }) {
-            listOf(hero) + inProgress.filter { it.book.id != hero.book.id }
-        } else {
-            inProgress
+    }
+    val mangaInProgress = mangaBooks.count {
+        statusOf(it) == app.xreader.data.library.ReadingStatus.READING
+    }
+    val deskLead = mangaBooks.firstOrNull {
+        statusOf(it) == app.xreader.data.library.ReadingStatus.READING
+    } ?: mangaBooks.firstOrNull()
+    // Continue: the state's hero first (its chapter index is the
+    // only one the state carries), else the most recent
+    // in-progress book.
+    val inProgress = remember(allBooks, state.metas) {
+        allBooks.filter {
+            statusOf(it) == app.xreader.data.library.ReadingStatus.READING &&
+                it.fraction < 1f
+        }.sortedByDescending { it.book.lastOpenedAt ?: 0L }
+    }
+    val lead = state.continueReading ?: inProgress.firstOrNull()
+    val alsoInProgress = inProgress.filter {
+        it.book.id != lead?.book?.id && it.book.id != deskLead?.book?.id
+    }
+    val departments = remember(allBooks, state.metas) {
+        listOf(
+            app.xreader.data.library.ReadingStatus.ON_HOLD,
+            app.xreader.data.library.ReadingStatus.PLAN_TO_READ,
+            app.xreader.data.library.ReadingStatus.COMPLETED,
+            app.xreader.data.library.ReadingStatus.DROPPED
+        ).map { status ->
+            status to allBooks.filter { statusOf(it) == status }
+                .sortedByDescending { it.book.lastOpenedAt ?: 0L }
+        }.filter { it.second.isNotEmpty() }
+    }
+    val unclassified = remember(allBooks, state.metas) {
+        allBooks.filter {
+            statusOf(it) == app.xreader.data.library.ReadingStatus.NONE
         }
     }
-    val visibleBooks = remember(
-        sideBooks, state.metas, state.favourites, state.downloadCounts,
-        tabKey, m3Sort, downloadedOnly, favouritesOnly, query
+    val finishedCount = allBooks.count {
+        statusOf(it) == app.xreader.data.library.ReadingStatus.COMPLETED
+    }
+    val filterLive = downloadedOnly || favouritesOnly ||
+        m3Sort != M3LibSort.RECENTLY_READ
+    val frontPage = tabKey == "ALL" && query.isBlank() &&
+        !downloadedOnly && !favouritesOnly && !mangaWall
+
+    fun matchesFlags(shelf: ShelfBook): Boolean =
+        (!downloadedOnly ||
+            (state.downloadCounts[shelf.book.id]?.downloaded ?: 0) > 0) &&
+            (!favouritesOnly || shelf.book.id in state.favourites)
+    fun matchesQuery(shelf: ShelfBook): Boolean = query.isBlank() ||
+        shelf.book.title.lowercase().contains(query.trim().lowercase()) ||
+        shelf.book.author.lowercase().contains(query.trim().lowercase())
+    fun sorted(books: List<ShelfBook>): List<ShelfBook> = when (m3Sort) {
+        M3LibSort.RECENTLY_READ -> books.sortedByDescending { it.book.lastOpenedAt ?: 0L }
+        M3LibSort.TITLE -> books.sortedBy { it.book.title.lowercase() }
+        M3LibSort.AUTHOR -> books.sortedBy { it.book.author.lowercase() }
+        M3LibSort.RECENTLY_ADDED -> books.sortedByDescending { it.book.addedAt }
+        M3LibSort.PROGRESS -> books.sortedByDescending { it.fraction }
+    }
+    // The collapsed view (a status pick, the manga wall, search,
+    // or a live flag): one department, expanded, as M3 cards.
+    val listBooks = remember(
+        allBooks, state.metas, state.favourites, state.downloadCounts,
+        tabKey, m3Sort, downloadedOnly, favouritesOnly, query, mangaWall,
+        state.bookKinds
     ) {
-        val filtered = sideBooks.filter { shelf ->
-            val status = state.metas[shelf.book.id]?.status
-                ?: app.xreader.data.library.ReadingStatus.NONE
+        val pool = if (mangaWall) mangaBooks else allBooks
+        val filtered = pool.filter { shelf ->
             val matchesTab = when (tabKey) {
-                "READING" -> status ==
-                    app.xreader.data.library.ReadingStatus.READING ||
-                    (status == app.xreader.data.library.ReadingStatus.NONE &&
-                        shelf.fraction > 0f && !shelf.book.finished)
-                "PLAN_TO_READ" -> status ==
+                "READING" -> statusOf(shelf) ==
+                    app.xreader.data.library.ReadingStatus.READING
+                "PLAN_TO_READ" -> statusOf(shelf) ==
                     app.xreader.data.library.ReadingStatus.PLAN_TO_READ
-                "COMPLETED" -> status ==
-                    app.xreader.data.library.ReadingStatus.COMPLETED ||
-                    shelf.book.finished
-                "ON_HOLD" -> status ==
+                "COMPLETED" -> statusOf(shelf) ==
+                    app.xreader.data.library.ReadingStatus.COMPLETED
+                "ON_HOLD" -> statusOf(shelf) ==
                     app.xreader.data.library.ReadingStatus.ON_HOLD
-                "DROPPED" -> status ==
+                "DROPPED" -> statusOf(shelf) ==
                     app.xreader.data.library.ReadingStatus.DROPPED
                 else -> true
             }
-            val matchesFlags =
-                (!downloadedOnly ||
-                    (state.downloadCounts[shelf.book.id]?.downloaded ?: 0) > 0) &&
-                    (!favouritesOnly || shelf.book.id in state.favourites)
-            val matchesQuery = query.isBlank() ||
-                shelf.book.title.lowercase().contains(query.trim().lowercase()) ||
-                shelf.book.author.lowercase().contains(query.trim().lowercase())
-            matchesTab && matchesFlags && matchesQuery
+            matchesTab && matchesFlags(shelf) && matchesQuery(shelf)
         }
-        when (m3Sort) {
-            M3LibSort.RECENTLY_READ ->
-                filtered.sortedByDescending { it.book.lastOpenedAt ?: 0L }
-            M3LibSort.TITLE ->
-                filtered.sortedBy { it.book.title.lowercase() }
-            M3LibSort.AUTHOR ->
-                filtered.sortedBy { it.book.author.lowercase() }
-            M3LibSort.RECENTLY_ADDED ->
-                filtered.sortedByDescending { it.book.addedAt }
-            M3LibSort.PROGRESS ->
-                filtered.sortedByDescending { it.fraction }
+        sorted(filtered)
+    }
+
+    fun onCoverClick(shelf: ShelfBook) {
+        val current = selection
+        if (current != null) {
+            selection = if (shelf.book.id in current) {
+                (current - shelf.book.id).ifEmpty { null }
+            } else {
+                current + shelf.book.id
+            }
+        } else {
+            viewModel.markSeen(shelf.book.id)
+            onOpenBook(shelf.book.id)
+        }
+    }
+    fun onCoverLongClick(shelf: ShelfBook) {
+        val current = selection
+        selection = if (current == null) {
+            setOf(shelf.book.id)
+        } else if (shelf.book.id in current) {
+            (current - shelf.book.id).ifEmpty { null }
+        } else {
+            current + shelf.book.id
         }
     }
 
-    val scrollBehavior = androidx.compose.material3.TopAppBarDefaults
-        .exitUntilCollapsedScrollBehavior()
     val libraryEmpty = !state.loading && state.books.isEmpty() &&
         candidates.isEmpty()
-    androidx.compose.material3.Scaffold(
-        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        topBar = {
-            androidx.compose.material3.MediumFlexibleTopAppBar(
-                title = {
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        // Selection bar (long-press multi-select) — unchanged
+        // actions from the code-121 M3 Library.
+        selection?.let { picked ->
+            androidx.compose.material3.Surface(
+                color = scheme.surfaceContainerHigh,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Text(
-                        "Library",
-                        style = MaterialTheme.typography.titleLarge
+                        "${picked.size} selected",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(end = 8.dp)
                     )
-                },
-                scrollBehavior = scrollBehavior,
-                actions = {
-                    androidx.compose.material3.IconButton(
-                        onClick = { searchOpen = !searchOpen }
-                    ) {
-                        androidx.compose.material3.Icon(
-                            Icons.Filled.Search,
-                            contentDescription = "Search your library"
+                    TextButton(onClick = {
+                        viewModel.bulkSetFavourite(picked, true)
+                    }) { Text("Favourite") }
+                    TextButton(onClick = {
+                        viewModel.bulkDownload(picked)
+                    }) { Text("Download") }
+                    TextButton(onClick = {
+                        viewModel.bulkSetStatus(
+                            picked,
+                            app.xreader.data.library.ReadingStatus.COMPLETED
                         )
-                    }
-                    Box {
-                        androidx.compose.material3.IconButton(
-                            onClick = { addMenuOpen = true }
-                        ) {
-                            androidx.compose.material3.Icon(
-                                Icons.Filled.Add,
-                                contentDescription = "Add a book"
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = addMenuOpen,
-                            onDismissRequest = { addMenuOpen = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Import a file") },
-                                onClick = {
-                                    addMenuOpen = false
-                                    onAddBook()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Add a list") },
-                                onClick = {
-                                    addMenuOpen = false
-                                    onOpenAddList()
-                                }
-                            )
-                        }
+                    }) { Text("Mark read") }
+                    TextButton(onClick = {
+                        bulkRemoveSize = null
+                        bulkRemoveOpen = true
+                    }) { Text("Remove…") }
+                    TextButton(onClick = { selection = null }) {
+                        Text("Done")
                     }
                 }
+            }
+        }
+        if (state.loading && state.books.isEmpty() && candidates.isEmpty()) {
+            LoadingState(
+                whatIsHappening = "Loading your library…",
+                modifier = Modifier.weight(1f)
             )
-        },
-        floatingActionButton = {
-            if (libraryEmpty) {
+            return@Column
+        }
+        if (libraryEmpty) {
+            Column(
+                Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "No books yet",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                Text(
+                    "Add your first book (EPUB, PDF, TXT and more) " +
+                        "and it will live here, ready to read.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = scheme.onSurfaceVariant
+                )
                 androidx.compose.material3.ExtendedFloatingActionButton(
                     onClick = onAddBook,
-                    icon = {
-                        androidx.compose.material3.Icon(
-                            Icons.Filled.Add,
-                            contentDescription = null
-                        )
-                    },
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                     text = { Text("Add a book") }
                 )
             }
+            return@Column
         }
-    ) { innerPadding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
+        androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+            isRefreshing = state.pullRefreshing,
+            onRefresh = { viewModel.pullRefresh() },
+            modifier = Modifier.weight(1f)
         ) {
-            // The Novels | Manga side switch — one segmented
-            // control, the same split the Nocturne page makes.
-            androidx.compose.material3.SingleChoiceSegmentedButtonRow(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 88.dp)
             ) {
-                SegmentedButton(
-                    selected = state.librarySide ==
-                        app.xreader.data.extension.MediaKind.TEXT,
-                    onClick = {
-                        viewModel.setLibrarySide(
-                            app.xreader.data.extension.MediaKind.TEXT
-                        )
-                    },
-                    shape = androidx.compose.material3.SegmentedButtonDefaults
-                        .itemShape(index = 0, count = 2)
-                ) { Text("Novels") }
-                SegmentedButton(
-                    selected = state.librarySide ==
-                        app.xreader.data.extension.MediaKind.MANGA,
-                    onClick = {
-                        viewModel.setLibrarySide(
-                            app.xreader.data.extension.MediaKind.MANGA
-                        )
-                    },
-                    shape = androidx.compose.material3.SegmentedButtonDefaults
-                        .itemShape(index = 1, count = 2)
-                ) { Text("Manga") }
-            }
-            if (searchOpen) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = { Text("Search your library — title or author") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-            }
-            // Selection bar (long-press multi-select): count +
-            // the batch actions, per the lists guidance.
-            selection?.let { picked ->
-                androidx.compose.material3.Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        Modifier
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            "${picked.size} selected",
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                        TextButton(onClick = {
-                            viewModel.bulkSetFavourite(picked, true)
-                        }) { Text("Favourite") }
-                        TextButton(onClick = {
-                            viewModel.bulkDownload(picked)
-                        }) { Text("Download") }
-                        TextButton(onClick = {
-                            viewModel.bulkSetStatus(
-                                picked,
-                                app.xreader.data.library.ReadingStatus.COMPLETED
-                            )
-                        }) { Text("Mark read") }
-                        TextButton(onClick = {
-                            bulkRemoveSize = null
-                            bulkRemoveOpen = true
-                        }) { Text("Remove…") }
-                        TextButton(onClick = { selection = null }) {
-                            Text("Done")
-                        }
-                    }
-                }
-            }
-            if (state.loading && state.books.isEmpty() && candidates.isEmpty()) {
-                LoadingState(
-                    whatIsHappening = "Loading your library…",
-                    modifier = Modifier.weight(1f)
-                )
-                return@Column
-            }
-            if (libraryEmpty) {
-                // S40 empty state: what would fill it, one body
-                // line, the door (the extended FAB above).
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        "No books yet",
-                        style = MaterialTheme.typography.headlineSmall
-                    )
-                    Text(
-                        "Add your first book (EPUB, PDF, TXT and more) " +
-                            "and it will live here, ready to read.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                return@Column
-            }
-            // The status tab row + its trailing sort door (S4).
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val selectedIndex = m3StatusTabs.indexOfFirst {
-                    it.first == tabKey
-                }.coerceAtLeast(0)
-                androidx.compose.material3.PrimaryScrollableTabRow(
-                    selectedTabIndex = selectedIndex,
-                    modifier = Modifier.weight(1f),
-                    edgePadding = 16.dp
-                ) {
-                    m3StatusTabs.forEachIndexed { index, (key, label) ->
-                        androidx.compose.material3.Tab(
-                            selected = index == selectedIndex,
-                            onClick = { tabKey = key },
-                            text = { Text(label) }
-                        )
-                    }
-                }
-                androidx.compose.material3.IconButton(
-                    onClick = { sheetOpen = true }
-                ) {
-                    androidx.compose.material3.Icon(
-                        Icons.Filled.Sort,
-                        contentDescription = "Filter and sort"
-                    )
-                }
-            }
-            androidx.compose.material3.pulltorefresh.PullToRefreshBox(
-                isRefreshing = state.pullRefreshing,
-                onRefresh = { viewModel.pullRefresh() },
-                modifier = Modifier.weight(1f)
-            ) {
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(
-                        start = 16.dp, end = 16.dp,
-                        top = 12.dp, bottom = 88.dp
-                    )
-                ) {
-                    if (designState.libraryContinueRail &&
-                        continueBooks.isNotEmpty() && tabKey == "ALL" &&
-                        !downloadedOnly && !favouritesOnly && query.isBlank()
-                    ) {
-                        item(key = "m3-continue-header") {
+                // ── 1. The masthead ──────────────────────────
+                item(key = "ed-masthead") {
+                    Column(Modifier.padding(horizontal = 16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val dayName = remember {
+                                java.time.LocalDate.now().dayOfWeek
+                                    .getDisplayName(
+                                        java.time.format.TextStyle.FULL,
+                                        java.util.Locale.ENGLISH
+                                    ).uppercase()
+                            }
                             Text(
-                                "Continue reading",
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(bottom = 2.dp)
+                                "$dayName · YOUR SHELF AT A GLANCE",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 2.sp
+                                ),
+                                color = scheme.primary,
+                                modifier = Modifier.weight(1f)
                             )
-                        }
-                        item(key = "m3-continue-carousel") {
-                            val carouselState =
-                                androidx.compose.material3.carousel
-                                    .rememberCarouselState {
-                                        continueBooks.size
-                                    }
-                            androidx.compose.material3.carousel
-                                .HorizontalUncontainedCarousel(
-                                    state = carouselState,
-                                    itemWidth = 300.dp,
-                                    itemSpacing = 12.dp,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(124.dp)
-                                ) { index ->
-                                    val hero = continueBooks[index]
-                                    val isHero = state.continueReading?.book?.id ==
-                                        hero.book.id
-                                    androidx.compose.material3.Card(
-                                        onClick = {
-                                            if (selection != null) {
-                                                // Selection mode: cards toggle.
-                                                val current = selection
-                                                if (current != null) {
-                                                    selection =
-                                                        if (hero.book.id in current) {
-                                                            (current - hero.book.id)
-                                                                .ifEmpty { null }
-                                                        } else {
-                                                            current + hero.book.id
-                                                        }
-                                                }
-                                            } else if (isHero) {
-                                                onContinueReading(
-                                                    hero.book.id,
-                                                    state.continueChapterIndex
-                                                )
-                                            } else {
-                                                viewModel.markSeen(hero.book.id)
-                                                onOpenBook(hero.book.id)
-                                            }
-                                        },
-                                        colors = androidx.compose.material3
-                                            .CardDefaults.cardColors(
-                                                containerColor = MaterialTheme
-                                                    .colorScheme.surfaceContainerLow
-                                            ),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(124.dp)
-                                    ) {
-                                        Row(
-                                            Modifier
-                                                .fillMaxSize()
-                                                .padding(12.dp),
-                                            horizontalArrangement =
-                                                Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            app.xreader.ui.common.M3CoverThumbnail(
-                                                title = hero.book.title,
-                                                author = hero.book.author
-                                                    .takeIf { it.isNotBlank() },
-                                                coverModel = coverFile(
-                                                    hero.book.coverPath
-                                                )?.takeIf { it.exists() }
-                                                    ?: hero.book.coverUrl
-                                                        ?.takeIf { it.isNotBlank() },
-                                                modifier = Modifier
-                                                    .width(68.dp)
-                                                    .height(100.dp)
-                                            )
-                                            Column(
-                                                Modifier.weight(1f),
-                                                verticalArrangement =
-                                                    Arrangement.spacedBy(4.dp)
-                                            ) {
-                                                Text(
-                                                    hero.book.title,
-                                                    style = MaterialTheme.typography
-                                                        .titleMediumEmphasized,
-                                                    maxLines = 2,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                Text(
-                                                    listOfNotNull(
-                                                        if (isHero) {
-                                                            if (hero.book.localFormat ==
-                                                                app.xreader.data.db
-                                                                    .BookFormat.PDF
-                                                            ) {
-                                                                "Page ${state.continueChapterIndex + 1}"
-                                                            } else {
-                                                                "Chapter ${state.continueChapterIndex + 1}"
-                                                            }
-                                                        } else {
-                                                            null
-                                                        },
-                                                        "${(hero.fraction * 100).toInt()}%",
-                                                        if (hero.book.totalChapters > 0) {
-                                                            "${hero.book.totalChapters} chapters"
-                                                        } else {
-                                                            null
-                                                        },
-                                                        timeLeftSuffix(hero, state.wpm)
-                                                            .removePrefix(" • ")
-                                                            .takeIf { it.isNotBlank() }
-                                                    ).joinToString(" · "),
-                                                    style = MaterialTheme.typography
-                                                        .bodySmall,
-                                                    color = MaterialTheme.colorScheme
-                                                        .onSurfaceVariant
-                                                )
-                                                androidx.compose.material3
-                                                    .LinearProgressIndicator(
-                                                        progress = {
-                                                            hero.fraction.coerceIn(0f, 1f)
-                                                        },
-                                                        modifier = Modifier.fillMaxWidth()
-                                                    )
-                                            }
-                                        }
-                                    }
-                                }
-                        }
-                    }
-                    if (candidates.isNotEmpty()) {
-                        item(key = "m3-import-header") {
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                            FilledTonalIconButton(
+                                onClick = { searchOpen = !searchOpen }
                             ) {
-                                Text(
-                                    "Adding books",
-                                    style = MaterialTheme.typography.titleMedium
+                                Icon(
+                                    Icons.Filled.Search,
+                                    contentDescription = "Search your library"
                                 )
-                                TextButton(onClick = {
-                                    viewModel.clearFinishedCandidates()
-                                }) { Text("Clear finished") }
+                            }
+                            Box {
+                                IconButton(
+                                    onClick = { addMenuOpen = true },
+                                    modifier = Modifier.background(
+                                        scheme.primary,
+                                        androidx.compose.foundation.shape.CircleShape
+                                    )
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Add,
+                                        contentDescription = "Add a book",
+                                        tint = scheme.onPrimary
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = addMenuOpen,
+                                    onDismissRequest = { addMenuOpen = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Import a file") },
+                                        onClick = {
+                                            addMenuOpen = false
+                                            onAddBook()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Add a list") },
+                                        onClick = {
+                                            addMenuOpen = false
+                                            onOpenAddList()
+                                        }
+                                    )
+                                }
                             }
                         }
-                        items(candidates, key = { "m3-cand-${it.token()}" }) { candidateState ->
+                        Text(
+                            "Library",
+                            style = MaterialTheme.typography.displayMedium.copy(
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = (-1.2).sp
+                            ),
+                            modifier = Modifier.padding(top = 10.dp)
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(top = 7.dp)
+                        ) {
+                            Text(
+                                "${allBooks.size} titles",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = FontWeight.Bold
+                                )
+                            )
+                            Text("·", style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant)
+                            Text(
+                                "${inProgress.size} in progress",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant
+                            )
+                            Text("·", style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant)
+                            Text(
+                                "${mangaBooks.size} manga",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant
+                            )
+                            Text("·", style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant)
+                            Text(
+                                "$finishedCount finished",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant
+                            )
+                        }
+                        // The double rule: one thick on-surface
+                        // line over one hairline.
+                        Box(
+                            Modifier.padding(top = 12.dp).fillMaxWidth()
+                                .height(3.dp).background(scheme.onSurface)
+                        )
+                        Box(
+                            Modifier.padding(top = 3.dp).fillMaxWidth()
+                                .height(1.dp).background(scheme.outlineVariant)
+                        )
+                    }
+                }
+                if (searchOpen) {
+                    item(key = "ed-search") {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            placeholder = {
+                                Text("Search your library — title or author")
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+                // ── 2. The sections strip ────────────────────
+                item(key = "ed-sections") {
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .padding(start = 16.dp, end = 8.dp, top = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "SECTIONS",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.8.sp
+                            ),
+                            color = scheme.onSurfaceVariant
+                        )
+                        androidx.compose.foundation.lazy.LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            items(editorialChips, key = { "chip-${it.first}" }) { (key, label) ->
+                                FilterChip(
+                                    selected = tabKey == key,
+                                    onClick = { tabKey = key },
+                                    label = { Text(label) },
+                                    leadingIcon = if (tabKey == key) {
+                                        {
+                                            Icon(
+                                                Icons.Filled.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(17.dp)
+                                            )
+                                        }
+                                    } else {
+                                        null
+                                    }
+                                )
+                            }
+                        }
+                        Box {
+                            IconButton(onClick = { sheetOpen = true }) {
+                                Icon(
+                                    Icons.Filled.Tune,
+                                    contentDescription = "Filter and sort",
+                                    tint = scheme.onSurfaceVariant
+                                )
+                            }
+                            if (filterLive) {
+                                Box(
+                                    Modifier.align(Alignment.TopEnd)
+                                        .padding(4.dp).size(8.dp)
+                                        .background(
+                                            scheme.primary,
+                                            androidx.compose.foundation.shape.CircleShape
+                                        )
+                                )
+                            }
+                        }
+                    }
+                }
+                // ── S36: the update card, in flow ────────────
+                if (updateState?.cardRelease != null) {
+                    item(key = "ed-update") {
+                        app.xreader.ui.update.UpdateCard(
+                            state = updateState,
+                            onUpdateNow = onUpdateNow,
+                            onDismiss = onDismissUpdate,
+                            onReadMore = onReadMoreUpdate,
+                            onInstall = onInstallUpdate,
+                            onCancelDownload = onCancelUpdateDownload,
+                            onOpenInstallSettings = onOpenUpdateInstallSettings,
+                            modifier = Modifier.padding(
+                                horizontal = 16.dp, vertical = 12.dp
+                            )
+                        )
+                    }
+                }
+                if (candidates.isNotEmpty()) {
+                    item(key = "ed-import-header") {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "Adding books",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            TextButton(onClick = {
+                                viewModel.clearFinishedCandidates()
+                            }) { Text("Clear finished") }
+                        }
+                    }
+                    items(candidates, key = { "ed-cand-${it.token()}" }) { candidateState ->
+                        Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                             ImportCandidateCard(
                                 state = candidateState,
                                 onImport = { viewModel.importCandidate(it) },
@@ -2944,35 +3256,63 @@ private fun M3LibraryContent(
                             )
                         }
                     }
-                    if (visibleBooks.isEmpty() && candidates.isEmpty()) {
-                        item(key = "m3-shelf-empty") {
+                }
+                if (mangaWall) {
+                    item(key = "ed-wall-head") {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = { mangaWall = false }) {
+                                Icon(
+                                    Icons.Filled.ArrowBack,
+                                    contentDescription = "Back to the front page"
+                                )
+                            }
+                            Column {
+                                Text(
+                                    "THE MANGA DESK",
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Black,
+                                        letterSpacing = 1.6.sp
+                                    )
+                                )
+                                Text(
+                                    "${mangaBooks.size} SERIES · " +
+                                        "$mangaInProgress IN PROGRESS",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.6.sp
+                                    ),
+                                    color = scheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+                if (!frontPage) {
+                    if (listBooks.isEmpty() && candidates.isEmpty()) {
+                        item(key = "ed-list-empty") {
                             Text(
-                                if (sideBooks.isEmpty()) {
-                                    if (state.librarySide ==
-                                        app.xreader.data.extension.MediaKind.MANGA
-                                    ) {
-                                        "No manga here yet. Manga lives in " +
-                                            "Explore — open the Keiyoushi " +
-                                            "catalogue, add a series, and it " +
-                                            "will live on this side."
-                                    } else {
-                                        "No novels on this side — your books " +
-                                            "are waiting under Manga."
-                                    }
+                                if (mangaWall && mangaBooks.isEmpty()) {
+                                    "No manga here yet. Manga lives in " +
+                                        "Explore — open the Keiyoushi " +
+                                        "catalogue, add a series, and it " +
+                                        "will live at this desk."
                                 } else {
                                     "Nothing matches these filters. " +
-                                        "Change the tab or the Show filters " +
-                                        "to see more of your library."
+                                        "Change the section or the Show " +
+                                        "filters to see more of your library."
                                 },
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 8.dp)
+                                color = scheme.onSurfaceVariant,
+                                modifier = Modifier.padding(16.dp)
                             )
                         }
                     }
-                    items(visibleBooks, key = { "m3-book-${it.book.id}" }) { shelfBook ->
-                        val status = state.metas[shelfBook.book.id]?.status
-                            ?: app.xreader.data.library.ReadingStatus.NONE
+                    items(listBooks, key = { "ed-book-${it.book.id}" }) { shelfBook ->
+                        val status = statusOf(shelfBook)
                         val downloaded = state.downloadCounts[shelfBook.book.id]
                             ?.downloaded ?: 0
                         val supporting = listOfNotNull(
@@ -2989,134 +3329,582 @@ private fun M3LibraryContent(
                                 null
                             }
                         ).joinToString(" · ")
-                        app.xreader.ui.common.M3BookCard(
-                            title = shelfBook.book.title,
-                            author = shelfBook.book.author
-                                .takeIf { it.isNotBlank() },
-                            coverModel = coverFile(shelfBook.book.coverPath)
-                                ?.takeIf { it.exists() }
-                                ?: shelfBook.book.coverUrl
-                                    ?.takeIf { it.isNotBlank() },
-                            supportingLine = supporting.ifBlank { null },
-                            progressFraction = if (
-                                designState.libraryProgressOnCovers &&
-                                shelfBook.fraction > 0f
-                            ) {
-                                shelfBook.fraction
-                            } else {
-                                null
-                            },
-                            selected = selection?.contains(shelfBook.book.id) == true,
-                            onClick = {
-                                val current = selection
-                                if (current != null) {
-                                    selection = if (shelfBook.book.id in current) {
-                                        (current - shelfBook.book.id).ifEmpty { null }
-                                    } else {
-                                        current + shelfBook.book.id
-                                    }
+                        Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                            app.xreader.ui.common.M3BookCard(
+                                title = shelfBook.book.title,
+                                author = shelfBook.book.author
+                                    .takeIf { it.isNotBlank() },
+                                coverModel = coverFile(shelfBook.book.coverPath)
+                                    ?.takeIf { it.exists() }
+                                    ?: shelfBook.book.coverUrl
+                                        ?.takeIf { it.isNotBlank() },
+                                supportingLine = supporting.ifBlank { null },
+                                progressFraction = if (
+                                    designState.libraryProgressOnCovers &&
+                                    shelfBook.fraction > 0f
+                                ) {
+                                    shelfBook.fraction
                                 } else {
-                                    viewModel.markSeen(shelfBook.book.id)
-                                    onOpenBook(shelfBook.book.id)
-                                }
-                            },
-                            onLongClick = {
-                                val current = selection
-                                selection = if (current == null) {
-                                    setOf(shelfBook.book.id)
-                                } else if (shelfBook.book.id in current) {
-                                    (current - shelfBook.book.id).ifEmpty { null }
-                                } else {
-                                    current + shelfBook.book.id
-                                }
-                            },
-                            trailingContent = {
-                                Box {
-                                    androidx.compose.material3.IconButton(
-                                        onClick = { menuFor = shelfBook }
-                                    ) {
-                                        androidx.compose.material3.Icon(
-                                            Icons.Filled.MoreVert,
-                                            contentDescription =
-                                                "Actions for ${shelfBook.book.title}"
-                                        )
-                                    }
-                                    DropdownMenu(
-                                        expanded = menuFor?.book?.id ==
-                                            shelfBook.book.id,
-                                        onDismissRequest = { menuFor = null }
-                                    ) {
-                                        DropdownMenuItem(
-                                            text = { Text("Open book page") },
-                                            onClick = {
-                                                menuFor = null
-                                                viewModel.markSeen(shelfBook.book.id)
-                                                onOpenBook(shelfBook.book.id)
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Download") },
-                                            onClick = {
-                                                menuFor = null
-                                                viewModel.bulkDownload(
-                                                    listOf(shelfBook.book.id)
+                                    null
+                                },
+                                selected = selection?.contains(shelfBook.book.id) == true,
+                                onClick = { onCoverClick(shelfBook) },
+                                onLongClick = { onCoverLongClick(shelfBook) },
+                                trailingContent = {
+                                    Box {
+                                        IconButton(
+                                            onClick = { menuFor = shelfBook }
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.MoreVert,
+                                                contentDescription =
+                                                    "Actions for ${shelfBook.book.title}"
+                                            )
+                                        }
+                                        DropdownMenu(
+                                            expanded = menuFor?.book?.id ==
+                                                shelfBook.book.id,
+                                            onDismissRequest = { menuFor = null }
+                                        ) {
+                                            DropdownMenuItem(
+                                                text = { Text("Open book page") },
+                                                onClick = {
+                                                    menuFor = null
+                                                    viewModel.markSeen(shelfBook.book.id)
+                                                    onOpenBook(shelfBook.book.id)
+                                                }
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("Download") },
+                                                onClick = {
+                                                    menuFor = null
+                                                    viewModel.bulkDownload(
+                                                        listOf(shelfBook.book.id)
+                                                    )
+                                                }
+                                            )
+                                            HorizontalDivider()
+                                            listOf(
+                                                app.xreader.data.library
+                                                    .ReadingStatus.READING,
+                                                app.xreader.data.library
+                                                    .ReadingStatus.PLAN_TO_READ,
+                                                app.xreader.data.library
+                                                    .ReadingStatus.COMPLETED,
+                                                app.xreader.data.library
+                                                    .ReadingStatus.ON_HOLD,
+                                                app.xreader.data.library
+                                                    .ReadingStatus.DROPPED
+                                            ).forEach { target ->
+                                                DropdownMenuItem(
+                                                    text = {
+                                                        Text(
+                                                            (if (status == target) {
+                                                                "✓ "
+                                                            } else {
+                                                                ""
+                                                            }) + m3StatusLabel(target)
+                                                        )
+                                                    },
+                                                    onClick = {
+                                                        menuFor = null
+                                                        viewModel.bulkSetStatus(
+                                                            listOf(shelfBook.book.id),
+                                                            target
+                                                        )
+                                                    }
                                                 )
                                             }
-                                        )
-                                        androidx.compose.material3
-                                            .HorizontalDivider()
-                                        // Change status: the five
-                                        // statuses, current checked.
-                                        listOf(
-                                            app.xreader.data.library
-                                                .ReadingStatus.READING,
-                                            app.xreader.data.library
-                                                .ReadingStatus.PLAN_TO_READ,
-                                            app.xreader.data.library
-                                                .ReadingStatus.COMPLETED,
-                                            app.xreader.data.library
-                                                .ReadingStatus.ON_HOLD,
-                                            app.xreader.data.library
-                                                .ReadingStatus.DROPPED
-                                        ).forEach { target ->
+                                            HorizontalDivider()
                                             DropdownMenuItem(
                                                 text = {
                                                     Text(
-                                                        (if (status == target) {
-                                                            "✓ "
-                                                        } else {
-                                                            ""
-                                                        }) + m3StatusLabel(target)
+                                                        "Remove from library…",
+                                                        color = scheme.error
                                                     )
                                                 },
                                                 onClick = {
                                                     menuFor = null
-                                                    viewModel.bulkSetStatus(
-                                                        listOf(shelfBook.book.id),
-                                                        target
-                                                    )
+                                                    removeTarget = shelfBook
                                                 }
                                             )
                                         }
-                                        androidx.compose.material3
-                                            .HorizontalDivider()
-                                        DropdownMenuItem(
-                                            text = {
-                                                Text(
-                                                    "Remove from library…",
-                                                    color = MaterialTheme.colorScheme
-                                                        .error
-                                                )
+                                    }
+                                }
+                            )
+                        }
+                    }
+                } else {
+                    // ── 3. The Cover Story ───────────────────
+                    if (lead != null && designState.libraryContinueRail) {
+                        item(key = "ed-lead") {
+                            val hero = lead
+                            val isHero = state.continueReading?.book?.id ==
+                                hero.book.id
+                            Column(
+                                Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    EditorialPill("COVER STORY")
+                                    Text(
+                                        "CONTINUE READING",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 2.sp
+                                        ),
+                                        color = scheme.primary
+                                    )
+                                }
+                                Row(
+                                    Modifier.padding(top = 13.dp)
+                                        .combinedClickable(
+                                            onClick = { onCoverClick(hero) },
+                                            onLongClick = { onCoverLongClick(hero) }
+                                        ),
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    EditorialCover(
+                                        shelf = hero, state = state,
+                                        coverFile = coverFile,
+                                        widthDp = 148, heightDp = 216,
+                                        selected = selection?.contains(hero.book.id) == true,
+                                        mangaTag = false
+                                    )
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            hero.book.title,
+                                            style = MaterialTheme.typography.headlineSmall.copy(
+                                                fontWeight = FontWeight.Bold
+                                            ),
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        editorialStandfirst(hero)?.let { standfirst ->
+                                            Text(
+                                                standfirst,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = scheme.onSurfaceVariant,
+                                                maxLines = 3,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.padding(top = 8.dp)
+                                            )
+                                        }
+                                        // Byline: format + the
+                                        // continue chapter's place —
+                                        // "FORMAT · CH. <parsed> ·
+                                        // <TITLE>", from the VM's
+                                        // resolved place label
+                                        // (state.placeLabels: the
+                                        // chapter at the progress
+                                        // index, labelled by
+                                        // ChapterDisplayOrder from
+                                        // its own number + title,
+                                        // the book page's
+                                        // derivation). No resolved
+                                        // place → no place segment:
+                                        // a position is never
+                                        // printed as a chapter.
+                                        val formatName = hero.book.localFormat.name
+                                        val heroPlace =
+                                            state.placeLabels[hero.book.id]
+                                        val byline = listOfNotNull(
+                                            formatName.takeIf {
+                                                hero.book.localFormat !=
+                                                    app.xreader.data.db.BookFormat.UNKNOWN
                                             },
-                                            onClick = {
-                                                menuFor = null
-                                                removeTarget = shelfBook
+                                            // The resolved place
+                                            // belongs to the hero
+                                            // only; a non-hero lead
+                                            // shows its count.
+                                            if (!isHero) {
+                                                if (hero.book.totalChapters > 0) {
+                                                    "${hero.book.totalChapters} CHAPTERS"
+                                                } else {
+                                                    null
+                                                }
+                                            } else if (heroPlace != null) {
+                                                val isPdf =
+                                                    hero.book.localFormat ==
+                                                        app.xreader.data.db.BookFormat.PDF
+                                                val unit = if (isPdf) {
+                                                    "PAGE"
+                                                } else {
+                                                    "CH."
+                                                }
+                                                val word = if (isPdf) {
+                                                    "Page"
+                                                } else {
+                                                    "Chapter"
+                                                }
+                                                val num =
+                                                    heroPlace.chapterNumber
+                                                val title =
+                                                    heroPlace.chapterTitle
+                                                when {
+                                                    num == null -> title
+                                                    title.isNullOrBlank() ->
+                                                        "$unit $num"
+                                                    title.equals(
+                                                        "$word $num",
+                                                        ignoreCase = true
+                                                    ) || title.startsWith(
+                                                        "$word $num ",
+                                                        ignoreCase = true
+                                                    ) || title.startsWith(
+                                                        "$word $num:",
+                                                        ignoreCase = true
+                                                    ) -> title
+                                                    else ->
+                                                        "$unit $num · $title"
+                                                }
+                                            } else {
+                                                null
                                             }
+                                        ).joinToString(" · ")
+                                        if (byline.isNotBlank()) {
+                                            Text(
+                                                byline,
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontWeight = FontWeight.Bold,
+                                                    letterSpacing = 1.4.sp
+                                                ),
+                                                color = scheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(top = 10.dp)
+                                            )
+                                        }
+                                        Spacer(Modifier.weight(1f))
+                                        LinearWavyProgressIndicator(
+                                            progress = {
+                                                hero.fraction.coerceIn(0f, 1f)
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(top = 9.dp)
+                                        ) {
+                                            Text(
+                                                "${(hero.fraction * 100).toInt()}%",
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            )
+                                            Spacer(Modifier.weight(1f))
+                                            Button(
+                                                onClick = {
+                                                    if (selection != null) {
+                                                        onCoverClick(hero)
+                                                    } else if (isHero) {
+                                                        onContinueReading(
+                                                            hero.book.id,
+                                                            state.continueChapterIndex
+                                                        )
+                                                    } else {
+                                                        viewModel.markSeen(hero.book.id)
+                                                        onOpenBook(hero.book.id)
+                                                    }
+                                                }
+                                            ) {
+                                                Icon(
+                                                    Icons.Filled.PlayArrow,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(19.dp)
+                                                )
+                                                Spacer(Modifier.width(6.dp))
+                                                Text("Resume")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        item(key = "ed-hairline") {
+                            Box(
+                                Modifier.padding(horizontal = 16.dp)
+                                    .fillMaxWidth().height(1.dp)
+                                    .background(scheme.outlineVariant)
+                            )
+                        }
+                    }
+                    // ── 4. The Manga Desk ────────────────────
+                    if (mangaBooks.isNotEmpty()) {
+                        item(key = "ed-desk") {
+                            Row(
+                                Modifier.padding(top = 14.dp).fillMaxWidth()
+                                    .background(scheme.tertiaryContainer)
+                                    .clickable { mangaWall = true }
+                                    .padding(
+                                        start = 16.dp, end = 16.dp,
+                                        top = 14.dp, bottom = 16.dp
+                                    ),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        "THE MANGA DESK",
+                                        style = MaterialTheme.typography.titleMedium.copy(
+                                            fontWeight = FontWeight.Black,
+                                            letterSpacing = 1.6.sp
+                                        ),
+                                        color = scheme.onTertiaryContainer
+                                    )
+                                    Text(
+                                        "${mangaBooks.size} SERIES · " +
+                                            "$mangaInProgress IN PROGRESS",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 1.6.sp
+                                        ),
+                                        color = scheme.onTertiaryContainer
+                                            .copy(alpha = 0.75f),
+                                        modifier = Modifier.padding(top = 3.dp)
+                                    )
+                                    mangaBooks.forEach { shelf ->
+                                        Text(
+                                            buildAnnotatedString {
+                                                withStyle(
+                                                    SpanStyle(fontWeight = FontWeight.Bold)
+                                                ) {
+                                                    append(shelf.book.title)
+                                                }
+                                                append(" — ")
+                                                append(editorialCoverLine(state, shelf))
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = scheme.onTertiaryContainer,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(top = 9.dp)
+                                        )
+                                    }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(top = 11.dp)
+                                    ) {
+                                        Text(
+                                            "Open the desk",
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontWeight = FontWeight.Bold
+                                            ),
+                                            color = scheme.onTertiaryContainer
+                                        )
+                                        Icon(
+                                            Icons.Filled.ChevronRight,
+                                            contentDescription = null,
+                                            tint = scheme.onTertiaryContainer,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                                if (deskLead != null) {
+                                    // The lead manga's tall cover
+                                    // breaks out of the band's top
+                                    // edge — the page's one
+                                    // deliberate overflow.
+                                    EditorialCover(
+                                        shelf = deskLead, state = state,
+                                        coverFile = coverFile,
+                                        widthDp = 92, heightDp = 148,
+                                        selected = false, mangaTag = true,
+                                        modifier = Modifier.offset(y = (-30).dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    // ── 5. Also in progress ──────────────────
+                    if (alsoInProgress.isNotEmpty()) {
+                        item(key = "ed-also-head") {
+                            Box(Modifier.padding(top = 18.dp, bottom = 10.dp)) {
+                                EditorialSectionHeader(
+                                    title = "ALSO IN PROGRESS",
+                                    countText = "${alsoInProgress.size} more",
+                                    onSeeAll = { tabKey = "READING" }
+                                )
+                            }
+                        }
+                        item(key = "ed-also-shelf") {
+                            val carouselState =
+                                androidx.compose.material3.carousel
+                                    .rememberCarouselState { alsoInProgress.size }
+                            androidx.compose.material3.carousel
+                                .HorizontalUncontainedCarousel(
+                                    state = carouselState,
+                                    itemWidth = 104.dp,
+                                    itemSpacing = 14.dp,
+                                    contentPadding = PaddingValues(horizontal = 16.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { index ->
+                                    val shelf = alsoInProgress[index]
+                                    EditorialCoverCard(
+                                        shelf = shelf, state = state,
+                                        coverFile = coverFile,
+                                        subLine = "${(shelf.fraction * 100).toInt()}%",
+                                        selected = selection?.contains(shelf.book.id) == true,
+                                        onClick = { onCoverClick(shelf) },
+                                        onLongClick = { onCoverLongClick(shelf) }
+                                    )
+                                }
+                        }
+                    }
+                    // ── 6. Departments ───────────────────────
+                    departments.forEachIndexed { deptIndex, (status, books) ->
+                        val deptTitle = when (status) {
+                            app.xreader.data.library.ReadingStatus.ON_HOLD -> "ON HOLD"
+                            app.xreader.data.library.ReadingStatus.PLAN_TO_READ -> "PLAN"
+                            app.xreader.data.library.ReadingStatus.COMPLETED -> "COMPLETED"
+                            app.xreader.data.library.ReadingStatus.DROPPED -> "DROPPED"
+                            else -> m3StatusLabel(status).uppercase()
+                        }
+                        val deptKey = when (status) {
+                            app.xreader.data.library.ReadingStatus.PLAN_TO_READ ->
+                                "PLAN_TO_READ"
+                            else -> status.name
+                        }
+                        item(key = "ed-dept-head-$deptKey") {
+                            Box(Modifier.padding(top = 18.dp, bottom = 10.dp)) {
+                                EditorialSectionHeader(
+                                    title = deptTitle,
+                                    countText = if (books.size == 1) {
+                                        "1 title"
+                                    } else {
+                                        "${books.size} titles"
+                                    },
+                                    onSeeAll = { tabKey = deptKey }
+                                )
+                            }
+                        }
+                        item(key = "ed-dept-feature-$deptKey") {
+                            val feature = books.first()
+                            val flip = deptIndex % 2 == 1
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
+                                    .combinedClickable(
+                                        onClick = { onCoverClick(feature) },
+                                        onLongClick = { onCoverLongClick(feature) }
+                                    ),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                if (!flip) {
+                                    EditorialCover(
+                                        shelf = feature, state = state,
+                                        coverFile = coverFile,
+                                        widthDp = 104, heightDp = 148,
+                                        selected = selection?.contains(feature.book.id) == true,
+                                        mangaTag = isManga(feature)
+                                    )
+                                }
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        feature.book.title,
+                                        style = MaterialTheme.typography.titleMedium.copy(
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    editorialStandfirst(feature)?.let { standfirst ->
+                                        Text(
+                                            standfirst,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = scheme.onSurfaceVariant,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(top = 5.dp)
+                                        )
+                                    }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier.padding(top = 8.dp)
+                                    ) {
+                                        if (feature.book.id in state.favourites) {
+                                            EditorialPill("FAVOURITE")
+                                        }
+                                        Text(
+                                            editorialFeatureLine(state, feature),
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        )
+                                    }
+                                }
+                                if (flip) {
+                                    EditorialCover(
+                                        shelf = feature, state = state,
+                                        coverFile = coverFile,
+                                        widthDp = 104, heightDp = 148,
+                                        selected = selection?.contains(feature.book.id) == true,
+                                        mangaTag = isManga(feature)
+                                    )
+                                }
+                            }
+                        }
+                        if (books.size > 1) {
+                            item(key = "ed-dept-beneath-$deptKey") {
+                                androidx.compose.foundation.lazy.LazyRow(
+                                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                    contentPadding = PaddingValues(horizontal = 16.dp),
+                                    modifier = Modifier.padding(top = 14.dp)
+                                ) {
+                                    items(
+                                        books.drop(1),
+                                        key = { "ed-beneath-${it.book.id}" }
+                                    ) { shelf ->
+                                        EditorialCoverCard(
+                                            shelf = shelf, state = state,
+                                            coverFile = coverFile,
+                                            subLine = editorialFeatureLine(state, shelf),
+                                            selected = selection?.contains(shelf.book.id) == true,
+                                            onClick = { onCoverClick(shelf) },
+                                            onLongClick = { onCoverLongClick(shelf) }
                                         )
                                     }
                                 }
                             }
-                        )
+                        }
+                    }
+                    // Books with no status and no progress belong
+                    // to no department — they still get a shelf
+                    // here so nothing in the library is unreachable
+                    // from the front page.
+                    if (unclassified.isNotEmpty()) {
+                        item(key = "ed-unclassified-head") {
+                            Box(Modifier.padding(top = 18.dp, bottom = 10.dp)) {
+                                EditorialSectionHeader(
+                                    title = "ON THE SHELF",
+                                    countText = if (unclassified.size == 1) {
+                                        "1 title"
+                                    } else {
+                                        "${unclassified.size} titles"
+                                    }
+                                )
+                            }
+                        }
+                        item(key = "ed-unclassified-shelf") {
+                            androidx.compose.foundation.lazy.LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp)
+                            ) {
+                                items(
+                                    unclassified,
+                                    key = { "ed-uncl-${it.book.id}" }
+                                ) { shelf ->
+                                    EditorialCoverCard(
+                                        shelf = shelf, state = state,
+                                        coverFile = coverFile,
+                                        subLine = editorialFeatureLine(state, shelf),
+                                        selected = selection?.contains(shelf.book.id) == true,
+                                        onClick = { onCoverClick(shelf) },
+                                        onLongClick = { onCoverLongClick(shelf) }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -3201,9 +3989,7 @@ private fun M3LibraryContent(
                         style = MaterialTheme.typography.bodyLarge
                     )
                 }
-                androidx.compose.material3.HorizontalDivider(
-                    Modifier.padding(vertical = 12.dp)
-                )
+                HorizontalDivider(Modifier.padding(vertical = 12.dp))
                 val newChapterCounts = state.metas.values
                     .mapNotNull { it.newChapterCount.takeIf { n -> n > 0 } }
                 androidx.compose.material3.ListItem(
@@ -3219,7 +4005,7 @@ private fun M3LibraryContent(
                         )
                     },
                     leadingContent = {
-                        androidx.compose.material3.Icon(
+                        Icon(
                             Icons.Filled.NewReleases,
                             contentDescription = null
                         )
@@ -3233,8 +4019,7 @@ private fun M3LibraryContent(
         }
     }
 
-    // Bulk remove (selection bar's Remove door): the confirm
-    // states the exact count + downloaded size, as shipped.
+    // Bulk remove (selection bar's Remove door).
     if (bulkRemoveOpen) {
         val picked = selection ?: emptySet()
         val pickedBooks = state.books.filter { it.book.id in picked }

@@ -104,7 +104,17 @@ data class CatalogUiState(
      * selected look while any are in force. */
     val activeFilterCount: Int = 0,
     /** K5: the filter sheet is open. */
-    val filterSheetOpen: Boolean = false
+    val filterSheetOpen: Boolean = false,
+    /** Code 122 (R20, audit item #9): the library key set —
+     * normalised titles (WorkMatcher.normaliseTitle, the same
+     * key the global search's in-library badge uses) of books
+     * that are library members and not merged away. The M3
+     * catalogue card badges a book whose normalised title is
+     * in this set. NOTE: there is still no latest-chapter
+     * datum — SourceBook carries none and no source listing
+     * provides one — so the card's latest-chapter line stays
+     * unbuilt rather than invented (D-121-W4-2, half). */
+    val libraryKeys: Set<String> = emptySet()
 )
 
 /**
@@ -292,6 +302,24 @@ class SourceCatalogViewModel(
     private var sheetSnapshot: FilterStateSnapshot? = null
 
     init {
+        // Code 122 (R20): keep the library key set live for
+        // the catalogue cards' "In library" badge.
+        viewModelScope.launch {
+            container.database.bookDao().observeAllBooks()
+                .collect { books ->
+                    _state.value = _state.value.copy(
+                        libraryKeys = books
+                            .filter {
+                                it.inLibrary && it.mergedIntoId == null
+                            }
+                            .map {
+                                app.xreader.data.extension.WorkMatcher
+                                    .normaliseTitle(it.title)
+                            }
+                            .toSet()
+                    )
+                }
+        }
         viewModelScope.launch {
             when (val found = container.extensionService.source(extensionId, sourceId)) {
                 is AppResult.Err -> _state.value = _state.value.copy(

@@ -54,7 +54,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.material.icons.filled.Headphones
@@ -405,6 +408,23 @@ fun ReaderScreen(
     var selectionTranslation by remember {
         mutableStateOf<Pair<String, String?>?>(null)
     }
+    // Code 122 (S26): the provider that answered the open
+    // selection translation (its dialog's provenance chip).
+    var selectionTranslationProvider by remember {
+        mutableStateOf<String?>(null)
+    }
+    // Code 122 (S17, audit #16): the Listen sheet's cache line
+    // — measured off the main thread when the sheet opens;
+    // its Clear routes the same TtsAudioCache.clear() call
+    // Customise → Storage's Clear makes.
+    var listenCacheBytes by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(activeSheet) {
+        if (activeSheet == ActiveSheet.LISTEN) {
+            listenCacheBytes = kotlinx.coroutines.withContext(
+                kotlinx.coroutines.Dispatchers.IO
+            ) { container.ttsAudioCache.sizeBytes() }
+        }
+    }
 
     // SelectionBar §6.4: the TRANSLATE / ASK_AI arms of
     // handleSelectionAction, extracted as local lambdas so
@@ -414,11 +434,16 @@ fun ReaderScreen(
     // from the former arms.
     val translateSelection: (String) -> Unit = { text ->
         selectionTranslation = text to null
+        selectionTranslationProvider = null
         scope.launch {
-            val result = translateSelectionText(container, text)
+            // Code 122 (S26): the provenance-carrying form —
+            // the dialog's assist chip names the provider the
+            // hub's result reports.
+            val result = translateSelectionWithProvenance(container, text)
             val open = selectionTranslation
             if (open != null && open.first == text) {
-                selectionTranslation = text to result
+                selectionTranslation = text to result.text
+                selectionTranslationProvider = result.providerName
             }
         }
     }
@@ -2064,7 +2089,19 @@ fun ReaderScreen(
                     voiceHasOverride = voiceUi.hasOverride,
                     onVoiceEngineChange = { viewModel.setVoiceEngine(it) },
                     onVoicePick = { viewModel.setEdgeVoice(it) },
-                    onVoiceReset = { viewModel.clearVoiceOverrides() }
+                    onVoiceReset = { viewModel.clearVoiceOverrides() },
+                    // Code 122 (S17): the cache line + Clear —
+                    // the same TtsAudioCache.clear() the
+                    // Customise → Storage Clear calls.
+                    listeningCacheBytes = listenCacheBytes,
+                    onClearListeningCache = {
+                        scope.launch {
+                            kotlinx.coroutines.withContext(
+                                kotlinx.coroutines.Dispatchers.IO
+                            ) { container.ttsAudioCache.clear() }
+                            listenCacheBytes = 0L
+                        }
+                    }
                 )
                 ActiveSheet.TOC -> if (pdfReady != null) {
                     PdfContentsSheet(
@@ -2101,6 +2138,7 @@ fun ReaderScreen(
                     chapters = state.chapters,
                     chapterLevels = state.chapterLevels,
                     currentChapterIndex = state.chapterIndex,
+                    currentChapterProgress = state.chapterFraction,
                     tocEntries = state.tocEntries,
                     currentTocEntryIndex = currentTocIndex,
                     bookmarks = bookmarks,
@@ -2343,6 +2381,8 @@ fun ReaderScreen(
                 text, state.bookTerms
             ),
             bookPairs = state.bookTerms,
+            globalPairs = state.globalTerms,
+            onSaveGlobal = { viewModel.setGlobalTerms(it) },
             onDismiss = { replaceText = null },
             onSave = { pairs ->
                 viewModel.setBookTerms(pairs)
@@ -2358,14 +2398,19 @@ fun ReaderScreen(
         DictionaryResultDialog(
             word = word,
             definition = definition,
-            onDismiss = { dictionaryResult = null }
+            onDismiss = { dictionaryResult = null },
+            // Code 122 (S25): Save to vocabulary rides the
+            // reader's existing save path — the SAVE_WORD
+            // selection arm's own viewModel.saveWord call.
+            onSaveToVocabulary = { viewModel.saveWord(word) }
         )
     }
     selectionTranslation?.let { (original, translated) ->
         SelectionTranslateDialog(
             original = original,
             translated = translated,
-            onDismiss = { selectionTranslation = null }
+            onDismiss = { selectionTranslation = null },
+            providerName = selectionTranslationProvider
         )
     }
 
@@ -2378,7 +2423,12 @@ fun ReaderScreen(
         CorePlateViewer(
             file = file,
             filter = plateFilter,
-            onDismiss = { plateFile = null }
+            onDismiss = { plateFile = null },
+            // Code 122 (S9, audit #14): the plate's caption —
+            // the book title is the caption the host can
+            // honestly supply (the tap handler carries only
+            // the asset file, not the illustration's alt).
+            caption = state.bookTitle
         )
     }
 }
@@ -3123,10 +3173,20 @@ private fun PdfContentsSheet(
         app.xreader.ui.localreader.StoredSelectionHighlight
     ) -> Unit
 ) {
+    // Code 122 (S19, audit #18): rebuilt as S18's TabRow
+    // composition — Contents · Bookmarks · Highlights tabs,
+    // the current outline row in secondaryContainer. All
+    // existing data/actions are kept: the stacked sections'
+    // contents live under their tabs, and the split
+    // Highlights sections merge under the Highlights tab
+    // (each row still jumps/removes through its own form's
+    // callback, labelled Pages/Text in its supporting line).
+    var pdfContentsTab by remember { mutableIntStateOf(0) }
+    val pagesFormHighlights = pageHighlights.filter { it.page != null }
+    val reflowFormHighlights = reflowHighlights.filter { it.page != null }
     Column(
         Modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Text(
@@ -3134,146 +3194,190 @@ private fun PdfContentsSheet(
             style = MaterialTheme.typography.titleMedium
         )
         Spacer(Modifier.height(8.dp))
-        if (session.outline.isEmpty()) {
-            Text(
-                "This PDF has no contents list.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+        TabRow(selectedTabIndex = pdfContentsTab) {
+            Tab(
+                selected = pdfContentsTab == 0,
+                onClick = { pdfContentsTab = 0 },
+                text = { Text("Contents") }
             )
-        } else {
-            session.outline.forEach { entry ->
-                val target =
-                    app.xreader.data.engine.LocatorJson
-                        .targetIndex(entry.targetJson) ?: 0
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onJumpBookmark(target) }
-                        .padding(vertical = 8.dp)
-                ) {
+            Tab(
+                selected = pdfContentsTab == 1,
+                onClick = { pdfContentsTab = 1 },
+                text = { Text("Bookmarks (${bookmarks.size})") }
+            )
+            Tab(
+                selected = pdfContentsTab == 2,
+                onClick = { pdfContentsTab = 2 },
+                text = {
                     Text(
-                        entry.title,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (target == currentPage) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        modifier = Modifier.weight(1f)
+                        "Highlights " +
+                            "(${pagesFormHighlights.size + reflowFormHighlights.size})"
                     )
+                }
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        when (pdfContentsTab) {
+            0 -> Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                if (session.outline.isEmpty()) {
                     Text(
-                        "p. ${target + 1}",
-                        style = MaterialTheme.typography.labelMedium,
+                        "This PDF has no contents list.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    session.outline.forEach { entry ->
+                        val target =
+                            app.xreader.data.engine.LocatorJson
+                                .targetIndex(entry.targetJson) ?: 0
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    if (target == currentPage) {
+                                        MaterialTheme.colorScheme
+                                            .secondaryContainer
+                                    } else {
+                                        Color.Transparent
+                                    }
+                                )
+                                .clickable { onJumpBookmark(target) }
+                                .padding(vertical = 8.dp, horizontal = 8.dp)
+                        ) {
+                            Text(
+                                entry.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (target == currentPage) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                "p. ${target + 1}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+            1 -> Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                if (bookmarks.isEmpty()) {
+                    Text(
+                        "No bookmarks yet.",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-            }
-        }
-        if (bookmarks.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Bookmarks",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(Modifier.height(8.dp))
-            bookmarks.forEach { bookmark ->
-                val page = bookmarkPageOf(bookmark)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onJumpBookmark(page) }
-                        .padding(vertical = 6.dp)
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            bookmark.label.ifBlank { "Bookmark" },
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1
-                        )
-                        Text(
-                            "p. ${page + 1}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme
-                                .colorScheme.onSurfaceVariant
-                        )
+                bookmarks.forEach { bookmark ->
+                    val page = bookmarkPageOf(bookmark)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onJumpBookmark(page) }
+                            .padding(vertical = 6.dp)
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                bookmark.label.ifBlank { "Bookmark" },
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1
+                            )
+                            Text(
+                                "p. ${page + 1}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme
+                                    .colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = { onDeleteBookmark(bookmark) }
+                        ) { Text("Remove") }
                     }
-                    TextButton(
-                        onClick = { onDeleteBookmark(bookmark) }
-                    ) { Text("Remove") }
                 }
             }
-        }
-        val pagesForm = pageHighlights.filter { it.page != null }
-        if (pagesForm.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Highlights — pages",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(Modifier.height(8.dp))
-            pagesForm.forEach { highlight ->
-                val page = highlight.page ?: 0
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onJumpPagesForm(page) }
-                        .padding(vertical = 6.dp)
+            else -> Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                if (pagesFormHighlights.isEmpty() &&
+                    reflowFormHighlights.isEmpty()
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            highlight.selectedText,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 2
-                        )
-                        Text(
-                            "p. ${page + 1}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme
-                                .colorScheme.onSurfaceVariant
-                        )
-                    }
-                    TextButton(
-                        onClick = { onRemovePageHighlight(highlight) }
-                    ) { Text("Remove") }
+                    Text(
+                        "No highlights yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-            }
-        }
-        val reflowForm = reflowHighlights.filter { it.page != null }
-        if (reflowForm.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Highlights — text",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(Modifier.height(8.dp))
-            reflowForm.forEach { highlight ->
-                val page = highlight.page ?: 0
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onJumpReflowForm(page) }
-                        .padding(vertical = 6.dp)
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            highlight.selectedText,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 2
-                        )
-                        Text(
-                            "p. ${page + 1}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme
-                                .colorScheme.onSurfaceVariant
-                        )
+                pagesFormHighlights.forEach { highlight ->
+                    val page = highlight.page ?: 0
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onJumpPagesForm(page) }
+                            .padding(vertical = 6.dp)
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                highlight.selectedText,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 2
+                            )
+                            Text(
+                                "Pages · p. ${page + 1}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme
+                                    .colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = { onRemovePageHighlight(highlight) }
+                        ) { Text("Remove") }
                     }
-                    TextButton(
-                        onClick = { onRemoveReflowHighlight(highlight) }
-                    ) { Text("Remove") }
+                }
+                reflowFormHighlights.forEach { highlight ->
+                    val page = highlight.page ?: 0
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onJumpReflowForm(page) }
+                            .padding(vertical = 6.dp)
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                highlight.selectedText,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 2
+                            )
+                            Text(
+                                "Text · p. ${page + 1}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme
+                                    .colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = { onRemoveReflowHighlight(highlight) }
+                        ) { Text("Remove") }
+                    }
                 }
             }
         }
@@ -3294,6 +3398,11 @@ private fun PdfSearchSheet(
     onJump: (PdfSearchHit) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
+    // Code 122 (S21, audit #20): the field auto-focuses on open.
+    val pdfSearchFocusRequester = remember {
+        androidx.compose.ui.focus.FocusRequester()
+    }
+    LaunchedEffect(Unit) { pdfSearchFocusRequester.requestFocus() }
     Column(
         Modifier
             .fillMaxWidth()
@@ -3325,7 +3434,9 @@ private fun PdfSearchSheet(
                 keyboardActions = KeyboardActions(
                     onSearch = { onSearch(query) }
                 ),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(pdfSearchFocusRequester)
             )
             TextButton(
                 onClick = { onSearch(query) },
@@ -3359,23 +3470,16 @@ private fun PdfSearchSheet(
                     .verticalScroll(rememberScrollState())
             ) {
                 hits.forEach { hit ->
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onJump(hit) }
-                            .padding(vertical = 8.dp)
-                    ) {
-                        Text(
-                            "p. ${hit.page + 1}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            hit.snippet,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 2
-                        )
-                    }
+                    // Code 122 (S21): results are list items
+                    // labelled "Page N", as S20's composition
+                    // specifies — not plain rows with "p. N".
+                    ListItem(
+                        headlineContent = { Text("Page ${hit.page + 1}") },
+                        supportingContent = {
+                            Text(hit.snippet, maxLines = 2)
+                        },
+                        modifier = Modifier.clickable { onJump(hit) }
+                    )
                 }
             }
         }

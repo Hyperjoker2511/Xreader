@@ -61,6 +61,15 @@ data class ContentsBookmarkRow(
     val detail: String?
 )
 
+/** One Highlights-tab row (Code 122, S30): the highlighted
+ * text as the label, its place (page/section + note) as the
+ * detail. Fed from the local highlight store's
+ * [StoredSelectionHighlight] rows by the host. */
+data class ContentsHighlightRow(
+    val label: String,
+    val detail: String?
+)
+
 /** PDF chapter rows: trailing label = the outline entry's
  * target FILE page number (1-based), Moon+'s column. */
 fun pdfChapterRows(
@@ -171,6 +180,19 @@ internal fun TabbedContentsPanel(
     // only reports the flip.
     sortOrder: ContentsSortOrder? = null,
     onSortOrderChange: ((ContentsSortOrder) -> Unit)? = null,
+    // Code 122 (S30, audit #25): the Highlights tab's rows —
+    // the local highlights (SelectionHighlightStore's
+    // StoredSelectionHighlight list for this book, mapped to
+    // rows by the host). Defaulted empty: this panel has NO
+    // live caller in the tree today (only its shape test), so
+    // no host yet feeds it — the wiring a host must do is:
+    // collect the store's highlights(bookId), map each to a
+    // ContentsHighlightRow(selectedText, page/note detail),
+    // and route click/delete to its jump/remove paths.
+    highlightRows: List<ContentsHighlightRow> = emptyList(),
+    highlightsEmptyText: String = "No highlights yet.",
+    onHighlightClick: (Int) -> Unit = {},
+    onHighlightDelete: (Int) -> Unit = {},
     footerActions: @Composable () -> Unit
 ) {
     var tab by remember { mutableIntStateOf(initialTab) }
@@ -233,6 +255,18 @@ internal fun TabbedContentsPanel(
                 unselectedContentColor = ReaderMutedText,
                 text = { Text("Bookmarks") }
             )
+            // Code 122 (S30): the Highlights tab — S18's
+            // three-tab composition under M3. Nocturne's
+            // shipped two-tab form is untouched.
+            if (panelIsM3) {
+                Tab(
+                    selected = tab == 2,
+                    onClick = { tab = 2 },
+                    selectedContentColor = readerChromeAccent(),
+                    unselectedContentColor = ReaderMutedText,
+                    text = { Text("Highlights") }
+                )
+            }
         }
         Spacer(Modifier.height(8.dp))
         when (tab) {
@@ -287,7 +321,7 @@ internal fun TabbedContentsPanel(
                     }
                 }
             }
-            else -> {
+            1 -> {
                 if (bookmarkRows.isEmpty()) {
                     Text(bookmarksEmptyText, Modifier.padding(vertical = 16.dp))
                 } else {
@@ -314,6 +348,43 @@ internal fun TabbedContentsPanel(
                                     }
                                 }
                                 TextButton(onClick = { onBookmarkDelete(index) }) {
+                                    Text("Delete")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            else -> {
+                // Code 122 (S30): the Highlights tab's rows —
+                // same row form as Bookmarks (label + detail,
+                // tap jumps, Delete removes).
+                if (highlightRows.isEmpty()) {
+                    Text(highlightsEmptyText, Modifier.padding(vertical = 16.dp))
+                } else {
+                    LazyColumn(Modifier.fillMaxWidth()) {
+                        items(highlightRows.indices.toList()) { index ->
+                            val row = highlightRows[index]
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TextButton(
+                                    onClick = { onHighlightClick(index) },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(Modifier.fillMaxWidth()) {
+                                        Text(row.label, maxLines = 2)
+                                        row.detail?.let { detail ->
+                                            Text(
+                                                detail,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                                TextButton(onClick = { onHighlightDelete(index) }) {
                                     Text("Delete")
                                 }
                             }
