@@ -2632,7 +2632,7 @@ private fun M3LibraryContent(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                androidx.compose.material3.SegmentedButton(
+                SegmentedButton(
                     selected = state.librarySide ==
                         app.xreader.data.extension.MediaKind.TEXT,
                     onClick = {
@@ -2643,7 +2643,7 @@ private fun M3LibraryContent(
                     shape = androidx.compose.material3.SegmentedButtonDefaults
                         .itemShape(index = 0, count = 2)
                 ) { Text("Novels") }
-                androidx.compose.material3.SegmentedButton(
+                SegmentedButton(
                     selected = state.librarySide ==
                         app.xreader.data.extension.MediaKind.MANGA,
                     onClick = {

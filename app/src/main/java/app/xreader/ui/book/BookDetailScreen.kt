@@ -2532,7 +2532,7 @@ fun BookDetailScreen(
                 }
             }
             if (section.kind == ChaptersSectionKind.LIST) {
-                androidx.compose.foundation.lazy.itemsIndexed(
+                itemsIndexed(
                     m3InlineChapters, key = { _, ch -> "chapter-${ch.id}" }
                 ) { rowIndex, chapter ->
                     // v1.5.37 (S6): no per-row effect and no
@@ -3063,7 +3063,7 @@ fun BookDetailScreen(
                         .heightIn(max = 560.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    androidx.compose.foundation.lazy.itemsIndexed(
+                    itemsIndexed(
                         displayChapters,
                         key = { _, ch -> "all-chapter-${ch.id}" }
                     ) { rowIndex, chapter ->
@@ -4685,7 +4685,7 @@ private fun M3StatusSegmented(
                 ReadingStatus.COMPLETED to "Completed",
                 ReadingStatus.DROPPED to "Dropped"
             ).forEachIndexed { index, (status, label) ->
-                androidx.compose.material3.SegmentedButton(
+                SegmentedButton(
                     selected = current == status,
                     onClick = { onPick(status) },
                     shape = androidx.compose.material3

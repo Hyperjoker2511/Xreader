@@ -1403,7 +1403,7 @@ fun ControlOptionsSheetM3Content(
             modifier = Modifier.fillMaxWidth()
         ) {
             TapLayoutPreset.entries.forEachIndexed { index, preset ->
-                androidx.compose.material3.SegmentedButton(
+                SegmentedButton(
                     selected = state.tapPreset == preset,
                     onClick = { onTapPreset(preset) },
                     shape = androidx.compose.material3.SegmentedButtonDefaults

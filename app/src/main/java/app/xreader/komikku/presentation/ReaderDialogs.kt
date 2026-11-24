@@ -500,7 +500,7 @@ fun M3ReadingModeSheet(
                 Modifier.fillMaxWidth()
             ) {
                 firstRow.forEachIndexed { index, option ->
-                    androidx.compose.material3.SegmentedButton(
+                    SegmentedButton(
                         selected = selectedIndex == index,
                         onClick = { onSelect(index) },
                         shape = androidx.compose.material3.SegmentedButtonDefaults
@@ -519,7 +519,7 @@ fun M3ReadingModeSheet(
                 ) {
                     secondRow.forEachIndexed { rowIndex, option ->
                         val index = firstRow.size + rowIndex
-                        androidx.compose.material3.SegmentedButton(
+                        SegmentedButton(
                             selected = selectedIndex == index,
                             onClick = { onSelect(index) },
                             shape = androidx.compose.material3.SegmentedButtonDefaults
