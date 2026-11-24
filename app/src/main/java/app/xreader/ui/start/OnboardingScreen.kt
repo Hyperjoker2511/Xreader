@@ -331,7 +331,6 @@ private fun DesignAskPage(
             },
             modifier = Modifier.padding(top = 12.dp)
         )
-        }
         Text(
             "You can change all of this later in Customise.",
             style = MaterialTheme.typography.bodySmall,

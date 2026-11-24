@@ -2073,11 +2073,12 @@ private fun PdfPageCell(
             // highlight. Any other fresh selection supersedes
             // an existing-highlight bar with a clean state,
             // as before.
+            val sel = checkNotNull(selection)
             val hit = pageHighlights.firstOrNull { stored ->
                 val cs = stored.charStart
                 val ce = stored.charEnd
                 stored.page == page && cs != null && ce != null &&
-                    selection.start >= cs && selection.end <= ce
+                    sel.start >= cs && sel.end <= ce
             }
             if (hit != null) {
                 if (existingBar != hit) existingBar = hit

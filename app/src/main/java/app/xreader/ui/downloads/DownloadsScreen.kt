@@ -737,10 +737,6 @@ private fun FinishedDownloadRow(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
 )
-@OptIn(
-    androidx.compose.material3.ExperimentalMaterial3Api::class,
-    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
-)
 @Composable
 private fun EditorialDownloadsContent(
     state: DownloadsUiState,

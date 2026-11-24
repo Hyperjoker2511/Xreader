@@ -3064,17 +3064,19 @@ fun BookDetailScreen(
     // Code 124 (A7, parity fix): the Ask AI sheet host —
     // the same BookPageAiSheetHost the Material 3 page
     // hosts, bound to this book's continue chapter.
-    BookPageAiSheetHost(
-        container = container,
-        bookId = book.id,
-        chapterIndex = state.continueChapterIndex,
-        chapterId = state.chapters.firstOrNull {
-            it.index == state.continueChapterIndex
-        }?.id,
-        open = aiSheetOpen,
-        illustrateRequests = illustrateRequests,
-        onDismiss = { aiSheetOpen = false }
-    )
+    book?.id?.let { aiBookId ->
+        BookPageAiSheetHost(
+            container = container,
+            bookId = aiBookId,
+            chapterIndex = state.continueChapterIndex,
+            chapterId = state.chapters.firstOrNull {
+                it.index == state.continueChapterIndex
+            }?.id,
+            open = aiSheetOpen,
+            illustrateRequests = illustrateRequests,
+            onDismiss = { aiSheetOpen = false }
+        )
+    }
 
     // v1.5.8 (J2/E3): the chapter-settings sheet — the donor's
     // sort/display choices the page lacked, plus the per-book

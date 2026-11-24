@@ -112,7 +112,10 @@ import kotlinx.coroutines.launch
  * design printed decoration, the app's truth stands in.
  */
 @Composable
-@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,
+    androidx.compose.material3.ExperimentalMaterial3Api::class
+)
 fun EditorialBookDetail(
     state: BookDetailUiState,
     localOutline: List<LocalOutline>,
@@ -2327,6 +2330,7 @@ private fun EditorialActionPill(
  * Shared by BOTH book pages (the feature-parity rule: the
  * Material 3 page and the Nocturne page carry the same AI
  * doors; only the tiles' dress differs). */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 internal fun BookPageAiSheetHost(
     container: app.xreader.di.AppContainer,
