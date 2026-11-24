@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.PlaylistAdd
@@ -67,7 +68,9 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Button
@@ -78,6 +81,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -88,6 +95,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -176,6 +186,8 @@ fun LibraryScreen(
     val designState = app.xreader.ui.theme.LocalDesignState.current
     val m3Design = designState.design ==
         app.xreader.data.prefs.AppDesign.MATERIAL3
+    val editorialDesign = designState.design ==
+        app.xreader.data.prefs.AppDesign.EDITORIAL
     // v1.0.1 library power basics: in-library search / sort / filter.
     var query by remember { mutableStateOf("") }
     // v1.0.6.2 (F6): search is an icon in the header now; the
@@ -317,6 +329,35 @@ fun LibraryScreen(
         } else {
             quickActionsFor = shelfBook
         }
+    }
+
+    // Code 123 (R1 COPY): the Editorial design's Library is
+    // its own composition (EditorialLibraryContent, below) —
+    // the approved Paper & Sage copy, alive: search pill,
+    // time-true greeting, serif headline, the wired
+    // Novels/Manga pill, the Continue carousel, the five
+    // statuses as text tabs, the cover grid, the Add FAB.
+    if (editorialDesign) {
+        EditorialLibraryContent(
+            state = state,
+            candidates = candidates,
+            viewModel = viewModel,
+            coverFile = coverFile,
+            designState = designState,
+            onAddBook = onAddBook,
+            onOpenBook = onOpenBook,
+            onContinueReading = onContinueReading,
+            onProfile = onProfile,
+            onOpenUpdates = onOpenUpdates,
+            updateState = updateState,
+            onUpdateNow = onUpdateNow,
+            onDismissUpdate = onDismissUpdate,
+            onReadMoreUpdate = onReadMoreUpdate,
+            onInstallUpdate = onInstallUpdate,
+            onCancelUpdateDownload = onCancelUpdateDownload,
+            onOpenUpdateInstallSettings = onOpenUpdateInstallSettings
+        )
+        return
     }
 
     // Code 121 (R1/S4): the Material 3 design's Library is a
@@ -4082,4 +4123,1087 @@ private fun M3LibraryContent(
             viewModel.removeLocalBook(book, mode, context)
         }
     )
+}
+
+// ── Code 123 (R1): the Editorial Library — the approved ────
+// Paper & Sage copy, alive. Element-for-element the copy in
+// DESIGN-M3-LIBRARY-V6-PAPER-COPY-2026-11-24.md, with the
+// build rulings applied: the Novels/Manga pill is WIRED (the
+// app's real side split), the greeting is computed from the
+// clock, the tabs are the app's FIVE statuses in the design's
+// text-tab form, the carousel is the design's progress rule
+// (0% < progress < 100%) ordered by the app's real reading
+// recency with the state's hero leading, every number is the
+// book's own, the hamburger carries the filter/sort sheet
+// (a secondary door, never a primary one), the avatar disc
+// opens Profile, the card ⋮ carries real actions only, and
+// the update card takes the in-flow slot under the greeting
+// (K12's resolution for this build).
+
+/** The Editorial tab row: All + the five statuses, in the
+ * app's canonical naming, in the design's text-tab form. */
+private val editorialTabs: List<Pair<String, String>> = listOf(
+    "ALL" to "All",
+    "READING" to "Reading",
+    "ON_HOLD" to "On hold",
+    "PLAN_TO_READ" to "Plan to read",
+    "COMPLETED" to "Completed",
+    "DROPPED" to "Dropped"
+)
+
+private fun editorialTabKey(
+    tab: app.xreader.data.prefs.M3LibraryTab
+): String = when (tab) {
+    app.xreader.data.prefs.M3LibraryTab.ALL -> "ALL"
+    app.xreader.data.prefs.M3LibraryTab.READING -> "READING"
+    app.xreader.data.prefs.M3LibraryTab.PLAN_TO_READ -> "PLAN_TO_READ"
+    app.xreader.data.prefs.M3LibraryTab.COMPLETED -> "COMPLETED"
+    app.xreader.data.prefs.M3LibraryTab.ON_HOLD -> "ON_HOLD"
+    app.xreader.data.prefs.M3LibraryTab.DROPPED -> "DROPPED"
+}
+
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+private fun EditorialLibraryContent(
+    state: LibraryUiState,
+    candidates: List<CandidateState>,
+    viewModel: LibraryViewModel,
+    coverFile: (String?) -> File?,
+    designState: app.xreader.data.prefs.DesignState,
+    onAddBook: () -> Unit,
+    onOpenBook: (Long) -> Unit,
+    onContinueReading: (bookId: Long, chapterIndex: Int) -> Unit,
+    onProfile: () -> Unit,
+    onOpenUpdates: () -> Unit,
+    updateState: app.xreader.ui.update.AppUpdateViewModel.UiState? = null,
+    onUpdateNow: () -> Unit = {},
+    onDismissUpdate: () -> Unit = {},
+    onReadMoreUpdate: () -> Unit = {},
+    onInstallUpdate: () -> Unit = {},
+    onCancelUpdateDownload: () -> Unit = {},
+    onOpenUpdateInstallSettings: () -> Unit = {}
+) {
+    val scheme = MaterialTheme.colorScheme
+    var tabKey by remember {
+        mutableStateOf(editorialTabKey(designState.libraryDefaultTab))
+    }
+    var query by remember { mutableStateOf("") }
+    var sort by remember {
+        mutableStateOf(app.xreader.data.library.LibrarySort.RECENTLY_READ)
+    }
+    var downloadedOnly by remember { mutableStateOf(false) }
+    var favouritesOnly by remember { mutableStateOf(false) }
+    var sheetOpen by remember { mutableStateOf(false) }
+    var statusDialogFor by remember { mutableStateOf<ShelfBook?>(null) }
+    var removeTarget by remember { mutableStateOf<ShelfBook?>(null) }
+
+    val sideBooks = remember(state.books, state.bookKinds, state.librarySide) {
+        app.xreader.data.library.LibrarySplit.onSide(
+            state.books, state.librarySide
+        ) { shelf ->
+            app.xreader.data.library.LibrarySplit
+                .kindOf(shelf.book.id, state.bookKinds)
+        }
+    }
+    fun statusOf(shelf: ShelfBook) = editorialStatusOf(state, shelf)
+    fun matchesFlags(shelf: ShelfBook): Boolean =
+        (!downloadedOnly ||
+            (state.downloadCounts[shelf.book.id]?.downloaded ?: 0) > 0) &&
+            (!favouritesOnly || shelf.book.id in state.favourites)
+    fun matchesQuery(shelf: ShelfBook): Boolean = query.isBlank() ||
+        shelf.book.title.lowercase().contains(query.trim().lowercase()) ||
+        shelf.book.author.lowercase().contains(query.trim().lowercase())
+    fun sorted(books: List<ShelfBook>): List<ShelfBook> = when (sort) {
+        app.xreader.data.library.LibrarySort.RECENTLY_READ ->
+            books.sortedByDescending { it.book.lastOpenedAt ?: 0L }
+        app.xreader.data.library.LibrarySort.TITLE ->
+            books.sortedBy { it.book.title.lowercase() }
+        app.xreader.data.library.LibrarySort.MOST_CHAPTERS ->
+            books.sortedByDescending { it.book.totalChapters }
+        app.xreader.data.library.LibrarySort.RECENTLY_ADDED ->
+            books.sortedByDescending { it.book.addedAt }
+    }
+    // The carousel: the design's progress rule over the active
+    // side, the state's hero leading, the rest by recency.
+    val carousel = remember(sideBooks, state.metas, state.continueReading) {
+        val pool = sideBooks.filter { it.fraction > 0f && it.fraction < 1f }
+            .sortedByDescending { it.book.lastOpenedAt ?: 0L }
+        val hero = state.continueReading?.takeIf { h ->
+            pool.any { it.book.id == h.book.id }
+        }
+        if (hero != null) {
+            listOf(hero) + pool.filter { it.book.id != hero.book.id }
+        } else {
+            pool
+        }
+    }
+    val gridBooks = remember(
+        sideBooks, state.metas, state.favourites, state.downloadCounts,
+        tabKey, sort, downloadedOnly, favouritesOnly, query
+    ) {
+        sorted(
+            sideBooks.filter { shelf ->
+                val tabMatch = when (tabKey) {
+                    "ALL" -> true
+                    "READING" -> statusOf(shelf) ==
+                        app.xreader.data.library.ReadingStatus.READING
+                    "ON_HOLD" -> statusOf(shelf) ==
+                        app.xreader.data.library.ReadingStatus.ON_HOLD
+                    "PLAN_TO_READ" -> statusOf(shelf) ==
+                        app.xreader.data.library.ReadingStatus.PLAN_TO_READ
+                    "COMPLETED" -> statusOf(shelf) ==
+                        app.xreader.data.library.ReadingStatus.COMPLETED
+                    "DROPPED" -> statusOf(shelf) ==
+                        app.xreader.data.library.ReadingStatus.DROPPED
+                    else -> true
+                }
+                tabMatch && matchesFlags(shelf) && matchesQuery(shelf)
+            }
+        )
+    }
+    val frontPage = tabKey == "ALL" && query.isBlank() &&
+        !downloadedOnly && !favouritesOnly
+    val dockClearance = app.xreader.ui.theme.LocalDockClearance.current
+    val greeting = remember {
+        when (java.util.Calendar.getInstance()
+            .get(java.util.Calendar.HOUR_OF_DAY)) {
+            in 5..11 -> "Good morning"
+            in 12..16 -> "Good afternoon"
+            else -> "Good evening"
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp, top = 4.dp,
+                bottom = dockClearance + 16.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(0.dp)
+        ) {
+            // ── 1–4: the search pill ────────────────────────
+            item(key = "paper-search") {
+                Surface(
+                    color = scheme.surfaceContainer,
+                    shape = androidx.compose.foundation.shape.CircleShape,
+                    shadowElevation = 2.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                ) {
+                    Row(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { sheetOpen = true }) {
+                            Icon(
+                                Icons.Filled.Menu,
+                                contentDescription = "Filter and sort",
+                                tint = scheme.onSurfaceVariant
+                            )
+                        }
+                        BasicTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyLarge
+                                .copy(color = scheme.onSurface),
+                            cursorBrush = SolidColor(scheme.primary),
+                            modifier = Modifier.weight(1f),
+                            decorationBox = { inner ->
+                                if (query.isEmpty()) {
+                                    Text(
+                                        "Search your library",
+                                        style = MaterialTheme
+                                            .typography.bodyLarge,
+                                        color = scheme.onSurfaceVariant
+                                    )
+                                }
+                                inner()
+                            }
+                        )
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(
+                                    Icons.Filled.Close,
+                                    contentDescription = "Clear search",
+                                    tint = scheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        // The avatar disc: his avatar when set,
+                        // else his initial on the peach.
+                        val avatar = state.avatarFile
+                        Box(
+                            Modifier
+                                .size(36.dp)
+                                .clip(
+                                    androidx.compose.foundation.shape
+                                        .CircleShape
+                                )
+                                .background(scheme.tertiaryContainer)
+                                .clickable { onProfile() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (avatar != null) {
+                                AsyncImage(
+                                    model = coverFile(avatar),
+                                    contentDescription = "Your profile",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Text(
+                                    state.profileName.trim()
+                                        .firstOrNull()?.uppercase() ?: "X",
+                                    style = MaterialTheme.typography
+                                        .titleMedium.copy(
+                                            fontFamily =
+                                                app.xreader.ui.theme
+                                                    .FrauncesSerif,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                    color = scheme.onTertiaryContainer
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            // ── S36: the update card, in flow (K12) ─────────
+            if (updateState?.cardRelease != null) {
+                item(key = "paper-update") {
+                    app.xreader.ui.update.UpdateCard(
+                        state = updateState,
+                        onUpdateNow = onUpdateNow,
+                        onDismiss = onDismissUpdate,
+                        onReadMore = onReadMoreUpdate,
+                        onInstall = onInstallUpdate,
+                        onCancelDownload = onCancelUpdateDownload,
+                        onOpenInstallSettings = onOpenUpdateInstallSettings,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+                }
+            }
+            // ── 5–7: greeting, headline, side pill ──────────
+            item(key = "paper-head") {
+                Column(Modifier.padding(top = 18.dp)) {
+                    Text(
+                        greeting.uppercase(),
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 2.sp
+                        ),
+                        color = scheme.primary
+                    )
+                    Text(
+                        "Library",
+                        style = MaterialTheme.typography.headlineLarge
+                            .copy(fontSize = 34.sp),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    // The Novels / Manga pill — wired to the
+                    // app's real side split.
+                    Surface(
+                        color = scheme.surfaceContainer,
+                        shape = androidx.compose.foundation.shape
+                            .CircleShape,
+                        modifier = Modifier.padding(top = 14.dp)
+                    ) {
+                        Row(Modifier.padding(4.dp)) {
+                            listOf(
+                                app.xreader.data.extension.MediaKind.TEXT
+                                    to "Novels",
+                                app.xreader.data.extension.MediaKind.MANGA
+                                    to "Manga"
+                            ).forEach { (kind, label) ->
+                                val picked = state.librarySide == kind
+                                Box(
+                                    Modifier
+                                        .clip(
+                                            androidx.compose.foundation
+                                                .shape.CircleShape
+                                        )
+                                        .background(
+                                            if (picked) {
+                                                scheme.primary
+                                            } else {
+                                                Color.Transparent
+                                            }
+                                        )
+                                        .clickable {
+                                            viewModel.setLibrarySide(kind)
+                                        }
+                                        .padding(
+                                            horizontal = 18.dp,
+                                            vertical = 8.dp
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        label,
+                                        style = MaterialTheme.typography
+                                            .labelLarge,
+                                        color = if (picked) {
+                                            scheme.onPrimary
+                                        } else {
+                                            scheme.onSurfaceVariant
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // ── Imports in flight ───────────────────────────
+            if (candidates.isNotEmpty()) {
+                item(key = "paper-import-head") {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 18.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "Adding books",
+                            style = MaterialTheme.typography.titleLarge
+                                .copy(fontSize = 19.sp)
+                        )
+                        TextButton(onClick = {
+                            viewModel.clearFinishedCandidates()
+                        }) { Text("Clear finished") }
+                    }
+                }
+                items(candidates, key = { "paper-cand-${it.token()}" }) {
+                    candidateState ->
+                    Box(Modifier.padding(vertical = 4.dp)) {
+                        ImportCandidateCard(
+                            state = candidateState,
+                            onImport = { viewModel.importCandidate(it) },
+                            onDismiss = { viewModel.dismissCandidate(it) },
+                            onPassword = { cand, pw ->
+                                viewModel.importCandidate(cand, pw)
+                            }
+                        )
+                    }
+                }
+            }
+            // ── 8–15: Continue reading ──────────────────────
+            if (frontPage && designState.libraryContinueRail &&
+                carousel.isNotEmpty()
+            ) {
+                item(key = "paper-continue-head") {
+                    Text(
+                        "Continue reading",
+                        style = MaterialTheme.typography.titleLarge
+                            .copy(fontSize = 19.sp),
+                        modifier = Modifier.padding(top = 22.dp, bottom = 12.dp)
+                    )
+                }
+                item(key = "paper-continue") {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(end = 4.dp)
+                    ) {
+                        items(
+                            carousel,
+                            key = { "paper-cont-${it.book.id}" }
+                        ) { shelf ->
+                            val lead = shelf.book.id ==
+                                carousel.first().book.id
+                            EditorialContinueCard(
+                                shelf = shelf,
+                                lead = lead,
+                                coverFile = coverFile,
+                                onClick = {
+                                    if (lead &&
+                                        state.continueReading?.book?.id ==
+                                        shelf.book.id
+                                    ) {
+                                        onContinueReading(
+                                            shelf.book.id,
+                                            state.continueChapterIndex
+                                        )
+                                    } else {
+                                        viewModel.markSeen(shelf.book.id)
+                                        onOpenBook(shelf.book.id)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            // ── 16–18: the status tab row ───────────────────
+            item(key = "paper-tabs") {
+                Column(Modifier.padding(top = 20.dp)) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(22.dp)
+                    ) {
+                        editorialTabs.forEach { (key, label) ->
+                            val picked = tabKey == key
+                            Column(
+                                Modifier
+                                    .clickable { tabKey = key }
+                                    .padding(bottom = 8.dp)
+                            ) {
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography
+                                        .titleSmall.copy(
+                                            fontWeight = if (picked) {
+                                                FontWeight.SemiBold
+                                            } else {
+                                                FontWeight.Normal
+                                            }
+                                        ),
+                                    color = if (picked) {
+                                        scheme.primary
+                                    } else {
+                                        scheme.onSurfaceVariant
+                                    }
+                                )
+                                Box(
+                                    Modifier
+                                        .padding(top = 6.dp)
+                                        .height(3.dp)
+                                        .fillMaxWidth()
+                                        .clip(
+                                            RoundedCornerShape(2.dp)
+                                        )
+                                        .background(
+                                            if (picked) {
+                                                scheme.primary
+                                            } else {
+                                                Color.Transparent
+                                            }
+                                        )
+                                )
+                            }
+                        }
+                    }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(scheme.outlineVariant)
+                    )
+                }
+            }
+            // ── 19–26: the cover grid ───────────────────────
+            if (state.loading) {
+                item(key = "paper-loading") {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
+            } else if (gridBooks.isEmpty()) {
+                item(key = "paper-empty") {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 40.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            if (state.books.isEmpty()) {
+                                "Your library is empty"
+                            } else {
+                                "Nothing here yet"
+                            },
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Text(
+                            if (state.books.isEmpty()) {
+                                "Add a book and it will wait for " +
+                                    "you here."
+                            } else {
+                                "No books match this view right now."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = scheme.onSurfaceVariant
+                        )
+                        if (state.books.isEmpty()) {
+                            Button(
+                                onClick = onAddBook,
+                                modifier = Modifier.padding(top = 8.dp)
+                            ) {
+                                Text("Add a book")
+                            }
+                        }
+                    }
+                }
+            } else {
+                items(
+                    gridBooks.chunked(2),
+                    key = { "paper-row-${it.first().book.id}" }
+                ) { pair ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        pair.forEach { shelf ->
+                            EditorialGridCard(
+                                shelf = shelf,
+                                favourite = shelf.book.id in state.favourites,
+                                coverFile = coverFile,
+                                onClick = {
+                                    viewModel.markSeen(shelf.book.id)
+                                    onOpenBook(shelf.book.id)
+                                },
+                                onToggleFavourite = {
+                                    viewModel.setFavourite(
+                                        shelf.book.id,
+                                        shelf.book.id !in state.favourites
+                                    )
+                                },
+                                onSetStatus = { statusDialogFor = shelf },
+                                onRemove = { removeTarget = shelf },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (pair.size == 1) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        }
+        // ── 27: the Add FAB ─────────────────────────────────
+        Surface(
+            color = scheme.tertiaryContainer,
+            shape = RoundedCornerShape(18.dp),
+            shadowElevation = 4.dp,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(
+                    end = 20.dp,
+                    bottom = dockClearance + 4.dp
+                )
+                .size(56.dp)
+                .clickable { onAddBook() }
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Filled.Add,
+                    contentDescription = "Add a book",
+                    tint = scheme.onTertiaryContainer
+                )
+            }
+        }
+    }
+
+    // Set-status dialog: the five statuses, the app's own
+    // bulk write carrying the single book.
+    statusDialogFor?.let { shelf ->
+        val current = statusOf(shelf)
+        AlertDialog(
+            onDismissRequest = { statusDialogFor = null },
+            title = { Text("Set status") },
+            text = {
+                Column {
+                    listOf(
+                        app.xreader.data.library.ReadingStatus.READING,
+                        app.xreader.data.library.ReadingStatus.ON_HOLD,
+                        app.xreader.data.library.ReadingStatus.PLAN_TO_READ,
+                        app.xreader.data.library.ReadingStatus.COMPLETED,
+                        app.xreader.data.library.ReadingStatus.DROPPED
+                    ).forEach { status ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.bulkSetStatus(
+                                        setOf(shelf.book.id), status
+                                    )
+                                    statusDialogFor = null
+                                }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement =
+                                Arrangement.spacedBy(10.dp)
+                        ) {
+                            if (status == current) {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = "Current",
+                                    tint = scheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            } else {
+                                Spacer(Modifier.size(18.dp))
+                            }
+                            Text(m3StatusLabel(status))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { statusDialogFor = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+    // S5's one delete sheet, shared with every design.
+    app.xreader.ui.common.BookDeleteDialogs(
+        book = removeTarget?.book,
+        downloadedSizeBytes = { viewModel.downloadedSizeBytes(it) },
+        onDismiss = { removeTarget = null },
+        onRemoveBook = { book, deleteFiles ->
+            viewModel.removeBook(book, deleteFiles)
+        },
+        onRemoveLocalBook = { book, mode, context ->
+            viewModel.removeLocalBook(book, mode, context)
+        }
+    )
+    // S4's extension: the filter/sort sheet behind the
+    // hamburger — sort, two live flags, and the updates doors.
+    if (sheetOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { sheetOpen = false },
+            sheetState = rememberModalBottomSheetState()
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    "Filter and sort",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                Text(
+                    "Sort",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 2.sp
+                    ),
+                    color = scheme.primary
+                )
+                listOf(
+                    app.xreader.data.library.LibrarySort.RECENTLY_READ
+                        to "Recently read",
+                    app.xreader.data.library.LibrarySort.TITLE
+                        to "Title",
+                    app.xreader.data.library.LibrarySort.MOST_CHAPTERS
+                        to "Most chapters",
+                    app.xreader.data.library.LibrarySort.RECENTLY_ADDED
+                        to "Recently added"
+                ).forEach { (value, label) ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { sort = value }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (sort == value) {
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = "Current",
+                                tint = scheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        } else {
+                            Spacer(Modifier.size(18.dp))
+                        }
+                        Text(label)
+                    }
+                }
+                HorizontalDivider(
+                    Modifier.padding(vertical = 8.dp),
+                    color = scheme.outlineVariant
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Downloaded only")
+                        Text(
+                            "Only books with downloaded chapters.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = downloadedOnly,
+                        onCheckedChange = { downloadedOnly = it }
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Favourites only")
+                        Text(
+                            "Only the books you marked as favourites.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = favouritesOnly,
+                        onCheckedChange = { favouritesOnly = it }
+                    )
+                }
+                HorizontalDivider(
+                    Modifier.padding(vertical = 8.dp),
+                    color = scheme.outlineVariant
+                )
+                TextButton(
+                    onClick = {
+                        sheetOpen = false
+                        onOpenUpdates()
+                    }
+                ) { Text("New chapters") }
+                TextButton(
+                    onClick = { viewModel.checkForUpdates() }
+                ) {
+                    Text(
+                        if (state.checkingUpdates) {
+                            "Checking for updates…"
+                        } else {
+                            "Check for updates"
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The copy's Continue carousel card: full-bleed cover, the
+ * black scrim, serif title, the % · chapters sub-line, the
+ * 4dp progress bar, and — on the lead card only — the play
+ * badge. */
+@Composable
+private fun EditorialContinueCard(
+    shelf: ShelfBook,
+    lead: Boolean,
+    coverFile: (String?) -> File?,
+    onClick: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    val pct = (shelf.fraction * 100).toInt()
+    val unit = if (
+        shelf.book.localFormat ==
+        app.xreader.data.db.BookFormat.PDF
+    ) {
+        "pages"
+    } else {
+        "ch"
+    }
+    Box(
+        Modifier
+            .width(if (lead) 250.dp else 170.dp)
+            .height(250.dp)
+            .clip(RoundedCornerShape(28.dp))
+            .background(scheme.surfaceContainerHigh)
+            .clickable { onClick() }
+    ) {
+        EditorialCoverImage(
+            shelf = shelf,
+            coverFile = coverFile,
+            modifier = Modifier.fillMaxSize()
+        )
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(150.dp)
+                .align(Alignment.BottomCenter)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.85f)
+                        )
+                    )
+                )
+        )
+        Column(
+            Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+            Text(
+                shelf.book.title,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontFamily = app.xreader.ui.theme.FrauncesSerif,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp
+                ),
+                color = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                if (shelf.book.totalChapters > 0) {
+                    "$pct% · ${shelf.book.totalChapters} $unit"
+                } else {
+                    "$pct%"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.padding(top = 3.dp)
+            )
+            Box(
+                Modifier
+                    .padding(top = 8.dp)
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color.White.copy(alpha = 0.3f))
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(shelf.fraction.coerceIn(0f, 1f))
+                        .height(4.dp)
+                        .background(scheme.primaryContainer)
+                )
+            }
+        }
+        if (lead) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(12.dp)
+                    .size(40.dp)
+                    .clip(
+                        androidx.compose.foundation.shape.CircleShape
+                    )
+                    .background(scheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.PlayArrow,
+                    contentDescription = "Continue reading",
+                    tint = scheme.onPrimaryContainer
+                )
+            }
+        }
+    }
+}
+
+/** The copy's grid card: 24dp card on surface-container-low,
+ * the 3:4 cover full-bleed, the ♥ Fav badge, the ⋮ button,
+ * the progress chip on every card, title + author below. */
+@Composable
+private fun EditorialGridCard(
+    shelf: ShelfBook,
+    favourite: Boolean,
+    coverFile: (String?) -> File?,
+    onClick: () -> Unit,
+    onToggleFavourite: () -> Unit,
+    onSetStatus: () -> Unit,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val scheme = MaterialTheme.colorScheme
+    val pct = (shelf.fraction * 100).toInt()
+    Surface(
+        color = scheme.surfaceContainerLow,
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 2.dp,
+        modifier = modifier.clickable { onClick() }
+    ) {
+        Column(Modifier.padding(8.dp)) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(150.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(scheme.surfaceContainerHigh)
+            ) {
+                EditorialCoverImage(
+                    shelf = shelf,
+                    coverFile = coverFile,
+                    modifier = Modifier.fillMaxSize()
+                )
+                if (favourite) {
+                    Row(
+                        Modifier
+                            .align(Alignment.TopStart)
+                            .padding(8.dp)
+                            .clip(
+                                androidx.compose.foundation.shape
+                                    .CircleShape
+                            )
+                            .background(scheme.tertiaryContainer)
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.Favorite,
+                            contentDescription = null,
+                            tint = scheme.onTertiaryContainer,
+                            modifier = Modifier.size(11.dp)
+                        )
+                        Text(
+                            "Fav",
+                            style = MaterialTheme.typography.labelSmall
+                                .copy(fontWeight = FontWeight.Bold),
+                            color = scheme.onTertiaryContainer
+                        )
+                    }
+                }
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(32.dp)
+                        .clip(
+                            androidx.compose.foundation.shape.CircleShape
+                        )
+                        .background(scheme.surface.copy(alpha = 0.85f))
+                        .clickable { menuOpen = true },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.MoreVert,
+                        contentDescription = "Book actions",
+                        tint = scheme.onSurface,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    // The card ⋮ menu — real actions only,
+                    // anchored to this button.
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Open book page") },
+                            onClick = {
+                                menuOpen = false
+                                onClick()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    if (favourite) {
+                                        "Remove from favourites"
+                                    } else {
+                                        "Add to favourites"
+                                    }
+                                )
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onToggleFavourite()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Set status…") },
+                            onClick = {
+                                menuOpen = false
+                                onSetStatus()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Remove or delete…") },
+                            onClick = {
+                                menuOpen = false
+                                onRemove()
+                            }
+                        )
+                    }
+                }
+                Box(
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(8.dp)
+                        .clip(
+                            androidx.compose.foundation.shape.CircleShape
+                        )
+                        .background(scheme.surface.copy(alpha = 0.9f))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        "$pct%",
+                        style = MaterialTheme.typography.labelSmall
+                            .copy(fontWeight = FontWeight.Bold),
+                        color = scheme.onSurface
+                    )
+                }
+            }
+            Text(
+                shelf.book.title,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp
+                ),
+                maxLines = 2,
+                minLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Text(
+                shelf.book.author,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 11.sp
+                ),
+                color = scheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/** A book's cover: the cached file when there is one, else
+ * the source URL, over a container ground carrying the
+ * title's serif initial (the mockups' placeholder convention,
+ * made real: it shows only until art loads or when a book
+ * has no art). */
+@Composable
+private fun EditorialCoverImage(
+    shelf: ShelfBook,
+    coverFile: (String?) -> File?,
+    modifier: Modifier = Modifier
+) {
+    val scheme = MaterialTheme.colorScheme
+    val file = coverFile(shelf.book.coverPath)
+    Box(modifier.background(scheme.surfaceContainerHigh)) {
+        Text(
+            shelf.book.title.trim().firstOrNull()?.uppercase() ?: "",
+            style = MaterialTheme.typography.headlineMedium,
+            color = scheme.onSurfaceVariant,
+            modifier = Modifier.align(Alignment.Center)
+        )
+        AsyncImage(
+            model = file ?: shelf.book.coverUrl,
+            contentDescription = shelf.book.title,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+    }
 }

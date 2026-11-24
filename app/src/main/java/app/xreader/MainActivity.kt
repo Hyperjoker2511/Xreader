@@ -214,9 +214,14 @@ class MainActivity : FragmentActivity() {
                             // writes a Nocturne setting; the
                             // Tinted write below exists only when
                             // Nocturne is the active design.
-                            if (designState.design ==
-                                app.xreader.data.prefs.AppDesign.MATERIAL3
+                            if (designState.design !=
+                                app.xreader.data.prefs.AppDesign.NOCTURNE
                             ) {
+                                // Code 123: the M3-family reset
+                                // serves Editorial too — the state
+                                // it resets (colour source, theme
+                                // mode, motion) is the family's
+                                // shared state Editorial reads.
                                 activityScope.launch {
                                     val prefs = container.designPrefs
                                     prefs.setColourSource(
@@ -397,8 +402,8 @@ class MainActivity : FragmentActivity() {
                         // never gated on it; it dismisses on the
                         // Library-ready signal above and is hard-
                         // capped at 1,000 ms by its controller.
-                        if (designState.design ==
-                            app.xreader.data.prefs.AppDesign.MATERIAL3
+                        if (designState.design !=
+                            app.xreader.data.prefs.AppDesign.NOCTURNE
                         ) {
                             // Code 120 (S2): in the Material 3
                             // design the launch intro is the plain
@@ -408,6 +413,10 @@ class MainActivity : FragmentActivity() {
                             // intro is Nocturne's and stays
                             // Nocturne's. The intro's own Show/Skip
                             // knob (§2.11 Advanced) gates both.
+                            // Code 123 (S2 extension): Editorial
+                            // takes the same plain surface — under
+                            // its theme that IS the extension's
+                            // form: paper ground, serif wordmark.
                             app.xreader.ui.start.M3LaunchIntro(
                                 libraryReady = libraryReady,
                                 animationsEnabled = motionEnabled &&
@@ -438,9 +447,10 @@ class MainActivity : FragmentActivity() {
                         // database file existed at container
                         // construction — fresh installs take the
                         // onboarding branch above and never reach
-                        // here), and the ACTIVE design is
-                        // Nocturne (an M3-active user does not
-                        // need an M3 reveal). It composes in this
+                        // here), and the ACTIVE design is not the
+                        // design being revealed (code 121: not
+                        // Nocturne-gated for M3; code 123: not
+                        // already Editorial). It composes in this
                         // shell branch only, so a Recovery detour
                         // DELAYS it — Recovery replaces this
                         // branch, and once Continue resolves it
@@ -490,6 +500,13 @@ class MainActivity : FragmentActivity() {
                         var showcaseDismissed by remember {
                             mutableStateOf(false)
                         }
+                        // Code 123: the reveal now presents the
+                        // Editorial design (DESIGN_CARRYING_CODE
+                        // moved to 123 in RevealPrefs). The gate's
+                        // design condition is "not already on
+                        // Editorial": Nocturne and Material 3
+                        // users both meet the new design; an
+                        // Editorial user does not need its reveal.
                         val revealGate =
                             !revealDismissed &&
                                 installedCode >=
@@ -499,11 +516,11 @@ class MainActivity : FragmentActivity() {
                                     app.xreader.ui.update.RevealPrefs
                                         .DESIGN_CARRYING_CODE &&
                                 container.databaseFileExisted &&
-                                designState.design ==
+                                designState.design !=
                                     app.xreader.data.prefs.AppDesign
-                                        .NOCTURNE
+                                        .EDITORIAL
                         if (revealGate) {
-                            app.xreader.ui.update.WhatsNewReveal(
+                            app.xreader.ui.update.WhatsNewRevealEditorial(
                                 designState = designState,
                                 onTryDesign = {
                                     revealDismissed = true
@@ -511,7 +528,7 @@ class MainActivity : FragmentActivity() {
                                         container.designPrefs
                                             .setDesign(
                                                 app.xreader.data.prefs
-                                                    .AppDesign.MATERIAL3
+                                                    .AppDesign.EDITORIAL
                                             )
                                         revealPrefs.setRevealSeen(
                                             installedCode

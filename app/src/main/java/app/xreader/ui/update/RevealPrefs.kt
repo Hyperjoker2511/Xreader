@@ -39,13 +39,17 @@ class RevealPrefs(private val store: DataStore<Preferences>) {
 
     companion object {
         /**
-         * The version code whose update first carries the new
-         * Material 3 design (code 121). An update is
+         * The version code whose update first carries the
+         * design the current reveal presents. An update is
          * design-carrying when it adds a design the installed
-         * app did not previously offer (R39 Mechanics 3); for
-         * this build that crossing is exactly this code.
+         * app did not previously offer (R39 Mechanics 3).
+         * Code 121 carried Material 3; code 123 carries the
+         * Editorial design, and the crossing moves to 123 —
+         * installs whose record holds 121 (or 122) have not
+         * seen THIS reveal, and installs already on Editorial
+         * are gated out in MainActivity.
          */
-        const val DESIGN_CARRYING_CODE: Int = 121
+        const val DESIGN_CARRYING_CODE: Int = 123
 
         private val KEY_REVEAL_SEEN =
             intPreferencesKey("reveal.design_seen_code")

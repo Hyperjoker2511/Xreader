@@ -19,15 +19,27 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.TextButton
 // Code 121 (W4): the scratch-M3 Explore branch's components.
 import androidx.compose.foundation.clickable
@@ -164,10 +176,12 @@ fun SourcesScreen(
     val designState = app.xreader.ui.theme.LocalDesignState.current
     val isM3Explore = designState.design ==
         app.xreader.data.prefs.AppDesign.MATERIAL3
+    val isEditorialExplore = designState.design ==
+        app.xreader.data.prefs.AppDesign.EDITORIAL
     androidx.compose.runtime.LaunchedEffect(
-        isM3Explore, designState.exploreSide
+        isM3Explore, isEditorialExplore, designState.exploreSide
     ) {
-        if (isM3Explore) {
+        if (isM3Explore || isEditorialExplore) {
             when (designState.exploreSide) {
                 app.xreader.data.prefs.M3ExploreSide.NOVELS ->
                     viewModel.setLibrarySide(
@@ -182,7 +196,7 @@ fun SourcesScreen(
             }
         }
     }
-    val exploreCompact = isM3Explore &&
+    val exploreCompact = (isM3Explore || isEditorialExplore) &&
         designState.exploreDensity ==
             app.xreader.data.prefs.M3DensityChoice.COMPACT
     // v1.5.9 (Finding 6): returning here from a Details page
@@ -289,6 +303,42 @@ fun SourcesScreen(
             app.xreader.data.library.LibrarySplit.extensionOnSide(
                 kindsOf(ext), app.xreader.data.extension.MediaKind.MANGA
             )
+    }
+
+    // ── Code 123 (R2 COPY): the Editorial Explore — the ─────
+    // approved Paper & Sage copy, alive: the search pill wired
+    // to the real all-sources search, real counts on the type
+    // chips, the receipt banner carrying the refresh pipeline's
+    // own summary sentence (shown only when a pass produced
+    // one; dismissal is the pipeline store's own), ALL his
+    // sources in the design's grid (built-in, repo and
+    // link-added — K10), real health words on the cards, and
+    // the add/store/manage doors as door rows at the foot.
+    if (isEditorialExplore) {
+        EditorialExploreContent(
+            state = state,
+            searchState = searchState,
+            searchViewModel = searchViewModel,
+            viewModel = viewModel,
+            designState = designState,
+            sideExtensions = sideExtensions,
+            novelsSideCount = novelsSideCount,
+            mangaSideCount = mangaSideCount,
+            offExtensions = visibleExtensions.filter { !it.enabled },
+            passSummary = passSummary,
+            opdsServers = opdsServers,
+            ratingBadgeOf = { ext -> ratingBadgeOf(ext) },
+            coverFile = coverFile,
+            onOpenSource = onOpenSource,
+            onOpenExtension = onOpenExtension,
+            onOpenOpdsServer = onOpenOpdsServer,
+            onAddSource = onAddSource,
+            onAddFromLink = onAddFromLink,
+            onOpenStore = onOpenStore,
+            onOpenManageSources = onOpenManageSources,
+            onOpenMangaSources = onOpenMangaSources
+        )
+        return
     }
 
     // ── Code 121 (W4, scratch R2 + S8): the Material 3 Explore ──
@@ -2215,6 +2265,875 @@ private fun androidx.compose.foundation.lazy.LazyListScope.searchGroupRows(
             repeat(3 - rowBooks.size) {
                 Spacer(Modifier.weight(1f))
             }
+        }
+    }
+}
+
+// ── Code 123 (R2): the Editorial Explore — the approved ────
+// Paper & Sage copy, alive (DESIGN-M3-EXPLORE-V6-PAPER-COPY).
+// Every literal the prototype hard-coded is the app's real
+// value here: chip counts are the registry's side counts, the
+// banner carries the refresh pipeline's own summary sentence
+// and shows only when a pass produced one (its dismissal is
+// the pipeline store's own — remembered), the grid holds ALL
+// his sources grouped by provenance (K10), and each card's
+// health line is the source's real health record.
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EditorialExploreContent(
+    state: SourcesUiState,
+    searchState: GlobalSearchUiState,
+    searchViewModel: GlobalSearchViewModel,
+    viewModel: SourcesViewModel,
+    designState: app.xreader.data.prefs.DesignState,
+    sideExtensions: List<InstalledExtension>,
+    novelsSideCount: Int,
+    mangaSideCount: Int,
+    offExtensions: List<InstalledExtension>,
+    passSummary: String?,
+    opdsServers: List<app.xreader.data.db.OpdsServer>,
+    ratingBadgeOf: (InstalledExtension) -> String?,
+    coverFile: (String?) -> java.io.File?,
+    onOpenSource: (extensionId: Long, sourceId: String) -> Unit,
+    onOpenExtension: (extensionId: Long) -> Unit,
+    onOpenOpdsServer: (app.xreader.data.db.OpdsServer) -> Unit,
+    onAddSource: () -> Unit,
+    onAddFromLink: () -> Unit,
+    onOpenStore: () -> Unit,
+    onOpenManageSources: () -> Unit,
+    onOpenMangaSources: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    var query by remember { mutableStateOf(searchState.query) }
+    androidx.compose.runtime.LaunchedEffect(query) {
+        if (query != searchState.query) searchViewModel.setQuery(query)
+    }
+    val dockClearance = LocalDockClearance.current
+    val isNovels = state.librarySide ==
+        app.xreader.data.extension.MediaKind.TEXT
+
+    Column(Modifier.fillMaxSize()) {
+        // ── 1–4: the search pill ────────────────────────────
+        Surface(
+            color = scheme.surfaceContainer,
+            shape = CircleShape,
+            shadowElevation = 2.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(top = 4.dp)
+                .height(56.dp)
+        ) {
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onOpenManageSources) {
+                    Icon(
+                        Icons.Filled.Menu,
+                        contentDescription = "Manage sources",
+                        tint = scheme.onSurfaceVariant
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge
+                        .copy(color = scheme.onSurface),
+                    cursorBrush = SolidColor(scheme.primary),
+                    modifier = Modifier.weight(1f),
+                    decorationBox = { inner ->
+                        if (query.isEmpty()) {
+                            Text(
+                                "Search every source",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = scheme.onSurfaceVariant
+                            )
+                        }
+                        inner()
+                    }
+                )
+                if (query.isNotEmpty() || searchState.searched) {
+                    IconButton(onClick = {
+                        query = ""
+                        searchViewModel.clearSearch()
+                    }) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Clear search",
+                            tint = scheme.onSurfaceVariant
+                        )
+                    }
+                }
+                IconButton(onClick = { searchViewModel.search() }) {
+                    Icon(
+                        Icons.Filled.Search,
+                        contentDescription = "Search",
+                        tint = scheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        // ── S8: live results replace the page ───────────────
+        if (searchState.searched) {
+            M3SearchResults(
+                state = searchState,
+                coverFile = coverFile,
+                onOpenLibraryBook = { searchViewModel.openLibraryBook(it) },
+                onOpenGroupBook = { group, book ->
+                    searchViewModel.openBook(group, book)
+                },
+                onOpenSource = onOpenSource,
+                onRetry = { searchViewModel.search() }
+            )
+            return@Column
+        }
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp, top = 18.dp,
+                bottom = dockClearance + 16.dp
+            )
+        ) {
+            // ── 5–10: kicker, headline, type chips ──────────
+            item(key = "paper-explore-head") {
+                Column {
+                    Text(
+                        "DISCOVER",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 2.sp
+                        ),
+                        color = scheme.primary
+                    )
+                    Text(
+                        "Explore",
+                        style = MaterialTheme.typography.headlineLarge
+                            .copy(fontSize = 34.sp),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    Row(
+                        Modifier.padding(top = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            app.xreader.data.extension.MediaKind.TEXT
+                                to ("Novels" to novelsSideCount),
+                            app.xreader.data.extension.MediaKind.MANGA
+                                to ("Manga" to mangaSideCount)
+                        ).forEach { (kind, labelCount) ->
+                            val (label, count) = labelCount
+                            val picked = state.librarySide == kind
+                            Surface(
+                                color = if (picked) {
+                                    scheme.secondaryContainer
+                                } else {
+                                    Color.Transparent
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                border = androidx.compose.foundation
+                                    .BorderStroke(
+                                        1.dp,
+                                        if (picked) {
+                                            Color.Transparent
+                                        } else {
+                                            scheme.outline
+                                        }
+                                    ),
+                                modifier = Modifier
+                                    .height(40.dp)
+                                    .clickable {
+                                        viewModel.setLibrarySide(kind)
+                                    }
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 12.dp),
+                                    verticalAlignment =
+                                        Alignment.CenterVertically,
+                                    horizontalArrangement =
+                                        Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (picked) {
+                                        Icon(
+                                            Icons.Filled.Check,
+                                            contentDescription = null,
+                                            tint = scheme
+                                                .onSecondaryContainer,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    Text(
+                                        label,
+                                        style = MaterialTheme.typography
+                                            .labelLarge,
+                                        color = if (picked) {
+                                            scheme.onSecondaryContainer
+                                        } else {
+                                            scheme.onSurfaceVariant
+                                        }
+                                    )
+                                    Box(
+                                        Modifier
+                                            .height(20.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (picked) {
+                                                    scheme.primary
+                                                } else {
+                                                    scheme
+                                                        .surfaceContainerHigh
+                                                }
+                                            )
+                                            .padding(horizontal = 7.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            count.toString(),
+                                            style = MaterialTheme
+                                                .typography.labelSmall.copy(
+                                                    fontWeight =
+                                                        FontWeight.Bold,
+                                                    fontSize = 11.sp
+                                                ),
+                                            color = if (picked) {
+                                                scheme.onPrimary
+                                            } else {
+                                                scheme.onSurfaceVariant
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // ── 11–15: the receipt banner (real pass summary) ──
+            if (passSummary != null) {
+                item(key = "paper-explore-banner") {
+                    Surface(
+                        color = scheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(20.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp, scheme.outlineVariant
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 16.dp)
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(12.dp)
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            scheme.primaryContainer
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Filled.CheckCircle,
+                                        contentDescription = null,
+                                        tint = scheme.onPrimaryContainer
+                                    )
+                                }
+                                Text(
+                                    passSummary,
+                                    style = MaterialTheme.typography
+                                        .bodyMedium,
+                                    color = scheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = {
+                                        viewModel
+                                            .dismissUpdatePassSummary()
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = "Dismiss",
+                                        tint = scheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Box(
+                                Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.CenterEnd
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        viewModel
+                                            .dismissUpdatePassSummary()
+                                    }
+                                ) {
+                                    Text(
+                                        "Got it",
+                                        color = scheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Keiyoushi updates waiting (the M3 form's banner,
+            // in the language).
+            if (state.keiyoushiPendingUpdateCount > 0) {
+                item(key = "paper-explore-keiyoushi") {
+                    Surface(
+                        color = scheme.secondaryContainer,
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 16.dp)
+                    ) {
+                        Row(
+                            Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (state.keiyoushiPendingUpdateCount == 1) {
+                                    "Source update available"
+                                } else {
+                                    "${state.keiyoushiPendingUpdateCount} " +
+                                        "source updates available"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = scheme.onSecondaryContainer,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Button(onClick = onOpenMangaSources) {
+                                Text("Update")
+                            }
+                        }
+                    }
+                }
+            }
+            // The restore card (sources switched off by an old
+            // version) — real content, the M3 form's own card.
+            val offExts = offExtensions
+            if (app.xreader.data.extension.SourceRestore.shouldShowCard(
+                    cardDone = state.restoreCardDone,
+                    rows = offExts.map {
+                        app.xreader.data.extension.SourceRestore.Row(
+                            it.id, it.displayName, it.enabled
+                        )
+                    }
+                )
+            ) {
+                item(key = "paper-explore-restore") {
+                    Surface(
+                        color = scheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 16.dp)
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text(
+                                "Some sources are switched off",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                "Older Xreader versions could switch " +
+                                    "a source off after failed loads — " +
+                                    "without asking you. These are off " +
+                                    "right now: " +
+                                    offExts.take(6).joinToString(", ") {
+                                        it.displayName
+                                    } +
+                                    if (offExts.size > 6) {
+                                        " and ${offExts.size - 6} more"
+                                    } else {
+                                        ""
+                                    } +
+                                    ". Turn them back on, or leave " +
+                                    "them off — either way, this card " +
+                                    "won't come back.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = scheme.onSurfaceVariant
+                            )
+                            Button(
+                                onClick = {
+                                    viewModel.restoreAllOffSources(offExts)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 10.dp)
+                            ) { Text("Turn them all back on") }
+                            TextButton(
+                                onClick = { viewModel.dismissRestoreCard() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Leave them off") }
+                        }
+                    }
+                }
+            }
+            // ── 16–28: the source sections ──────────────────
+            val groups: List<Pair<String, List<InstalledExtension>>> =
+                if (designState.exploreGrouping) {
+                    listOf(
+                        "Built-in sources" to sideExtensions.filter {
+                            it.packageId.startsWith("bundled.")
+                        },
+                        "From repositories" to sideExtensions.filter {
+                            !it.packageId.startsWith("bundled.") &&
+                                !it.packageId.startsWith("link.")
+                        },
+                        "Added by link" to sideExtensions.filter {
+                            it.packageId.startsWith("link.")
+                        }
+                    ).filter { it.second.isNotEmpty() }
+                } else if (sideExtensions.isNotEmpty()) {
+                    listOf("Your sources" to sideExtensions)
+                } else {
+                    emptyList()
+                }
+            if (groups.isEmpty() && !(isNovels && opdsServers.isNotEmpty())) {
+                item(key = "paper-explore-empty") {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 40.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "No sources here yet",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Text(
+                            if (isNovels) {
+                                "Add a source and it will live here."
+                            } else {
+                                "Manga comes from the Keiyoushi " +
+                                    "catalogue — open the Source store " +
+                                    "and install the ones you want."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = scheme.onSurfaceVariant
+                        )
+                        Button(
+                            onClick = if (isNovels) {
+                                onAddSource
+                            } else {
+                                onOpenStore
+                            },
+                            modifier = Modifier.padding(top = 8.dp)
+                        ) {
+                            Text(
+                                if (isNovels) {
+                                    "Add a source"
+                                } else {
+                                    "Open the Source store"
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            groups.forEach { (groupTitle, groupExts) ->
+                item(key = "paper-explore-group-$groupTitle") {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 22.dp, bottom = 12.dp),
+                        verticalAlignment = Alignment.Bottom,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            groupTitle,
+                            style = MaterialTheme.typography.titleLarge
+                                .copy(fontSize = 19.sp)
+                        )
+                        Text(
+                            "${groupExts.size} shown",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                }
+                items(
+                    groupExts.chunked(2),
+                    key = { "paper-explore-row-$groupTitle-${it.first().id}" }
+                ) { pair ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        pair.forEachIndexed { indexInPair, ext ->
+                            val indexInGroup = groupExts.indexOf(ext)
+                            EditorialSourceCard(
+                                ext = ext,
+                                state = state,
+                                rotationIndex = indexInGroup,
+                                ratingBadge = ratingBadgeOf(ext),
+                                onClick = {
+                                    val ids = ext.sourceIds.split(",")
+                                        .map { it.trim() }
+                                        .filter { it.isNotBlank() }
+                                    val canOpen = ext.enabled &&
+                                        ext.trustState ==
+                                            app.xreader.data.db
+                                                .TrustState.TRUSTED
+                                    if (!canOpen) {
+                                        onOpenExtension(ext.id)
+                                    } else {
+                                        val decision =
+                                            SourcesRowRouting.decide(
+                                                sourceIds = ids,
+                                                defaultSourceId =
+                                                    state.defaultSourceIds[
+                                                        ext.id
+                                                    ]
+                                            )
+                                        when (decision.destination) {
+                                            SourcesRowRouting
+                                                .Destination.CATALOGUE ->
+                                                decision.sourceId?.let {
+                                                    onOpenSource(ext.id, it)
+                                                } ?: onOpenExtension(ext.id)
+                                            SourcesRowRouting
+                                                .Destination.DETAILS ->
+                                                onOpenExtension(ext.id)
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (pair.size == 1) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+            }
+            // OPDS library servers (Novels side, as shipped).
+            if (isNovels && opdsServers.isNotEmpty()) {
+                item(key = "paper-explore-opds-head") {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 22.dp, bottom = 12.dp),
+                        verticalAlignment = Alignment.Bottom,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "Library servers",
+                            style = MaterialTheme.typography.titleLarge
+                                .copy(fontSize = 19.sp)
+                        )
+                        Text(
+                            "${opdsServers.size} shown",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                }
+                items(opdsServers, key = { "paper-opds-${it.id}" }) { server ->
+                    Surface(
+                        color = scheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(24.dp),
+                        shadowElevation = 2.dp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                            .clickable { onOpenOpdsServer(server) }
+                    ) {
+                        Row(
+                            Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement =
+                                Arrangement.spacedBy(12.dp)
+                        ) {
+                            EditorialAvatar(
+                                letter = server.name.trim()
+                                    .firstOrNull()?.uppercase() ?: "O",
+                                rotationIndex = 1
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    server.name,
+                                    style = MaterialTheme.typography
+                                        .titleSmall.copy(
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 15.sp
+                                        ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    server.baseUrl,
+                                    style = MaterialTheme.typography
+                                        .bodySmall,
+                                    color = scheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Icon(
+                                Icons.Filled.ChevronRight,
+                                contentDescription = null,
+                                tint = scheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+            // ── The doors (K10): add / store / manage ───────
+            item(key = "paper-explore-doors") {
+                Column(
+                    Modifier.padding(top = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    EditorialDoorRow(
+                        title = "Add a source",
+                        line = "Repositories, packs and links — " +
+                            "every way a source arrives.",
+                        onClick = onAddSource
+                    )
+                    EditorialDoorRow(
+                        title = "Add from link",
+                        line = "Paste a novel site's link and " +
+                            "Xreader works out the rest.",
+                        onClick = onAddFromLink
+                    )
+                    EditorialDoorRow(
+                        title = "Source store",
+                        line = "Browse and install source packages.",
+                        onClick = onOpenStore
+                    )
+                    if (!isNovels) {
+                        EditorialDoorRow(
+                            title = "Manga sources",
+                            line = "The Keiyoushi shelf — install " +
+                                "and update manga sources.",
+                            onClick = onOpenMangaSources
+                        )
+                    }
+                    EditorialDoorRow(
+                        title = "Manage sources",
+                        line = "Every source, its switch and " +
+                            "its health, in one place.",
+                        onClick = onOpenManageSources
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The copy's source card: 48dp serif-initial avatar on the
+ * three-container rotation, chevron, name, provenance line,
+ * and the meta row (language chip + real health word). */
+@Composable
+private fun EditorialSourceCard(
+    ext: InstalledExtension,
+    state: SourcesUiState,
+    rotationIndex: Int,
+    ratingBadge: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val scheme = MaterialTheme.colorScheme
+    val ids = ext.sourceIds.split(",")
+        .map { it.trim() }.filter { it.isNotBlank() }
+    val firstSource = ids.firstOrNull()
+    val record = firstSource?.let {
+        state.health[
+            app.xreader.data.extension.SourceHealthRecord.key(ext.id, it)
+        ]
+    }
+    val healthWord = record?.shortStateWord() ?: "Not checked yet"
+    val broken = ext.needsRepair || record?.state ==
+        app.xreader.data.extension.SourceHealthState.BROKEN
+    val languageLabel = ext.languages.split(",")
+        .firstOrNull()?.uppercase()?.takeIf { it.isNotBlank() }
+    Surface(
+        color = scheme.surfaceContainerLow,
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 2.dp,
+        modifier = modifier.clickable { onClick() }
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                EditorialAvatar(
+                    letter = ext.displayName.trim()
+                        .firstOrNull()?.uppercase() ?: "?",
+                    rotationIndex = rotationIndex
+                )
+                Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = scheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Text(
+                ext.displayName,
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 12.dp)
+            )
+            Text(
+                app.xreader.data.extension.SourceProvenance.label(ext),
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 11.sp
+                ),
+                color = scheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Row(
+                Modifier.padding(top = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (languageLabel != null) {
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(scheme.surfaceContainerHigh)
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.Language,
+                            contentDescription = null,
+                            tint = scheme.onSurfaceVariant,
+                            modifier = Modifier.size(11.dp)
+                        )
+                        Text(
+                            languageLabel,
+                            style = MaterialTheme.typography.labelSmall
+                                .copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 11.sp
+                                ),
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Text(
+                    healthWord,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 11.sp
+                    ),
+                    color = scheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (broken) {
+                Text(
+                    "Needs repair",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.error,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+            if (ratingBadge != null) {
+                Text(
+                    ratingBadge,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+/** The 48dp avatar: serif initial on the design's
+ * three-container rotation (primary → tertiary → secondary). */
+@Composable
+private fun EditorialAvatar(letter: String, rotationIndex: Int) {
+    val scheme = MaterialTheme.colorScheme
+    val (bg, fg) = when (rotationIndex % 3) {
+        0 -> scheme.primaryContainer to scheme.onPrimaryContainer
+        1 -> scheme.tertiaryContainer to scheme.onTertiaryContainer
+        else -> scheme.secondaryContainer to scheme.onSecondaryContainer
+    }
+    Box(
+        Modifier
+            .size(48.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(bg),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            letter,
+            style = MaterialTheme.typography.titleLarge.copy(
+                fontFamily = app.xreader.ui.theme.FrauncesSerif,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 22.sp
+            ),
+            color = fg
+        )
+    }
+}
+
+/** A full-width door row in the language (the Explore foot
+ * doors; the same form the Settings doors take). */
+@Composable
+private fun EditorialDoorRow(
+    title: String,
+    line: String,
+    onClick: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        color = scheme.surfaceContainerLow,
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+    ) {
+        Row(
+            Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp
+                    )
+                )
+                Text(
+                    line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = scheme.onSurfaceVariant
+            )
         }
     }
 }

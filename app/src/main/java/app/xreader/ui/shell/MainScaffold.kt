@@ -633,6 +633,32 @@ fun MainScaffold(
                     packViewModel = packViewModel
                 )
             }
+        } else if (designState.design == app.xreader.data.prefs.AppDesign.EDITORIAL) {
+            // Code 123 (S1): the Editorial shell — the floating
+            // pill nav of the approved copies at phone widths;
+            // the family rail (Editorial-dressed) from 600dp,
+            // the design drawing no rail of its own.
+            if (m3UseRail(designState, isM3RailLayout)) {
+                M3RailShell(
+                    navController, snackbar, appearance, container, onPhaseNote,
+                    libraryViewModel, downloadsViewModel, opdsViewModel,
+                    sourcesViewModel, linkAddViewModel, onAddBook,
+                    onExport = { book, kind -> pendingExport = book to kind },
+                    designState = designState,
+                    appUpdateViewModel = appUpdateViewModel,
+                    packViewModel = packViewModel
+                )
+            } else {
+                EditorialPhoneShell(
+                    navController, snackbar, appearance, container, onPhaseNote,
+                    libraryViewModel, downloadsViewModel, opdsViewModel,
+                    sourcesViewModel, linkAddViewModel, onAddBook,
+                    onExport = { book, kind -> pendingExport = book to kind },
+                    designState = designState,
+                    appUpdateViewModel = appUpdateViewModel,
+                    packViewModel = packViewModel
+                )
+            }
         } else if (isWideLayout) {
             RailShell(
                 navController, snackbar, appearance, container, onPhaseNote,
@@ -661,9 +687,13 @@ fun MainScaffold(
         // Code 122 (S36): under Material 3 the update card is
         // hosted in the Library flow instead — this overlay
         // host is Nocturne-only now. Nocturne's behaviour is
-        // exactly as before.
-        if (designState.design !=
-            app.xreader.data.prefs.AppDesign.MATERIAL3
+        // exactly as before. Code 123: Editorial hosts the
+        // card in its Library flow the same way (the copied
+        // composition has no slot for it — K12 — so the
+        // Editorial Library gives it the slot under its
+        // greeting, in the language).
+        if (designState.design ==
+            app.xreader.data.prefs.AppDesign.NOCTURNE
         ) {
             UpdateCardOverlay(
                 navController = navController,

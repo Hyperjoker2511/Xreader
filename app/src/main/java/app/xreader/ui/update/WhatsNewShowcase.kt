@@ -27,6 +27,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
@@ -184,6 +186,427 @@ fun WhatsNewReveal(
                 onTryDesign = onTryDesign,
                 onFinish = onFinish
             )
+        }
+    }
+}
+
+/**
+ * Code 123 (R39, re-pointed): the reveal for THIS design-
+ * carrying update — the Editorial design. Same mechanics as
+ * [WhatsNewReveal]: truly modal (a [Dialog]), its seen-record
+ * is [RevealPrefs] written only by its terminal actions, Skip
+ * on every card, and it never switches anyone automatically.
+ *
+ * It presents the design AS ITSELF — composed inside
+ * [app.xreader.ui.theme.EditorialThemeRoot] with the design
+ * forced to Editorial and the mode forced to LIGHT for this
+ * subtree only: the light paper face is the design as the
+ * owner approved it, page by page, and the reveal is where
+ * existing users meet it. (The stored design and mode are
+ * untouched unless Try is tapped; a user who tries Editorial
+ * gets its dark form too, from their own mode setting.)
+ *
+ * [onTryDesign] must switch the design to Editorial
+ * (DesignPrefs) and then finish; [onFinish] records the
+ * reveal seen and dismisses.
+ */
+@Composable
+fun WhatsNewRevealEditorial(
+    designState: DesignState,
+    onTryDesign: () -> Unit,
+    onFinish: () -> Unit
+) {
+    val previewState = remember(designState) {
+        designState.copy(
+            design = app.xreader.data.prefs.AppDesign.EDITORIAL,
+            themeMode = app.xreader.data.prefs.M3ThemeMode.LIGHT
+        )
+    }
+    Dialog(
+        onDismissRequest = onFinish,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false
+        )
+    ) {
+        app.xreader.ui.theme.EditorialThemeRoot(
+            design = previewState,
+            reduceMotion = false
+        ) {
+            EditorialRevealPager(
+                onTryDesign = onTryDesign,
+                onFinish = onFinish
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun EditorialRevealPager(
+    onTryDesign: () -> Unit,
+    onFinish: () -> Unit
+) {
+    val pagerState = rememberPagerState(pageCount = { 3 })
+    val scope = rememberCoroutineScope()
+    val lastPage = 2
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 16.dp)
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "What's new",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                // Skip on EVERY card, from the first (R39).
+                TextButton(onClick = onFinish) { Text("Skip") }
+            }
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = androidx.compose.foundation.layout
+                    .PaddingValues(vertical = 16.dp),
+                pageSpacing = 16.dp
+            ) { page ->
+                Card(
+                    shape = MaterialTheme.shapes.extraLarge,
+                    colors = CardDefaults.cardColors(
+                        containerColor =
+                            MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    when (page) {
+                        0 -> EditorialRevealFeature(
+                            title = "Paper & sage",
+                            body = "A new design for Xreader — warm " +
+                                "paper, a sage accent and a serif " +
+                                "voice, drawn around your books. " +
+                                "You are looking at it now.",
+                            demo = { EditorialLibraryDemo() }
+                        )
+                        1 -> EditorialRevealFeature(
+                            title = "Your books, front and centre",
+                            body = "In-progress books lead the " +
+                                "Library with your place on every " +
+                                "cover, and the book page carries " +
+                                "the book's own Contents.",
+                            demo = { EditorialBookDemo() }
+                        )
+                        else -> Column(
+                            Modifier
+                                .fillMaxSize()
+                                .padding(24.dp),
+                            verticalArrangement =
+                                Arrangement.spacedBy(12.dp),
+                            horizontalAlignment =
+                                Alignment.CenterHorizontally
+                        ) {
+                            Spacer(Modifier.weight(1f))
+                            Box(
+                                Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        MaterialTheme.colorScheme
+                                            .primaryContainer
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme
+                                        .onPrimaryContainer
+                                )
+                            }
+                            Text(
+                                "This is the new Editorial design.",
+                                style = MaterialTheme.typography
+                                    .headlineSmallEmphasized
+                            )
+                            Text(
+                                "Try it now, or keep the design " +
+                                    "you have. You can switch any " +
+                                    "time in Customise → Design — " +
+                                    "nothing changes unless you tap.",
+                                style = MaterialTheme.typography
+                                    .bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Button(
+                                onClick = onTryDesign,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Try Editorial")
+                            }
+                            FilledTonalButton(
+                                onClick = onFinish,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Keep mine")
+                            }
+                        }
+                    }
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (0..lastPage).forEach { index ->
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .background(
+                                    if (index ==
+                                        pagerState.currentPage
+                                    ) {
+                                        MaterialTheme.colorScheme
+                                            .primary
+                                    } else {
+                                        MaterialTheme.colorScheme
+                                            .surfaceContainerHigh
+                                    },
+                                    CircleShape
+                                )
+                        )
+                    }
+                }
+                if (pagerState.currentPage < lastPage) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                pagerState.animateScrollToPage(
+                                    pagerState.currentPage + 1
+                                )
+                            }
+                        }
+                    ) { Text("Next") }
+                } else {
+                    TextButton(onClick = onFinish) { Text("Done") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditorialRevealFeature(
+    title: String,
+    body: String,
+    demo: @Composable () -> Unit
+) {
+    Column(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .background(
+                    MaterialTheme.colorScheme.secondaryContainer
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            demo()
+        }
+        Column(
+            Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.headlineSmallEmphasized
+            )
+            Text(
+                body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** The reveal's Library miniature — the copied page's own
+ * atoms (search pill, serif headline, a Continue card) in
+ * miniature. A demo arrangement only; it navigates nothing. */
+@Composable
+private fun EditorialLibraryDemo() {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            shape = CircleShape,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp)
+        ) {
+            Row(
+                Modifier.padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    Icons.Filled.Menu, null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    "Search your library",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Text(
+            "Library",
+            style = MaterialTheme.typography.headlineMedium
+        )
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = MaterialTheme.shapes.large,
+            shadowElevation = 2.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    Modifier
+                        .size(width = 40.dp, height = 56.dp)
+                        .clip(MaterialTheme.shapes.medium)
+                        .background(
+                            MaterialTheme.colorScheme.tertiaryContainer
+                        )
+                )
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        "Continue reading",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { 0.63f },
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme
+                            .secondaryContainer,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        "63% · Chapter 214",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme
+                            .onSurfaceVariant
+                    )
+                }
+                Box(
+                    Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(
+                            MaterialTheme.colorScheme.primaryContainer
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.PlayArrow, null,
+                        tint = MaterialTheme.colorScheme
+                            .onPrimaryContainer,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The reveal's book-page miniature — the design's progress
+ * ring and its two tiles, in miniature. */
+@Composable
+private fun EditorialBookDemo() {
+    Row(
+        Modifier.padding(horizontal = 24.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Box(
+            Modifier.size(92.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.material3.CircularProgressIndicator(
+                progress = { 0.63f },
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme
+                    .secondaryContainer,
+                strokeWidth = 9.dp,
+                modifier = Modifier.size(92.dp)
+            )
+            Text(
+                "63%",
+                style = MaterialTheme.typography.titleLarge
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.size(width = 120.dp, height = 64.dp)
+            ) {
+                Box(
+                    Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Catch me up",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme
+                            .onPrimaryContainer
+                    )
+                }
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.size(width = 120.dp, height = 64.dp)
+            ) {
+                Box(
+                    Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Lore",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme
+                            .onTertiaryContainer
+                    )
+                }
+            }
         }
     }
 }

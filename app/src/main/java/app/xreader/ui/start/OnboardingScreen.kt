@@ -202,18 +202,22 @@ fun OnboardingScreen(
 }
 
 /**
- * The first-start ask (S38, code 121 form): "Pick your
- * design" — two M3 cards in scheme language. The Material 3
- * card is pre-selected (priming seeds the default; this page
- * only records the user's hand). The Nocturne card is TEXT
- * ONLY — its name and a one-line description in scheme
- * colours; its colours are never drawn and there is NO
- * violet miniature (trace T1). Beneath the cards, ONE colour
- * bar serves both designs: for Material 3 the pick seeds the
- * M3 scheme; for Nocturne it feeds that design's any-colour
- * generation (§5.2). Skip lives in the pager chrome around
- * this page and is always visible; skipping lands on
- * Material 3 + dynamic colour, opening on Library.
+ * The first-start ask (S38, code 121 form; three cards since
+ * code 123): "Pick your design" — three cards in the active
+ * scheme's language. The Editorial card is pre-selected
+ * (priming seeds the new-user default; this page only records
+ * the user's hand). The Nocturne card is TEXT ONLY — its name
+ * and a one-line description in scheme colours; its colours
+ * are never drawn and there is NO violet miniature (trace
+ * T1). Beneath the cards, ONE colour bar serves the two
+ * colour-following designs: for Material 3 the pick seeds
+ * the M3 scheme; for Nocturne it feeds that design's
+ * any-colour generation (§5.2). Editorial wears its own
+ * colours, so under an Editorial pick the bar gives way to
+ * one plain line saying so (the owner's colour ruling,
+ * 2026-11-24). Skip lives in the pager chrome around this
+ * page and is always visible; skipping lands on Editorial,
+ * opening on Library.
  */
 @Composable
 private fun DesignAskPage(
@@ -232,6 +236,8 @@ private fun DesignAskPage(
     var nocturnePicked by remember { mutableStateOf<Long?>(null) }
     val isM3 = designState.design ==
         app.xreader.data.prefs.AppDesign.MATERIAL3
+    val isEditorial = designState.design ==
+        app.xreader.data.prefs.AppDesign.EDITORIAL
     Column(
         Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center
@@ -253,6 +259,17 @@ private fun DesignAskPage(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             DesignAskCard(
+                name = "Editorial",
+                line = "Paper & sage — an editorial design in " +
+                    "its own colours, with a serif voice.",
+                selected = isEditorial,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                onPickDesign(
+                    app.xreader.data.prefs.AppDesign.EDITORIAL
+                )
+            }
+            DesignAskCard(
                 name = "Material 3",
                 line = "Google's design language. Colours from " +
                     "your phone, or any colour you pick.",
@@ -267,7 +284,8 @@ private fun DesignAskPage(
                 name = "Nocturne",
                 line = "A dark glass design with a violet " +
                     "accent, built around your library's covers.",
-                selected = !isM3,
+                selected = designState.design ==
+                    app.xreader.data.prefs.AppDesign.NOCTURNE,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 onPickDesign(
@@ -275,6 +293,17 @@ private fun DesignAskPage(
                 )
             }
         }
+        if (isEditorial) {
+            // Editorial's palette is fixed by the design — the
+            // honest line instead of a colour bar that would
+            // do nothing (the owner's colour ruling).
+            Text(
+                "Editorial wears its own colours — paper & " +
+                    "sage, in light and dark.",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 24.dp)
+            )
+        } else {
         Text(
             "Pick a colour — it applies to the design you chose.",
             style = MaterialTheme.typography.titleSmall,
@@ -321,6 +350,7 @@ private fun DesignAskPage(
             },
             modifier = Modifier.padding(top = 12.dp)
         )
+        }
         Text(
             "You can change all of this later in Customise.",
             style = MaterialTheme.typography.bodySmall,
