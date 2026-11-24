@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Shield
@@ -165,7 +166,7 @@ fun SourceStoreScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
-                androidx.compose.foundation.lazy.grid.items(
+                items(
                     state.repos.filter { it.id in state.changedRepos },
                     key = { "changed-${it.id}" },
                     span = {
@@ -231,7 +232,7 @@ fun SourceStoreScreen(
                         )
                     }
                 }
-                androidx.compose.foundation.lazy.grid.items(
+                items(
                     orderedRepos,
                     key = { "repo-${it.id}" }
                 ) { repo ->

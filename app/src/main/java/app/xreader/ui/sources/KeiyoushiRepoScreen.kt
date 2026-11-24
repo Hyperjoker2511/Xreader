@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -296,7 +297,7 @@ fun KeiyoushiRepoScreen(
                             )
                         }
                     } else {
-                        androidx.compose.foundation.lazy.grid.items(
+                        items(
                             searchResults,
                             key = { "keiyoushi-pkg-${it.packageName}" }
                         ) { row ->
@@ -332,7 +333,7 @@ fun KeiyoushiRepoScreen(
                                 ) { Text("Update all") }
                             }
                         }
-                        androidx.compose.foundation.lazy.grid.items(
+                        items(
                             updates,
                             key = { "keiyoushi-pkg-${it.packageName}" }
                         ) { row ->
@@ -355,7 +356,7 @@ fun KeiyoushiRepoScreen(
                                     .onSurfaceVariant
                             )
                         }
-                        androidx.compose.foundation.lazy.grid.items(
+                        items(
                             installed,
                             key = { "keiyoushi-pkg-${it.packageName}" }
                         ) { row ->
@@ -384,7 +385,7 @@ fun KeiyoushiRepoScreen(
                                     .onSurfaceVariant
                             )
                         }
-                        androidx.compose.foundation.lazy.grid.items(
+                        items(
                             langRows,
                             key = { "keiyoushi-pkg-${it.packageName}" }
                         ) { row ->

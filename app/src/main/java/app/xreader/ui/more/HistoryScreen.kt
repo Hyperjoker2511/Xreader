@@ -564,7 +564,6 @@ fun HistoryScreen(
  * most-recent-first), every action's effect, and the card's
  * own tap-to-open are unchanged.
  */
-@Composable
 /**
  * One History entry's rendering, shared by the flat list and
  * the By-day grouping so both forms render identical rows.

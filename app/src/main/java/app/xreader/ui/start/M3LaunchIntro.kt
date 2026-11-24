@@ -43,7 +43,7 @@ fun M3LaunchIntro(
         delay(1_200)
         dismissed = true
     }
-    val effects = MaterialTheme.motionScheme.defaultEffectsSpec()
+    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     AnimatedVisibility(
         visible = animationsEnabled && !dismissed,
         enter = fadeIn(effects),
