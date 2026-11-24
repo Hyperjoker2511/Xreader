@@ -50,8 +50,21 @@ enum class M3ColourStyle { FIDELITY, TONAL_SPOT, VIBRANT, EXPRESSIVE, CONTENT }
 enum class M3ThemeMode { DARK, LIGHT, FOLLOW_SYSTEM }
 
 /** Theme-level motion (§1.4): Expressive is the design's motion;
- * Standard is the reduced-motion scheme and a Customise choice. */
-enum class M3MotionChoice { EXPRESSIVE, STANDARD }
+ * Standard is the reduced-motion scheme and a Customise choice.
+ * REDUCED (owner approval A-121-2, 2026-11-24) is an
+ * OPTIONAL, user-picked setting for lower-end devices:
+ * lighter, cheaper motion for weak hardware. (That framing —
+ * optional, for lower devices, user-picked only, never
+ * auto-applied, never the default — is Muse's recommendation
+ * in answer to the owner's question of the same day, not an
+ * owner ruling.) It resolves to the same Standard motion
+ * scheme — whose spatial springs are near-critically damped
+ * (0.9) against Expressive's overshooting 0.6–0.8 — as an
+ * explicit third segment on the Motion control, beside the
+ * Reduce-motion gate. It is NEVER auto-applied by performance
+ * tier and NEVER the default: Expressive stays the default,
+ * and the user picks Reduced, on any device. */
+enum class M3MotionChoice { EXPRESSIVE, STANDARD, REDUCED }
 
 /** Tab label knob for the flexible bar (§2.11 Navigation). */
 enum class M3TabLabels { ALWAYS, SELECTED_ONLY }
@@ -134,6 +147,11 @@ data class DesignState(
     /** Colours the user saved from the picker ("Your seeds"). */
     val savedSeeds: List<Long> = emptyList(),
     val themeMode: M3ThemeMode = M3ThemeMode.DARK,
+    /** Owner approval A-121-4 (2026-11-24): AMOLED dark — an
+     * OPTION, never the default. When on, the DARK scheme's
+     * floor roles go true black in M3ThemeRoot; every other
+     * role stays the active scheme's own. Light unaffected. */
+    val m3AmoledDark: Boolean = false,
     val bookPageCoverColour: Boolean = true,
     // Navigation (§2.11).
     val tabLabels: M3TabLabels = M3TabLabels.ALWAYS,
@@ -265,6 +283,7 @@ class DesignPrefs(
         themeMode = DesignValidation.enumOr(
             this[KEY_THEME_MODE], M3ThemeMode.values(), M3ThemeMode.DARK
         ),
+        m3AmoledDark = this[KEY_AMOLED_DARK] ?: false,
         bookPageCoverColour = this[KEY_BOOK_COVER] ?: true,
         tabLabels = DesignValidation.enumOr(
             this[KEY_TAB_LABELS], M3TabLabels.values(), M3TabLabels.ALWAYS
@@ -413,6 +432,9 @@ class DesignPrefs(
     suspend fun setThemeMode(value: M3ThemeMode) =
         store.edit { it[KEY_THEME_MODE] = value.name }
 
+    suspend fun setM3AmoledDark(value: Boolean) =
+        store.edit { it[KEY_AMOLED_DARK] = value }
+
     suspend fun setBookPageCoverColour(value: Boolean) =
         store.edit { it[KEY_BOOK_COVER] = value }
 
@@ -539,6 +561,7 @@ class DesignPrefs(
         val KEY_COLOUR_STYLE = stringPreferencesKey("design.m3.colourStyle")
         val KEY_SAVED_SEEDS = stringPreferencesKey("design.m3.savedSeeds")
         val KEY_THEME_MODE = stringPreferencesKey("design.m3.themeMode")
+        val KEY_AMOLED_DARK = booleanPreferencesKey("design.m3.amoledDark")
         val KEY_BOOK_COVER = booleanPreferencesKey("design.m3.bookPageCoverColour")
         val KEY_TAB_LABELS = stringPreferencesKey("design.m3.tabLabels")
         val KEY_NAV_FORM = stringPreferencesKey("design.m3.navForm")

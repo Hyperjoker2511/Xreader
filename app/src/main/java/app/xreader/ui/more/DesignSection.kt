@@ -418,14 +418,19 @@ fun DesignPageContent(
         label = "Motion",
         options = listOf(
             M3MotionChoice.EXPRESSIVE to "Expressive",
-            M3MotionChoice.STANDARD to "Standard"
+            M3MotionChoice.STANDARD to "Standard",
+            M3MotionChoice.REDUCED to "Reduced"
         ),
         selected = state.motionChoice,
         onPick = viewModel::setM3MotionChoice
     )
     Text(
-        "Standard is the reduced-motion scheme; Reduce " +
-            "motion (Accessibility & motion) also selects it.",
+        "Standard and Reduced both use the Standard motion " +
+            "scheme — no spring overshoot. Reduced is lighter " +
+            "motion, for slower phones; you pick it yourself, " +
+            "it is never switched on for you. Reduce motion " +
+            "(Accessibility & motion) also selects the " +
+            "Standard scheme.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
@@ -752,10 +757,28 @@ fun M3CustomisePage(
                 label = "Motion",
                 options = listOf(
                     M3MotionChoice.EXPRESSIVE to "Expressive",
-                    M3MotionChoice.STANDARD to "Standard"
+                    M3MotionChoice.STANDARD to "Standard",
+                    M3MotionChoice.REDUCED to "Reduced"
                 ),
                 selected = design.motionChoice,
                 onPick = viewModel::setM3MotionChoice
+            )
+            Text(
+                "Reduced is lighter motion, for slower " +
+                    "phones. It is your pick — never switched " +
+                    "on automatically.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
+            // A-121-4 (owner approval, 2026-11-24): AMOLED
+            // dark — an option in the Design group, off by
+            // default; a colour treatment only.
+            M3SwitchRow(
+                label = "AMOLED dark",
+                description = "Pure black backgrounds in the dark theme, for AMOLED screens. Off by default.",
+                checked = design.m3AmoledDark,
+                onChange = viewModel::setM3AmoledDark
             )
             M3SegmentedRow(
                 label = "Navigation labels",

@@ -135,11 +135,28 @@ fun M3ThemeRoot(
 ) {
     val context = LocalContext.current
     val dark = m3DarkTheme(design)
-    val darkColors = remember(context, design) { resolveM3ColorScheme(context, design, true) }
+    val resolvedDark = remember(context, design) { resolveM3ColorScheme(context, design, true) }
+    // A-121-4 (owner approval, 2026-11-24): AMOLED dark — an
+    // option, off by default. The transform applies to the
+    // dark scheme BEFORE both consumers (the theme itself and
+    // the AppScheme helpers), so every M3 surface sees the
+    // same floored scheme.
+    val darkColors = remember(resolvedDark, design.m3AmoledDark) {
+        if (design.m3AmoledDark) resolvedDark.withAmoledFloor() else resolvedDark
+    }
     val lightColors = remember(context, design) { resolveM3ColorScheme(context, design, false) }
     val colors = if (dark) darkColors else lightColors
+    // A-121-2 (owner approval, 2026-11-24): REDUCED resolves to
+    // the Standard motion scheme, like STANDARD and the
+    // Reduce-motion gate. Verified against the staged 1.5.0
+    // MotionScheme sources: Expressive's spatial springs are
+    // under-damped (damping 0.6–0.8 — they overshoot);
+    // Standard's are 0.9 spatial / 1.0 effects — the
+    // no-overshoot scheme of the two.
     val motionScheme = if (
-        design.motionChoice == M3MotionChoice.STANDARD || reduceMotion
+        design.motionChoice == M3MotionChoice.STANDARD ||
+        design.motionChoice == M3MotionChoice.REDUCED ||
+        reduceMotion
     ) {
         MotionScheme.standard()
     } else {
@@ -160,6 +177,31 @@ fun M3ThemeRoot(
         )
     }
 }
+
+/**
+ * A-121-4's floor transform: the dark scheme's floor goes
+ * true black — background, surface, surfaceDim and the
+ * surface-container ladder's floor roles (Lowest / Low /
+ * Container) become pure #000000. High and Highest keep a
+ * minimal step (#0A0A0A / #121212) so stacked containers stay
+ * legible against the black floor — the ladder's only
+ * concession, and the choice recorded for this build. EVERY
+ * other role — primary/secondary/tertiary, the on-roles,
+ * error, inverse, surfaceBright/Variant — stays the active
+ * scheme's own, whichever door produced it (dynamic, picked
+ * or palette). A colour treatment only: nothing Nocturne
+ * (no glass, no violet) rides with it.
+ */
+private fun ColorScheme.withAmoledFloor(): ColorScheme = copy(
+    background = Color.Black,
+    surface = Color.Black,
+    surfaceDim = Color.Black,
+    surfaceContainerLowest = Color.Black,
+    surfaceContainerLow = Color.Black,
+    surfaceContainer = Color.Black,
+    surfaceContainerHigh = Color(0xFF0A0A0A),
+    surfaceContainerHighest = Color(0xFF121212)
+)
 
 /** True when the active design (as read from [LocalDesignState])
  * is Material 3 — the branch condition surfaces use. */

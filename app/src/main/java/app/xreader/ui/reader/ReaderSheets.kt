@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -55,10 +56,12 @@ import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,6 +88,9 @@ import app.xreader.domain.reader.ReaderConfig
 import app.xreader.domain.reader.ReaderMode
 import app.xreader.domain.reader.SleepMode
 import app.xreader.domain.reader.Soundscape
+import app.xreader.ui.common.CHAPTER_RANGE_SIZE
+import app.xreader.ui.common.CHAPTER_RANGE_THRESHOLD
+import app.xreader.ui.common.ChapterRangeBar
 import app.xreader.ui.common.ElasticSlider
 import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.NocturneSwitch
@@ -93,6 +99,7 @@ import app.xreader.ui.common.RowItem
 import app.xreader.ui.common.SectionHeader
 import app.xreader.domain.reader.PagedDirection
 import app.xreader.domain.reader.TapZoneLayout
+import kotlinx.coroutines.launch
 import app.xreader.ui.theme.Contrast
 import app.xreader.ui.theme.ReaderPalettes
 import app.xreader.ui.theme.maxContrast
@@ -2046,8 +2053,54 @@ fun TocSheet(
                 text = { Text("Highlights (${highlights.size})") }
             )
         }
+        // A-121-1 (owner approval, 2026-11-24): in the M3
+        // branch only, a Contents list longer than 100 rows
+        // gains the range jump bar at its head. The rows
+        // counted are the rows shown — the book's own TOC
+        // entries when it has them, else the chapter rows.
+        // Nocturne and short lists render exactly as before
+        // (the tab-0 list state is simply hoisted; its
+        // behaviour is unchanged).
+        val contentsRowCount = if (tocEntries.isNotEmpty()) {
+            tocEntries.size
+        } else {
+            chapters.size
+        }
+        val contentsGrouped =
+            designState.design ==
+                app.xreader.data.prefs.AppDesign.MATERIAL3 &&
+                contentsRowCount > CHAPTER_RANGE_THRESHOLD
+        val contentsListState = rememberLazyListState()
+        val contentsScope = rememberCoroutineScope()
+        val contentsRange by remember(contentsRowCount) {
+            derivedStateOf {
+                (contentsListState.firstVisibleItemIndex /
+                    CHAPTER_RANGE_SIZE).coerceIn(
+                    0,
+                    ((contentsRowCount - 1) /
+                        CHAPTER_RANGE_SIZE).coerceAtLeast(0)
+                )
+            }
+        }
         when (tab) {
-            0 -> LazyColumn(Modifier.heightIn(max = 480.dp)) {
+            0 -> Column {
+                if (contentsGrouped) {
+                    ChapterRangeBar(
+                        totalCount = contentsRowCount,
+                        selectedRange = contentsRange,
+                        onSelectRange = { range ->
+                            contentsScope.launch {
+                                contentsListState.scrollToItem(
+                                    range * CHAPTER_RANGE_SIZE
+                                )
+                            }
+                        }
+                    )
+                }
+                LazyColumn(
+                    state = contentsListState,
+                    modifier = Modifier.heightIn(max = 480.dp)
+                ) {
                 // Micro-build M: the chapter's AI summary no
                 // longer rides at the top of Contents (the
                 // owner's ruling — Contents is the book's own
@@ -2221,6 +2274,7 @@ fun TocSheet(
                             )
                         }
                     }
+                }
                 }
                 }
             }

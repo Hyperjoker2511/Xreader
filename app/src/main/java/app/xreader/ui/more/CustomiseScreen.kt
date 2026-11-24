@@ -468,6 +468,10 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { container.designPrefs.setMotionChoice(value) }
     }
 
+    fun setM3AmoledDark(value: Boolean) {
+        viewModelScope.launch { container.designPrefs.setM3AmoledDark(value) }
+    }
+
     fun setLaunchIntro(value: Boolean) {
         viewModelScope.launch { container.designPrefs.setLaunchIntro(value) }
     }

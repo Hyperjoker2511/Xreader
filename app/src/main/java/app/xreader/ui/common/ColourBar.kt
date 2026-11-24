@@ -56,7 +56,16 @@ import androidx.compose.ui.unit.dp
  *     colour exists (API 31+) and only in scheme mode;
  *  2. a row of **seed swatches** — plain colour circles in the
  *     MCU seed hues (red, orange, yellow, green, teal, blue,
- *     indigo, purple, pink, brown), colours only, NO names;
+ *     indigo, purple, pink, brown), colours only, NO names.
+ *     This row IS the palette-presets feature (owner approval
+ *     A-121-3, 2026-11-24): a swatch tap generates the full
+ *     scheme from that seed (Fidelity), exactly like a picked
+ *     colour — presets are an intentional, named part of the
+ *     bar in BOTH its scheme-mode homes (Customise → Design
+ *     and the first-start ask, which both call this component
+ *     in scheme mode). Colours only, never a scheme system,
+ *     and never the default — the default stays dynamic →
+ *     baseline → picked;
  *  3. a **Pick any colour** swatch (rainbow ring + plus)
  *     opening the S37 colour picker dialog ([ColourPickerDialog],
  *     in this file).

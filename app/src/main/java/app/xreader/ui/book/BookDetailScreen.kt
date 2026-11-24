@@ -33,6 +33,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -95,6 +96,8 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -117,9 +120,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import app.xreader.data.db.Chapter
 import app.xreader.data.db.DownloadState
 import app.xreader.data.library.ReadingStatus
+import app.xreader.ui.common.CHAPTER_RANGE_SIZE
+import app.xreader.ui.common.CHAPTER_RANGE_THRESHOLD
+import app.xreader.ui.common.ChapterRangeBar
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.GlassSheetActionRow
@@ -3044,6 +3051,24 @@ fun BookDetailScreen(
     if (allChaptersSheetOpen && isM3Book) {
         val sheetMaxChapterIndex = state.chapters
             .maxOfOrNull { it.index } ?: -1
+        // A-121-1 (owner approval, 2026-11-24): very long
+        // chapter lists (>100) gain the range jump bar at the
+        // list's head. The selected range follows the list's
+        // first visible row; a chip tap jumps the list.
+        val allChaptersListState = rememberLazyListState()
+        val allChaptersScope = rememberCoroutineScope()
+        val chaptersGrouped =
+            displayChapters.size > CHAPTER_RANGE_THRESHOLD
+        val selectedChapterRange by remember(displayChapters.size) {
+            derivedStateOf {
+                (allChaptersListState.firstVisibleItemIndex /
+                    CHAPTER_RANGE_SIZE).coerceIn(
+                    0,
+                    ((displayChapters.size - 1) /
+                        CHAPTER_RANGE_SIZE).coerceAtLeast(0)
+                )
+            }
+        }
         androidx.compose.material3.ModalBottomSheet(
             onDismissRequest = { allChaptersSheetOpen = false },
             sheetState = androidx.compose.material3
@@ -3057,10 +3082,24 @@ fun BookDetailScreen(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
+                if (chaptersGrouped) {
+                    ChapterRangeBar(
+                        totalCount = displayChapters.size,
+                        selectedRange = selectedChapterRange,
+                        onSelectRange = { range ->
+                            allChaptersScope.launch {
+                                allChaptersListState.scrollToItem(
+                                    range * CHAPTER_RANGE_SIZE
+                                )
+                            }
+                        }
+                    )
+                }
                 androidx.compose.foundation.lazy.LazyColumn(
                     Modifier
                         .fillMaxWidth()
                         .heightIn(max = 560.dp),
+                    state = allChaptersListState,
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     itemsIndexed(
