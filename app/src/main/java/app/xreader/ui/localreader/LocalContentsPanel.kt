@@ -207,7 +207,7 @@ internal fun TabbedContentsPanel(
                 if (tab in tabPositions.indices) {
                     TabRowDefaults.SecondaryIndicator(
                         Modifier.tabIndicatorOffset(tabPositions[tab]),
-                        color = ReaderViolet
+                        color = readerChromeAccent()
                     )
                 }
             }
@@ -215,14 +215,14 @@ internal fun TabbedContentsPanel(
             Tab(
                 selected = tab == 0,
                 onClick = { tab = 0 },
-                selectedContentColor = ReaderViolet,
+                selectedContentColor = readerChromeAccent(),
                 unselectedContentColor = ReaderMutedText,
                 text = { Text("Chapters") }
             )
             Tab(
                 selected = tab == 1,
                 onClick = { tab = 1 },
-                selectedContentColor = ReaderViolet,
+                selectedContentColor = readerChromeAccent(),
                 unselectedContentColor = ReaderMutedText,
                 text = { Text("Bookmarks") }
             )

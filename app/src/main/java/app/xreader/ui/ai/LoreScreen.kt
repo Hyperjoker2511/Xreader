@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Translate
@@ -267,6 +269,22 @@ private fun LoreTab(
     onArt: (LoreEntity) -> Unit,
     onDelete: (LoreEntity) -> Unit
 ) {
+    // Code 120 completion (R11): the M3 lore view knob — card
+    // grid (the design default) or list, both below. Under
+    // Nocturne the shipped card column after this branch
+    // renders exactly as before and the knob is never read.
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    if (designState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        when (designState.loreView) {
+            app.xreader.data.prefs.M3ListView.CARD_GRID ->
+                LoreGridTab(state, onBuild, onEdit, onAdd, onArt, onDelete)
+            app.xreader.data.prefs.M3ListView.LIST ->
+                LoreListTab(state, onBuild, onEdit, onAdd, onArt, onDelete)
+        }
+        return
+    }
     LazyColumn(
         Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -732,4 +750,313 @@ private fun TermEditor(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+// ────────────────────────────────────────────────────────────────
+// Code 120 completion (R11) — the lore tab's Material 3 forms:
+// the card grid (the design default) and the list. Both carry
+// the shipped actions and facts; Nocturne never reaches them.
+// ────────────────────────────────────────────────────────────────
+
+/** The lore tab's action block — the explainer, the Build /
+ * Add pills and the build spinner — shared by the two M3
+ * forms. (The Nocturne column keeps its own inline copy.) */
+@Composable
+private fun LoreActionsBlock(
+    state: LoreUiState,
+    onBuild: () -> Unit,
+    onAdd: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!state.hasKey) {
+            Text(
+                "LoreKeeper reads chapters with your AI engine and remembers the " +
+                    "people, places and terms. Add your free key in More → " +
+                    "Providers & keys to switch it on — you can also add " +
+                    "entries by hand below.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PrimaryPill(
+                text = when {
+                    state.building -> state.buildProgress.ifBlank { "Reading…" }
+                    else -> "Build lore from my chapters"
+                },
+                onClick = onBuild,
+                enabled = state.hasKey && !state.building,
+                modifier = Modifier.weight(1f)
+            )
+            PrimaryPill(
+                text = "Add by hand",
+                enabled = true,
+                onClick = onAdd,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        if (state.building) {
+            CircularProgressIndicator()
+        }
+    }
+}
+
+@Composable
+private fun LoreEmptyState() {
+    KitEmptyState(
+        icon = Icons.Filled.AutoStories,
+        message = "No lore yet. Once chapters are read or downloaded, " +
+            "LoreKeeper remembers who everyone is — names, factions, " +
+            "places, terms."
+    )
+}
+
+/** The remove confirm, identical words in every form. */
+@Composable
+private fun LoreRemoveDialog(
+    entity: LoreEntity,
+    onDismiss: () -> Unit,
+    onDelete: (LoreEntity) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Remove “${entity.name}”?") },
+        text = {
+            Text("It will also be removed from your other device on the next sync.")
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onDismiss()
+                    onDelete(entity)
+                }
+            ) { Text("Remove") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Keep") }
+        }
+    )
+}
+
+/** R11 card grid: entities two to a row as compact cards —
+ * name, type, description, first-seen line, and the Generate
+ * art / Remove doors. Tap opens the editor, as shipped. */
+@Composable
+private fun LoreGridTab(
+    state: LoreUiState,
+    onBuild: () -> Unit,
+    onEdit: (LoreEntity) -> Unit,
+    onAdd: () -> Unit,
+    onArt: (LoreEntity) -> Unit,
+    onDelete: (LoreEntity) -> Unit
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier.fillMaxSize(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(
+            bottom = bottomContentPadding(
+                LocalUiMetrics.current, dockVisible = false
+            )
+        )
+    ) {
+        item(
+            key = "actions",
+            span = {
+                androidx.compose.foundation.lazy.grid
+                    .GridItemSpan(maxLineSpan)
+            }
+        ) {
+            LoreActionsBlock(state, onBuild, onAdd)
+        }
+        if (state.entities.isEmpty()) {
+            item(
+                key = "empty",
+                span = {
+                    androidx.compose.foundation.lazy.grid
+                        .GridItemSpan(maxLineSpan)
+                }
+            ) {
+                LoreEmptyState()
+            }
+        }
+        items(state.entities, key = { "lore-${it.id}" }) { entity ->
+            var confirmDelete by remember { mutableStateOf(false) }
+            GlassCard(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = { onEdit(entity) }
+            ) {
+                Text(
+                    entity.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style
+                        .TextOverflow.Ellipsis
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(top = 6.dp)
+                ) {
+                    NocturneChip(
+                        label = entity.type.label(),
+                        selected = false,
+                        dotColor = MaterialTheme.colorScheme.tertiary,
+                        onClick = null
+                    )
+                    if (entity.userLocked) {
+                        NocturneChip(
+                            label = "Your edit",
+                            selected = false,
+                            dotColor = MaterialTheme.colorScheme.secondary,
+                            onClick = null
+                        )
+                    }
+                }
+                if (entity.description.isNotBlank()) {
+                    Text(
+                        entity.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = androidx.compose.ui.text.style
+                            .TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+                Text(
+                    "First seen in chapter ${entity.firstChapterIndex + 1}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                QuickActionTile(
+                    icon = Icons.Filled.Brush,
+                    label = if (state.artBusyFor == entity.id) {
+                        "Painting…"
+                    } else {
+                        "Generate art"
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    active = state.artBusyFor == entity.id,
+                    onClick = {
+                        if (state.artBusyFor == null) onArt(entity)
+                    }
+                )
+                TextButton(onClick = { confirmDelete = true }) {
+                    Text("Remove")
+                }
+            }
+            if (confirmDelete) {
+                LoreRemoveDialog(
+                    entity = entity,
+                    onDismiss = { confirmDelete = false },
+                    onDelete = onDelete
+                )
+            }
+        }
+    }
+}
+
+/** R11 list: entities as compact rows — name + type +
+ * one-line description, with the art and remove doors as
+ * icon buttons on the row. Tap opens the editor. */
+@Composable
+private fun LoreListTab(
+    state: LoreUiState,
+    onBuild: () -> Unit,
+    onEdit: (LoreEntity) -> Unit,
+    onAdd: () -> Unit,
+    onArt: (LoreEntity) -> Unit,
+    onDelete: (LoreEntity) -> Unit
+) {
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(
+            bottom = bottomContentPadding(
+                LocalUiMetrics.current, dockVisible = false
+            )
+        )
+    ) {
+        item(key = "actions") {
+            LoreActionsBlock(state, onBuild, onAdd)
+        }
+        if (state.entities.isEmpty()) {
+            item(key = "empty") {
+                LoreEmptyState()
+            }
+        }
+        items(state.entities, key = { "lore-${it.id}" }) { entity ->
+            var confirmDelete by remember { mutableStateOf(false) }
+            GlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .animateItem(placementSpec = listPlacementSpec()),
+                onClick = { onEdit(entity) },
+                contentPadding = PaddingValues(
+                    horizontal = 14.dp, vertical = 10.dp
+                )
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            entity.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style
+                                .TextOverflow.Ellipsis
+                        )
+                        Text(
+                            listOfNotNull(
+                                entity.type.label(),
+                                entity.description
+                                    .takeIf { it.isNotBlank() }
+                            ).joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style
+                                .TextOverflow.Ellipsis
+                        )
+                    }
+                    if (state.artBusyFor == entity.id) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        IconButton(
+                            onClick = {
+                                if (state.artBusyFor == null) {
+                                    onArt(entity)
+                                }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Filled.Brush,
+                                contentDescription = "Generate art"
+                            )
+                        }
+                    }
+                    IconButton(onClick = { confirmDelete = true }) {
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = "Remove"
+                        )
+                    }
+                }
+            }
+            if (confirmDelete) {
+                LoreRemoveDialog(
+                    entity = entity,
+                    onDismiss = { confirmDelete = false },
+                    onDelete = onDelete
+                )
+            }
+        }
+    }
 }

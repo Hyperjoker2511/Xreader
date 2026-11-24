@@ -137,6 +137,16 @@ class MainActivity : FragmentActivity() {
         setContent {
             val appearance by container.appearancePrefs.state
                 .collectAsStateWithLifecycle(initialValue = AppearanceState())
+            // Code 120: the design state rides beside appearance —
+            // the theme branches on it, the first-start ask writes
+            // it, and the M3 launch intro + the intro's own
+            // Show/Skip knob (design §2.11 Advanced) read it. An
+            // existing install's value is whatever priming
+            // recorded (U10): Nocturne, exactly as found.
+            val designState by container.designPrefs.state
+                .collectAsStateWithLifecycle(
+                    initialValue = app.xreader.data.prefs.DesignState()
+                )
             val onboardingDone by container.onboardingPrefs.completed
                 .collectAsStateWithLifecycle(initialValue = null)
             val darkTheme = when (appearance.themeMode) {
@@ -177,7 +187,8 @@ class MainActivity : FragmentActivity() {
             XreaderTheme(
                 darkTheme = darkTheme,
                 appearance = appearance,
-                hazeReady = hazeReady
+                hazeReady = hazeReady,
+                design = designState
             ) {
                 when {
                     showRecovery -> RecoveryScreen(
@@ -200,6 +211,45 @@ class MainActivity : FragmentActivity() {
                     onboardingDone == false -> OnboardingScreen(
                         onDone = {
                             activityScope.launch { container.onboardingPrefs.markCompleted() }
+                        },
+                        // Code 120 (S38): the first-start design &
+                        // colour ask — shown inside the onboarding
+                        // pager, fresh installs only (this branch
+                        // is unreachable once onboarding completed,
+                        // and priming has already seeded the M3
+                        // default, so skipping the ask changes
+                        // nothing).
+                        designState = designState,
+                        onPickDesign = { picked ->
+                            activityScope.launch {
+                                container.designPrefs.setDesign(picked)
+                            }
+                        },
+                        onPickDynamicColour = {
+                            activityScope.launch {
+                                container.designPrefs.setColourSource(
+                                    app.xreader.data.prefs.M3ColourSource.DYNAMIC
+                                )
+                            }
+                        },
+                        onPickSeedColour = { argb ->
+                            activityScope.launch {
+                                container.designPrefs.setColourSource(
+                                    app.xreader.data.prefs.M3ColourSource.PICKED
+                                )
+                                container.designPrefs.setSeed(argb)
+                            }
+                        },
+                        // Code 120 completion (S38): the
+                        // Nocturne card's accent choice — the
+                        // preset scheme names through the one
+                        // explicit scheme-choice write.
+                        nocturneScheme = appearance.colourScheme,
+                        onPickNocturneScheme = { schemeName ->
+                            activityScope.launch {
+                                container.appearancePrefs
+                                    .setColourScheme(schemeName)
+                            }
                         }
                     )
                     // v1.2.0 (audit finding 7 / S4): first paint is
@@ -227,11 +277,87 @@ class MainActivity : FragmentActivity() {
                         // never gated on it; it dismisses on the
                         // Library-ready signal above and is hard-
                         // capped at 1,000 ms by its controller.
-                        LaunchIntro(
-                            libraryReady = libraryReady,
-                            animationsEnabled = motionEnabled &&
-                                launchMotionTier != SpringMotionEngine.MotionTier.Minimal
-                        )
+                        if (designState.design ==
+                            app.xreader.data.prefs.AppDesign.MATERIAL3
+                        ) {
+                            // Code 120 (S2): in the Material 3
+                            // design the launch intro is the plain
+                            // spec surface — wordmark on the scheme
+                            // surface, dismissed by an effect fade
+                            // when Library is ready. The spring
+                            // intro is Nocturne's and stays
+                            // Nocturne's. The intro's own Show/Skip
+                            // knob (§2.11 Advanced) gates both.
+                            app.xreader.ui.start.M3LaunchIntro(
+                                libraryReady = libraryReady,
+                                animationsEnabled = motionEnabled &&
+                                    launchMotionTier !=
+                                        SpringMotionEngine.MotionTier.Minimal &&
+                                    designState.launchIntro
+                            )
+                        } else {
+                            LaunchIntro(
+                                libraryReady = libraryReady,
+                                animationsEnabled = motionEnabled &&
+                                    launchMotionTier !=
+                                        SpringMotionEngine.MotionTier.Minimal &&
+                                    designState.launchIntro
+                            )
+                        }
+                        // Code 120 completion (§2.9 + the owner's
+                        // standing What's-New rule): on an update,
+                        // EVERY user gets this update's showcase
+                        // once — a pager of feature cards, each
+                        // with its own animation, skippable from
+                        // the first card. It wears the ACTIVE
+                        // design (existing users see it in
+                        // Nocturne: it announces the new design,
+                        // it never switches anyone). Shown when
+                        // the stored last-seen code is behind the
+                        // installed one; a genuinely fresh install
+                        // (nothing seen AND no database file at
+                        // first run) never sees it for its first
+                        // version. Finishing or skipping records
+                        // the version seen, so it never re-shows
+                        // for this version. The initial
+                        // Int.MAX_VALUE read means it can never
+                        // flash before the stored value lands.
+                        val whatsNewSeen by container.gamePrefs
+                            .whatsNewSeenCode
+                            .collectAsStateWithLifecycle(
+                                initialValue = Int.MAX_VALUE
+                            )
+                        val installedCode = remember {
+                            runCatching {
+                                @Suppress("DEPRECATION")
+                                container.applicationContext
+                                    .packageManager.getPackageInfo(
+                                        container.applicationContext
+                                            .packageName, 0
+                                    ).versionCode
+                            }.getOrDefault(0)
+                        }
+                        var showcaseDismissed by remember {
+                            mutableStateOf(false)
+                        }
+                        if (!showcaseDismissed &&
+                            installedCode > 0 &&
+                            whatsNewSeen < installedCode &&
+                            (whatsNewSeen > 0 ||
+                                container.databaseFileExisted)
+                        ) {
+                            app.xreader.ui.update.WhatsNewShowcase(
+                                onFinish = {
+                                    showcaseDismissed = true
+                                    activityScope.launch {
+                                        container.gamePrefs
+                                            .setWhatsNewSeen(
+                                                installedCode
+                                            )
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }

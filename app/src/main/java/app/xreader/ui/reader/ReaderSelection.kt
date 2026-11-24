@@ -92,10 +92,19 @@ fun highlightTokenForTint(tintArgb: Int): String =
         else -> "amber"
     }
 
-/** The stored token's bar tint (see [highlightTokenForTint]). */
+/** The stored token's bar tint (see [highlightTokenForTint]).
+ * The sixth token, "scheme" (code 120 F1), names the active
+ * design's own default tint: it is written only under
+ * Material 3 and resolved against the design tint at the two
+ * read sites (the DocumentReader wash and this host's
+ * existing-episode seed). This pure mapping keeps the shipped
+ * violet as its fallback, so wherever the design tint IS the
+ * violet — Nocturne — a "scheme" row renders exactly the
+ * shipped value. */
 fun highlightTintForToken(token: String): Int =
     when (token) {
         "violet" -> HIGHLIGHT_TINT_ARGB
+        "scheme" -> HIGHLIGHT_TINT_ARGB
         "sage" -> 0xFF99AA77.toInt()
         "orange" -> 0xFFFF9200.toInt()
         "pink" -> 0xFFCC99C0.toInt()
@@ -253,12 +262,24 @@ fun ReaderSelectionMenuHost(
     LaunchedEffect(open) {
         if (!open) barState = SelectionBarState()
     }
+    // Code 120 F1: the design default, hoisted in composition
+    // because the seeding effect below is not composable. A
+    // "scheme" row seeds with it, so the colour row's active
+    // ring lands on circle 1 — the same value the bar applied.
+    // Under Nocturne the resolver returns HIGHLIGHT_TINT_ARGB,
+    // the value highlightTintForToken's "scheme" fallback
+    // yields, so the seed is the shipped one.
+    val designDefaultTintArgb = defaultHighlightTintArgb()
     LaunchedEffect(existingHighlight?.id, selection != null) {
         barState = when {
             existingHighlight != null -> SelectionBarState(
                 existingHighlight = true,
                 activeTintArgb =
-                    highlightTintForToken(existingHighlight.color)
+                    if (existingHighlight.color == "scheme") {
+                        designDefaultTintArgb
+                    } else {
+                        highlightTintForToken(existingHighlight.color)
+                    }
             )
             selection != null -> SelectionBarState()
             else -> barState

@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.DesignServices
 import androidx.compose.material.icons.filled.DirectionsRun
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Explore
@@ -155,7 +156,12 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
          * local CBZ/CBR opens — true = the manga reader
          * (Komikku, the default), false = the book reader.
          * One global choice; no per-book override. */
-        val cbzOpensInKomikku: Boolean = true
+        val cbzOpensInKomikku: Boolean = true,
+        /** Code 120: the whole-app design state (the Design
+         * door's page + the Material 3 knobs). A separate prefs
+         * owner — Nocturne's fields above never read it. */
+        val design: app.xreader.data.prefs.DesignState =
+            app.xreader.data.prefs.DesignState()
     )
 
     /** FIX-18: the Komikku manga reader's GLOBAL defaults,
@@ -173,7 +179,8 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         container.sourcePrefs.contentVisibility,
         container.sourcePrefs.keiyoushiPlayerEnabled,
         container.sourcePrefs.dohEnabled,
-        container.readerPrefs.cbzOpensInKomikku
+        container.readerPrefs.cbzOpensInKomikku,
+        container.designPrefs.state
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         UiState(
@@ -189,7 +196,8 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
                 as app.xreader.data.extension.ContentVisibility,
             keiyoushiPlayerEnabled = values[7] as Boolean,
             dohEnabled = values[8] as Boolean,
-            cbzOpensInKomikku = values[9] as Boolean
+            cbzOpensInKomikku = values[9] as Boolean,
+            design = values[10] as app.xreader.data.prefs.DesignState
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
@@ -313,6 +321,138 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
 
     fun setColourScheme(name: String) {
         viewModelScope.launch { container.appearancePrefs.setColourScheme(name) }
+    }
+
+    // ── Code 120: the design switch + the Material 3 knobs ──
+    // Each writes DesignPrefs only; Nocturne's state is never
+    // touched by a Material 3 knob, nor the reverse.
+
+    fun setDesign(value: app.xreader.data.prefs.AppDesign) {
+        viewModelScope.launch { container.designPrefs.setDesign(value) }
+    }
+
+    fun setM3ColourSource(value: app.xreader.data.prefs.M3ColourSource) {
+        viewModelScope.launch { container.designPrefs.setColourSource(value) }
+    }
+
+    fun setM3Seed(argb: Long) {
+        viewModelScope.launch { container.designPrefs.setSeed(argb) }
+    }
+
+    fun setM3ColourStyle(value: app.xreader.data.prefs.M3ColourStyle) {
+        viewModelScope.launch { container.designPrefs.setColourStyle(value) }
+    }
+
+    fun setM3ThemeMode(value: app.xreader.data.prefs.M3ThemeMode) {
+        viewModelScope.launch { container.designPrefs.setThemeMode(value) }
+    }
+
+    fun setM3BookPageCoverColour(value: Boolean) {
+        viewModelScope.launch { container.designPrefs.setBookPageCoverColour(value) }
+    }
+
+    fun setM3TabLabels(value: app.xreader.data.prefs.M3TabLabels) {
+        viewModelScope.launch { container.designPrefs.setTabLabels(value) }
+    }
+
+    fun setM3NavForm(value: app.xreader.data.prefs.M3NavForm) {
+        viewModelScope.launch { container.designPrefs.setNavForm(value) }
+    }
+
+    fun setM3LibraryContinueRail(value: Boolean) {
+        viewModelScope.launch { container.designPrefs.setLibraryContinueRail(value) }
+    }
+
+    fun setM3LibraryProgressOnCovers(value: Boolean) {
+        viewModelScope.launch { container.designPrefs.setLibraryProgressOnCovers(value) }
+    }
+
+    fun setM3LibraryFilterRow(value: Boolean) {
+        viewModelScope.launch { container.designPrefs.setLibraryFilterRow(value) }
+    }
+
+    fun setM3BookHeader(value: app.xreader.data.prefs.M3BookHeader) {
+        viewModelScope.launch { container.designPrefs.setBookHeader(value) }
+    }
+
+    fun setM3BookAction(value: app.xreader.data.prefs.M3BookAction) {
+        viewModelScope.launch { container.designPrefs.setBookAction(value) }
+    }
+
+    fun setM3HistoryGrouping(value: app.xreader.data.prefs.M3HistoryGrouping) {
+        viewModelScope.launch { container.designPrefs.setHistoryGrouping(value) }
+    }
+
+    fun setM3HistoryDensity(value: app.xreader.data.prefs.M3DensityChoice) {
+        viewModelScope.launch { container.designPrefs.setHistoryDensity(value) }
+    }
+
+    fun setM3DownloadsSort(value: app.xreader.data.prefs.M3DownloadsSort) {
+        viewModelScope.launch { container.designPrefs.setDownloadsSort(value) }
+    }
+
+    fun setM3DownloadsChapterSize(value: Boolean) {
+        viewModelScope.launch { container.designPrefs.setDownloadsChapterSize(value) }
+    }
+
+    fun setM3ReaderChrome(value: app.xreader.data.prefs.M3ReaderChrome) {
+        viewModelScope.launch { container.designPrefs.setReaderChrome(value) }
+    }
+
+    fun setM3SelectionColourRow(value: Boolean) {
+        viewModelScope.launch { container.designPrefs.setSelectionColourRow(value) }
+    }
+
+    fun setM3ContentsTab(value: app.xreader.data.prefs.M3ContentsTab) {
+        viewModelScope.launch { container.designPrefs.setContentsTab(value) }
+    }
+
+    fun setM3ExploreSide(value: app.xreader.data.prefs.M3ExploreSide) {
+        viewModelScope.launch { container.designPrefs.setExploreSide(value) }
+    }
+
+    fun setM3ExploreGrouping(value: Boolean) {
+        viewModelScope.launch { container.designPrefs.setExploreGrouping(value) }
+    }
+
+    fun setM3ExploreDensity(value: app.xreader.data.prefs.M3DensityChoice) {
+        viewModelScope.launch { container.designPrefs.setExploreDensity(value) }
+    }
+
+    fun setM3ExploreStoreView(value: app.xreader.data.prefs.M3ListView) {
+        viewModelScope.launch { container.designPrefs.setExploreStoreView(value) }
+    }
+
+    fun setM3ExploreRepoSort(value: app.xreader.data.prefs.M3RepoSort) {
+        viewModelScope.launch { container.designPrefs.setExploreRepoSort(value) }
+    }
+
+    fun setM3ProfileHeaderCard(value: Boolean) {
+        viewModelScope.launch { container.designPrefs.setProfileHeaderCard(value) }
+    }
+
+    fun setM3ProfileDoorsList(value: Boolean) {
+        viewModelScope.launch { container.designPrefs.setProfileDoorsList(value) }
+    }
+
+    fun setM3VocabSort(value: app.xreader.data.prefs.M3VocabSort) {
+        viewModelScope.launch { container.designPrefs.setVocabSort(value) }
+    }
+
+    fun setM3LoreView(value: app.xreader.data.prefs.M3ListView) {
+        viewModelScope.launch { container.designPrefs.setLoreView(value) }
+    }
+
+    fun setM3GalleryColumns(value: app.xreader.data.prefs.M3GalleryColumns) {
+        viewModelScope.launch { container.designPrefs.setGalleryColumns(value) }
+    }
+
+    fun setM3MotionChoice(value: app.xreader.data.prefs.M3MotionChoice) {
+        viewModelScope.launch { container.designPrefs.setMotionChoice(value) }
+    }
+
+    fun setLaunchIntro(value: Boolean) {
+        viewModelScope.launch { container.designPrefs.setLaunchIntro(value) }
     }
 
     fun setThemeMode(mode: app.xreader.data.prefs.ThemeMode) {
@@ -738,6 +878,21 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
     // reader's Komikku defaults, Storage's sizes, Advanced's
     // lone reset — the door carries no line.
     val doors = listOf(
+        // Code 120 (design §2.11): the Design door stands at
+        // the top — it holds the whole-app design switch and,
+        // under Material 3, that design's knobs grouped by
+        // their map sections.
+        CustomiseDoor(
+            icon = Icons.Filled.DesignServices,
+            title = "Design",
+            status = if (state.design.design ==
+                app.xreader.data.prefs.AppDesign.MATERIAL3
+            ) {
+                "Material 3"
+            } else {
+                "Nocturne"
+            }
+        ),
         CustomiseDoor(
             icon = Icons.Filled.Palette,
             title = "Colour theme",
@@ -830,6 +985,11 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
     // Each door's page body: the section's existing content,
     // verbatim — the controls move, they are not rewritten.
     val pageContents = listOf<@Composable () -> Unit>(
+        {
+            // Code 120: the Design page (DesignSection.kt) —
+            // the switch + the Material 3 knobs.
+            DesignPageContent(state = state.design, viewModel = viewModel)
+        },
         {
             Text(
                 "The colours the whole app wears.",

@@ -31,8 +31,23 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun LoadingState(
     whatIsHappening: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Code 120 (Q11 + A3): in the Material 3 design a long job
+     * (a probe, an install) shows the wavy line; a short wait
+     * shows the experimental LoadingIndicator (the §3 U7
+     * opt-in). Nocturne ignores this — its spinner is unchanged. */
+    longJob: Boolean = false
 ) {
+    if (app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        M3LoadingState(
+            whatIsHappening = whatIsHappening,
+            modifier = modifier,
+            longJob = longJob
+        )
+        return
+    }
     GlassCard(modifier = modifier.fillMaxWidth()) {
         Column(
             Modifier.fillMaxWidth(),
@@ -43,6 +58,59 @@ fun LoadingState(
                 modifier = Modifier.size(28.dp),
                 color = MaterialTheme.colorScheme.primary
             )
+            Text(
+                whatIsHappening,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                "Still loading…",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+/**
+ * The Material 3 design's loading state (design §2.10 S40):
+ * a tonal card (surfaceContainer, medium shape), the label in
+ * the type scale, and the wait indicator per Q11 — the
+ * experimental LoadingIndicator for short waits (the build's
+ * single experimental opt-in, §3 U7/E2), the wavy line for
+ * long jobs.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun M3LoadingState(
+    whatIsHappening: String,
+    modifier: Modifier = Modifier,
+    longJob: Boolean = false
+) {
+    androidx.compose.material3.Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .androidx.compose.foundation.layout.padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            if (longJob) {
+                androidx.compose.material3.LinearWavyProgressIndicator(
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                androidx.compose.material3.LoadingIndicator(
+                    modifier = Modifier.size(48.dp)
+                )
+            }
             Text(
                 whatIsHappening,
                 style = MaterialTheme.typography.bodyMedium,

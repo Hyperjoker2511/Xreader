@@ -3,7 +3,8 @@ import java.time.format.DateTimeFormatter
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    // Code 120 (M3 build): AGP 9's built-in Kotlin replaces the
+    // kotlin-android plugin (removed per the AGP 9 migration guide).
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
@@ -11,10 +12,18 @@ plugins {
 
 android {
     namespace = "app.xreader"
-    compileSdk = 36
+    // Code 120 (M3 build, design §3 U1): compileSdk 37.1 — the
+    // Compose BOM 2026.11.01 (material3 1.5.0) requirement. AGP
+    // 9.3 is the minimum AGP line whose maximum API level covers
+    // 37.1 (9.2 caps at 37.0). targetSdk stays 36: U1 leaves
+    // targetSdk untouched by this design (targeting 37 is a
+    // separate deliberate step with its own behaviour gates).
+    compileSdk = 37
+    compileSdkMinor = 1
     // AGP 8.7.3's lint-vital crashes parsing this sandbox SDK's build-tools
     // 37.0.0 revision ("For input string: 37.0") — pin the 36.0.0 tools,
-    // same as the sibling ReTranslate build (see BUILD-ENV.md).
+    // same as the sibling ReTranslate build (see BUILD-ENV.md). The pin
+    // is kept under AGP 9.3, where 36.0.0 is also the default.
     buildToolsVersion = "36.0.0"
 
     lint {
@@ -27,8 +36,8 @@ android {
         applicationId = "app.xreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = 119
-        versionName = "1.6.2-mr23-diag"
+        versionCode = 120
+        versionName = "1.6.2-mr24-diag"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -96,9 +105,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // Code 120: the AGP 8-era kotlinOptions block is gone with
+    // built-in Kotlin — jvmTarget defaults to
+    // compileOptions.targetCompatibility (17) per the AGP 9
+    // migration guide.
     buildFeatures {
         compose = true
         buildConfig = true

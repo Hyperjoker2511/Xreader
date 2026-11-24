@@ -74,6 +74,13 @@ fun RepoSourcesScreen(
     builtIn: Boolean = false
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Code 120 completion (M1): the M3 design's store-view and
+    // repository-sort knobs. Under Nocturne neither is read:
+    // the list below keeps the shipped novel-led ORDER and the
+    // shipped list form.
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val isM3Repo = designState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
     // Manga programme (M3): the Keiyoushi repository renders
     // its own catalogue screen (KeiyoushiIndex.rows — the true
     // Ready / Needs-the-manga-conversion states), not the
@@ -237,16 +244,49 @@ fun RepoSourcesScreen(
     val allRows = entries.map { it.row }
     val showNovelToggle = !builtIn &&
         RepoSourceFilter.hasNonNovelRows(allRows)
-    val visibleEntries = entries
-        .filter { entry ->
-            RepoSourceFilter.matches(
-                entry.row, query, language,
-                novelsOnly = showNovelToggle && novelsOnly
-            )
+    val filteredEntries = entries.filter { entry ->
+        RepoSourceFilter.matches(
+            entry.row, query, language,
+            novelsOnly = showNovelToggle && novelsOnly
+        )
+    }
+    // Code 120 completion (M1): the M3 repository sort — A–Z
+    // is a plain name sort; Recently added stands the
+    // installed entries first, newest install first (the
+    // extensions' own installedAt), the rest A–Z (catalogue
+    // entries carry no install time of their own). Under
+    // Nocturne the shipped novel-led ORDER stands.
+    val visibleEntries = if (isM3Repo) {
+        when (designState.exploreRepoSort) {
+            app.xreader.data.prefs.M3RepoSort.A_Z ->
+                filteredEntries.sortedWith(
+                    compareBy { it.row.name.lowercase() }
+                )
+            app.xreader.data.prefs.M3RepoSort.RECENTLY_ADDED -> {
+                val installedAtByPkg = state.extensions
+                    .associate { it.packageId to it.installedAt }
+                val installedAtById = state.extensions
+                    .associate { it.id to it.installedAt }
+                fun entryInstalledAt(entry: Entry): Long =
+                    when {
+                        entry.pkg != null ->
+                            installedAtByPkg[entry.pkg.pkg]
+                        entry.extensionId != null ->
+                            installedAtById[entry.extensionId]
+                        else -> null
+                    } ?: Long.MIN_VALUE
+                filteredEntries.sortedWith(
+                    compareByDescending<Entry> {
+                        entryInstalledAt(it)
+                    }.thenBy { it.row.name.lowercase() }
+                )
+            }
         }
-        .sortedWith { a, b ->
+    } else {
+        filteredEntries.sortedWith { a, b ->
             RepoSourceFilter.ORDER.compare(a.row, b.row)
         }
+    }
     val visible = visibleEntries.map { it.row }
 
     Column(
@@ -294,6 +334,285 @@ fun RepoSourcesScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(10.dp))
+        if (isM3Repo &&
+            designState.exploreStoreView ==
+                app.xreader.data.prefs.M3ListView.CARD_GRID
+        ) {
+            // Code 120 completion (M1): the card-grid form of
+            // this shelf — the same search and filters above
+            // the grid (composed in the column, not the grid),
+            // the same entries as compact cards, the same Add /
+            // Added / Uninstall actions. The list form below is
+            // the shipped one, untouched.
+            SearchCapsule(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = "Search this repository…",
+                modifier = Modifier.fillMaxWidth()
+            )
+            val gridLangs = RepoSourceFilter.languages(allRows)
+            if (gridLangs.size > 1 || showNovelToggle) {
+                Spacer(Modifier.height(8.dp))
+                var gridLanguageMenuOpen by remember {
+                    mutableStateOf(false)
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (showNovelToggle) {
+                        NocturneChip(
+                            label = "Novels only",
+                            selected = novelsOnly,
+                            onClick = { novelsOnly = !novelsOnly }
+                        )
+                    }
+                    if (gridLangs.size > 1) {
+                        androidx.compose.foundation.layout.Box {
+                            NocturneChip(
+                                label = "Language: " +
+                                    (language?.uppercase()
+                                        ?: "All") + " ▾",
+                                selected = language != null,
+                                onClick = {
+                                    gridLanguageMenuOpen = true
+                                }
+                            )
+                            androidx.compose.material3.DropdownMenu(
+                                expanded = gridLanguageMenuOpen,
+                                onDismissRequest = {
+                                    gridLanguageMenuOpen = false
+                                }
+                            ) {
+                                androidx.compose.material3
+                                    .DropdownMenuItem(
+                                        text = { Text("All languages") },
+                                        onClick = {
+                                            language = null
+                                            gridLanguageMenuOpen = false
+                                        }
+                                    )
+                                gridLangs.forEach { lang ->
+                                    androidx.compose.material3
+                                        .DropdownMenuItem(
+                                            text = {
+                                                Text(lang.uppercase())
+                                            },
+                                            onClick = {
+                                                language = lang
+                                                gridLanguageMenuOpen =
+                                                    false
+                                            }
+                                        )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                columns = androidx.compose.foundation.lazy.grid
+                    .GridCells.Fixed(2),
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(
+                    bottom = bottomContentPadding(
+                        LocalUiMetrics.current, dockVisible = false
+                    )
+                )
+            ) {
+                if (entries.isEmpty()) {
+                    item(
+                        span = {
+                            androidx.compose.foundation.lazy.grid
+                                .GridItemSpan(maxLineSpan)
+                        }
+                    ) {
+                        KitEmptyState(
+                            icon = Icons.Filled.Storefront,
+                            message = if (
+                                repo != null && foreign == null
+                            ) {
+                                "No source list is loaded for this " +
+                                    "repository yet — check for " +
+                                    "updates and its sources will " +
+                                    "appear here."
+                            } else {
+                                "Nothing here yet."
+                            },
+                            actionText = if (
+                                repo != null && foreign == null
+                            ) {
+                                "Check for updates"
+                            } else {
+                                null
+                            },
+                            onAction = if (
+                                repo != null && foreign == null
+                            ) {
+                                { viewModel.refreshRepo(repo) }
+                            } else {
+                                null
+                            }
+                        )
+                    }
+                }
+                androidx.compose.foundation.lazy.grid.items(
+                    visibleEntries,
+                    key = { "repo-row-${it.id}" }
+                ) { entry ->
+                    GlassCard(
+                        onClick = {
+                            entry.extensionId?.let {
+                                onOpenExtension(it)
+                            }
+                        },
+                        contentPadding = PaddingValues(
+                            horizontal = 12.dp, vertical = 10.dp
+                        )
+                    ) {
+                        Row(
+                            verticalAlignment =
+                                Alignment.CenterVertically,
+                            horizontalArrangement =
+                                Arrangement.spacedBy(10.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme
+                                    .primary.copy(alpha = 0.18f),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Column(
+                                    verticalArrangement =
+                                        Arrangement.Center,
+                                    horizontalAlignment =
+                                        Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        entry.row.name.firstOrNull()
+                                            ?.uppercase() ?: "?",
+                                        style = MaterialTheme
+                                            .typography.titleSmall,
+                                        color = primaryTextColor()
+                                    )
+                                }
+                            }
+                            Text(
+                                entry.row.name,
+                                style = MaterialTheme.typography
+                                    .bodyLarge,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Text(
+                            listOfNotNull(
+                                entry.row.lang
+                                    .takeIf { it.isNotBlank() }
+                                    ?.uppercase(),
+                                entry.row.domain
+                                    .takeIf { it.isNotBlank() },
+                                entry.badge
+                            ).joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        androidx.compose.foundation.layout.Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                        ) {
+                            when {
+                                entry.added && entry.pkg != null ->
+                                    Row(
+                                        verticalAlignment =
+                                            Alignment.CenterVertically,
+                                        horizontalArrangement =
+                                            Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            "Added ✓",
+                                            style = MaterialTheme
+                                                .typography.labelLarge,
+                                            color = MaterialTheme
+                                                .colorScheme.secondary
+                                        )
+                                        TextButton(
+                                            onClick = {
+                                                installedByPkg[
+                                                    entry.pkg.pkg
+                                                ]?.let {
+                                                    viewModel
+                                                        .uninstallExtension(
+                                                            it
+                                                        )
+                                                }
+                                            },
+                                            enabled = !state.busy
+                                        ) { Text("Uninstall") }
+                                    }
+                                entry.added -> Text(
+                                    "Added ✓",
+                                    style = MaterialTheme.typography
+                                        .labelLarge,
+                                    color = MaterialTheme.colorScheme
+                                        .secondary
+                                )
+                                entry.pkg != null -> PrimaryPill(
+                                    text = "Add",
+                                    onClick = {
+                                        pendingInstall = entry.pkg
+                                    },
+                                    enabled = !state.busy
+                                )
+                                entry.site != null -> PrimaryPill(
+                                    text = "Add",
+                                    onClick = {
+                                        val site = entry.site
+                                        if (app.xreader.data.extension
+                                                .FamilyTemplates
+                                                .hasTemplate(site.family)
+                                        ) {
+                                            viewModel
+                                                .installFamilySource(site)
+                                        } else {
+                                            viewModel
+                                                .createSourceFromSite(site)
+                                        }
+                                    },
+                                    enabled = !state.busy
+                                )
+                            }
+                        }
+                    }
+                }
+                if (entries.isNotEmpty() &&
+                    visibleEntries.isEmpty()
+                ) {
+                    item(
+                        span = {
+                            androidx.compose.foundation.lazy.grid
+                                .GridItemSpan(maxLineSpan)
+                        }
+                    ) {
+                        KitEmptyState(
+                            icon = Icons.Filled.Storefront,
+                            message = "Nothing in this repository " +
+                                "matches that search."
+                        )
+                    }
+                }
+            }
+        } else {
         LazyColumn(
             Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -539,6 +858,7 @@ fun RepoSourcesScreen(
                     )
                 }
             }
+        }
         }
     }
 

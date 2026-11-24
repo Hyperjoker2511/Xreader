@@ -66,6 +66,13 @@ fun SourceStoreScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var pendingRepoRemoval by remember { mutableStateOf<ExtensionRepo?>(null) }
+    // Code 120 completion (M1): the M3 store-view knob — the
+    // repository cards as a card grid under Material 3. Under
+    // Nocturne (and at the List view) the shipped column below
+    // renders exactly as before.
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val isM3Store = designState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
 
     // v1.3.3 (V132-CHECK 9, scope S7e): the built-in sources
     // appear ONCE — as the friendly card below — never ALSO
@@ -130,6 +137,133 @@ fun SourceStoreScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(14.dp))
+        if (isM3Store &&
+            designState.exploreStoreView ==
+                app.xreader.data.prefs.M3ListView.CARD_GRID
+        ) {
+            // The card-grid form: the same content — warnings
+            // and the pack span the full width (their actions
+            // need the room), repositories stand two to a row.
+            androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                columns = androidx.compose.foundation.lazy.grid
+                    .GridCells.Fixed(2),
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = androidx.compose.foundation.layout
+                    .PaddingValues(bottom = bottomContentPadding(LocalUiMetrics.current, dockVisible = false))
+            ) {
+                item(
+                    span = {
+                        androidx.compose.foundation.lazy.grid
+                            .GridItemSpan(maxLineSpan)
+                    }
+                ) {
+                    PrimaryPill(
+                        text = "Add repository",
+                        onClick = onAddRepo,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                androidx.compose.foundation.lazy.grid.items(
+                    state.repos.filter { it.id in state.changedRepos },
+                    key = { "changed-${it.id}" },
+                    span = {
+                        androidx.compose.foundation.lazy.grid
+                            .GridItemSpan(maxLineSpan)
+                    }
+                ) { repo ->
+                    ChangedRepoCard(
+                        repo = repo,
+                        onAccept = { viewModel.acceptChangedIndex(repo) },
+                        onDismiss = {
+                            viewModel.dismissChangedIndex(repo)
+                        },
+                        modifier = Modifier.animateItem(
+                            placementSpec = listPlacementSpec()
+                        )
+                    )
+                }
+                item(key = "repo-builtin") {
+                    GlassCard(
+                        onClick = onOpenBuiltIn,
+                        modifier = Modifier.animateItem(
+                            placementSpec = listPlacementSpec()
+                        )
+                    ) {
+                        Text(
+                            "Built-in sources",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = primaryTextColor()
+                        )
+                        Text(
+                            "$builtInCount sources · Ships with " +
+                                "the app — always up to date",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                }
+                if (packViewModel != null) {
+                    item(
+                        key = "repo-pack",
+                        span = {
+                            androidx.compose.foundation.lazy.grid
+                                .GridItemSpan(maxLineSpan)
+                        }
+                    ) {
+                        ProviderPackCard(packViewModel)
+                    }
+                }
+                if (orderedRepos.isEmpty()) {
+                    item(
+                        span = {
+                            androidx.compose.foundation.lazy.grid
+                                .GridItemSpan(maxLineSpan)
+                        }
+                    ) {
+                        KitEmptyState(
+                            icon = Icons.Filled.Storefront,
+                            message = "No repositories added yet. " +
+                                "Add one and its sources will " +
+                                "appear here."
+                        )
+                    }
+                }
+                androidx.compose.foundation.lazy.grid.items(
+                    orderedRepos,
+                    key = { "repo-${it.id}" }
+                ) { repo ->
+                    RepoCardGrid(
+                        repo = repo,
+                        sourceCount = sourceCount(repo),
+                        pinned = repo.id in state.pinnedRepoIds,
+                        busy = state.busy,
+                        onOpen = { onOpenRepo(repo.id) },
+                        onTogglePin = {
+                            viewModel.setRepoPinned(
+                                repo.id,
+                                repo.id !in state.pinnedRepoIds
+                            )
+                        },
+                        onRefresh = { viewModel.refreshRepo(repo) },
+                        onRemove = { pendingRepoRemoval = repo },
+                        modifier = Modifier.animateItem(
+                            placementSpec = listPlacementSpec()
+                        )
+                    )
+                }
+                item(
+                    span = {
+                        androidx.compose.foundation.lazy.grid
+                            .GridItemSpan(maxLineSpan)
+                    }
+                ) {
+                    StoreSafetyLine()
+                }
+            }
+        } else {
         LazyColumn(
             Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -332,6 +466,7 @@ fun SourceStoreScreen(
                 }
             }
         }
+        }
     }
 
     pendingRepoRemoval?.let { repo ->
@@ -355,6 +490,136 @@ fun SourceStoreScreen(
                     Text("Cancel")
                 }
             }
+        )
+    }
+}
+
+/**
+ * Code 120 completion: the changed-index warning card (§5.5
+ * banner), shared by the store's list and card-grid forms —
+ * the same words and the same two doors in both.
+ */
+@Composable
+private fun ChangedRepoCard(
+    repo: ExtensionRepo,
+    onAccept: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    GlassCard(modifier) {
+        Text(
+            "“${repo.name}” changed its list",
+            style = MaterialTheme.typography.titleMedium
+        )
+        Text(
+            "The repository's list no longer matches " +
+                "the fingerprint from when you added " +
+                "it. That can be a normal update — or " +
+                "a sign the repository was taken over. " +
+                "Only accept if you trust it.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            PrimaryPill(
+                text = "Accept the new list",
+                onClick = onAccept,
+                modifier = Modifier.fillMaxWidth()
+            )
+            GhostPill(
+                text = "Not now",
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+/**
+ * Code 120 completion: one repository as a card-grid cell —
+ * the list card's facts stacked (name, count · checked line,
+ * address) with its doors (Pin / Check for updates / Remove)
+ * on a wrapping row, so no action is lost in the grid form.
+ * The link repository keeps its shipped exemption: no address
+ * line and no Check/Remove doors.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun RepoCardGrid(
+    repo: ExtensionRepo,
+    sourceCount: Int,
+    pinned: Boolean,
+    busy: Boolean,
+    onOpen: () -> Unit,
+    onTogglePin: () -> Unit,
+    onRefresh: () -> Unit,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isLinkRepo = repo.indexUrl == RepoManager.LINK_REPO_URL
+    GlassCard(onClick = onOpen, modifier = modifier) {
+        Text(
+            repo.name,
+            style = MaterialTheme.typography.titleMedium,
+            color = primaryTextColor(),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            listOfNotNull(
+                "$sourceCount sources",
+                checkedLine(repo.lastFetchedAt)
+                    .takeIf { it.isNotBlank() }
+            ).joinToString(" · "),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (!isLinkRepo) {
+            Text(
+                repo.indexUrl,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            TextButton(onClick = onTogglePin) {
+                Text(if (pinned) "📌 Pinned" else "Pin")
+            }
+            if (!isLinkRepo) {
+                TextButton(onClick = onRefresh, enabled = !busy) {
+                    Text("Check for updates")
+                }
+                TextButton(onClick = onRemove) { Text("Remove") }
+            }
+        }
+    }
+}
+
+/** The store's safety line, shared by both forms. */
+@Composable
+private fun StoreSafetyLine() {
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(
+            Icons.Filled.Shield,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.secondary,
+            modifier = Modifier.size(20.dp)
+        )
+        Text(
+            "Sources can only open the sites you allow.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

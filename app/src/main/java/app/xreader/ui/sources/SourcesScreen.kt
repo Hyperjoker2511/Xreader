@@ -118,6 +118,38 @@ fun SourcesScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val searchState by searchViewModel.state.collectAsStateWithLifecycle()
+    // Code 120 completion (§2.11 Explore + M1): the Material 3
+    // design's Explore knobs. The landing side writes the SAME
+    // remembered side switch the Library uses (the two tabs
+    // mirror one switch — the shipped rule), applied when this
+    // tab composes under Material 3; Last used leaves the
+    // switch exactly where the user left it. Grouping and
+    // density reshape the list below. Under Nocturne none of
+    // this is read and the tab renders exactly as shipped.
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val isM3Explore = designState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    androidx.compose.runtime.LaunchedEffect(
+        isM3Explore, designState.exploreSide
+    ) {
+        if (isM3Explore) {
+            when (designState.exploreSide) {
+                app.xreader.data.prefs.M3ExploreSide.NOVELS ->
+                    viewModel.setLibrarySide(
+                        app.xreader.data.extension.MediaKind.TEXT
+                    )
+                app.xreader.data.prefs.M3ExploreSide.MANGA ->
+                    viewModel.setLibrarySide(
+                        app.xreader.data.extension.MediaKind.MANGA
+                    )
+                app.xreader.data.prefs.M3ExploreSide.LAST_USED ->
+                    Unit
+            }
+        }
+    }
+    val exploreCompact = isM3Explore &&
+        designState.exploreDensity ==
+            app.xreader.data.prefs.M3DensityChoice.COMPACT
     // v1.5.9 (Finding 6): returning here from a Details page
     // may carry a fresh remembered pick — re-resolve the
     // browsing defaults so a multi-source row's next tap opens
@@ -265,7 +297,9 @@ fun SourcesScreen(
             }
         )
         if (state.busy) {
-            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+            app.xreader.ui.common.DesignLinearProgressIndeterminate(
+                Modifier.fillMaxWidth().padding(top = 8.dp)
+            )
         }
         Spacer(Modifier.height(12.dp))
         // M3: the Novels | Manga switch — the Library's own
@@ -867,59 +901,61 @@ fun SourcesScreen(
                     )
                 }
             }
-            items(sideExtensions, key = { "ext-${it.id}" }) { ext ->
-                val firstSource = ext.sourceIds.split(",")
-                    .firstOrNull()?.trim()?.takeIf { it.isNotBlank() }
-                val record = firstSource?.let {
-                    state.health[SourceHealthRecord.key(ext.id, it)]
-                }
-                SourceRow(
-                    ext = ext,
-                    healthRecord = record,
-                    ratingBadge = ratingBadgeOf(ext),
-                    sessionWord = firstSource?.let {
-                        state.sessionWords[
-                            SourceHealthRecord.key(ext.id, it)
-                        ]
+            if (isM3Explore && designState.exploreGrouping) {
+                // Code 120 completion (M1 grouping): the same
+                // rows, stood in their provenance groups —
+                // Built-in (the bundled.* packages), Repos
+                // (repo-installed), Link-added (link.*); the
+                // packageId prefixes are the provenance record
+                // RepoManager writes. Order inside a group is
+                // the shipped order; OPDS rows keep their place
+                // after the groups, as shipped.
+                val groupedSources = listOf(
+                    "Built-in" to sideExtensions.filter {
+                        it.packageId.startsWith("bundled.")
                     },
-                    hasUpdate = state.updates[ext.packageId] != null,
-                    hasPending = state.pendings.containsKey(ext.packageId),
-                    addedByYou = ext.id in state.addedByYouIds,
-                    onOpen = {
-                        // v1.5.9 (Finding 6): a multi-source
-                        // row opens its DEFAULT instance's
-                        // catalogue directly — the same door
-                        // single-source packages always had.
-                        // Details (with the labelled instance
-                        // switcher) is the fallback only when
-                        // no default could be resolved.
-                        val decision = SourcesRowRouting.decide(
-                            sourceIds = ext.sourceIds.split(",")
-                                .map { it.trim() }
-                                .filter { it.isNotBlank() },
-                            defaultSourceId =
-                                state.defaultSourceIds[ext.id]
+                    "Repos" to sideExtensions.filter {
+                        !it.packageId.startsWith("bundled.") &&
+                            !it.packageId.startsWith("link.")
+                    },
+                    "Link-added" to sideExtensions.filter {
+                        it.packageId.startsWith("link.")
+                    }
+                ).filter { it.second.isNotEmpty() }
+                groupedSources.forEach { (groupTitle, groupExts) ->
+                    item(key = "src-group-$groupTitle") {
+                        SectionHeader(
+                            title = groupTitle,
+                            modifier = Modifier.padding(top = 4.dp)
                         )
-                        when (decision.destination) {
-                            SourcesRowRouting.Destination.CATALOGUE ->
-                                // v1.5.10 (B2): null-safe read —
-                                // the pre-fix !! could throw a
-                                // KotlinNullPointerException on
-                                // the Main thread when a decision
-                                // carried no source id; a missing
-                                // id keeps the Details route.
-                                decision.sourceId?.let { sourceId ->
-                                    onOpenSource(ext.id, sourceId)
-                                } ?: onOpenExtension(ext.id)
-                            SourcesRowRouting.Destination.DETAILS ->
-                                onOpenExtension(ext.id)
+                    }
+                    sourceRowItems(
+                        exts = groupExts,
+                        state = state,
+                        ratingBadgeOf = ::ratingBadgeOf,
+                        compact = exploreCompact,
+                        onOpenSource = onOpenSource,
+                        onOpenExtension = onOpenExtension,
+                        onUpdateFor = { ext ->
+                            state.updates[ext.packageId]?.let {
+                                viewModel.applyUpdate(it)
+                            }
                         }
-                    },
-                    onDetails = { onOpenExtension(ext.id) },
-                    onUpdate = {
-                        state.updates[ext.packageId]?.let { viewModel.applyUpdate(it) }
-                    },
-                    modifier = Modifier.animateItem(placementSpec = listPlacementSpec())
+                    )
+                }
+            } else {
+                sourceRowItems(
+                    exts = sideExtensions,
+                    state = state,
+                    ratingBadgeOf = ::ratingBadgeOf,
+                    compact = exploreCompact,
+                    onOpenSource = onOpenSource,
+                    onOpenExtension = onOpenExtension,
+                    onUpdateFor = { ext ->
+                        state.updates[ext.packageId]?.let {
+                            viewModel.applyUpdate(it)
+                        }
+                    }
                 )
             }
             // OPDS servers serve books: they stand on the
@@ -931,7 +967,8 @@ fun SourcesScreen(
                     OpdsServerRow(
                         server = server,
                         onOpen = { onOpenOpdsServer(server) },
-                        modifier = Modifier.animateItem(placementSpec = listPlacementSpec())
+                        modifier = Modifier.animateItem(placementSpec = listPlacementSpec()),
+                        compact = exploreCompact
                     )
                 }
             }
@@ -1015,7 +1052,11 @@ private fun SourceRow(
     onOpen: () -> Unit,
     onDetails: () -> Unit,
     onUpdate: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Code 120 completion: the M3 density knob — a tighter
+     * row padding at Compact. False (the default, and always
+     * under Nocturne) renders the shipped padding. */
+    compact: Boolean = false
 ) {
     val canOpen = ext.enabled && ext.trustState == TrustState.TRUSTED
     // v1.0.6.2 (SO1/F8a): action alerts only (re-trust, update,
@@ -1041,7 +1082,10 @@ private fun SourceRow(
         modifier = modifier,
         onClick = if (canOpen) onOpen else onDetails,
         bouncePress = true,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
+        contentPadding = PaddingValues(
+            horizontal = 14.dp,
+            vertical = if (compact) 8.dp else 12.dp
+        )
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SourceLetterTile(letter = ext.displayName.firstOrNull()?.uppercase() ?: "?")
@@ -1117,13 +1161,18 @@ private fun SourceRow(
 private fun OpdsServerRow(
     server: OpdsServer,
     onOpen: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** The M3 density knob, as on SourceRow. */
+    compact: Boolean = false
 ) {
     GlassCard(
         modifier = modifier,
         onClick = onOpen,
         bouncePress = true,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
+        contentPadding = PaddingValues(
+            horizontal = 14.dp,
+            vertical = if (compact) 8.dp else 12.dp
+        )
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SourceLetterTile(letter = server.name.firstOrNull()?.uppercase() ?: "?")
@@ -1236,6 +1285,82 @@ private fun androidx.compose.foundation.lazy.LazyListScope.searchLibraryRows(
                 Spacer(Modifier.weight(1f))
             }
         }
+    }
+}
+
+/**
+ * Code 120 completion: the Explore list's source rows, emitted
+ * for one list of extensions — the shipped flat list, or one
+ * provenance group under the M3 grouping knob. The row body is
+ * the shipped one verbatim (v1.5.9 Finding 6 routing and all);
+ * [compact] carries the M3 density knob and is false under
+ * Nocturne and at Comfortable.
+ */
+private fun androidx.compose.foundation.lazy.LazyListScope
+    .sourceRowItems(
+    exts: List<InstalledExtension>,
+    state: SourcesUiState,
+    ratingBadgeOf: (InstalledExtension) -> String?,
+    compact: Boolean,
+    onOpenSource: (Long, String) -> Unit,
+    onOpenExtension: (Long) -> Unit,
+    onUpdateFor: (InstalledExtension) -> Unit
+) {
+    items(exts, key = { "ext-${it.id}" }) { ext ->
+        val firstSource = ext.sourceIds.split(",")
+            .firstOrNull()?.trim()?.takeIf { it.isNotBlank() }
+        val record = firstSource?.let {
+            state.health[SourceHealthRecord.key(ext.id, it)]
+        }
+        SourceRow(
+            ext = ext,
+            healthRecord = record,
+            ratingBadge = ratingBadgeOf(ext),
+            sessionWord = firstSource?.let {
+                state.sessionWords[
+                    SourceHealthRecord.key(ext.id, it)
+                ]
+            },
+            hasUpdate = state.updates[ext.packageId] != null,
+            hasPending = state.pendings.containsKey(ext.packageId),
+            addedByYou = ext.id in state.addedByYouIds,
+            onOpen = {
+                // v1.5.9 (Finding 6): a multi-source
+                // row opens its DEFAULT instance's
+                // catalogue directly — the same door
+                // single-source packages always had.
+                // Details (with the labelled instance
+                // switcher) is the fallback only when
+                // no default could be resolved.
+                val decision = SourcesRowRouting.decide(
+                    sourceIds = ext.sourceIds.split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() },
+                    defaultSourceId =
+                        state.defaultSourceIds[ext.id]
+                )
+                when (decision.destination) {
+                    SourcesRowRouting.Destination.CATALOGUE ->
+                        // v1.5.10 (B2): null-safe read —
+                        // the pre-fix !! could throw a
+                        // KotlinNullPointerException on
+                        // the Main thread when a decision
+                        // carried no source id; a missing
+                        // id keeps the Details route.
+                        decision.sourceId?.let { sourceId ->
+                            onOpenSource(ext.id, sourceId)
+                        } ?: onOpenExtension(ext.id)
+                    SourcesRowRouting.Destination.DETAILS ->
+                        onOpenExtension(ext.id)
+                }
+            },
+            onDetails = { onOpenExtension(ext.id) },
+            onUpdate = { onUpdateFor(ext) },
+            modifier = Modifier.animateItem(
+                placementSpec = listPlacementSpec()
+            ),
+            compact = compact
+        )
     }
 }
 

@@ -50,7 +50,6 @@ import app.xreader.domain.content.ChapterBlock
 import app.xreader.domain.content.ChapterContent
 import app.xreader.domain.reader.ChapterText
 import app.xreader.domain.reader.ReaderConfig
-import app.xreader.ui.localreader.HIGHLIGHT_TINT_ARGB
 import app.xreader.ui.localreader.PdfTextSelection
 import app.xreader.ui.localreader.SelectionNoteEditor
 import app.xreader.ui.localreader.StoredSelectionHighlight
@@ -155,6 +154,11 @@ fun PdfReflowSurface(
     var barState by remember(page, content) {
         mutableStateOf(SelectionBarState())
     }
+    // Code 120 fix pass (recheck L5): the note-draft save's
+    // highlight tint — the design-aware default (under
+    // Nocturne the shipped constant, so the stored value
+    // there is unchanged).
+    val noteDefaultTintArgb = defaultHighlightTintArgb()
     var barDismissing by remember(page, content) {
         mutableStateOf(false)
     }
@@ -277,7 +281,9 @@ fun PdfReflowSurface(
                             selection = selection
                                 ?.takeIf { it.page == page },
                             mark = mark,
-                            spokenRange = spokenRange
+                            spokenRange = spokenRange,
+                            selectionTint =
+                                app.xreader.ui.theme.LocalSelectionTint.current
                         ),
                         style = blockTextStyle(block, config, fontFamily),
                         color = textColor,
@@ -617,6 +623,7 @@ fun PdfReflowSurface(
                         charEnd = draftEnd,
                         selectedText = selectedText,
                         note = note,
+                        tintArgb = noteDefaultTintArgb,
                         createdAtEpochMillis =
                             System.currentTimeMillis()
                     )
@@ -657,7 +664,11 @@ private fun pdfReflowAnnotated(
     highlights: List<IntRange>,
     selection: PdfTextSelection?,
     mark: PdfSearchMark?,
-    spokenRange: IntRange?
+    spokenRange: IntRange?,
+    /** Code 120 (E1): the live-selection wash colour — the
+     * active design's selection tint (scheme primary under
+     * Material 3; the ReaderViolet value under Nocturne). */
+    selectionTint: Color
 ): AnnotatedString {
     val blockEnd = blockStart + blockText.length
     fun local(range: IntRange): IntRange? {
@@ -674,7 +685,14 @@ private fun pdfReflowAnnotated(
         highlights.forEach { range ->
             local(range)?.let { span ->
                 addStyle(
-                    SpanStyle(background = Color(HIGHLIGHT_TINT_ARGB)),
+                    // Code 120 fix pass (recheck L4): the stored
+                    // highlights wash in the design's tint at the
+                    // shipped 0x66 alpha — Reflow's model carries
+                    // no per-highlight colour, so the default tint
+                    // is the design's own (scheme primary under
+                    // Material 3; the ReaderViolet value, rendering
+                    // as HIGHLIGHT_TINT_ARGB, under Nocturne).
+                    SpanStyle(background = selectionTint.copy(alpha = 0.4f)),
                     span.first, span.last + 1
                 )
             }
@@ -682,7 +700,10 @@ private fun pdfReflowAnnotated(
         spokenRange?.let { range ->
             local(range)?.let { span ->
                 addStyle(
-                    SpanStyle(background = Color(0x338B5CF6)),
+                    // Code 120 fix pass (recheck L4): the spoken
+                    // range likewise — the design's tint at the
+                    // shipped 0x33 alpha (0.2).
+                    SpanStyle(background = selectionTint.copy(alpha = 0.2f)),
                     span.first, span.last + 1
                 )
             }
@@ -699,7 +720,7 @@ private fun pdfReflowAnnotated(
             local(selection.range)
                 ?.let { span ->
                     addStyle(
-                        SpanStyle(background = Color(0x558B5CF6)),
+                        SpanStyle(background = selectionTint.copy(alpha = 0.33f)),
                         span.first, span.last + 1
                     )
                 }

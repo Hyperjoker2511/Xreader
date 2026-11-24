@@ -136,7 +136,8 @@ fun AddFromLinkScreen(
                 // is happening + "still loading", never bare.
                 LoadingState(
                     whatIsHappening = "Looking at the site and " +
-                        "test-reading a chapter…"
+                        "test-reading a chapter…",
+                    longJob = true
                 )
             }
             is LinkAddUiState.AiProbing -> {
@@ -144,7 +145,8 @@ fun AddFromLinkScreen(
                     whatIsHappening = "The AI is studying the page — " +
                         "then Xreader test-reads a chapter with what " +
                         "it proposes. Nothing is saved unless the " +
-                        "test passes."
+                        "test passes.",
+                    longJob = true
                 )
             }
             is LinkAddUiState.LoginRequired -> {

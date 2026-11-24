@@ -28,7 +28,6 @@ import androidx.compose.ui.unit.dp
 import app.xreader.data.db.Highlight
 import app.xreader.domain.reader.CentreTap
 import app.xreader.domain.reader.ChapterText
-import app.xreader.ui.localreader.ReaderViolet
 import app.xreader.ui.localreader.expandWordRange
 import kotlin.math.max
 import kotlin.math.min
@@ -1032,6 +1031,13 @@ fun ReaderSelectionOverlay(
                 }
             }
     ) {
+        // Code 120 (recheck erratum E1): the tint and handles
+        // bind to the active design's selection colour —
+        // LocalSelectionTint defaults to the ReaderViolet
+        // constant's value (Nocturne renders byte-identically)
+        // and the Material 3 theme provides its scheme's
+        // primary role.
+        val selectionTint = app.xreader.ui.theme.LocalSelectionTint.current
         Canvas(Modifier.fillMaxSize()) {
             val origin = controller.rootWindowOffset
             // §6.1: the live tint — at 0.55 over the stored
@@ -1044,7 +1050,7 @@ fun ReaderSelectionOverlay(
             // Custom palette accent IS the ink colour, so the
             // tint and handles rendered grey on the owner's
             // setup (CONVICTION-CODE117 item 1).
-            val tint = ReaderViolet.copy(alpha = 0.55f)
+            val tint = selectionTint.copy(alpha = 0.55f)
             for ((key, entry, local) in
                 controller.intersectedRanges(selection)) {
                 val layout = entry.layout ?: continue
@@ -1082,13 +1088,13 @@ fun ReaderSelectionOverlay(
             startTip?.let { tip ->
                 drawPath(
                     selectionTeardropPath(tip - origin, tipPx, radiusPx),
-                    ReaderViolet
+                    selectionTint
                 )
             }
             endTip?.let { tip ->
                 drawPath(
                     selectionTeardropPath(tip - origin, tipPx, radiusPx),
-                    ReaderViolet
+                    selectionTint
                 )
             }
         }

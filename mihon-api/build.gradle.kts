@@ -1,6 +1,6 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
+    // Code 120: built-in Kotlin (AGP 9) — no kotlin-android plugin.
     alias(libs.plugins.kotlin.serialization)
 }
 
@@ -16,9 +16,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // Code 120: kotlinOptions removed (built-in Kotlin; jvmTarget
+    // defaults to compileOptions.targetCompatibility).
     testOptions {
         // Unit tests touch model types whose signatures mention android.net.Uri
         // and friends; return defaults instead of "not mocked" errors.

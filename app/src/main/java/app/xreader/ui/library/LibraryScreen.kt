@@ -136,6 +136,13 @@ fun LibraryScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val candidates by viewModel.candidates.collectAsStateWithLifecycle()
+    // Code 120: the Material 3 design's Library knobs (§2.11)
+    // gate their Nocturne-era equivalents ONLY in the M3
+    // design — under Nocturne every condition below is
+    // vacuously true and the screen is byte-identical.
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val m3Design = designState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
     // v1.0.1 library power basics: in-library search / sort / filter.
     var query by remember { mutableStateOf("") }
     // v1.0.6.2 (F6): search is an icon in the header now; the
@@ -511,6 +518,7 @@ fun LibraryScreen(
         androidx.compose.foundation.lazy.LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (!m3Design || designState.libraryFilterRow) {
             item(key = "filter") {
                 val activeStatus = statusOptions.firstOrNull {
                     it.first == statusFilter && statusFilter != "ALL"
@@ -525,8 +533,9 @@ fun LibraryScreen(
                     onClick = { filterSheetOpen = true },
                     modifier = Modifier,
                     dotColor = null,
-                
+
                 )
+            }
             }
             items(shelfChips, key = { "shelf-${it.ref}" }) { chip ->
                 NocturneChip(
@@ -758,7 +767,8 @@ fun LibraryScreen(
             // filtered shelf (Favourites, a status shelf, …).
             (state.continueReading.takeIf {
                 state.libraryPrefs.showContinueReading &&
-                    state.selectedShelf == "all"
+                    state.selectedShelf == "all" &&
+                    (!m3Design || designState.libraryContinueRail)
             })?.let { hero ->
                 item(key = "continue") {
                     androidx.compose.animation.AnimatedVisibility(
@@ -1586,7 +1596,16 @@ private fun ShelfGridCard(
         metaLine = metaLine.ifBlank { null },
         onClick = onOpen,
         onLongClick = onLongPress,
-        progressFraction = if (showProgress) shelfBook.fraction else null,
+        progressFraction = if (showProgress &&
+            (app.xreader.ui.theme.LocalDesignState.current.design !=
+                app.xreader.data.prefs.AppDesign.MATERIAL3 ||
+                app.xreader.ui.theme.LocalDesignState.current
+                    .libraryProgressOnCovers)
+        ) {
+            shelfBook.fraction
+        } else {
+            null
+        },
         topEndBadge = if (newChapters > 0) "+$newChapters" else null,
         topStartBadge = when {
             selected == true -> "✓"

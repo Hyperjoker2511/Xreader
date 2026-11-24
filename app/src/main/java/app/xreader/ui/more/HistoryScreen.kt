@@ -320,6 +320,18 @@ fun HistoryScreen(
 ) {
     val entries by viewModel.entries.collectAsStateWithLifecycle()
     val pulse by viewModel.pulse.collectAsStateWithLifecycle()
+    // Code 120 (§2.11 History): the Material 3 design's
+    // grouping + density knobs. Under Nocturne both are inert
+    // and the list is the settled flat list, byte-identical.
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val m3History = designState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val historyCompact = m3History &&
+        designState.historyDensity ==
+            app.xreader.data.prefs.M3DensityChoice.COMPACT
+    val historyByDay = m3History &&
+        designState.historyGrouping ==
+            app.xreader.data.prefs.M3HistoryGrouping.BY_DAY
     // Hoisted locals (run #54's lesson).
     val entriesNow = entries
     val pulseNow = pulse
@@ -421,28 +433,51 @@ fun HistoryScreen(
                 // most-recent-first — no day groups, no filters.
                 // v1.5.4 (item 24): entries render as compact
                 // rows — see HistoryEntryRow below.
-                items(entriesNow, key = { "hist-${it.bookKey}" }) { entry ->
-                    val coverFileNow = coverFile(entry.coverPath)
-                        ?.takeIf { it.exists() }
-                    val coverRequest =
-                        rememberSizedCover(coverFileNow, 40, 58)
-                    HistoryEntryRow(
-                        entry = entry,
-                        coverRequest = coverRequest,
-                        coverFileNow = coverFileNow,
-                        onOpen = {
-                            entry.bookId?.let {
-                                onOpenBook(it, entry.chapterIndex)
-                            }
-                        },
-                        onAddBack = {
-                            entry.bookId?.let {
-                                viewModel.addBackToLibrary(it)
-                            }
-                        },
-                        onRemove = { confirmRemove = entry },
-                        onDeleteBook = { deleteTarget = entry.book }
-                    )
+                if (historyByDay) {
+                    // The By-day form (M3 knob): day headers
+                    // over the same most-recent-first entries —
+                    // grouping changes presentation only, never
+                    // the order or the rows' actions.
+                    val nowMs = System.currentTimeMillis()
+                    val grouped = entriesNow.groupBy {
+                        historyDayLabel(it.recordedAt, nowMs)
+                    }
+                    grouped.forEach { (label, dayEntries) ->
+                        item(key = "hist-day-$label") {
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant,
+                                modifier = Modifier.padding(
+                                    start = 4.dp, top = 8.dp, bottom = 2.dp
+                                )
+                            )
+                        }
+                        items(dayEntries, key = { "hist-${it.bookKey}" }) { entry ->
+                            HistoryEntryBlock(
+                                entry = entry,
+                                coverFile = coverFile,
+                                compact = historyCompact,
+                                onOpenBook = onOpenBook,
+                                viewModel = viewModel,
+                                onRemove = { confirmRemove = entry },
+                                onDeleteBook = { deleteTarget = entry.book }
+                            )
+                        }
+                    }
+                } else {
+                    items(entriesNow, key = { "hist-${it.bookKey}" }) { entry ->
+                        HistoryEntryBlock(
+                            entry = entry,
+                            coverFile = coverFile,
+                            compact = historyCompact,
+                            onOpenBook = onOpenBook,
+                            viewModel = viewModel,
+                            onRemove = { confirmRemove = entry },
+                            onDeleteBook = { deleteTarget = entry.book }
+                        )
+                    }
                 }
             }
         }
@@ -530,6 +565,69 @@ fun HistoryScreen(
  * own tap-to-open are unchanged.
  */
 @Composable
+/**
+ * One History entry's rendering, shared by the flat list and
+ * the By-day grouping so both forms render identical rows.
+ */
+@Composable
+private fun HistoryEntryBlock(
+    entry: HistoryEntryUi,
+    coverFile: (String?) -> File?,
+    compact: Boolean,
+    onOpenBook: (bookId: Long, chapterIndex: Int) -> Unit,
+    viewModel: HistoryViewModel,
+    onRemove: () -> Unit,
+    onDeleteBook: () -> Unit
+) {
+    val coverFileNow = coverFile(entry.coverPath)
+        ?.takeIf { it.exists() }
+    val coverRequest = if (compact) {
+        rememberSizedCover(coverFileNow, 32, 46)
+    } else {
+        rememberSizedCover(coverFileNow, 40, 58)
+    }
+    HistoryEntryRow(
+        entry = entry,
+        coverRequest = coverRequest,
+        coverFileNow = coverFileNow,
+        onOpen = {
+            entry.bookId?.let {
+                onOpenBook(it, entry.chapterIndex)
+            }
+        },
+        onAddBack = {
+            entry.bookId?.let {
+                viewModel.addBackToLibrary(it)
+            }
+        },
+        onRemove = onRemove,
+        onDeleteBook = onDeleteBook,
+        compact = compact
+    )
+}
+
+/** The By-day header for an entry: Today / Yesterday / the
+ * date, by the entry's own recorded time. */
+private fun historyDayLabel(recordedAt: Long, nowMillis: Long): String {
+    val cal = java.util.Calendar.getInstance()
+    cal.timeInMillis = recordedAt
+    val entryDay = cal.get(java.util.Calendar.DAY_OF_YEAR) to
+        cal.get(java.util.Calendar.YEAR)
+    cal.timeInMillis = nowMillis
+    val today = cal.get(java.util.Calendar.DAY_OF_YEAR) to
+        cal.get(java.util.Calendar.YEAR)
+    cal.add(java.util.Calendar.DAY_OF_YEAR, -1)
+    val yesterday = cal.get(java.util.Calendar.DAY_OF_YEAR) to
+        cal.get(java.util.Calendar.YEAR)
+    return when (entryDay) {
+        today -> "Today"
+        yesterday -> "Yesterday"
+        else -> java.text.SimpleDateFormat(
+            "d MMM yyyy", java.util.Locale.US
+        ).format(java.util.Date(recordedAt))
+    }
+}
+
 private fun HistoryEntryRow(
     entry: HistoryEntryUi,
     coverRequest: ImageRequest?,
@@ -537,12 +635,19 @@ private fun HistoryEntryRow(
     onOpen: () -> Unit,
     onAddBack: () -> Unit,
     onRemove: () -> Unit,
-    onDeleteBook: () -> Unit
+    onDeleteBook: () -> Unit,
+    /** Code 120: the M3 Compact density — tighter padding and
+     * a smaller cover; Comfortable (and Nocturne) render the
+     * shipped geometry. */
+    compact: Boolean = false
 ) {
     GlassCard(
         onClick = if (entry.bookExists) onOpen else null,
         modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        contentPadding = PaddingValues(
+            horizontal = 12.dp,
+            vertical = if (compact) 3.dp else 8.dp
+        ),
         bouncePress = true
     ) {
         Row(
@@ -555,7 +660,10 @@ private fun HistoryEntryRow(
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .size(width = 40.dp, height = 58.dp)
+                    .size(
+                        width = if (compact) 32.dp else 40.dp,
+                        height = if (compact) 46.dp else 58.dp
+                    )
                     .clip(RoundedCornerShape(12.dp))
             )
             Column(

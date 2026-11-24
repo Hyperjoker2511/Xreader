@@ -140,6 +140,18 @@ class AppContainer(
         appContext.settingsDataStore,
         establishedInstall = databaseFileExisted
     )
+    /** Code 120 (Material 3 design): the design switch + the M3
+     * design's own settings — a separate prefs owner over the
+     * same settings store (`design.*` keys); Nocturne's state in
+     * [appearancePrefs] is never read or written by it. The
+     * established-install signal is the same one appearance
+     * priming uses, so the U10 migration rule and the scheme
+     * rule can never disagree about what a fresh install is. */
+    val designPrefs: app.xreader.data.prefs.DesignPrefs =
+        app.xreader.data.prefs.DesignPrefs(
+            appContext.settingsDataStore,
+            establishedInstall = databaseFileExisted
+        )
     val onboardingPrefs: OnboardingPrefs = OnboardingPrefs(appContext.settingsDataStore)
 
     /** v1.0.2: Best-source ranking, repo pins/recents, search memory. */
@@ -2344,6 +2356,13 @@ class AppContainer(
         appScope.launch {
             runCatching { appearancePrefs.migrateToNocturneV2() }
             runCatching { appearancePrefs.primeDefaultScheme() }
+            // Code 120 (design §3 U10 — the migration rule): the
+            // design default is primed in the same launch, after
+            // appearance priming. It records the design state as
+            // found and seeds MATERIAL3 only where no design
+            // state exists on a genuinely fresh install — an
+            // update can never switch an existing user's design.
+            runCatching { designPrefs.primeDesignDefault() }
         }
         // v1.2.1 (Defect 3): the orphan sweep — files owned by
         // book ids that no longer have a row (a cleared library,

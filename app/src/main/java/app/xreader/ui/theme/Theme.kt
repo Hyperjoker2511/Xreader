@@ -235,6 +235,17 @@ fun XreaderTheme(
     darkTheme: Boolean,
     appearance: AppearanceState = AppearanceState(),
     hazeReady: Boolean = true,
+    /** Code 120: the whole-app design switch. The default is the
+     * Nocturne state, so every call site that does not pass it
+     * (including the whole Komikku tree) renders exactly as
+     * before. When the design is Material 3, the content delegates
+     * to [M3ThemeRoot] inside the shared providers below — the
+     * app-size density and UiMetrics apply to both designs (App
+     * size is a settled behaviour rule, not a Nocturne feature),
+     * while Nocturne's colour resolution is simply not read by
+     * the M3 path and Nocturne's state is never written by it. */
+    design: app.xreader.data.prefs.DesignState =
+        app.xreader.data.prefs.DesignState(),
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
@@ -338,12 +349,24 @@ fun XreaderTheme(
         // the other theme-level locals, so any screen can read
         // its scaled tier row.
         ProvideUiMetrics(appearance.appSize) {
-            MaterialTheme(
-                colorScheme = colors,
-                typography = XreaderTypography,
-                shapes = glass.shapes(),
-                content = content
-            )
+            if (design.design == app.xreader.data.prefs.AppDesign.MATERIAL3) {
+                M3ThemeRoot(
+                    design = design,
+                    reduceMotion = appearance.reduceMotion,
+                    content = content
+                )
+            } else {
+                CompositionLocalProvider(
+                    LocalDesignState provides design
+                ) {
+                    MaterialTheme(
+                        colorScheme = colors,
+                        typography = XreaderTypography,
+                        shapes = glass.shapes(),
+                        content = content
+                    )
+                }
+            }
         }
     }
 }

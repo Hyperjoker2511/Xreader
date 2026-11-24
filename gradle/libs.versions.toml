@@ -4,10 +4,18 @@
 # values — extensions are compiled against that platform and meet OUR
 # copies at runtime. PlatformParityTest enforces the match.
 [versions]
-agp = "8.7.3"
-kotlin = "2.2.21"
-ksp = "2.2.21-2.0.5"
-composeBom = "2024.12.01"
+# Code 120 (Material 3 build, design §3 U1–U3): composeBom
+# 2024.12.01 → 2026.11.01 (material3 1.5.0 / Compose 1.13,
+# requires compileSdk 37.1); agp 8.7.3 → 9.3.3 (the minimum AGP
+# line whose maximum API level covers 37.1 — 9.2 caps at 37.0;
+# AGP 9 brings built-in Kotlin, so the kotlin-android plugin is
+# gone and the Gradle wrapper is 9.5.0); kotlin 2.2.21 → 2.3.21
+# (AGP 9.3's POM carries KGP 2.2.10; 2.3.21 is the current
+# stable the KSP line pairs with); ksp → 2.3.6.
+agp = "9.3.3"
+kotlin = "2.3.21"
+ksp = "2.3.6"
+composeBom = "2026.11.01"
 coreKtx = "1.15.0"
 activityCompose = "1.9.3"
 lifecycle = "2.8.7"
@@ -106,7 +114,6 @@ subsampling-scale-image-view = { group = "com.github.tachiyomiorg", name = "subs
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

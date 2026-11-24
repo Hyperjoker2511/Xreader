@@ -142,7 +142,6 @@ import app.xreader.ui.localreader.PdfSpreadMath
 import app.xreader.ui.localreader.PdfSurfaceZoomState
 import app.xreader.core.motion.SpringMotionEngine
 import app.xreader.core.motion.toSpec
-import app.xreader.ui.localreader.ReaderViolet
 import app.xreader.ui.localreader.SelectionNoteEditor
 import app.xreader.ui.localreader.StoredSelectionHighlight
 import app.xreader.ui.localreader.TapLayoutPreset
@@ -664,6 +663,12 @@ private fun PdfPageGeometryOverlay(
     }
     val effStart = dragRange?.first ?: selection?.start ?: 0
     val effEnd = dragRange?.let { it.last + 1 } ?: selection?.end ?: 0
+    // Code 120 (recheck erratum E1): the live-selection wash and
+    // handles bind to the active design's selection colour —
+    // LocalSelectionTint defaults to the ReaderViolet constant's
+    // value (Nocturne byte-identical); Material 3 provides its
+    // scheme's primary.
+    val selectionTint = app.xreader.ui.theme.LocalSelectionTint.current
     Box(modifier) {
         Canvas(Modifier.fillMaxSize()) {
             if (pageWidthPt <= 0f || pageHeightPt <= 0f) {
@@ -695,7 +700,7 @@ private fun PdfPageGeometryOverlay(
                     pdfMergedLineRects(
                         geometry, effStart..effEnd - 1
                     ),
-                    Color(0x558B5CF6)
+                    selectionTint.copy(alpha = 0.33f)
                 )
                 val first = geometry.rects.getOrNull(effStart)
                 val last = geometry.rects.getOrNull(effEnd - 1)
@@ -717,7 +722,7 @@ private fun PdfPageGeometryOverlay(
                             startGeom.tipLengthPx,
                             startGeom.bodyRadiusPx
                         ),
-                        color = ReaderViolet
+                        color = selectionTint
                     )
                     drawPath(
                         path = selectionTeardropPath(
@@ -725,7 +730,7 @@ private fun PdfPageGeometryOverlay(
                             endGeom.tipLengthPx,
                             endGeom.bodyRadiusPx
                         ),
-                        color = ReaderViolet
+                        color = selectionTint
                     )
                 }
             }
@@ -1208,7 +1213,8 @@ internal fun PdfFilmstripRow(
                     .then(
                         if (page == currentPage) {
                             Modifier.border(
-                                2.dp, ReaderViolet,
+                                2.dp,
+                                app.xreader.ui.theme.LocalSelectionTint.current,
                                 RoundedCornerShape(4.dp)
                             )
                         } else {
@@ -3673,6 +3679,11 @@ private fun PdfPageCell(
                         }
                 )
             }
+            // Code 120 fix pass (recheck L5): the note-draft
+            // save's highlight tint — the design-aware default
+            // (under Nocturne the shipped constant, so the
+            // stored value there is unchanged).
+            val noteDefaultTintArgb = defaultHighlightTintArgb()
             PdfSelectionDialogs(
                 state = dialogState,
                 onNoteDraftSave = { note ->
@@ -3686,6 +3697,7 @@ private fun PdfPageCell(
                                 charEnd = draft.end,
                                 selectedText = draft.text,
                                 note = note,
+                                tintArgb = noteDefaultTintArgb,
                                 createdAtEpochMillis =
                                     System.currentTimeMillis()
                             )
@@ -4860,6 +4872,13 @@ private fun PdfContinuousBody(
                         // MR-4 (R1): no item-local pill — the
                         // item registered its selection with
                         // the surface-level bar above.
+                        // Code 120 fix pass (recheck L5): the
+                        // note-draft save's highlight tint —
+                        // the design-aware default (under
+                        // Nocturne the shipped constant, so the
+                        // stored value there is unchanged).
+                        val noteDefaultTintArgb =
+                            defaultHighlightTintArgb()
                         PdfSelectionDialogs(
                             state = itemDialogs,
                             onNoteDraftSave = { note ->
@@ -4874,6 +4893,8 @@ private fun PdfContinuousBody(
                                             charEnd = draft.end,
                                             selectedText = draft.text,
                                             note = note,
+                                            tintArgb =
+                                                noteDefaultTintArgb,
                                             createdAtEpochMillis =
                                                 System
                                                     .currentTimeMillis()

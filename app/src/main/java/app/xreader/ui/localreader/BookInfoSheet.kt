@@ -453,7 +453,7 @@ internal fun BookInfoSheetContent(
             Text(
                 model.contributors.joinToString(", "),
                 style = MaterialTheme.typography.bodyMedium,
-                color = ReaderViolet
+                color = readerChromeAccent()
             )
         }
         Spacer(Modifier.height(4.dp))
@@ -542,7 +542,7 @@ internal fun BookInfoSheetContent(
                             },
                             contentDescription = "Rate $star stars",
                             tint = if (star <= model.starRating) {
-                                ReaderViolet
+                                readerChromeAccent()
                             } else {
                                 ReaderMutedText
                             }
@@ -570,7 +570,7 @@ internal fun BookInfoSheetContent(
                 checked = isFavourite,
                 onCheckedChange = { onToggleFavourite() },
                 colors = SwitchDefaults.colors(
-                    checkedTrackColor = ReaderViolet,
+                    checkedTrackColor = readerChromeAccent(),
                     checkedThumbColor = Color.White,
                     uncheckedTrackColor = ReaderTier2Surface,
                     uncheckedThumbColor = ReaderMutedText
@@ -583,7 +583,7 @@ internal fun BookInfoSheetContent(
             Text(
                 "Reading history",
                 style = MaterialTheme.typography.titleSmall,
-                color = ReaderViolet
+                color = readerChromeAccent()
             )
             model.dailyHistory.forEach { entry ->
                 Row(

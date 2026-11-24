@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.xreader.core.motion.SpringMotionEngine
@@ -133,6 +134,30 @@ data class SelectionBarState(
     val colourRowEnabled: Boolean = true
 )
 
+/**
+ * Code 120 fix pass (recheck L5): the tint a NEW highlight
+ * takes when the user has not picked a colour — the default
+ * the bar's state, its first colour-row circle and the
+ * store's note-draft constructions resolve through. Under
+ * Nocturne it is [HIGHLIGHT_TINT_ARGB] exactly as shipped.
+ * Under Material 3 it is the active design's selection tint
+ * ([app.xreader.ui.theme.LocalSelectionTint] — the scheme
+ * primary under M3) at the same 0x66 alpha, as E1 rules for
+ * the live selection: the Nocturne violet is never the
+ * default inside the M3 design. A colour the user picked is
+ * data and never passes through here.
+ */
+@Composable
+fun defaultHighlightTintArgb(): Int =
+    if (app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        app.xreader.ui.theme.LocalSelectionTint.current
+            .copy(alpha = 0.4f).toArgb()
+    } else {
+        HIGHLIGHT_TINT_ARGB
+    }
+
 /** The PDF hosts' More list (§3.3): the owner's surviving
  * order — Translate · Ask AI · Share. All three are
  * fulfilled for every PDF seat (§6.4), so the list is a
@@ -146,7 +171,9 @@ val PdfSelectionMoreItems: List<SelectionBarMoreItem> = listOf(
 
 /** The colour row's circles, in order (§7.2): the live
  * violet tint, amber (the search-mark hue), then Moon+'s
- * sage / orange / pink slot hues. */
+ * sage / orange / pink slot hues. The first entry is the
+ * default tint: under Material 3 the bar renders
+ * [defaultHighlightTintArgb] in its place (recheck L5). */
 private val SELECTION_BAR_TINTS: List<Int> = listOf(
     HIGHLIGHT_TINT_ARGB,
     0xFFFFB020.toInt(),
@@ -172,6 +199,67 @@ fun SelectionBar(
     hiddenActions: Set<SelectionBarAction> = emptySet(),
     modifier: Modifier = Modifier
 ) {
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val isM3Bar = designState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    // Code 120 fix pass (recheck L5): the default tint under
+    // Material 3. A live-selection episode whose hoisted state
+    // still carries the untouched Nocturne default is
+    // normalised — in the effective state below (the active
+    // ring and the bar's own apply calls) and, through
+    // onStateChange, in the host's state itself, so a host
+    // arm that applies with state.activeTintArgb stores the
+    // design's colour too. An existing highlight's stored
+    // tint is user data and is never rewritten; neither is a
+    // tint the user picked from the row (only the untouched
+    // default matches). Under Nocturne none of this fires.
+    val m3DefaultTintArgb = defaultHighlightTintArgb()
+    LaunchedEffect(
+        isM3Bar, m3DefaultTintArgb,
+        state.activeTintArgb, state.existingHighlight
+    ) {
+        if (isM3Bar && !state.existingHighlight &&
+            state.activeTintArgb == HIGHLIGHT_TINT_ARGB &&
+            m3DefaultTintArgb != HIGHLIGHT_TINT_ARGB
+        ) {
+            onStateChange(
+                state.copy(activeTintArgb = m3DefaultTintArgb)
+            )
+        }
+    }
+    // Code 120 (design §2.11 Reader): the selection colour
+    // row's own knob — under Material 3 with the knob off, the
+    // row can never open: the host's capability is ANDed with
+    // the knob here, at the one component every host renders,
+    // so no host needs to know. The bar's anatomy is otherwise
+    // exactly as shipped (S23 — the design's reference surface).
+    val knobbedState = if (isM3Bar && !designState.selectionColourRow) {
+        state.copy(colourRowEnabled = false, colourRowOpen = false)
+    } else {
+        state
+    }
+    val state = if (isM3Bar && !knobbedState.existingHighlight &&
+        knobbedState.activeTintArgb == HIGHLIGHT_TINT_ARGB
+    ) {
+        knobbedState.copy(activeTintArgb = m3DefaultTintArgb)
+    } else {
+        knobbedState
+    }
+    // The colour row's first circle IS the default tint:
+    // under Material 3 it shows (and applies) the
+    // scheme-derived value; the remaining circles are the
+    // user's explicit colour choices in both designs.
+    val barTints = if (isM3Bar) {
+        SELECTION_BAR_TINTS.map { tint ->
+            if (tint == HIGHLIGHT_TINT_ARGB) {
+                m3DefaultTintArgb
+            } else {
+                tint
+            }
+        }
+    } else {
+        SELECTION_BAR_TINTS
+    }
     Surface(
         modifier = modifier.widthIn(max = 344.dp),
         shape = RoundedCornerShape(16.dp),
@@ -228,7 +316,7 @@ fun SelectionBar(
                             Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        SELECTION_BAR_TINTS.forEach { tint ->
+                        barTints.forEach { tint ->
                             SelectionTintCircle(
                                 tintArgb = tint,
                                 active = tint == state.activeTintArgb,

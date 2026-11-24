@@ -683,6 +683,12 @@ fun MainScaffold(
     val libraryState by container.libraryPrefs.state.collectAsStateWithLifecycle(
         initialValue = app.xreader.data.library.LibraryState()
     )
+    // Code 120: the design switch picks the shell — Nocturne's
+    // overlay-dock shells below, or the Material 3 shells
+    // (M3Shell.kt: flexible bar / stock rails, no backdrop).
+    val designState by container.designPrefs.state.collectAsStateWithLifecycle(
+        initialValue = app.xreader.data.prefs.DesignState()
+    )
     var startHandled by remember { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(libraryState.startScreen) {
         if (startHandled) return@LaunchedEffect
@@ -713,7 +719,32 @@ fun MainScaffold(
         // receiver is no longer implicit under Kotlin 2.2.
         val isWideLayout = maxWidth >= 840.dp
         Box(Modifier.fillMaxSize()) {
-        if (isWideLayout) {
+        if (designState.design == app.xreader.data.prefs.AppDesign.MATERIAL3) {
+            // Code 120: the Material 3 shell (design §2.1 + A1).
+            // The Bar/Rail knob can pin a form; Auto follows the
+            // same 840dp split as the Nocturne shells.
+            if (m3UseRail(designState, isWideLayout)) {
+                M3RailShell(
+                    navController, snackbar, appearance, container, onPhaseNote,
+                    libraryViewModel, downloadsViewModel, opdsViewModel,
+                    sourcesViewModel, linkAddViewModel, onAddBook,
+                    onExport = { book, kind -> pendingExport = book to kind },
+                    designState = designState,
+                    appUpdateViewModel = appUpdateViewModel,
+                    packViewModel = packViewModel
+                )
+            } else {
+                M3PhoneShell(
+                    navController, snackbar, appearance, container, onPhaseNote,
+                    libraryViewModel, downloadsViewModel, opdsViewModel,
+                    sourcesViewModel, linkAddViewModel, onAddBook,
+                    onExport = { book, kind -> pendingExport = book to kind },
+                    designState = designState,
+                    appUpdateViewModel = appUpdateViewModel,
+                    packViewModel = packViewModel
+                )
+            }
+        } else if (isWideLayout) {
             RailShell(
                 navController, snackbar, appearance, container, onPhaseNote,
                 libraryViewModel, downloadsViewModel, opdsViewModel,
@@ -859,7 +890,7 @@ private fun displayName(context: android.content.Context, uri: android.net.Uri):
 /** True while an immersive route (reader, login) is showing: the
  * shell chrome animates away and the destination owns the screen. */
 @Composable
-private fun shellImmersive(navController: NavHostController): Boolean {
+internal fun shellImmersive(navController: NavHostController): Boolean {
     val entry by navController.currentBackStackEntryAsState()
     return ShellChrome.isImmersiveRoutePattern(entry?.destination?.route)
 }
@@ -873,7 +904,7 @@ private fun shellImmersive(navController: NavHostController): Boolean {
  * would show the dock on still loses it while immersive,
  * exactly as before. */
 @Composable
-private fun dockShown(navController: NavHostController): Boolean {
+internal fun dockShown(navController: NavHostController): Boolean {
     val backStack by navController.currentBackStack
         .collectAsStateWithLifecycle()
     val patterns = backStack.map { it.destination.route }
@@ -1283,7 +1314,7 @@ private fun tabTravelDirection(fromRoute: String?, toRoute: String?): Int {
 }
 
 @Composable
-private fun XreaderNavHost(
+internal fun XreaderNavHost(
     navController: NavHostController,
     container: AppContainer,
     modifier: Modifier,
@@ -1939,7 +1970,14 @@ private fun XreaderNavHost(
                 reduceMotion = reduceMotion,
                 onMakeEpub = { group: BookDownloads -> onExport(group.book, "epub") },
                 onOpenBook = { bookId -> navigateContent("book/$bookId") },
-                onOpenCustomise = { navController.navigate("customise") }
+                onOpenCustomise = { navController.navigate("customise") },
+                // Code 120 completion (R4): the M3 downloads
+                // sort cycles into DesignPrefs.
+                onDownloadsSortChange = { sort ->
+                    scope.launch {
+                        container.designPrefs.setDownloadsSort(sort)
+                    }
+                }
             )
         }
         composable(Tab.Me.route) {
@@ -2165,7 +2203,22 @@ private fun XreaderNavHost(
                 .collectAsStateWithLifecycle(
                     initialValue = app.xreader.data.prefs.AppearanceState()
                 )
-            app.xreader.ui.book.BookDetailTheme(appearance = bookAppearance) {
+            // Code 120 (design §2.5 R8): in the Material 3
+            // design the book page wears a scheme generated
+            // from its own cover (MCU Content style) — the
+            // wrapper applies it to this subtree only, and the
+            // app scheme resumes on exit. The seed rides the
+            // VM's palette load.
+            val bookDesign by container.designPrefs.state
+                .collectAsStateWithLifecycle(
+                    initialValue = app.xreader.data.prefs.DesignState()
+                )
+            val bookState by viewModel.state.collectAsStateWithLifecycle()
+            app.xreader.ui.book.BookDetailTheme(
+                appearance = bookAppearance,
+                design = bookDesign,
+                coverSeedArgb = bookState.coverSeedArgb
+            ) {
             BookDetailScreen(
                 viewModel = viewModel,
                 coverFile = coverFile,
@@ -2630,7 +2683,7 @@ private fun XreaderNavHost(
 }
 
 @Composable
-private fun selectedTab(navController: NavHostController): Tab {
+internal fun selectedTab(navController: NavHostController): Tab {
     val entry by navController.currentBackStackEntryAsState()
     val route = entry?.destination?.route
     return when {
@@ -2653,7 +2706,7 @@ private fun selectedTab(navController: NavHostController): Tab {
     }
 }
 
-private fun navigateToTab(navController: NavHostController, tab: Tab) {
+internal fun navigateToTab(navController: NavHostController, tab: Tab) {
     navController.navigate(tab.route) {
         popUpTo(navController.graph.startDestinationId) { saveState = true }
         launchSingleTop = true

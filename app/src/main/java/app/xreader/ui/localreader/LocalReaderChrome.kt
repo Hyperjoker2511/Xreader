@@ -56,8 +56,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.xreader.data.prefs.AppDesign
 import app.xreader.data.prefs.GlassStyle
 import app.xreader.ui.theme.JakartaSans
+import app.xreader.ui.theme.LocalDesignState
 import app.xreader.ui.theme.LocalGlassSettings
 import app.xreader.ui.theme.LocalHazeState
 import coil.compose.AsyncImage
@@ -107,6 +109,24 @@ import dev.chrisbanes.haze.hazeEffect
 /** DESIGN.md's violet accent (#8B5CF6) — the one accent the
  * reader chrome spends on selection and glow (SLOP #10). */
 val ReaderViolet: Color = Color(0xFF8B5CF6)
+
+/**
+ * Code 120 fix pass (recheck L2): the reader chrome's accent
+ * under the ACTIVE design. Under Nocturne it is [ReaderViolet]
+ * exactly as shipped; under Material 3 the chrome's accents
+ * bind to the active scheme's `primary` — no Nocturne colour
+ * renders inside the M3 design. Every violet spend in this
+ * package's chrome resolves through here (directly, or via
+ * the `accent` parameter of the pure spec functions, whose
+ * default keeps the shipped value for their pinned tests).
+ */
+@Composable
+internal fun readerChromeAccent(): Color =
+    if (LocalDesignState.current.design == AppDesign.MATERIAL3) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        ReaderViolet
+    }
 
 /** DESIGN.md tier-2 surface (#161822): unselected chips and
  * nested controls. */
@@ -224,17 +244,26 @@ data class ReaderChipSpec(
     val glow: Boolean
 )
 
-fun readerChipSpec(selected: Boolean, primary: Boolean = false): ReaderChipSpec =
+fun readerChipSpec(
+    selected: Boolean,
+    primary: Boolean = false,
+    /** Code 120 fix pass (recheck L2): the accent the selected
+     * states spend. Defaults to [ReaderViolet] — the shipped
+     * Nocturne value the spec's tests pin; composable callers
+     * pass [readerChromeAccent] so Material 3 spends its
+     * scheme primary instead. */
+    accent: Color = ReaderViolet
+): ReaderChipSpec =
     when {
         selected && primary -> ReaderChipSpec(
-            containerColor = ReaderViolet,
-            borderColor = ReaderViolet.copy(alpha = 0.8f),
+            containerColor = accent,
+            borderColor = accent.copy(alpha = 0.8f),
             labelColor = Color.White,
             glow = true
         )
         selected -> ReaderChipSpec(
             containerColor = ReaderTier2Surface,
-            borderColor = ReaderViolet.copy(alpha = 0.8f),
+            borderColor = accent.copy(alpha = 0.8f),
             labelColor = Color.White,
             glow = false
         )
@@ -263,10 +292,16 @@ internal fun rememberReaderGlassSpec(): ReaderGlassSpec {
 
 /** The border colour a glass primitive strokes: the U-3
  * violet when the spec carries the violet border treatment
- * (A-8's WebView adaptation), else white at the spec's alpha. */
-private fun glassBorderColor(spec: ReaderGlassSpec): Color =
+ * (A-8's WebView adaptation), else white at the spec's alpha.
+ * Code 120 fix pass (recheck L2): [accent] is the design's
+ * accent (see [readerChromeAccent]); it defaults to
+ * [ReaderViolet] so the pure mapping is unchanged. */
+private fun glassBorderColor(
+    spec: ReaderGlassSpec,
+    accent: Color = ReaderViolet
+): Color =
     if (spec.violetBorder) {
-        ReaderViolet.copy(alpha = spec.borderAlpha)
+        accent.copy(alpha = spec.borderAlpha)
     } else {
         Color.White.copy(alpha = spec.borderAlpha)
     }
@@ -307,7 +342,7 @@ private fun Modifier.readerGlassSurface(
         clip = false,
         ambientColor = Color.Black.copy(alpha = 0.7f),
         spotColor = if (violetSpot && spec.violetShadow) {
-            ReaderViolet.copy(alpha = 0.35f)
+            readerChromeAccent().copy(alpha = 0.35f)
         } else {
             Color.Black.copy(alpha = 0.7f)
         }
@@ -335,7 +370,7 @@ internal fun GlassChipButton(
         shape = shape,
         color = glassPrimitiveColor(),
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, glassBorderColor(spec)),
+        border = BorderStroke(1.dp, glassBorderColor(spec, readerChromeAccent())),
         shadowElevation = 0.dp,
         modifier = modifier
             .readerGlassSurface(spec, shape, elevation = 4.dp, violetSpot = false)
@@ -375,7 +410,7 @@ internal fun GlassTitlePill(
         shape = shape,
         color = glassPrimitiveColor(),
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, glassBorderColor(spec)),
+        border = BorderStroke(1.dp, glassBorderColor(spec, readerChromeAccent())),
         shadowElevation = 0.dp,
         modifier = modifier.readerGlassSurface(
             spec, shape, elevation = 4.dp, violetSpot = false
@@ -431,7 +466,7 @@ internal fun GlassCapsule(
         shape = shape,
         color = glassPrimitiveColor(),
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, glassBorderColor(spec)),
+        border = BorderStroke(1.dp, glassBorderColor(spec, readerChromeAccent())),
         shadowElevation = 0.dp,
         modifier = modifier.readerGlassSurface(
             spec, shape, elevation = 6.dp, violetSpot = true
@@ -461,7 +496,10 @@ internal fun ReaderStadiumChip(
     leadingIcon: @Composable (() -> Unit)? = null,
     label: @Composable () -> Unit
 ) {
-    val chip = readerChipSpec(selected = selected, primary = primary)
+    val accent = readerChromeAccent()
+    val chip = readerChipSpec(
+        selected = selected, primary = primary, accent = accent
+    )
     FilterChip(
         selected = selected,
         onClick = onClick,
@@ -472,8 +510,8 @@ internal fun ReaderStadiumChip(
                 elevation = 8.dp,
                 shape = RoundedCornerShape(50),
                 clip = false,
-                ambientColor = ReaderViolet.copy(alpha = 0.4f),
-                spotColor = ReaderViolet.copy(alpha = 0.4f)
+                ambientColor = accent.copy(alpha = 0.4f),
+                spotColor = accent.copy(alpha = 0.4f)
             )
         } else {
             modifier
@@ -662,7 +700,7 @@ internal fun ReaderBarRow(
                             action.label,
                             style = MaterialTheme.typography.labelSmall,
                             color = if (action in activeActions) {
-                                ReaderViolet
+                                readerChromeAccent()
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             },
@@ -728,7 +766,7 @@ internal fun CustomisableReaderBarSheetContent(
                         onConfigChange(config.toggled(action, checked))
                     },
                     colors = CheckboxDefaults.colors(
-                        checkedColor = ReaderViolet,
+                        checkedColor = readerChromeAccent(),
                         uncheckedColor = ReaderMutedText
                     )
                 )
@@ -777,7 +815,7 @@ internal fun ReaderBarSwitch(
         checked = checked,
         onCheckedChange = onCheckedChange,
         colors = SwitchDefaults.colors(
-            checkedTrackColor = ReaderViolet,
+            checkedTrackColor = readerChromeAccent(),
             checkedThumbColor = Color.White,
             uncheckedTrackColor = ReaderTier2Surface,
             uncheckedThumbColor = ReaderMutedText,

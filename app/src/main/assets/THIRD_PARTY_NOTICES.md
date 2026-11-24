@@ -43,3 +43,16 @@ Copyright 2017 Chris Banes (Apache License 2.0). Referenced by
 the donor's animated-image path; Xreader's animated fallback
 currently renders through Coil instead (see the changes note in
 ReaderPageImageView.kt).
+
+## Material Color Utilities
+Copyright 2021 Google LLC (Apache License, Version 2.0 — the
+full text ships beside this file as `APACHE-2.0.txt`).
+https://github.com/material-foundation/material-color-utilities
+The Material 3 design's colour generation (code 120): the
+library's Java sources are vendored unmodified under their
+official packages (`hct`, `scheme`, `dynamiccolor`, `palettes`,
+`quantize`, `score`, `blend`, `contrast`, `dislike`,
+`temperature`, `utils`) because MCU is not published as a
+Maven artifact. It generates the picked-colour schemes and
+the book page's cover-derived scheme, and extracts cover
+seed colours (Celebi quantisation + Score).

@@ -180,6 +180,22 @@ fun VocabScreen(
     onBack: () -> Unit
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Code 120 completion (R10): the M3 vocabulary sort — A–Z
+    // orders the saved-words list; Recent (the default) is the
+    // shipped order. The Review-today queue keeps its
+    // spaced-repetition order in both designs. Under Nocturne
+    // the knob is never read.
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val allWords = if (
+        designState.design ==
+            app.xreader.data.prefs.AppDesign.MATERIAL3 &&
+        designState.vocabSort ==
+            app.xreader.data.prefs.M3VocabSort.A_Z
+    ) {
+        state.words.sortedBy { it.word.lowercase() }
+    } else {
+        state.words
+    }
     val context = androidx.compose.ui.platform.LocalContext.current
     var addOpen by remember { mutableStateOf(false) }
     var lookupDraft by remember { mutableStateOf("") }
@@ -332,7 +348,7 @@ fun VocabScreen(
                     )
                 }
             }
-            items(state.words, key = { "word-${it.id}" }) { word ->
+            items(allWords, key = { "word-${it.id}" }) { word ->
                 VocabWordCard(
                     word = word,
                     reviewing = false,

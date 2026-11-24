@@ -1,5 +1,6 @@
 package app.xreader.ui.book
 
+import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -112,6 +113,13 @@ data class BookDetailUiState(
     val expectedNextLabel: String? = null,
     /** Cover palette for the ambient backdrop (R05). */
     val coverPalette: app.xreader.ui.theme.CoverPalette? = null,
+    /** Code 120 (design §2.5 R8): the cover's MCU seed colour
+     * (Celebi quantisation + Score over the same pixels the
+     * palette came from) — the Material 3 design's book-page
+     * Content scheme generates from it. On a palette-cache hit
+     * it is the cached palette's ambient colour instead (the
+     * pixels are not re-read for a cache hit). */
+    val coverSeedArgb: Int? = null,
     /** Book-colours scope covers this page (all scopes do). */
     val backdropEnabled: Boolean = true,
     /** Blurred backdrop on STANDARD/FULL tiers; a static tint on
@@ -2197,13 +2205,16 @@ class BookDetailViewModel(
         paletteTried = true
         viewModelScope.launch {
             container.coverPaletteCache.get(bookId.toString())?.let { cached ->
-                storyLocal.value = storyLocal.value.copy(coverPalette = cached)
+                storyLocal.value = storyLocal.value.copy(
+                    coverPalette = cached,
+                    coverSeedArgb = cached.ambient?.toArgb()
+                )
                 return@launch
             }
             val book = container.database.bookDao().getById(bookId) ?: return@launch
             val file = book.coverPath?.let { container.bookStorage.resolve(it) }
                 ?: return@launch
-            val palette = kotlinx.coroutines.withContext(
+            val extracted = kotlinx.coroutines.withContext(
                 kotlinx.coroutines.Dispatchers.Default
             ) {
                 runCatching {
@@ -2214,12 +2225,16 @@ class BookDetailViewModel(
                     )
                     val pixels = IntArray(48 * 48)
                     scaled.getPixels(pixels, 0, 48, 0, 0, 48, 48)
-                    app.xreader.ui.theme.CoverPaletteExtractor.extract(pixels)
+                    app.xreader.ui.theme.CoverPaletteExtractor.extract(pixels) to
+                        app.xreader.ui.theme.McuScheme.coverSeedArgb(pixels)
                 }.getOrNull()
             }
-            if (palette != null) {
-                container.coverPaletteCache.put(bookId.toString(), palette)
-                storyLocal.value = storyLocal.value.copy(coverPalette = palette)
+            if (extracted != null) {
+                container.coverPaletteCache.put(bookId.toString(), extracted.first)
+                storyLocal.value = storyLocal.value.copy(
+                    coverPalette = extracted.first,
+                    coverSeedArgb = extracted.second
+                )
             }
         }
     }

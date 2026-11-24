@@ -99,9 +99,24 @@ fun DownloadsScreen(
     /** v1.1.0 (§5.12): the storage card's settings door → Customise.
      * Optional so older call sites keep compiling; the shell wires
      * it to the Customise route. */
-    onOpenCustomise: () -> Unit = {}
+    onOpenCustomise: () -> Unit = {},
+    /** Code 120 completion (R4): under Material 3 the finished
+     * list's Sort action cycles the DESIGN's downloads-sort knob
+     * (persisted in DesignPrefs) instead of the local sort; the
+     * shell wires this to DesignPrefs. Default no-op keeps older
+     * call sites compiling; under Nocturne it is never called. */
+    onDownloadsSortChange: (
+        app.xreader.data.prefs.M3DownloadsSort
+    ) -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Code 120 completion (R4): the M3 downloads knobs — sort
+    // and the size line. Under Nocturne neither is read and the
+    // screen behaves exactly as shipped (local sort, size
+    // always shown).
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val isM3Downloads = designState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
     // Hoisted local (run #54's lesson): read the delegated state
     // once, then work from plain vals.
     val stateNow = state
@@ -149,11 +164,25 @@ fun DownloadsScreen(
             // didn't show.
             val usedBytes = novelsBytes + coversBytes + imageCacheBytes
             if (stateNow.deviceTotalBytes > 0L) {
-                ProgressPillBar(
-                    fraction = (usedBytes.toFloat() / stateNow.deviceTotalBytes.toFloat())
-                        .coerceIn(0f, 1f),
-                    modifier = Modifier.fillMaxWidth()
-                )
+                // Code 120 (A3): the storage card's bar is a
+                // wavy indicator under Material 3.
+                if (app.xreader.ui.theme.LocalDesignState.current.design ==
+                    app.xreader.data.prefs.AppDesign.MATERIAL3
+                ) {
+                    androidx.compose.material3.LinearWavyProgressIndicator(
+                        progress = {
+                            (usedBytes.toFloat() / stateNow.deviceTotalBytes.toFloat())
+                                .coerceIn(0f, 1f)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    ProgressPillBar(
+                        fraction = (usedBytes.toFloat() / stateNow.deviceTotalBytes.toFloat())
+                            .coerceIn(0f, 1f),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "${formatBytes(usedBytes)} of ${formatBytes(stateNow.deviceTotalBytes)} " +
@@ -369,25 +398,91 @@ fun DownloadsScreen(
             } else {
                 if (stateNow.finished.isNotEmpty()) {
                     item(key = "finished-header") {
-                        SectionHeader(
-                            title = "Downloaded",
-                            modifier = Modifier.fillMaxWidth(),
-                            actionText = "Sort: ${finishedSort.label}",
-                            onAction = {
-                                finishedSort = when (finishedSort) {
-                                    FinishedSort.SHELF -> FinishedSort.TITLE
-                                    FinishedSort.TITLE -> FinishedSort.NEWEST
-                                    FinishedSort.NEWEST -> FinishedSort.SHELF
+                        if (isM3Downloads) {
+                            // R4: the header action cycles the
+                            // design's sort knob (Recent → Title
+                            // → Size), persisted by the shell.
+                            SectionHeader(
+                                title = "Downloaded",
+                                modifier = Modifier.fillMaxWidth(),
+                                actionText = "Sort: " + when (
+                                    designState.downloadsSort
+                                ) {
+                                    app.xreader.data.prefs
+                                        .M3DownloadsSort.RECENT ->
+                                        "Recent"
+                                    app.xreader.data.prefs
+                                        .M3DownloadsSort.TITLE ->
+                                        "Title"
+                                    app.xreader.data.prefs
+                                        .M3DownloadsSort.SIZE ->
+                                        "Size"
+                                },
+                                onAction = {
+                                    onDownloadsSortChange(
+                                        when (designState.downloadsSort) {
+                                            app.xreader.data.prefs
+                                                .M3DownloadsSort.RECENT ->
+                                                app.xreader.data.prefs
+                                                    .M3DownloadsSort.TITLE
+                                            app.xreader.data.prefs
+                                                .M3DownloadsSort.TITLE ->
+                                                app.xreader.data.prefs
+                                                    .M3DownloadsSort.SIZE
+                                            app.xreader.data.prefs
+                                                .M3DownloadsSort.SIZE ->
+                                                app.xreader.data.prefs
+                                                    .M3DownloadsSort.RECENT
+                                        }
+                                    )
                                 }
-                            }
-                        )
+                            )
+                        } else {
+                            SectionHeader(
+                                title = "Downloaded",
+                                modifier = Modifier.fillMaxWidth(),
+                                actionText = "Sort: ${finishedSort.label}",
+                                onAction = {
+                                    finishedSort = when (finishedSort) {
+                                        FinishedSort.SHELF -> FinishedSort.TITLE
+                                        FinishedSort.TITLE -> FinishedSort.NEWEST
+                                        FinishedSort.NEWEST -> FinishedSort.SHELF
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
-                val finishedSorted = when (finishedSort) {
-                    FinishedSort.SHELF -> stateNow.finished
-                    FinishedSort.TITLE -> stateNow.finished.sortedBy { it.book.title.lowercase() }
-                    FinishedSort.NEWEST -> stateNow.finished
-                        .sortedByDescending { it.book.updatedAt }
+                // R4 sort: under Material 3 the knob orders the
+                // finished list (Recent = newest book activity
+                // first, the shipped Newest order; Size = the
+                // bytes the row itself prints). The transfer
+                // queue keeps its shipped order in both designs —
+                // DesignState carries no separate Active order.
+                val finishedSorted = if (isM3Downloads) {
+                    when (designState.downloadsSort) {
+                        app.xreader.data.prefs.M3DownloadsSort.RECENT ->
+                            stateNow.finished
+                                .sortedByDescending { it.book.updatedAt }
+                        app.xreader.data.prefs.M3DownloadsSort.TITLE ->
+                            stateNow.finished
+                                .sortedBy { it.book.title.lowercase() }
+                        app.xreader.data.prefs.M3DownloadsSort.SIZE ->
+                            stateNow.finished.sortedByDescending {
+                                if (it.isLocalFile) {
+                                    it.localFileBytes
+                                } else {
+                                    it.bytesOnDisk
+                                }
+                            }
+                    }
+                } else {
+                    when (finishedSort) {
+                        FinishedSort.SHELF -> stateNow.finished
+                        FinishedSort.TITLE -> stateNow.finished.sortedBy { it.book.title.lowercase() }
+                        FinishedSort.NEWEST -> stateNow.finished
+                            .sortedByDescending { it.book.updatedAt }
+                    }
                 }
                 items(finishedSorted, key = { "finished-${it.book.id}" }) { group ->
                     FinishedDownloadRow(
@@ -395,7 +490,9 @@ fun DownloadsScreen(
                         coverFile = coverFile,
                         onMakeEpub = { onMakeEpub(group) },
                         onOpen = { onOpenBook(group.book.id) },
-                        modifier = Modifier.animateItem(placementSpec = listPlacementSpec())
+                        modifier = Modifier.animateItem(placementSpec = listPlacementSpec()),
+                        showSize = !isM3Downloads ||
+                            designState.downloadsChapterSize
                     )
                 }
                 if (stateNow.finished.isEmpty()) {
@@ -513,10 +610,21 @@ private fun ActiveDownloadCard(
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    ProgressPillBar(
-                        fraction = progress,
-                        modifier = Modifier.weight(1f)
-                    )
+                    // Code 120 (A3): active-download rows take
+                    // the wavy indicator under Material 3.
+                    if (app.xreader.ui.theme.LocalDesignState.current.design ==
+                        app.xreader.data.prefs.AppDesign.MATERIAL3
+                    ) {
+                        androidx.compose.material3.LinearWavyProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else {
+                        ProgressPillBar(
+                            fraction = progress,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                     Text(
                         "${(progress * 100).toInt()}%",
                         style = MaterialTheme.typography.labelMedium,
@@ -581,7 +689,13 @@ private fun FinishedDownloadRow(
     coverFile: (String?) -> File?,
     onMakeEpub: () -> Unit,
     onOpen: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Code 120 completion (R4): the size line's knob — the
+     * downloaded chapters' total size for this book (the only
+     * size this surface carries; there are no per-chapter rows
+     * here to hang per-chapter sizes on). True under Nocturne
+     * and at the knob's On default. */
+    showSize: Boolean = true
 ) {
     val coverRequest = rememberSizedCover(coverFile(group.book.coverPath), 48, 68)
     GlassCard(
@@ -636,13 +750,15 @@ private fun FinishedDownloadRow(
                     },
                     color = MaterialTheme.colorScheme.secondary
                 )
-                Text(
-                    formatBytes(
-                        if (group.isLocalFile) group.localFileBytes else group.bytesOnDisk
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (showSize) {
+                    Text(
+                        formatBytes(
+                            if (group.isLocalFile) group.localFileBytes else group.bytesOnDisk
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 PrimaryPill(

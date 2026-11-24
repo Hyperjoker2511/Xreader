@@ -107,6 +107,7 @@ import app.xreader.domain.reader.ReaderMode
 import app.xreader.domain.reader.WpmEstimator
 import app.xreader.ui.common.ElasticSlider
 import app.xreader.ui.common.EmptyState
+import app.xreader.ui.localreader.HIGHLIGHT_TINT_ARGB
 import app.xreader.ui.theme.ReaderAmoled
 import app.xreader.ui.theme.ReaderPalette
 import app.xreader.ui.theme.ReaderPalettes
@@ -172,6 +173,14 @@ fun ReaderScreen(
     )
     val voiceUi by viewModel.voiceUi.collectAsStateWithLifecycle()
     val focus by viewModel.focus.collectAsStateWithLifecycle()
+    // Code 120: the design switch picks this screen's chrome —
+    // Nocturne's capsule (ReaderChrome) or the Material 3 form
+    // (M3ReaderChromeBar: floating toolbar / top-and-bottom
+    // bars). Everything else in the reader is design-neutral.
+    val designState by container.designPrefs.state
+        .collectAsStateWithLifecycle(
+            initialValue = app.xreader.data.prefs.DesignState()
+        )
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
     val allHighlights by viewModel.highlights.collectAsStateWithLifecycle()
     // v1.7 Patch 3: the prepared-EPUB surfaces — in-book
@@ -1112,6 +1121,18 @@ fun ReaderScreen(
             // per-segment state; there is no window and no
             // activation gap.
             config.mode == ReaderMode.SCROLL && state.chapterText != null -> {
+                // Code 120 F1 (recheck of the L5 fix): the
+                // design's default highlight tint, hoisted for
+                // the two colour fulfilments below. Under
+                // Material 3 an applied tint equal to it is
+                // stored as the "scheme" token — the five fixed
+                // tokens cannot name it, and the mapping's else
+                // filed it as "amber", a colour the user never
+                // picked. Under Nocturne the resolver returns
+                // HIGHLIGHT_TINT_ARGB, and the fulfilments'
+                // guard excludes that value, so no Nocturne
+                // store can change.
+                val m3DefaultTint = defaultHighlightTintArgb()
                 DocumentReader(
                     chapters = state.chapters,
                     segmentStates = state.segmentStates,
@@ -1254,7 +1275,21 @@ fun ReaderScreen(
                     // split loop, writing the picked tint's
                     // token instead of the constant.
                     onApplyHighlight = { sel, tintArgb ->
-                        val token = highlightTokenForTint(tintArgb)
+                        // F1: the design default under M3 is
+                        // stored as "scheme" (see the hoist
+                        // above); every other tint keeps the
+                        // shipped token mapping.
+                        val token = if (
+                            designState.design ==
+                                app.xreader.data.prefs.AppDesign
+                                    .MATERIAL3 &&
+                            tintArgb == m3DefaultTint &&
+                            tintArgb != HIGHLIGHT_TINT_ARGB
+                        ) {
+                            "scheme"
+                        } else {
+                            highlightTokenForTint(tintArgb)
+                        }
                         for (chapterIndex in
                             sel.startChapter..sel.endChapter) {
                             val chapterText = state.chapters
@@ -1290,7 +1325,21 @@ fun ReaderScreen(
                     onUpdateHighlightColor = { highlight, tintArgb ->
                         viewModel.updateHighlightColor(
                             highlight,
-                            highlightTokenForTint(tintArgb)
+                            // F1: the same "scheme" store as
+                            // the apply door above — a circle-1
+                            // re-tint under M3 names the design
+                            // default, not "amber".
+                            if (
+                                designState.design ==
+                                    app.xreader.data.prefs
+                                        .AppDesign.MATERIAL3 &&
+                                tintArgb == m3DefaultTint &&
+                                tintArgb != HIGHLIGHT_TINT_ARGB
+                            ) {
+                                "scheme"
+                            } else {
+                                highlightTokenForTint(tintArgb)
+                            }
                         )
                     },
                     onRemoveHighlight = {
@@ -1384,6 +1433,190 @@ fun ReaderScreen(
         // estimates — has nothing honest to say about a page
         // list and stays away.
         if (state.mangaPages == null) {
+        if (designState.design ==
+            app.xreader.data.prefs.AppDesign.MATERIAL3
+        ) {
+        M3ReaderChromeBar(
+            visible = chromeVisible,
+            chromeStyle = designState.readerChrome,
+            bookTitle = state.bookTitle,
+            // v1.1.2: the header's chapter line and the footer's
+            // both derive from the chapter's POSITION through
+            // ReaderCounters — the source-given name is shown
+            // only when it does not contradict that position.
+            chapterTitle = if (pdfReady != null) {
+                // OE-1: a PDF's header second line is the
+                // outline section the page sits in (or
+                // nothing) — never a chapter line.
+                pdfReady.anchorTitle ?: ""
+            } else {
+                ReaderCounters.headerLine(
+                    chapterTitle = state.chapter?.title ?: "",
+                    chapterIndex = state.chapterIndex,
+                    chapterCount = state.chapters.size,
+                    // v1.3.2 (item 79): the chapter's OWN number —
+                    // the header agrees with the chapter that was
+                    // actually opened, never with list position.
+                    ownNumber = state.chapter?.let {
+                        app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
+                    }
+                )
+            },
+            // Part 2 (A8): for a TOC book the counters count
+            // TOC ENTRIES — the position is the current TOC
+            // entry, the count is the TOC's size, and there
+            // is no own number (the label must be the TOC
+            // position, never a spine number the reader never
+            // sees). Non-TOC books pass exactly today's
+            // values.
+            chapterIndex = if (state.tocEntries.isNotEmpty()) {
+                maxOf(0, currentTocIndex)
+            } else {
+                state.chapterIndex
+            },
+            chapterCount = if (state.tocEntries.isNotEmpty()) {
+                state.tocEntries.size
+            } else {
+                state.chapters.size
+            },
+            chapterOwnNumber = if (state.tocEntries.isNotEmpty()) {
+                null
+            } else {
+                state.chapter?.let {
+                    app.xreader.domain.reader.ChapterDisplayOrder.numberOf(it)
+                }
+            },
+            bookFraction = pdfReady?.bookFraction ?: state.bookFraction,
+            minutesLeftInChapter = state.minutesLeftInChapter,
+            minutesLeftInBook = state.minutesLeftInBook,
+            showTimeEstimates = pdfReady == null &&
+                ReaderCounters.showTimeEstimates(
+                    state.chapterText?.content
+                ),
+            bookmarked = if (pdfReady != null) {
+                viewModel.pdfBookmarkedHere(bookmarks)
+            } else {
+                state.currentPositionBookmarked
+            },
+            hasPrevious = when {
+                pdfReady != null -> pdfReady.page > 0
+                // v1.7 OE-4: in the CBZ page world the turn
+                // buttons turn pages.
+                state.cbzPages.isNotEmpty() -> state.cbzPage > 0
+                else -> state.hasPrevious
+            },
+            hasNext = when {
+                pdfReady != null -> pdfReady.page < pdfReady.pageCount - 1
+                state.cbzPages.isNotEmpty() ->
+                    state.cbzPage < state.cbzPages.lastIndex
+                else -> state.hasNext
+            },
+            onBack = onBack,
+            onToggleBookmark = {
+                if (pdfReady != null) {
+                    // OE-1 (R19): the bookmark is the page.
+                    val wasBookmarked =
+                        viewModel.pdfBookmarkedHere(bookmarks)
+                    viewModel.togglePdfBookmark()
+                    notice = if (wasBookmarked) {
+                        "Bookmark removed"
+                    } else {
+                        "Bookmarked"
+                    }
+                } else if (state.currentPositionBookmarked) {
+                    viewModel.removeBookmarkAtCurrentPosition()
+                    notice = "Bookmark removed"
+                } else {
+                    viewModel.addBookmarkHere()
+                    notice = "Bookmarked"
+                }
+            },
+            onPreviousChapter = {
+                when {
+                    pdfReady != null ->
+                        viewModel.pdfGoToPage(pdfReady.page - 1)
+                    state.cbzPages.isNotEmpty() ->
+                        viewModel.cbzGoToPage(state.cbzPage - 1)
+                    else -> viewModel.previousChapter()
+                }
+            },
+            onNextChapter = {
+                when {
+                    pdfReady != null ->
+                        viewModel.pdfGoToPage(pdfReady.page + 1)
+                    state.cbzPages.isNotEmpty() ->
+                        viewModel.cbzGoToPage(state.cbzPage + 1)
+                    else -> viewModel.nextChapter()
+                }
+            },
+            onSeekFraction = { fraction ->
+                when {
+                    pdfReady != null -> {
+                        val target = (fraction * pdfReady.pageCount).toInt()
+                            .coerceIn(0, maxOf(0, pdfReady.pageCount - 1))
+                        viewModel.pdfGoToPage(target)
+                    }
+                    // v1.7 OE-4: the slider seeks pages in the
+                    // CBZ page world.
+                    state.cbzPages.isNotEmpty() -> {
+                        val target = (fraction * state.cbzPages.size).toInt()
+                            .coerceIn(0, state.cbzPages.lastIndex)
+                        viewModel.cbzGoToPage(target)
+                    }
+                    else -> {
+                        val target = (fraction * state.chapters.size).toInt()
+                            .coerceIn(0, maxOf(0, state.chapters.lastIndex))
+                        viewModel.openChapter(target)
+                    }
+                }
+            },
+            onOpenToc = { activeSheet = ActiveSheet.TOC },
+            onOpenSearch = { activeSheet = ActiveSheet.SEARCH },
+            onOpenListen = { activeSheet = ActiveSheet.LISTEN },
+            onOpenFocus = { activeSheet = ActiveSheet.FOCUS },
+            onOpenSettings = {
+                settingsInitialPage = "index"
+                activeSheet = ActiveSheet.SETTINGS
+            },
+            onOpenAi = { onOpenAiPage() },
+            pdfPageLabel = pdfPageLabel,
+            // OE-1 (R13, OQ4): the mode switch on the bar —
+            // the label names the mode a tap enters; a book
+            // with no text layer carries the honest line
+            // instead, and its tap explains (R22).
+            pdfModeLabel = when {
+                pdfReady == null -> null
+                pdfReady.textAvailable == false -> "No text layer"
+                pdfReady.mode == PdfReadMode.PAGES -> "Text reflow"
+                else -> "Pages"
+            },
+            onTogglePdfMode = {
+                val ready = pdfReady
+                if (ready != null) {
+                    if (ready.textAvailable == false) {
+                        notice = "This book has no text layer, so " +
+                            "there's no text view — the pages " +
+                            "are all there is."
+                    } else {
+                        viewModel.setPdfMode(
+                            ready.mode == PdfReadMode.PAGES
+                        )
+                    }
+                }
+            },
+            // v1.7 OE-4: in the CBZ page world the footer
+            // speaks in pages, and the text-only doors
+            // (Contents / Search / Listen / Ask AI) stay away —
+            // there is no text on an image page to serve them.
+            cbzPageLabel = if (state.cbzPages.isNotEmpty()) {
+                "Page ${state.cbzPage + 1} / ${state.cbzPages.size}"
+            } else {
+                null
+            },
+            onTopBarHeight = { px -> if (px > 0) topChromePx = px },
+            onBottomBarHeight = { px -> if (px > 0) bottomChromePx = px }
+        )
+        } else {
         ReaderChrome(
             visible = chromeVisible,
             palette = palette,
@@ -1565,6 +1798,7 @@ fun ReaderScreen(
             onTopBarHeight = { px -> if (px > 0) topChromePx = px },
             onBottomBarHeight = { px -> if (px > 0) bottomChromePx = px }
         )
+        }
         } // (text chrome — skipped while the image reader is up)
 
         // Eye-tracking status (Labs): small, honest, dismissible.

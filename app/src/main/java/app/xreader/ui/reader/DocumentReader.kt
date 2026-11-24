@@ -2445,10 +2445,21 @@ private fun DocumentBlock(
             val highlightColor = palette.accent.copy(alpha = 0.38f)
             val spokenColor = palette.accent.copy(alpha = 0.30f)
             val overlayColor = palette.accent.copy(alpha = 0.20f)
+            // Code 120 F1: the design's selection tint, read in
+            // composition and keyed into the remember below —
+            // a stored "scheme" highlight (written only under
+            // Material 3, for the design-default tint) washes
+            // in this colour at the site's uniform alpha.
+            // Under Nocturne the local holds the ReaderViolet
+            // value, whose 0.38 wash is exactly what the token
+            // fallback renders, so the wash cannot change.
+            val selectionTint =
+                app.xreader.ui.theme.LocalSelectionTint.current
             val backgrounds = remember(
                 block, range.start, range.end, highlights,
                 spokenRange, overlayActive,
-                highlightColor, spokenColor, overlayColor
+                highlightColor, spokenColor, overlayColor,
+                selectionTint
             ) {
                 blockBackgrounds(
                     blockStart = range.start,
@@ -2460,8 +2471,13 @@ private fun DocumentBlock(
                     spokenColor = spokenColor,
                     overlayColor = overlayColor,
                     highlightColors = highlights.map { highlight ->
-                        Color(highlightTintForToken(highlight.color))
-                            .copy(alpha = 0.38f)
+                        if (highlight.color == "scheme") {
+                            selectionTint.copy(alpha = 0.38f)
+                        } else {
+                            Color(
+                                highlightTintForToken(highlight.color)
+                            ).copy(alpha = 0.38f)
+                        }
                     }
                 )
             }

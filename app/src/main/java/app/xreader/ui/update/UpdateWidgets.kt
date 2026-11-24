@@ -32,7 +32,7 @@ fun UpdateProgressBlock(
         is UpdateDownloadPhase.Running -> {
             Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (phase.fraction != null) {
-                    LinearProgressIndicator(
+                    app.xreader.ui.common.DesignLinearProgress(
                         progress = { phase.fraction },
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -42,7 +42,9 @@ fun UpdateProgressBlock(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    app.xreader.ui.common.DesignLinearProgressIndeterminate(
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Text(
                         "Downloading…",
                         style = MaterialTheme.typography.bodyMedium,

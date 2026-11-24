@@ -16,10 +16,18 @@ import app.xreader.ui.theme.isDarkScheme
 import app.xreader.ui.theme.withTrueBlack
 
 /**
- * The frozen book page's colour pin (v1.1.0, Nocturne reskin
- * design §3): BookDetailScreen.kt is FROZEN — this wrapper lives
- * OUTSIDE it, at the book-detail route's call site, and changes
- * nothing but the COLOURS its subtree sees.
+ * The book page's colour pin (v1.1.0, Nocturne reskin design
+ * §3): this wrapper lives OUTSIDE BookDetailScreen.kt, at the
+ * book-detail route's call site, and changes nothing but the
+ * COLOURS its subtree sees. (The screen itself was frozen
+ * when this wrapper was written; the owner's 2026-11-24
+ * ruling — "Not frozen I said okay" — has since opened it for
+ * the Material 3 layout, which branches inside the screen.
+ * The pin itself is unchanged — and, per the code-120 fix
+ * pass (recheck L1), it resolves ONLY under Nocturne: under
+ * Material 3 the wrapper never resolves it, so an M3 book
+ * page wears the ambient M3 scheme (or the cover scheme
+ * above), never a Nocturne preset or snapshot.)
  *
  * When [AppearanceState.bookDetailScheme] holds a snapshot (the
  * pre-flip scheme the one-time v2 migration copied verbatim),
@@ -50,6 +58,16 @@ import app.xreader.ui.theme.withTrueBlack
 @Composable
 fun BookDetailTheme(
     appearance: AppearanceState,
+    /** Code 120 (design §2.5 R8): the design state + the open
+     * book's MCU cover seed. In the Material 3 design with the
+     * book-page cover-colour knob on, this subtree wears a
+     * scheme generated from the cover (MCU Content style) —
+     * containers and accents only; the app scheme resumes on
+     * exit because the scheme is provided to this subtree
+     * alone. Nocturne never takes this branch. */
+    design: app.xreader.data.prefs.DesignState =
+        app.xreader.data.prefs.DesignState(),
+    coverSeedArgb: Int? = null,
     content: @Composable () -> Unit
 ) {
     // Hoisted to plain local vals before any null check (the
@@ -59,6 +77,17 @@ fun BookDetailTheme(
     val trueBlack = appearance.trueBlack
     val darkTheme = isDarkScheme()
     val context = LocalContext.current
+
+    // Code 120 (R8): the cover-derived pair, computed
+    // unconditionally (hook order never depends on the seed's
+    // arrival) and applied only in the M3 branch below.
+    val coverPair = remember(coverSeedArgb) {
+        coverSeedArgb?.let { seed ->
+            app.xreader.ui.theme.McuScheme.contentScheme(seed, true) to
+                app.xreader.ui.theme.McuScheme.contentScheme(seed, false)
+        }
+    }
+
 
     // The Wallpaper path, resolved the same way XreaderTheme
     // resolves it — remembered unconditionally so this
@@ -87,6 +116,51 @@ fun BookDetailTheme(
                 else appSchemeNamed(name)
             }
         }
+    }
+
+    // Code 120 (R8): the Material 3 cover scheme — placed after
+    // every remember above so this composable's hook order is
+    // the same on both paths (the file's own rule).
+    if (design.design == app.xreader.data.prefs.AppDesign.MATERIAL3 &&
+        design.bookPageCoverColour && coverPair != null
+    ) {
+        val coverColors = if (darkTheme) coverPair.first else coverPair.second
+        val coverAppScheme = app.xreader.ui.theme.AppScheme(
+            name = "Cover",
+            dark = coverPair.first,
+            light = coverPair.second,
+            primaryTextDark = coverPair.first.primary,
+            primaryTextLight = coverPair.second.primary,
+            aiTextDark = coverPair.first.tertiary,
+            aiTextLight = coverPair.second.tertiary,
+            errorTextDark = coverPair.first.error,
+            errorTextLight = coverPair.second.error,
+            sageTextDark = coverPair.first.secondary,
+            sageTextLight = coverPair.second.secondary
+        )
+        CompositionLocalProvider(LocalAppScheme provides coverAppScheme) {
+            MaterialTheme(
+                colorScheme = coverColors,
+                typography = MaterialTheme.typography,
+                shapes = MaterialTheme.shapes,
+                content = content
+            )
+        }
+        return
+    }
+
+    // Code 120 fix pass (recheck L1 — BLOCKER): under Material
+    // 3 the Nocturne colour pin NEVER resolves. The cover
+    // branch above returns only when the knob is on AND a seed
+    // has landed; in every other M3 case (knob off, seed still
+    // computing, cover yields no seed) the page wears the
+    // ambient M3 scheme like every other M3 surface — it must
+    // not fall through to the pin below, which would dress the
+    // page in a Nocturne preset / custom snapshot. Nocturne's
+    // pin path below is untouched.
+    if (design.design == app.xreader.data.prefs.AppDesign.MATERIAL3) {
+        content()
+        return
     }
 
     val schemeNow = resolvedScheme

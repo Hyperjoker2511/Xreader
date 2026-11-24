@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,6 +43,8 @@ import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -50,6 +53,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -112,6 +116,16 @@ fun ProfileScreen(
     onOpenVocab: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Code 120 completion (§2.5 R31 + §2.11 Profile): under
+    // Material 3 the identity is the design's stock assembly
+    // (avatar on a shape-library field, name emphasized) in
+    // the header knob's Card or Plain form, and the Nocturne
+    // showpiece layers (breathing glow, drift strip, the 3D
+    // card) do not render. Under Nocturne nothing here is
+    // read and the page is exactly as shipped.
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val isM3Profile = designState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
     val context = LocalContext.current
     var editingName by remember { mutableStateOf(false) }
     var nameDraft by remember { mutableStateOf("") }
@@ -136,11 +150,15 @@ fun ProfileScreen(
         // v1.0.4 (D12): the breathing glow — a Me-scoped overlay
         // layer behind this screen's content (never a haze source,
         // never an effect; static under reduce-motion / low RAM).
-        MeBreathingGlow(
-            reduceMotion = reduceMotion,
-            lowRam = lowRam,
-            modifier = Modifier.fillMaxSize()
-        )
+        // Code 120 completion: a Nocturne showpiece layer — it
+        // does not render inside the Material 3 design.
+        if (!isM3Profile) {
+            MeBreathingGlow(
+                reduceMotion = reduceMotion,
+                lowRam = lowRam,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
         Column(
             Modifier
                 .fillMaxSize()
@@ -197,6 +215,31 @@ fun ProfileScreen(
                     }
                 }
 
+                if (isM3Profile) {
+                    // Code 120 completion (R31): the M3 identity
+                    // — stock parts only, the header knob's form.
+                    // Edit name, avatar colour and everything
+                    // below stay shared with Nocturne.
+                    M3ProfileIdentity(
+                        name = profile.displayName,
+                        title = state.title,
+                        level = profile.level,
+                        streakDays = state.stats.currentStreak,
+                        avatarFile = profile.avatarPath?.let {
+                            File(
+                                container.bookStorage.resolve(it)
+                                    .absolutePath
+                            )
+                        },
+                        avatarColour = avatarColourNamed(
+                            state.avatarColour
+                        ) ?: MaterialTheme.colorScheme.primary,
+                        cardForm = designState.profileHeaderCard,
+                        onAvatarClick = {
+                            avatarLauncher.launch(arrayOf("image/*"))
+                        }
+                    )
+                } else {
                 // v1.0.1 Me showpiece: scheme-colour drift strip —
                 // the screen's expressive signature (Celebration
                 // family; static under Reduce Motion / low RAM).
@@ -239,6 +282,7 @@ fun ProfileScreen(
                     motionTiltEnabled = appearanceForCard.meCardMotionTilt,
                     onAvatarClick = { avatarLauncher.launch(arrayOf("image/*")) }
                 )
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -873,3 +917,104 @@ fun dailyGoalFraction(todayMinutes: Int, goalMinutes: Int): Float =
     } else {
         (todayMinutes.toFloat() / goalMinutes.toFloat()).coerceIn(0f, 1f)
     }
+
+/**
+ * Code 120 completion (R31): the Profile identity in the
+ * Material 3 design — assembled from stock parts only: the
+ * avatar on a shape-library marker field (§1.3's Profile
+ * spend: the Cookie shape in primaryContainer, the photo or
+ * the initial over it, tappable to change the avatar exactly
+ * as the 3D card's avatar is), the name in headlineSmall
+ * emphasized, level · title and the streak beneath. The
+ * header knob picks the form: inside a Card (default) or as
+ * a plain row. Nocturne never renders this — its identity is
+ * IdentityCard3D.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun M3ProfileIdentity(
+    name: String,
+    title: String,
+    level: Int,
+    streakDays: Int,
+    avatarFile: File?,
+    avatarColour: androidx.compose.ui.graphics.Color,
+    cardForm: Boolean,
+    onAvatarClick: () -> Unit
+) {
+    val fieldShape = androidx.compose.material3.MaterialShapes
+        .Cookie9Sided.toShape()
+    val content: @Composable () -> Unit = {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Box(
+                Modifier
+                    .size(64.dp)
+                    .clip(fieldShape)
+                    .background(
+                        MaterialTheme.colorScheme.primaryContainer
+                    )
+                    .clickable(onClick = onAvatarClick),
+                contentAlignment = Alignment.Center
+            ) {
+                if (avatarFile != null && avatarFile.exists()) {
+                    AsyncImage(
+                        model = avatarFile,
+                        contentDescription = "Your avatar",
+                        contentScale = androidx.compose.ui.layout
+                            .ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(fieldShape)
+                    )
+                } else {
+                    Text(
+                        name.trim().firstOrNull()?.uppercase() ?: "M",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = avatarColour
+                    )
+                }
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    name.ifBlank { "Me" },
+                    style = MaterialTheme.typography
+                        .headlineSmallEmphasized,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style
+                        .TextOverflow.Ellipsis
+                )
+                Text(
+                    "Level $level · $title",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (streakDays > 0) {
+                    Text(
+                        "$streakDays-day streak",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+    }
+    if (cardForm) {
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor =
+                    MaterialTheme.colorScheme.surfaceContainer
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(Modifier.padding(16.dp)) {
+                content()
+            }
+        }
+    } else {
+        content()
+    }
+}

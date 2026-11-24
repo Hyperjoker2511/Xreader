@@ -1974,7 +1974,25 @@ fun TocSheet(
     /** Phase 6: share a highlight as a quote-card PNG. */
     onQuoteCard: (Highlight) -> Unit = {}
 ) {
-    var tab by remember { mutableIntStateOf(0) }
+    // Code 120 (§2.11 Reader): in the Material 3 design the
+    // sheet opens on the design's Contents-tab knob; Nocturne
+    // opens on Chapters exactly as before.
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    var tab by remember {
+        mutableIntStateOf(
+            if (designState.design ==
+                app.xreader.data.prefs.AppDesign.MATERIAL3
+            ) {
+                when (designState.contentsTab) {
+                    app.xreader.data.prefs.M3ContentsTab.CHAPTERS -> 0
+                    app.xreader.data.prefs.M3ContentsTab.BOOKMARKS -> 1
+                    app.xreader.data.prefs.M3ContentsTab.HIGHLIGHTS -> 2
+                }
+            } else {
+                0
+            }
+        )
+    }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         SectionHeader(title = "Contents", eyebrow = "This book",
     modifier = Modifier,

@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -105,6 +106,14 @@ fun MoreScreen(
     // this screen like every other — the tier itself rides
     // along untouched in the scaled row.
     val metrics = LocalUiMetrics.current
+    // Code 120 completion (§2.11 Profile + M1): the M3 knobs
+    // for this hub — the header-card form and the doors
+    // list/grid. Under Nocturne neither is read: the identity
+    // rides its GlassCard and the doors keep the shipped
+    // Orion arrangement, whatever the knobs say.
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val isM3Me = designState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
     Column(
         Modifier
             .fillMaxSize()
@@ -130,45 +139,31 @@ fun MoreScreen(
         // v1.0.1: "Me" — the personal home base is the FIRST thing
         // on this screen, one tap, labelled. (Visibility law: who
         // uses it if it's not visible?)
-        GlassCard(
-            onClick = onProfile,
-            modifier = Modifier.fillMaxWidth(),
-            bouncePress = true
-        ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
+        // Code 120 completion: under Material 3 the header knob
+        // picks the form — Card (this shipped GlassCard) or
+        // Plain (the same identity row with no card around it).
+        if (isM3Me && !designState.profileHeaderCard) {
+            MeIdentityRow(
+                meName = meName,
+                meLevel = meLevel,
+                meTitle = meTitle,
+                meStreak = meStreak,
+                onClick = onProfile,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else {
+            GlassCard(
+                onClick = onProfile,
+                modifier = Modifier.fillMaxWidth(),
+                bouncePress = true
             ) {
-                Box(
-                    Modifier
-                        .size(52.dp)
-                        .clip(androidx.compose.foundation.shape.CircleShape)
-                        .background(MaterialTheme.colorScheme.primary),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        meName.trim().firstOrNull()?.uppercase() ?: "M",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        if (meName.isBlank()) "Me" else meName,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        "Level $meLevel · $meTitle" +
-                            if (meStreak > 0) " · $meStreak-day streak" else "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                MeIdentityRow(
+                    meName = meName,
+                    meLevel = meLevel,
+                    meTitle = meTitle,
+                    meStreak = meStreak,
+                    onClick = null,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }
@@ -286,7 +281,15 @@ fun MoreScreen(
                 onClick = onAbout
             )
         )
-        if (metrics.tier == UiTier.COMPACT) {
+        if (isM3Me && designState.profileDoorsList) {
+            // Code 120 completion: the M3 doors form — full-
+            // width list rows (the design's default). Grid
+            // (the knob's other form) is the shipped Orion
+            // arrangement below, which Nocturne always uses.
+            doors.forEach { door ->
+                MeDoorListRow(door, Modifier.fillMaxWidth())
+            }
+        } else if (metrics.tier == UiTier.COMPACT) {
             doors.forEach { door ->
                 MeDoorCard(door, Modifier.fillMaxWidth())
             }
@@ -377,6 +380,127 @@ private fun MeDoorCard(door: MeDoorData, modifier: Modifier = Modifier) {
                 minLines = 2,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * Code 120 completion: the Me hub's identity row — avatar
+ * initial, name, level · title · streak, chevron — shared by
+ * the header's Card form (inside the shipped GlassCard,
+ * [onClick] null: the card is the tap target) and the M3
+ * Plain form (the bare row, itself the tap target).
+ */
+@Composable
+private fun MeIdentityRow(
+    meName: String,
+    meLevel: Int,
+    meTitle: String,
+    meStreak: Int,
+    onClick: (() -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier.then(
+            if (onClick != null) {
+                Modifier.clickable(onClick = onClick)
+            } else {
+                Modifier
+            }
+        ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Box(
+            Modifier
+                .size(52.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                meName.trim().firstOrNull()?.uppercase() ?: "M",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onPrimary
+            )
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (meName.isBlank()) "Me" else meName,
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                "Level $meLevel · $meTitle" +
+                    if (meStreak > 0) " · $meStreak-day streak" else "",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.ArrowForward,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * Code 120 completion: one Me door as a full-width list row —
+ * the icon in its badge, the plain-word title, the subtitle
+ * given its two lines, and the forward chevron. The M3 doors
+ * form (the design's default); the grid form is MeDoorCard.
+ */
+@Composable
+private fun MeDoorListRow(door: MeDoorData, modifier: Modifier = Modifier) {
+    GlassCard(
+        onClick = door.onClick,
+        modifier = modifier,
+        bouncePress = true,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Box(
+                Modifier
+                    .size(42.dp)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceContainerHigh,
+                        androidx.compose.foundation.shape
+                            .RoundedCornerShape(16.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    door.icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    door.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    door.subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

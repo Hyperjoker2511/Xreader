@@ -100,19 +100,31 @@ data class PdfTextSelection(
 
 /** A page's text with its stored highlights (and the live
  * selection) as background spans — the Text view's rendering
- * of the shared highlight store. */
+ * of the shared highlight store.
+ *
+ * Code 120 fix pass (recheck L3): both backgrounds derive
+ * from [selectionTint] — the active design's selection tint,
+ * threaded exactly the way Reflow's renderer (this function's
+ * own span shape) takes it. The parameter defaults to the
+ * shipped ReaderViolet value, so every existing caller —
+ * including the gate tests that pin this renderer — renders
+ * byte-identically under Nocturne: the stored-highlight span
+ * is the tint at 0.4 alpha (the [HIGHLIGHT_TINT_ARGB] value)
+ * and the live-selection span the tint at 0.55. */
 fun highlightedPdfText(
     pageText: String,
     page: Int,
     highlights: List<StoredSelectionHighlight>,
-    selection: PdfTextSelection?
+    selection: PdfTextSelection?,
+    selectionTint: androidx.compose.ui.graphics.Color =
+        androidx.compose.ui.graphics.Color(0xFF8B5CF6)
 ): androidx.compose.ui.text.AnnotatedString =
     androidx.compose.ui.text.buildAnnotatedString {
         append(pageText)
         for (range in highlightSpansFor(pageText, page, highlights)) {
             addStyle(
                 androidx.compose.ui.text.SpanStyle(
-                    background = androidx.compose.ui.graphics.Color(HIGHLIGHT_TINT_ARGB)
+                    background = selectionTint.copy(alpha = 0.4f)
                 ),
                 range.first, range.last + 1
             )
@@ -123,8 +135,7 @@ fun highlightedPdfText(
             if (end > start) {
                 addStyle(
                     androidx.compose.ui.text.SpanStyle(
-                        background = androidx.compose.ui.graphics.Color(0x8B5CF6)
-                            .copy(alpha = 0.55f)
+                        background = selectionTint.copy(alpha = 0.55f)
                     ),
                     start, end
                 )

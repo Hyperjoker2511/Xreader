@@ -63,6 +63,26 @@ fun GeneratedArtScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val selected = state.selected
     BackHandler(enabled = selected != null) { viewModel.clearSelection() }
+    // Code 120 completion (R33): the M3 gallery-columns knob —
+    // Auto is breakpoint-driven (an adaptive min cell size),
+    // 2 / 3 pin the count. Under Nocturne the shipped fixed
+    // two columns stand and the knob is never read.
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val artColumns = if (
+        designState.design ==
+            app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        when (designState.galleryColumns) {
+            app.xreader.data.prefs.M3GalleryColumns.AUTO ->
+                GridCells.Adaptive(minSize = 150.dp)
+            app.xreader.data.prefs.M3GalleryColumns.TWO ->
+                GridCells.Fixed(2)
+            app.xreader.data.prefs.M3GalleryColumns.THREE ->
+                GridCells.Fixed(3)
+        }
+    } else {
+        GridCells.Fixed(2)
+    }
 
     Column(
         Modifier
@@ -108,7 +128,7 @@ fun GeneratedArtScreen(
                     "and tap Illustrate."
             )
             else -> LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
+                columns = artColumns,
                 modifier = Modifier.fillMaxSize(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
