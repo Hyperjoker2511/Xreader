@@ -445,7 +445,12 @@ fun ReaderScreen(
     // — (chapterIndex, start, end) — so the note lands on the
     // paragraph's own chapter even if the reader has crossed
     // into another one before saving.
-    var pendingNoteHighlight by remember { mutableStateOf<Triple<Int, Int, Int>?>(null) }
+    // Code 117 (§8): the pending note now carries the model's
+    // WHOLE selection — a range spanning chapters writes the
+    // split set on save, the note text shared (§8's rule).
+    var pendingNoteHighlight by remember {
+        mutableStateOf<ReaderTextSelection?>(null)
+    }
     var noteText by remember { mutableStateOf("") }
 
     // SelectionBar §9.2 (Revision 1): the reader back chain.
@@ -1145,31 +1150,102 @@ fun ReaderScreen(
                     onChapterCrossed = { chapterIndex ->
                         viewModel.onChapterCrossed(chapterIndex)
                     },
-                    // A5: ranges resolve against the
-                    // paragraph's OWN segment text; marks are
-                    // written against that chapter. Bookmark
-                    // never routes through onPosition.
-                    onParagraphAction = { chapterIndex, blockIndex, action ->
-                        val segmentText = state.chapters
-                            .getOrNull(chapterIndex)
-                            ?.let { state.segmentTexts[it.id] }
-                        val range = segmentText?.rangeOf(blockIndex)
-                        if (range != null) {
-                            when (action) {
-                                ParagraphAction.HIGHLIGHT ->
-                                    viewModel.addHighlightInChapter(
-                                        chapterIndex, range.start, range.end
-                                    )
-                                ParagraphAction.NOTE ->
-                                    pendingNoteHighlight = Triple(
-                                        chapterIndex, range.start, range.end
-                                    )
-                                ParagraphAction.BOOKMARK -> {
-                                    viewModel.addBookmarkInChapter(
-                                        chapterIndex, range.start
-                                    )
-                                    notice = "Bookmarked this passage"
+                    // Code 117 (§7.3): the selected text,
+                    // assembled from the model — a chapter
+                    // index resolves through the chapter list
+                    // to its ID, then to the segment text
+                    // (segmentTexts is keyed by chapter ID,
+                    // never by index). A spanning range joins
+                    // its chapters' substrings with a blank
+                    // line; within a chapter the flattened
+                    // text already carries "\n\n" between
+                    // blocks, so paragraph breaks come out as
+                    // blank lines by construction.
+                    selectionText = { sel ->
+                        val parts = ArrayList<String>()
+                        var complete = true
+                        for (chapterIndex in
+                            sel.startChapter..sel.endChapter) {
+                            val chapterText = state.chapters
+                                .getOrNull(chapterIndex)
+                                ?.let { state.segmentTexts[it.id] }
+                            if (chapterText == null) {
+                                complete = false
+                                break
+                            }
+                            val from = if (
+                                chapterIndex == sel.startChapter
+                            ) {
+                                sel.start
+                            } else {
+                                0
+                            }
+                            val to = if (
+                                chapterIndex == sel.endChapter
+                            ) {
+                                sel.end
+                            } else {
+                                chapterText.length
+                            }
+                            if (to > from) {
+                                parts += chapterText.text.substring(
+                                    from, to
+                                )
+                            }
+                        }
+                        if (complete) {
+                            parts.joinToString("\n\n")
+                        } else {
+                            ""
+                        }
+                    },
+                    // Code 117 (§8): true-range fulfilment —
+                    // the bar's Highlight / Note / Bookmark
+                    // arms run against the model's range, not
+                    // a paragraph. A spanning range writes one
+                    // Highlight per chapter segment (the split
+                    // rule); a Note opens the editor once and
+                    // splits on save; a Bookmark anchors at the
+                    // range's true start.
+                    onRangeAction = { sel, action ->
+                        when (action) {
+                            ParagraphAction.HIGHLIGHT -> {
+                                for (chapterIndex in
+                                    sel.startChapter..sel.endChapter) {
+                                    val chapterText = state.chapters
+                                        .getOrNull(chapterIndex)
+                                        ?.let {
+                                            state.segmentTexts[it.id]
+                                        }
+                                        ?: continue
+                                    val from = if (
+                                        chapterIndex == sel.startChapter
+                                    ) {
+                                        sel.start
+                                    } else {
+                                        0
+                                    }
+                                    val to = if (
+                                        chapterIndex == sel.endChapter
+                                    ) {
+                                        sel.end
+                                    } else {
+                                        chapterText.length
+                                    }
+                                    if (from < to) {
+                                        viewModel.addHighlightInChapter(
+                                            chapterIndex, from, to
+                                        )
+                                    }
                                 }
+                            }
+                            ParagraphAction.NOTE ->
+                                pendingNoteHighlight = sel
+                            ParagraphAction.BOOKMARK -> {
+                                viewModel.addBookmarkInChapter(
+                                    sel.startChapter, sel.start
+                                )
+                                notice = "Bookmarked this passage"
                             }
                         }
                     },
@@ -1827,12 +1903,42 @@ fun ReaderScreen(
                         if (noteTarget != null) {
                             viewModel.updateHighlightNote(noteTarget, noteText)
                         } else if (pendingRange != null) {
-                            viewModel.addHighlightInChapter(
-                                pendingRange.first,
-                                pendingRange.second,
-                                pendingRange.third,
-                                noteText
-                            )
+                            // Code 117 (§8): saving a note on a
+                            // spanning selection writes the
+                            // split set — one highlight per
+                            // chapter segment, the note text
+                            // shared. A single-chapter range is
+                            // the one-iteration case.
+                            for (chapterIndex in
+                                pendingRange.startChapter..
+                                pendingRange.endChapter) {
+                                val chapterText = state.chapters
+                                    .getOrNull(chapterIndex)
+                                    ?.let { state.segmentTexts[it.id] }
+                                    ?: continue
+                                val from = if (
+                                    chapterIndex ==
+                                    pendingRange.startChapter
+                                ) {
+                                    pendingRange.start
+                                } else {
+                                    0
+                                }
+                                val to = if (
+                                    chapterIndex ==
+                                    pendingRange.endChapter
+                                ) {
+                                    pendingRange.end
+                                } else {
+                                    chapterText.length
+                                }
+                                if (from < to) {
+                                    viewModel.addHighlightInChapter(
+                                        chapterIndex, from, to,
+                                        noteText
+                                    )
+                                }
+                            }
                             notice = "Passage highlighted with your note"
                         }
                         editingNoteFor = null

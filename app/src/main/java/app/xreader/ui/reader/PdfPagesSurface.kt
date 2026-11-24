@@ -11,8 +11,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.AwaitPointerEventScope
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -87,6 +89,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
@@ -100,6 +104,7 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
@@ -435,6 +440,120 @@ private fun pdfSelectionAt(
     return PdfPageSelection(geometry, word.first, word.last + 1)
 }
 
+/** F1 (post-re-check): the drain a post-long-press exit
+ * owes its gesture. Once an entry recogniser's long-press
+ * has fired, Rev 1 §11.1's consumption duty runs to the
+ * gesture's end — every remaining change of the tracked
+ * pointer is consumed until its up/cancel — so the
+ * release can never reach the split tap detectors
+ * unconsumed (foundation's waitForUpOrCancellation has
+ * no long-press timeout, so an unconsumed up could pair
+ * with the next tap). The success paths and the geometry
+ * waits already consume to the up inline; the early
+ * exits call this instead of returning bare. */
+private suspend fun AwaitPointerEventScope
+    .drainPdfEntryGesture(pointerId: PointerId) {
+    while (true) {
+        val event = awaitPointerEvent()
+        val change = event.changes
+            .firstOrNull { it.id == pointerId } ?: continue
+        change.consume()
+        if (!change.pressed) break
+    }
+}
+
+/** Code 117 §13: one handle end's geometry, in the
+ * overlay's local pixel space — the tip point (the anchor
+ * char's bottom corner), the teardrop body's centre, and
+ * the grab radius. The Canvas draw and the grab hit test
+ * both consume [pdfHandleGeometry]'s output, so what is
+ * drawn is exactly what can be grabbed. */
+private class PdfHandleGeom(
+    val tip: Offset,
+    val centre: Offset,
+    val grabRadiusPx: Float,
+    val bodyRadiusPx: Float,
+    val tipLengthPx: Float
+)
+
+/**
+ * Code 117 §13: the handle pair's geometry for a
+ * selection's [first]/[last] char rects, scaled from page
+ * points by [sx]/[sy].
+ *
+ * Rule 1 — screen-constant size: this overlay sits inside
+ * the cell's zoom-transformed layer, so the local
+ * dimensions are dp ÷ z (the density conversion, then
+ * divided by the cell's current zoom [z]) — on screen the
+ * teardrop's body diameter is 22 dp and its tip 9 dp at
+ * every zoom, and the 24 dp grab radius is divided the
+ * same way.
+ *
+ * Rule 2 — one helper: both consumers (draw and hit test)
+ * take their numbers from here. Per Revision 2 D2, both
+ * consumers read z at USE time (the draw inside its draw
+ * lambda, the grab loop at each gesture start) — never a
+ * composition-captured Float.
+ */
+private fun pdfHandleGeometry(
+    first: PdfCharRect,
+    last: PdfCharRect,
+    sx: Float,
+    sy: Float,
+    z: Float,
+    density: Density
+): Pair<PdfHandleGeom, PdfHandleGeom> {
+    val zoom = if (z > 0f) z else 1f
+    val tipPx = with(density) { 9.dp.toPx() } / zoom
+    val radiusPx = with(density) { 11.dp.toPx() } / zoom
+    val grabPx = with(density) { 24.dp.toPx() } / zoom
+    fun end(tip: Offset) = PdfHandleGeom(
+        tip = tip,
+        centre = tip + Offset(0f, tipPx + radiusPx),
+        grabRadiusPx = grabPx,
+        bodyRadiusPx = radiusPx,
+        tipLengthPx = tipPx
+    )
+    return end(Offset(first.left * sx, first.bottom * sy)) to
+        end(Offset(last.right * sx, last.bottom * sy))
+}
+
+/**
+ * Code 117 §11.2: the press-drag edge rule for an ENTRY
+ * drag (paged + continuous). The entry word-snap happens
+ * once, in pdfSelectionAt; extension is CHARACTER-level.
+ * The anchor is the entry word's far boundary relative to
+ * first travel — moving forward past the word's end pins
+ * the anchor at the word's start, moving backward before
+ * its start pins it at the word's end; the anchor never
+ * changes again. The range is word ∪ span(anchor, finger
+ * edge), so it never empties and never inverts.
+ *
+ * [wordStart]/[wordEnd] are half-open; [index] is the
+ * character under the finger. Returns the inclusive range
+ * to write and the (possibly newly pinned) anchor.
+ */
+internal fun pdfEntryDragRange(
+    wordStart: Int,
+    wordEnd: Int,
+    anchor: Int?,
+    index: Int
+): Pair<IntRange, Int?> {
+    var pinned = anchor
+    if (pinned == null) {
+        when {
+            index + 1 > wordEnd -> pinned = wordStart
+            index < wordStart -> pinned = wordEnd
+            else -> return (wordStart..wordEnd - 1) to null
+        }
+    }
+    val a = pinned!!
+    val edge = if (index >= a) index + 1 else index
+    val lo = minOf(wordStart, a, edge)
+    val hi = maxOf(wordEnd, a, edge)
+    return (lo..hi - 1) to a
+}
+
 /**
  * The geometry overlay for one page — drawn exactly over
  * the page's displayed rect (the caller sizes and positions
@@ -474,6 +593,14 @@ private fun PdfPageGeometryOverlay(
     onHighlightTap: (StoredSelectionHighlight) -> Unit,
     onTapAway: () -> Unit,
     onDragStateChange: (Boolean) -> Unit,
+    /** Code 117 (§11.1): the live drag range, hoisted to
+     * the host so the entry recogniser writes through the
+     * same channel this overlay renders from. */
+    dragRangeState: MutableState<IntRange?>,
+    /** Code 117 §13 / Revision 2 D2: the hosting layer's
+     * current zoom, read at use time (draw lambda / gesture
+     * start) — 1f where the layer is untransformed. */
+    zoomProvider: () -> Float = { 1f },
     modifier: Modifier = Modifier,
     /** SelectionBar (§7.4/§9.1): the existing-highlight bar
      * is open over this page — a clean tap that hits no
@@ -521,13 +648,19 @@ private fun PdfPageGeometryOverlay(
             }
         }
     }
-    // MR-4 (R2.3): the drag's live range is overlay-local —
-    // the settled [selection] (and with it the action bar's
-    // text) is written only at settle points: entry (the
-    // hosts create the selection whole) and drag release
-    // (the commit in the drag loop below).
-    var dragRange by remember(selection) {
-        mutableStateOf<IntRange?>(null)
+    // MR-4 (R2.3): the drag's live range — the settled
+    // [selection] (and with it the action bar's text) is
+    // written only at settle points: entry (the hosts create
+    // the selection whole) and drag release (the commit in
+    // the drag loop below). Code 117: the range state is
+    // hoisted (the entry recogniser writes it too) and
+    // resets when the selection OBJECT changes — a stale
+    // range from a dismissed episode can never render over
+    // a new selection (at entry the fallback below reads
+    // the selection itself, which holds the same word).
+    var dragRange by dragRangeState
+    LaunchedEffect(selection) {
+        dragRangeState.value = null
     }
     val effStart = dragRange?.first ?: selection?.start ?: 0
     val effEnd = dragRange?.let { it.last + 1 } ?: selection?.end ?: 0
@@ -566,23 +699,33 @@ private fun PdfPageGeometryOverlay(
                 )
                 val first = geometry.rects.getOrNull(effStart)
                 val last = geometry.rects.getOrNull(effEnd - 1)
-                val radius = 9.dp.toPx()
-                if (first != null) {
-                    drawCircle(
-                        color = ReaderViolet,
-                        radius = radius,
-                        center = Offset(
-                            first.left * sx, first.bottom * sy
-                        )
+                if (first != null && last != null) {
+                    // Code 117 §13: the handles are the
+                    // §6.2 teardrops — tip on the anchor
+                    // char's bottom corner, body hanging
+                    // below — drawn in ReaderViolet, sized
+                    // screen-constant through
+                    // pdfHandleGeometry (z read here, at
+                    // draw time — Revision 2 D2). Start
+                    // first, end last (on top).
+                    val (startGeom, endGeom) = pdfHandleGeometry(
+                        first, last, sx, sy, zoomProvider(), this
                     )
-                }
-                if (last != null) {
-                    drawCircle(
-                        color = ReaderViolet,
-                        radius = radius,
-                        center = Offset(
-                            last.right * sx, last.bottom * sy
-                        )
+                    drawPath(
+                        path = selectionTeardropPath(
+                            startGeom.tip,
+                            startGeom.tipLengthPx,
+                            startGeom.bodyRadiusPx
+                        ),
+                        color = ReaderViolet
+                    )
+                    drawPath(
+                        path = selectionTeardropPath(
+                            endGeom.tip,
+                            endGeom.tipLengthPx,
+                            endGeom.bodyRadiusPx
+                        ),
+                        color = ReaderViolet
                     )
                 }
             }
@@ -610,18 +753,24 @@ private fun PdfPageGeometryOverlay(
                         val first = geometry.rects.getOrNull(effStart)
                         val last = geometry.rects.getOrNull(effEnd - 1)
                         if (first != null && last != null) {
-                            val grab = 24.dp.toPx()
-                            val startCentre = Offset(
-                                first.left * sx, first.bottom * sy
-                            )
-                            val endCentre = Offset(
-                                last.right * sx, last.bottom * sy
-                            )
+                            // Code 117 §13: the grab geometry
+                            // comes from the one helper the
+                            // draw uses, z read at gesture
+                            // start (Revision 2 D2). Grab
+                            // routing keeps start-dot
+                            // priority (§11.3, unchanged).
+                            val (startGeom, endGeom) =
+                                pdfHandleGeometry(
+                                    first, last, sx, sy,
+                                    zoomProvider(), this
+                                )
                             val handle = when {
-                                (down.position - startCentre)
-                                    .getDistance() <= grab -> 0
-                                (down.position - endCentre)
-                                    .getDistance() <= grab -> 1
+                                (down.position - startGeom.centre)
+                                    .getDistance() <=
+                                    startGeom.grabRadiusPx -> 0
+                                (down.position - endGeom.centre)
+                                    .getDistance() <=
+                                    endGeom.grabRadiusPx -> 1
                                 else -> null
                             }
                             if (handle != null) {
@@ -653,27 +802,24 @@ private fun PdfPageGeometryOverlay(
                                                     point.x, point.y
                                                 )
                                             if (index != null) {
-                                                // MR-4 (R2): LIVE
-                                                // word snap on the
-                                                // move path (Moon+
-                                                // VSel.SetSel(...,
-                                                // alignWord) every
-                                                // move) over the
-                                                // held geometry's
-                                                // words, written to
-                                                // the overlay-local
-                                                // range only (R2.3).
-                                                val word =
-                                                    resolvePdfWordRange(
-                                                        geometry.pageText,
-                                                        index
-                                                    )
+                                                // Code 117 §11.2:
+                                                // extension is
+                                                // CHARACTER-level —
+                                                // the moving edge is
+                                                // the character
+                                                // under the finger,
+                                                // clamped against
+                                                // the fixed edge
+                                                // (minimum one
+                                                // character, never
+                                                // inverted, never
+                                                // empty). The word
+                                                // snap lives only at
+                                                // entry, inside
+                                                // pdfSelectionAt.
                                                 if (handle == 0) {
-                                                    val snapped =
-                                                        word?.first
-                                                            ?: index
                                                     val newStart =
-                                                        snapped.coerceIn(
+                                                        index.coerceIn(
                                                             0,
                                                             (effEnd - 1)
                                                                 .coerceAtLeast(0)
@@ -681,11 +827,8 @@ private fun PdfPageGeometryOverlay(
                                                     dragRange =
                                                         newStart..effEnd - 1
                                                 } else {
-                                                    val snapped =
-                                                        word?.last
-                                                            ?: index
                                                     val newEnd =
-                                                        (snapped + 1)
+                                                        (index + 1)
                                                             .coerceIn(
                                                                 effStart + 1,
                                                                 geometry
@@ -794,6 +937,10 @@ private fun PdfPageGeometryOverlay(
 private class PdfBarSeatInputs(
     /** The selection's start dot centre. */
     val startDot: Offset,
+    /** The selection's horizontal midpoint (surface px) —
+     * code 117 §14's fallback anchor when the start-dot
+     * side cannot be honoured inside the 16 dp slack. */
+    val midX: Float,
     /** The lower (end) dot's bottom edge. */
     val endDotBottom: Float,
     /** The selection's first line top edge. */
@@ -827,8 +974,11 @@ private fun pdfSeatInputs(
     val last = rects.last()
     val startDot = mapPoint(first.left, first.bottom)
     val endDot = mapPoint(last.right, last.bottom)
+    val minLeft = rects.minOf { it.left }
+    val maxRight = rects.maxOf { it.right }
     return PdfBarSeatInputs(
         startDot = startDot,
+        midX = mapPoint((minLeft + maxRight) / 2f, first.top).x,
         endDotBottom = endDot.y + dotRadiusPx,
         firstLineTop = mapPoint(first.left, first.top).y,
         firstLineHeight = (first.bottom - first.top) * heightScale
@@ -838,13 +988,18 @@ private fun pdfSeatInputs(
 /**
  * MR-4 (R1): the bar's offset within its surface, copying
  * Moon+'s `layoutHBar` (ActivityTxt.java:20893-20972) as
- * adapted: the horizontal seat anchors to the selection's
- * start dot (its centre x, clamped [8dp, surface − bar −
- * 8dp]); vertically the bar's bottom edge seats at the
+ * adapted: vertically the bar's bottom edge seats at the
  * first line's top − (the first line's display height +
  * 15dp) when that fits, else the bar's top seats at the
  * lower dot's bottom + 15dp, else the bar pins to the
  * surface's bottom edge (8dp).
+ *
+ * Horizontal rule (code 117 §14): the bar's left edge
+ * lives in [marginPx, surface − bar − marginPx] — 16 dp
+ * of slack at both edges. The preferred anchor is the
+ * start dot's x; when that anchor cannot be honoured
+ * inside the range, the bar CENTRES on the selection's
+ * horizontal midpoint instead of pinning to an edge.
  */
 private fun pdfBarSeatOffset(
     surfaceW: Float,
@@ -853,10 +1008,17 @@ private fun pdfBarSeatOffset(
     barH: Float,
     inputs: PdfBarSeatInputs,
     gapPx: Float,
-    edgePx: Float
+    edgePx: Float,
+    marginPx: Float
 ): Offset {
-    val maxLeft = (surfaceW - barW - edgePx).coerceAtLeast(edgePx)
-    val left = inputs.startDot.x.coerceIn(edgePx, maxLeft)
+    val maxLeft = (surfaceW - barW - marginPx)
+        .coerceAtLeast(marginPx)
+    val preferred = inputs.startDot.x
+    val left = if (preferred < marginPx || preferred > maxLeft) {
+        (inputs.midX - barW / 2f).coerceIn(marginPx, maxLeft)
+    } else {
+        preferred
+    }
     val aboveY = inputs.firstLineTop -
         (inputs.firstLineHeight + gapPx) - barH
     val y = when {
@@ -871,6 +1033,59 @@ private fun pdfBarSeatOffset(
         }
     }
     return Offset(left, y)
+}
+
+/**
+ * Code 117 §12.1 (Revision 1's replacement — the base
+ * spec's Main-pass mechanism could never fire): a
+ * watch-only INITIAL-pass watcher seated on the bar's own
+ * modifier chain. A clean tap that lands anywhere on the
+ * bar cancels the surface's pending single tap (the job a
+ * tap-zone observer created at the tap's up, ~300 ms from
+ * firing), so a bar tap can never turn the page or toggle
+ * the chrome. It watches only and consumes nothing; it
+ * covers the bar's bounds only, never the cell's.
+ *
+ * Clean tap = single pointer throughout, never past
+ * touch slop, up within 400 ms of the down (the
+ * pdfTapObserver's own constant).
+ *
+ * (Revision 2 D4: a press starting within touch slop
+ * OUTSIDE the bar's bounds and drifting to an up INSIDE
+ * them is a recorded seam, not covered here.)
+ */
+private suspend fun PointerInputScope.pdfBarTapWatcher(
+    onCleanTap: () -> Unit
+) {
+    awaitEachGesture {
+        val down = awaitFirstDown(
+            requireUnconsumed = false,
+            pass = PointerEventPass.Initial
+        )
+        var sawSecondPointer = false
+        var moved = false
+        var upTime = 0L
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            if (event.changes.size > 1) sawSecondPointer = true
+            for (change in event.changes) {
+                if ((change.position - down.position)
+                        .getDistance() > viewConfiguration.touchSlop
+                ) {
+                    moved = true
+                }
+                if (!change.pressed) {
+                    upTime = change.uptimeMillis
+                }
+            }
+            if (event.changes.all { !it.pressed }) break
+        }
+        if (!sawSecondPointer && !moved && upTime > 0L &&
+            upTime - down.uptimeMillis <= 400L
+        ) {
+            onCleanTap()
+        }
+    }
 }
 
 /** The selection's follow-on dialogs (the kit's own
@@ -920,76 +1135,6 @@ private fun PdfSelectionDialogs(
                 ) { Text("Close") }
             }
         )
-    }
-}
-
-/**
- * A watch-only long-press observer (Initial pass, consumes
- * NOTHING) in the shipped tap observers' pattern — the
- * continuous body's per-item entry, where a Main-pass
- * tap detector on the item could starve the surface's own
- * double-tap detector of its events. Fires once when a
- * press stays down past the platform long-press timeout
- * without moving past the touch slop; the position reported
- * is the DOWN's, in the observed composable's local
- * coordinates (for a list item: already un-transformed by
- * Compose, per Revision 1 C5).
- */
-private fun Modifier.pdfLongPressObserver(
-    onLongPress: (Offset) -> Unit
-): Modifier = pointerInput(onLongPress) {
-    awaitEachGesture {
-        val down = awaitFirstDown(
-            requireUnconsumed = false,
-            pass = PointerEventPass.Initial
-        )
-        val downPosition = down.position
-        var moved = false
-        var fired = false
-        var released = false
-        while (!released) {
-            val event = withTimeoutOrNull(
-                viewConfiguration.longPressTimeoutMillis
-            ) {
-                awaitPointerEvent(PointerEventPass.Initial)
-            }
-            if (event == null) {
-                // No event inside the window: the press is
-                // still down and (no move arrived) unmoved.
-                if (!moved && !fired) {
-                    fired = true
-                    onLongPress(downPosition)
-                }
-                // Drain to the release, bounded — watch-only
-                // to the end, whatever the stream does.
-                withTimeoutOrNull(2_000L) {
-                    while (true) {
-                        val drain =
-                            awaitPointerEvent(PointerEventPass.Initial)
-                        if (drain.changes.all { !it.pressed }) break
-                    }
-                }
-                released = true
-                continue
-            }
-            for (change in event.changes) {
-                if ((change.position - downPosition).getDistance() >
-                    viewConfiguration.touchSlop
-                ) {
-                    moved = true
-                }
-                if (change.pressed &&
-                    change.uptimeMillis - down.uptimeMillis >=
-                    viewConfiguration.longPressTimeoutMillis &&
-                    !moved && !fired
-                ) {
-                    fired = true
-                    onLongPress(downPosition)
-                }
-                if (!change.pressed) released = true
-            }
-            if (event.changes.all { !it.pressed }) released = true
-        }
     }
 }
 
@@ -1776,9 +1921,22 @@ private fun PdfPageCell(
         mutableStateOf<PageCharGeometry?>(null)
     }
     val selectionDragActive = remember(page) { mutableStateOf(false) }
-    // MR-4 (R1): the action bar's measured size — the seat
-    // is computed from it (the bar measures, then seats).
-    var pillSize by remember { mutableStateOf(IntSize.Zero) }
+    // Code 117 (§11.1): the live drag range, hoisted out of
+    // the geometry overlay so the entry recogniser writes
+    // through the same channel the overlay renders from
+    // (half-open [first, last + 1) carried as an inclusive
+    // range). The overlay resets it when the selection
+    // object changes.
+    val dragRangeState = remember(page) {
+        mutableStateOf<IntRange?>(null)
+    }
+    // Code 117 §14 / Revision 2 D1: the last computed seat
+    // target. While an episode's bar is unmeasured the seat
+    // is NOT placed — the animated target holds this value
+    // and the bar stays invisible (alpha gate at the bar).
+    var seatHold by remember(page) {
+        mutableStateOf(IntOffset.Zero)
+    }
     val dialogState = remember(page) { PdfSelectionDialogState() }
     // SelectionBar (§6.1): the bar's hoisted state, its
     // §9.3 dismissing flag, and the existing-highlight
@@ -2324,74 +2482,202 @@ private fun PdfPageCell(
                 }
             )
             .pointerInput(page) {
-                detectTapGestures(
-                    onLongPress = { press ->
-                        // MR-2b (Revision 1, C1/C4): selection
-                        // entry. The offset arrives POST-
-                        // transform (this box's screen space);
-                        // invert the centre-anchored layer
-                        // transform FIRST (screen = C + (s − C)·z
-                        // + pan, PdfDisplayMath's own doc), then
-                        // the fitted rect takes layer points to
-                        // page points. Under an edge trim the
-                        // overlay stands down (C3) — the press
-                        // reports the stand-down instead. The
-                        // tap observers' 400 ms clean-tap rule
-                        // defuses the tap-zone collision: a
-                        // press this long is never a clean tap.
-                        if (trimStandsDown) {
-                            onTrimStandDown()
-                        } else if (cellSizePx != IntSize.Zero) {
-                            val slotBitmap = bitmap ?: previewBitmap
-                            val points = session.pagePointsSizePeek(page)
-                            if (slotBitmap != null && points != null) {
-                                val centre = Offset(
-                                    cellSizePx.width / 2f,
-                                    cellSizePx.height / 2f
-                                )
-                                val z = zoomState.zoom
-                                val local = if (z != 0f) {
-                                    centre + (press - centre -
-                                        zoomState.pan) / z
-                                } else {
-                                    press
-                                }
-                                val (dispW, dispH) = pdfDisplayedSizePx(
-                                    slotBitmap.width, slotBitmap.height,
-                                    cellSizePx.width, cellSizePx.height,
-                                    settings.fitMode
-                                )
-                                val originX =
-                                    (cellSizePx.width - dispW) / 2f
-                                val originY =
-                                    (cellSizePx.height - dispH) / 2f
-                                if (dispW > 0f && dispH > 0f &&
-                                    local.x in originX..(originX + dispW) &&
-                                    local.y in originY..(originY + dispH)
-                                ) {
-                                    val pointX = (local.x - originX) *
-                                        points.first / dispW
-                                    val pointY = (local.y - originY) *
-                                        points.second / dispH
-                                    cellScope.launch {
-                                        val geometry = pageGeometry
-                                            ?: session.pageGeometry(page)
-                                                ?.also {
-                                                    pageGeometry = it
-                                                }
-                                            ?: return@launch
-                                        // §9.3: a new selection
-                                        // entry cancels a fade
-                                        // still running.
-                                        barDismissing = false
-                                        selection = pdfSelectionAt(
-                                            geometry, pointX, pointY
-                                        )
-                                    }
-                                }
+                // Code 117 §11.1: the press-drag entry
+                // recogniser (replaces detectTapGestures'
+                // onLongPress; detectTapGestures remains
+                // below for onDoubleTap only). The recogniser
+                // KEEPS the pointer after the long-press
+                // fires: the entry word-snaps through
+                // pdfSelectionAt, then the same motion
+                // extends the selection character-level
+                // (§11.2) until the up. From the firing
+                // onward it consumes every change of its
+                // pointer — consumption, not duration, is
+                // what protects the split double-tap detector
+                // (foundation's waitForUpOrCancellation
+                // returns null for a consumed up). A scroll
+                // can still claim the gesture first:
+                // awaitLongPressOrCancellation returns null
+                // when it does, and no entry happens.
+                // There is no onSelectionDragActive callback
+                // (§11.1): the recogniser writes the cell's
+                // selectionDragActive state directly, as the
+                // overlay's handle drags do.
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val longPress = awaitLongPressOrCancellation(down.id)
+                        ?: return@awaitEachGesture
+                    // MR-2b (Revision 1, C3): under an edge
+                    // trim the entry stands down — the press
+                    // reports the stand-down and no drag
+                    // begins (the branch is unchanged).
+                    if (trimStandsDown) {
+                        onTrimStandDown()
+                        longPress.consume()
+                        drainPdfEntryGesture(down.id)
+                        return@awaitEachGesture
+                    }
+                    longPress.consume()
+                    if (cellSizePx == IntSize.Zero) {
+                        drainPdfEntryGesture(down.id)
+                        return@awaitEachGesture
+                    }
+                    val slotBitmap = bitmap ?: previewBitmap
+                    val points = session.pagePointsSizePeek(page)
+                    if (slotBitmap == null || points == null) {
+                        drainPdfEntryGesture(down.id)
+                        return@awaitEachGesture
+                    }
+                    // The inversion (MR-2b's maths,
+                    // unchanged): offsets arrive
+                    // POST-transform (this box's screen
+                    // space); invert the centre-anchored
+                    // layer transform FIRST (screen =
+                    // C + (s − C)·z + pan), then the fitted
+                    // rect takes layer points to page points.
+                    // Null when the point falls outside the
+                    // displayed page rect.
+                    fun pagePointOf(
+                        screen: Offset
+                    ): Pair<Float, Float>? {
+                        val centre = Offset(
+                            cellSizePx.width / 2f,
+                            cellSizePx.height / 2f
+                        )
+                        val z = zoomState.zoom
+                        val local = if (z != 0f) {
+                            centre + (screen - centre -
+                                zoomState.pan) / z
+                        } else {
+                            screen
+                        }
+                        val (dispW, dispH) = pdfDisplayedSizePx(
+                            slotBitmap.width, slotBitmap.height,
+                            cellSizePx.width, cellSizePx.height,
+                            settings.fitMode
+                        )
+                        if (dispW <= 0f || dispH <= 0f) return null
+                        val originX = (cellSizePx.width - dispW) / 2f
+                        val originY = (cellSizePx.height - dispH) / 2f
+                        if (local.x !in originX..(originX + dispW) ||
+                            local.y !in originY..(originY + dispH)
+                        ) {
+                            return null
+                        }
+                        return ((local.x - originX) *
+                            points.first / dispW) to
+                            ((local.y - originY) *
+                                points.second / dispH)
+                    }
+                    val pressPoint = pagePointOf(longPress.position)
+                    if (pressPoint == null) {
+                        drainPdfEntryGesture(down.id)
+                        return@awaitEachGesture
+                    }
+                    // The geometry: the cell's copy if held,
+                    // else suspend for it — still holding the
+                    // pointer and tracking its latest
+                    // position; if the pointer lifts or
+                    // cancels before the geometry arrives,
+                    // the entry abandons silently (§11.5's
+                    // rule, shared by both entries).
+                    var latestPosition = longPress.position
+                    var geometry = pageGeometry
+                    if (geometry == null) {
+                        val holder = object {
+                            var value: PageCharGeometry? = null
+                            var done = false
+                        }
+                        val fetch = cellScope.launch {
+                            holder.value = session.pageGeometry(page)
+                            if (holder.value != null) {
+                                pageGeometry = holder.value
+                            }
+                            holder.done = true
+                        }
+                        var lifted = false
+                        while (!holder.done && !lifted) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes
+                                .firstOrNull { it.id == down.id }
+                                ?: continue
+                            change.consume()
+                            if (change.pressed) {
+                                latestPosition = change.position
+                            } else {
+                                lifted = true
                             }
                         }
-                    },
+                        if (lifted) {
+                            fetch.cancel()
+                            return@awaitEachGesture
+                        }
+                        geometry = holder.value
+                        if (geometry == null) {
+                            drainPdfEntryGesture(down.id)
+                            return@awaitEachGesture
+                        }
+                    }
+                    val geo = geometry!!
+                    // §9.3: a new selection entry cancels a
+                    // fade still running.
+                    barDismissing = false
+                    val entered = pdfSelectionAt(
+                        geo, pressPoint.first, pressPoint.second
+                    )
+                    if (entered == null) {
+                        drainPdfEntryGesture(down.id)
+                        return@awaitEachGesture
+                    }
+                    selection = entered
+                    selectionDragActive.value = true
+                    dragRangeState.value =
+                        entered.start..entered.end - 1
+                    val entryLineIndex = PdfLineIndex(geo)
+                    var anchor: Int? = null
+                    fun extend(screen: Offset) {
+                        val point = pagePointOf(screen) ?: return
+                        val index = entryLineIndex.charIndexAt(
+                            point.first, point.second
+                        ) ?: pdfCharIndexAt(
+                            geo, point.first, point.second
+                        ) ?: return
+                        val (range, newAnchor) = pdfEntryDragRange(
+                            entered.start, entered.end, anchor, index
+                        )
+                        anchor = newAnchor
+                        dragRangeState.value = range
+                    }
+                    try {
+                        if (latestPosition != longPress.position) {
+                            extend(latestPosition)
+                        }
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes
+                                .firstOrNull { it.id == down.id }
+                                ?: continue
+                            change.consume()
+                            if (!change.pressed) break
+                            extend(change.position)
+                        }
+                    } finally {
+                        // The settle (R2.3's rule): the one
+                        // write of the settled selection (and
+                        // its text) per drag; the range
+                        // stands — no rollback.
+                        val settled = dragRangeState.value
+                        if (settled != null) {
+                            entered.start = settled.first
+                            entered.end = settled.last + 1
+                            dragRangeState.value = null
+                        }
+                        selectionDragActive.value = false
+                    }
+                }
+            }
+            .pointerInput(page) {
+                detectTapGestures(
                     onDoubleTap = { tap ->
                         // v1.5.29: the double-tap is a FIXED
                         // two-state toggle (Komikku semantics),
@@ -2833,6 +3119,10 @@ private fun PdfPageCell(
                             onDragStateChange = { active ->
                                 selectionDragActive.value = active
                             },
+                            dragRangeState = dragRangeState,
+                            // §13 / D2: read at use time
+                            // from the zoom state holder.
+                            zoomProvider = { zoomState.zoom },
                             modifier = Modifier
                                 .offset(
                                     x = with(density) {
@@ -2915,8 +3205,13 @@ private fun PdfPageCell(
                                     zoomState.pan
                             },
                             heightScale = sy * z,
+                            // §13: the end handle is now the
+                            // teardrop — its full drop (9 dp
+                            // tip + 22 dp body) below the end
+                            // char's corner, so a below-seat
+                            // clears the drawn handle.
                             dotRadiusPx = with(density) {
-                                9.dp.toPx()
+                                31.dp.toPx()
                             } * z
                         )
                     } else {
@@ -2927,27 +3222,68 @@ private fun PdfPageCell(
                 }
                 val gapPx = with(density) { 15.dp.toPx() }
                 val edgePx = with(density) { 8.dp.toPx() }
-                val seat = if (seatInputs != null &&
-                    pillSize != IntSize.Zero
+                // Code 117 §14: the horizontal slack is
+                // 16 dp at both edges.
+                val marginPx = with(density) { 16.dp.toPx() }
+                // Code 117 §14: the bar's measured size is
+                // keyed by this episode (page + the
+                // selection's start/end pair) and resets to
+                // Zero when the key changes — a previous
+                // page's or selection's size can never seat
+                // this episode's bar.
+                var pillSize by remember(
+                    page, barSelection.start, barSelection.end
                 ) {
-                    pdfBarSeatOffset(
+                    mutableStateOf(IntSize.Zero)
+                }
+                // Revision 2 D1: while the keyed size is
+                // Zero NO seat target is computed — the
+                // animated target holds the last placed seat
+                // and the bar is held invisible (the alpha
+                // gate on its graphicsLayer below). The bar
+                // IS composed from the episode's first
+                // frame; the seat motion's fade covers its
+                // appearance once the first measure lands.
+                val seatTarget = if (pillSize == IntSize.Zero) {
+                    seatHold
+                } else if (seatInputs != null) {
+                    val computed = pdfBarSeatOffset(
                         surfaceW = cellSizePx.width.toFloat(),
                         surfaceH = cellSizePx.height.toFloat(),
                         barW = pillSize.width.toFloat(),
                         barH = pillSize.height.toFloat(),
                         inputs = seatInputs,
                         gapPx = gapPx,
-                        edgePx = edgePx
+                        edgePx = edgePx,
+                        marginPx = marginPx
+                    )
+                    IntOffset(
+                        computed.x.roundToInt(),
+                        computed.y.roundToInt()
                     )
                 } else {
-                    // Unmeasured or unmappable: bottom pin,
+                    // Measured but unmappable: bottom pin,
                     // centred — the seat's edge fallback.
-                    Offset(
+                    IntOffset(
                         ((cellSizePx.width - pillSize.width) / 2f)
-                            .coerceAtLeast(edgePx),
+                            .coerceIn(
+                                marginPx,
+                                maxOf(
+                                    marginPx,
+                                    cellSizePx.width -
+                                        pillSize.width - marginPx
+                                )
+                            )
+                            .roundToInt(),
                         (cellSizePx.height - edgePx - pillSize.height)
                             .coerceAtLeast(0f)
+                            .roundToInt()
                     )
+                }
+                LaunchedEffect(seatTarget) {
+                    if (pillSize != IntSize.Zero) {
+                        seatHold = seatTarget
+                    }
                 }
                 // §9.4 (as revised): the seat MOVES on the
                 // Spatial spring — and the animated value is
@@ -2957,10 +3293,7 @@ private fun PdfPageCell(
                 // overshoot can never carry the bar off the
                 // cell's edge.
                 val animatedSeat by animateIntOffsetAsState(
-                    targetValue = IntOffset(
-                        seat.x.roundToInt(),
-                        seat.y.roundToInt()
-                    ),
+                    targetValue = seatTarget,
                     animationSpec = if (motionEnabled) {
                         SpringMotionEngine.Spatial.toSpec()
                     } else {
@@ -3144,13 +3477,17 @@ private fun PdfPageCell(
                         .align(Alignment.TopStart)
                         .offset {
                             val edge = edgePx.roundToInt()
+                            // §14: the per-frame clamp honours
+                            // the same 16 dp horizontal slack
+                            // as the seat target.
+                            val margin = marginPx.roundToInt()
                             IntOffset(
                                 animatedSeat.x.coerceIn(
-                                    edge,
+                                    margin,
                                     maxOf(
-                                        edge,
+                                        margin,
                                         cellSizePx.width -
-                                            pillSize.width - edge
+                                            pillSize.width - margin
                                     )
                                 ),
                                 animatedSeat.y.coerceIn(
@@ -3170,8 +3507,23 @@ private fun PdfPageCell(
                             }
                         )
                         .onSizeChanged { pillSize = it }
+                        // §12.1: a clean tap landing on the
+                        // bar cancels the pending single tap,
+                        // so a bar tap never turns the page.
+                        .pointerInput(page) {
+                            pdfBarTapWatcher {
+                                cancelPendingSingleTap()
+                            }
+                        }
                         .graphicsLayer {
-                            alpha = seatMotion.alpha
+                            // Revision 2 D1: held invisible
+                            // until this episode's first
+                            // measure lands.
+                            alpha = if (pillSize == IntSize.Zero) {
+                                0f
+                            } else {
+                                seatMotion.alpha
+                            }
                             scaleX = seatMotion.scale
                             scaleY = seatMotion.scale
                         }
@@ -3305,7 +3657,22 @@ private fun PdfContinuousBody(
     var barRegistration by remember {
         mutableStateOf<PdfContinuousBarRegistration?>(null)
     }
-    var surfacePillSize by remember { mutableStateOf(IntSize.Zero) }
+    // Code 117 §14: the measured size is keyed by the
+    // registration's episode (its page + the selection's
+    // start/end pair) and resets to Zero when the key
+    // changes — the paged seat's rule, this body's seat.
+    var surfacePillSize by remember(
+        barRegistration?.let {
+            it.page to (it.selection.start to it.selection.end)
+        }
+    ) {
+        mutableStateOf(IntSize.Zero)
+    }
+    // Revision 2 D1: the last placed seat target — held
+    // (bar invisible) while an episode is unmeasured.
+    var surfaceSeatHold by remember {
+        mutableStateOf(IntOffset.Zero)
+    }
     // SelectionBar (§9.2 as revised): the back chain's
     // reports for this body — the ARMED aggregate is a live
     // registration whose item has no follow-on dialog open
@@ -3827,6 +4194,13 @@ private fun PdfContinuousBody(
                     var itemSizePx by remember {
                         mutableStateOf(IntSize.Zero)
                     }
+                    // Code 117 (§11.5): the live drag range,
+                    // hoisted so the entry recogniser writes
+                    // through the channel the item's overlay
+                    // renders from (as §11.1's paged cell).
+                    val itemDragRangeState = remember(page) {
+                        mutableStateOf<IntRange?>(null)
+                    }
                     val itemDialogs = remember(page) {
                         PdfSelectionDialogState()
                     }
@@ -4071,37 +4445,197 @@ private fun PdfContinuousBody(
                     Box(
                         Modifier.fillMaxWidth()
                             .onSizeChanged { itemSizePx = it }
-                            .pdfLongPressObserver { press ->
-                                val points =
-                                    session.pagePointsSizePeek(page)
-                                if (points != null &&
-                                    itemSizePx.width > 0 &&
-                                    itemSizePx.height > 0
-                                ) {
-                                    val pointX = press.x *
-                                        points.first / itemSizePx.width
-                                    val pointY = press.y *
-                                        points.second / itemSizePx.height
-                                    scope.launch {
-                                        val geometry = itemGeometry
-                                            ?: session.pageGeometry(page)
-                                                ?.also {
-                                                    itemGeometry = it
-                                                }
-                                            ?: return@launch
-                                        // §9.3 + §6.1: a new entry
-                                        // cancels a running fade,
-                                        // supersedes any
-                                        // existing-highlight bar,
-                                        // and starts from a clean
-                                        // bar state.
-                                        itemBarDismissing.value = false
-                                        existingBarHighlight = null
-                                        itemBarState.value =
-                                            SelectionBarState()
-                                        itemSelection = pdfSelectionAt(
-                                            geometry, pointX, pointY
-                                        )
+                            .pointerInput(page) {
+                                // Code 117 §11.5: the press-drag
+                                // entry recogniser (replaces the
+                                // watch-only Initial-pass
+                                // pdfLongPressObserver). The
+                                // same custom shape as the paged
+                                // entry (§11.1): Main pass,
+                                // awaitLongPressOrCancellation —
+                                // null when the list's scroll
+                                // claims the pointer first — then
+                                // the pointer is KEPT: the entry
+                                // word-snaps through
+                                // pdfSelectionAt, the same
+                                // motion extends the selection
+                                // character-level (§11.2), and
+                                // every change from the firing
+                                // onward is consumed (the
+                                // consumption duty of §11.1).
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(
+                                        requireUnconsumed = false
+                                    )
+                                    val longPress =
+                                        awaitLongPressOrCancellation(
+                                            down.id
+                                        ) ?: return@awaitEachGesture
+                                    longPress.consume()
+                                    val points =
+                                        session.pagePointsSizePeek(page)
+                                    if (points == null ||
+                                        itemSizePx.width <= 0 ||
+                                        itemSizePx.height <= 0
+                                    ) {
+                                        drainPdfEntryGesture(down.id)
+                                        return@awaitEachGesture
+                                    }
+                                    // Item-local offsets map
+                                    // straight to page points:
+                                    // Compose delivers them
+                                    // already un-scaled through
+                                    // the surface's zoom layer
+                                    // (the C5 note).
+                                    fun pagePointOf(
+                                        local: Offset
+                                    ): Pair<Float, Float> =
+                                        (local.x * points.first /
+                                            itemSizePx.width) to
+                                            (local.y * points.second /
+                                                itemSizePx.height)
+                                    val pressPoint =
+                                        pagePointOf(longPress.position)
+                                    // §11.5's async geometry
+                                    // wait: suspend for the
+                                    // geometry still holding
+                                    // the pointer, tracking its
+                                    // moves; abandon silently
+                                    // if the pointer lifts or
+                                    // cancels before it arrives.
+                                    var latestPosition =
+                                        longPress.position
+                                    var geometry = itemGeometry
+                                    if (geometry == null) {
+                                        val holder = object {
+                                            var value:
+                                                PageCharGeometry? = null
+                                            var done = false
+                                        }
+                                        val fetch = scope.launch {
+                                            holder.value =
+                                                session.pageGeometry(page)
+                                            if (holder.value != null) {
+                                                itemGeometry =
+                                                    holder.value
+                                            }
+                                            holder.done = true
+                                        }
+                                        var lifted = false
+                                        while (!holder.done && !lifted) {
+                                            val event =
+                                                awaitPointerEvent()
+                                            val change = event.changes
+                                                .firstOrNull {
+                                                    it.id == down.id
+                                                } ?: continue
+                                            change.consume()
+                                            if (change.pressed) {
+                                                latestPosition =
+                                                    change.position
+                                            } else {
+                                                lifted = true
+                                            }
+                                        }
+                                        if (lifted) {
+                                            fetch.cancel()
+                                            return@awaitEachGesture
+                                        }
+                                        geometry = holder.value
+                                        if (geometry == null) {
+                                            drainPdfEntryGesture(down.id)
+                                            return@awaitEachGesture
+                                        }
+                                    }
+                                    val geo = geometry!!
+                                    // §9.3 + §6.1: a new entry
+                                    // cancels a running fade,
+                                    // supersedes any
+                                    // existing-highlight bar,
+                                    // and starts from a clean
+                                    // bar state (today's entry
+                                    // writes, kept).
+                                    itemBarDismissing.value = false
+                                    existingBarHighlight = null
+                                    itemBarState.value =
+                                        SelectionBarState()
+                                    val entered = pdfSelectionAt(
+                                        geo,
+                                        pressPoint.first,
+                                        pressPoint.second
+                                    )
+                                    if (entered == null) {
+                                        drainPdfEntryGesture(down.id)
+                                        return@awaitEachGesture
+                                    }
+                                    itemSelection = entered
+                                    selectionDragPages =
+                                        selectionDragPages + page
+                                    itemDragRangeState.value =
+                                        entered.start..entered.end - 1
+                                    val entryLineIndex =
+                                        PdfLineIndex(geo)
+                                    var anchor: Int? = null
+                                    fun extend(local: Offset) {
+                                        val point = pagePointOf(local)
+                                        val index = entryLineIndex
+                                            .charIndexAt(
+                                                point.first,
+                                                point.second
+                                            ) ?: pdfCharIndexAt(
+                                                geo,
+                                                point.first,
+                                                point.second
+                                            ) ?: return
+                                        val (range, newAnchor) =
+                                            pdfEntryDragRange(
+                                                entered.start,
+                                                entered.end,
+                                                anchor,
+                                                index
+                                            )
+                                        anchor = newAnchor
+                                        itemDragRangeState.value =
+                                            range
+                                    }
+                                    try {
+                                        if (latestPosition !=
+                                            longPress.position
+                                        ) {
+                                            extend(latestPosition)
+                                        }
+                                        while (true) {
+                                            val event =
+                                                awaitPointerEvent()
+                                            val change = event.changes
+                                                .firstOrNull {
+                                                    it.id == down.id
+                                                } ?: continue
+                                            change.consume()
+                                            if (!change.pressed) break
+                                            extend(change.position)
+                                        }
+                                    } finally {
+                                        // The settle (R2.3's
+                                        // rule): the one write
+                                        // of the settled
+                                        // selection per drag;
+                                        // the drag report
+                                        // leaves through the
+                                        // existing
+                                        // selectionDragPages
+                                        // channel.
+                                        val settled =
+                                            itemDragRangeState.value
+                                        if (settled != null) {
+                                            entered.start = settled.first
+                                            entered.end =
+                                                settled.last + 1
+                                            itemDragRangeState.value =
+                                                null
+                                        }
+                                        selectionDragPages =
+                                            selectionDragPages - page
                                     }
                                 }
                             }
@@ -4161,6 +4695,12 @@ private fun PdfContinuousBody(
                                         selectionDragPages - page
                                     }
                                 },
+                                dragRangeState = itemDragRangeState,
+                                // §13 / D2: the item sits inside
+                                // the surface's zoom layer — z is
+                                // the surface zoom, read at use
+                                // time.
+                                zoomProvider = { surfaceZoom.scale },
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -4243,42 +4783,67 @@ private fun PdfContinuousBody(
                             surfaceZoom.pan
                     },
                     heightScale = isy * scale,
-                    dotRadiusPx = with(density) { 9.dp.toPx() } * scale
+                    dotRadiusPx = with(density) { 31.dp.toPx() } * scale
                 )
             } else {
                 null
             }
             val gapPx = with(density) { 15.dp.toPx() }
             val edgePx = with(density) { 8.dp.toPx() }
-            val seat = if (seatInputs != null &&
-                surfacePillSize != IntSize.Zero
-            ) {
-                pdfBarSeatOffset(
+            // Code 117 §14: the 16 dp horizontal slack, and
+            // the teardrop's full drop for the below-seat
+            // (§13), as at the paged seat.
+            val marginPx = with(density) { 16.dp.toPx() }
+            // Revision 2 D1: while the keyed size is Zero no
+            // seat target is computed — the animated target
+            // holds the last placed seat and the bar stays
+            // invisible (alpha gate on its graphicsLayer).
+            val seatTarget = if (surfacePillSize == IntSize.Zero) {
+                surfaceSeatHold
+            } else if (seatInputs != null) {
+                val computed = pdfBarSeatOffset(
                     surfaceW = surfaceSizePx.width.toFloat(),
                     surfaceH = surfaceSizePx.height.toFloat(),
                     barW = surfacePillSize.width.toFloat(),
                     barH = surfacePillSize.height.toFloat(),
                     inputs = seatInputs,
                     gapPx = gapPx,
-                    edgePx = edgePx
+                    edgePx = edgePx,
+                    marginPx = marginPx
+                )
+                IntOffset(
+                    computed.x.roundToInt(),
+                    computed.y.roundToInt()
                 )
             } else {
-                Offset(
+                IntOffset(
                     ((surfaceSizePx.width - surfacePillSize.width) / 2f)
-                        .coerceAtLeast(edgePx),
-                    (surfaceSizePx.height - edgePx - surfacePillSize.height)
+                        .coerceIn(
+                            marginPx,
+                            maxOf(
+                                marginPx,
+                                surfaceSizePx.width -
+                                    surfacePillSize.width - marginPx
+                            )
+                        )
+                        .roundToInt(),
+                    (surfaceSizePx.height - edgePx -
+                        surfacePillSize.height)
                         .coerceAtLeast(0f)
+                        .roundToInt()
                 )
+            }
+            LaunchedEffect(seatTarget) {
+                if (surfacePillSize != IntSize.Zero) {
+                    surfaceSeatHold = seatTarget
+                }
             }
             // §9.4 (as revised): the seat animation + the
             // per-frame clamp, exactly as the paged seat
             // (Critic F7) — the spring may overshoot its
             // target, never the screen.
             val animatedSeat by animateIntOffsetAsState(
-                targetValue = IntOffset(
-                    seat.x.roundToInt(),
-                    seat.y.roundToInt()
-                ),
+                targetValue = seatTarget,
                 animationSpec = if (motionEnabled) {
                     SpringMotionEngine.Spatial.toSpec()
                 } else {
@@ -4376,13 +4941,16 @@ private fun PdfContinuousBody(
                     .align(Alignment.TopStart)
                     .offset {
                         val edge = edgePx.roundToInt()
+                        // §14: the per-frame clamp honours the
+                        // same 16 dp horizontal slack.
+                        val margin = marginPx.roundToInt()
                         IntOffset(
                             animatedSeat.x.coerceIn(
-                                edge,
+                                margin,
                                 maxOf(
-                                    edge,
+                                    margin,
                                     surfaceSizePx.width -
-                                        surfacePillSize.width - edge
+                                        surfacePillSize.width - margin
                                 )
                             ),
                             animatedSeat.y.coerceIn(
@@ -4402,8 +4970,23 @@ private fun PdfContinuousBody(
                         }
                     )
                     .onSizeChanged { surfacePillSize = it }
+                    // §12.1: a clean tap landing on the bar
+                    // cancels the surface's pending single
+                    // tap, so a bar tap never scrolls the
+                    // list or toggles the chrome.
+                    .pointerInput(Unit) {
+                        pdfBarTapWatcher {
+                            cancelSurfacePendingSingleTap()
+                        }
+                    }
                     .graphicsLayer {
-                        alpha = seatMotion.alpha
+                        // Revision 2 D1: held invisible until
+                        // this episode's first measure lands.
+                        alpha = if (surfacePillSize == IntSize.Zero) {
+                            0f
+                        } else {
+                            seatMotion.alpha
+                        }
                         scaleX = seatMotion.scale
                         scaleY = seatMotion.scale
                     }

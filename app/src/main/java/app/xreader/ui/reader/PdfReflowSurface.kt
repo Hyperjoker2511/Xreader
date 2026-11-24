@@ -1,6 +1,10 @@
 package app.xreader.ui.reader
 
 import android.content.Intent
+import androidx.compose.foundation.gestures.AwaitPointerEventScope
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -28,7 +32,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -52,6 +59,28 @@ import app.xreader.ui.localreader.highlightSpansFor
 import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/** F1 (post-re-check): the drain a post-long-press exit
+ * owes its gesture. Once the entry recogniser's
+ * long-press has fired, Rev 1 §11.1's consumption duty
+ * runs to the gesture's end — every remaining change of
+ * the tracked pointer is consumed until its up/cancel —
+ * so the release can never reach the split onTap
+ * detector unconsumed (foundation's
+ * waitForUpOrCancellation has no long-press timeout, so
+ * an unconsumed up would fire onToggleControls). The
+ * success path already consumes to the up inline; the
+ * early exits call this instead of returning bare. */
+private suspend fun AwaitPointerEventScope
+    .drainPdfEntryGesture(pointerId: PointerId) {
+    while (true) {
+        val event = awaitPointerEvent()
+        val change = event.changes
+            .firstOrNull { it.id == pointerId } ?: continue
+        change.consume()
+        if (!change.pressed) break
+    }
+}
 
 /**
  * v1.7 OE-1 (R8–R12, OQ3): Reflow in the one reader — ONE
@@ -164,6 +193,17 @@ fun PdfReflowSurface(
     val layouts = remember(page, content) {
         mutableMapOf<Int, TextLayoutResult>()
     }
+    // Code 117 (§11.6): each block's origin + height in the
+    // column's content space, recorded beside [layouts] —
+    // the drag loop converts a finger position in the DOWN
+    // block's local space into any block's local space
+    // through these.
+    val blockOrigins = remember(page, content) {
+        mutableMapOf<Int, Offset>()
+    }
+    val blockHeights = remember(page, content) {
+        mutableMapOf<Int, Int>()
+    }
 
     // The boundary crossing: overscroll past an edge
     // accumulates; a deliberate pull (or a strong fling
@@ -242,14 +282,57 @@ fun PdfReflowSurface(
                         style = blockTextStyle(block, config, fontFamily),
                         color = textColor,
                         onTextLayout = { layouts[index] = it },
-                        modifier = Modifier.pointerInput(page, content, index) {
-                            detectTapGestures(
-                                onTap = { onToggleControls() },
-                                onLongPress = { offset ->
+                        modifier = Modifier
+                            .onGloballyPositioned { coordinates ->
+                                blockOrigins[index] =
+                                    coordinates.positionInParent()
+                                blockHeights[index] =
+                                    coordinates.size.height
+                            }
+                            .pointerInput(page, content, index) {
+                                detectTapGestures(
+                                    onTap = { onToggleControls() }
+                                )
+                            }
+                            .pointerInput(page, content, index) {
+                                // Code 117 (§11.6): the
+                                // press-drag entry recogniser
+                                // (bounded Reflow scope). The
+                                // entry is today's, unchanged —
+                                // long-press → word through
+                                // expandWordRange — then the
+                                // pointer is KEPT and the same
+                                // motion extends the selection
+                                // across lines/blocks:
+                                // character-level edges on
+                                // extension (§11.2's rule,
+                                // shared maths), word on
+                                // entry. The column's scroll
+                                // competes exactly as §11.5's
+                                // list does:
+                                // awaitLongPressOrCancellation
+                                // returns null when the scroll
+                                // claims the pointer first.
+                                // There are no handles in
+                                // Reflow (§11.6).
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(
+                                        requireUnconsumed = false
+                                    )
+                                    val longPress =
+                                        awaitLongPressOrCancellation(
+                                            down.id
+                                        ) ?: return@awaitEachGesture
                                     val layout = layouts[index]
-                                        ?: return@detectTapGestures
+                                    if (layout == null) {
+                                        longPress.consume()
+                                        drainPdfEntryGesture(down.id)
+                                        return@awaitEachGesture
+                                    }
                                     val local = layout
-                                        .getOffsetForPosition(offset)
+                                        .getOffsetForPosition(
+                                            longPress.position
+                                        )
                                     val global = range.start + local
                                     val word = expandWordRange(
                                         fullText, global
@@ -257,20 +340,112 @@ fun PdfReflowSurface(
                                     // §9.3: a new entry cancels
                                     // a fade still running.
                                     barDismissing = false
-                                    selection = if (word.isEmpty()) {
-                                        null
-                                    } else {
-                                        PdfTextSelection(
-                                            page = page,
-                                            range = word,
-                                            word = fullText.substring(
-                                                word.first, word.last + 1
-                                            )
-                                        )
+                                    if (word.isEmpty()) {
+                                        selection = null
+                                        longPress.consume()
+                                        drainPdfEntryGesture(down.id)
+                                        return@awaitEachGesture
                                     }
+                                    longPress.consume()
+                                    selection = PdfTextSelection(
+                                        page = page,
+                                        range = word,
+                                        word = fullText.substring(
+                                            word.first, word.last + 1
+                                        )
+                                    )
+                                    val downOrigin =
+                                        blockOrigins[index]
+                                            ?: Offset.Zero
+                                    var anchor: Int? = null
+                                    fun extend(position: Offset) {
+                                        val columnPoint =
+                                            position + downOrigin
+                                        // The block whose
+                                        // vertical span holds
+                                        // the point — or the
+                                        // nearest by y when
+                                        // the finger sits in a
+                                        // gap or past the
+                                        // last block.
+                                        var target = index
+                                        var bestDy = Float.MAX_VALUE
+                                        for ((i, origin)
+                                            in blockOrigins) {
+                                            val h = blockHeights[i]
+                                                ?: continue
+                                            val dy = when {
+                                                columnPoint.y <
+                                                    origin.y ->
+                                                    origin.y -
+                                                        columnPoint.y
+                                                columnPoint.y >
+                                                    origin.y + h ->
+                                                    columnPoint.y -
+                                                        (origin.y + h)
+                                                else -> 0f
+                                            }
+                                            if (dy < bestDy) {
+                                                bestDy = dy
+                                                target = i
+                                            }
+                                        }
+                                        val targetLayout =
+                                            layouts[target] ?: return
+                                        val targetRange =
+                                            chapterText
+                                                .rangeOf(target)
+                                                ?: return
+                                        val targetOrigin =
+                                            blockOrigins[target]
+                                                ?: Offset.Zero
+                                        val fingerGlobal =
+                                            targetRange.start +
+                                                targetLayout
+                                                    .getOffsetForPosition(
+                                                        columnPoint -
+                                                            targetOrigin
+                                                    )
+                                        val (newRange, newAnchor) =
+                                            pdfEntryDragRange(
+                                                word.first,
+                                                word.last + 1,
+                                                anchor,
+                                                fingerGlobal
+                                            )
+                                        anchor = newAnchor
+                                        if (selection?.range !=
+                                            newRange
+                                        ) {
+                                            selection =
+                                                PdfTextSelection(
+                                                    page = page,
+                                                    range = newRange,
+                                                    word = fullText
+                                                        .substring(
+                                                            newRange.first,
+                                                            newRange.last + 1
+                                                        )
+                                                )
+                                        }
+                                    }
+                                    while (true) {
+                                        val event =
+                                            awaitPointerEvent()
+                                        val change = event.changes
+                                            .firstOrNull {
+                                                it.id == down.id
+                                            } ?: continue
+                                        change.consume()
+                                        if (!change.pressed) break
+                                        extend(change.position)
+                                    }
+                                    // The selection stands at
+                                    // the up — no rollback, and
+                                    // this host keeps no drag
+                                    // channel to settle.
                                 }
-                            )
-                        }
+                            }
                     )
                 }
             }

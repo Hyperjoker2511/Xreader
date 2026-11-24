@@ -9,7 +9,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,15 +23,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.selection.LocalTextSelectionColors
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -42,8 +38,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -52,7 +50,12 @@ import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -117,6 +120,14 @@ private object WallWheel {
     /** The wheel's diameter (REA: a 40 dp circle). */
     val SIZE = 40.dp
 }
+
+/** Code 117 (§5.6, OQ8): the selection drag's edge
+ * auto-scroll — the band at each LazyColumn edge inside
+ * which a held finger scrolls the list, and the top speed
+ * the band's pressure maps to. Named constants; tune the
+ * numbers, not the shape. */
+private const val SELECTION_EDGE_BAND_DP = 48f
+private const val SELECTION_EDGE_MAX_DP_PER_SECOND = 480f
 
 /**
  * The wall wheel's live drag state: SIGNED accumulated
@@ -268,12 +279,15 @@ fun DocumentReader(
      * Position reports proper ride [onDocumentPosition] and
      * can never name another chapter. */
     onChapterCrossed: (chapterIndex: Int) -> Unit,
-    /** The paragraph long-press menu's actions,
-     * CHAPTER-QUALIFIED — the callback carries the
-     * paragraph's own chapter index; the ViewModel resolves
-     * ranges against that segment's text and writes the mark
-     * against that chapter, never the current one. */
-    onParagraphAction: (chapterIndex: Int, blockIndex: Int, action: ParagraphAction) -> Unit,
+    /** Code 117 (§8): the selection bar's true-range arms —
+     * the callback carries the model's whole range; the
+     * screen fulfils Highlight / Note / Bookmark against it
+     * (the split rule for spanning ranges lives there). */
+    onRangeAction: (selection: ReaderTextSelection, action: ParagraphAction) -> Unit,
+    /** Code 117 (§7.3): the model's selected text, assembled
+     * by the screen from its segment texts — the bar host's
+     * Copy/Share arms and text actions consume it. */
+    selectionText: (ReaderTextSelection) -> String = { "" },
     /** Patch 11: the selection menu's screen-level actions. */
     onSelectionAction: (ReaderSelectionAction, String) -> Unit = { _, _ -> },
     /** SelectionBar (§9.2): the back chain's selection-layer
@@ -496,6 +510,19 @@ fun DocumentReader(
      * the release observer accumulates into it, reads and
      * resets it; the overlay renders it. */
     val wheelState = remember { WallWheelState() }
+
+    // ── Code 117: the selection model (§3.2) ─────────────
+    // The controller holds the one selection state, the drag
+    // session, the layout registry and the tap-away gate.
+    // This body never reads the selection/session states in
+    // composition — the bar layer, the overlay and the
+    // effects read them in their own scopes, so a drag frame
+    // recomposes nothing here (§6.4's budget).
+    val selectionController = remember { ReaderSelectionController() }
+    // The controller's chapter-text door, refreshed on every
+    // composition (a plain assignment — the seed-tracker
+    // pattern, never a snapshot write).
+    selectionController.chapterTextOf = { segment -> textOf(segment) }
 
     /** The anchor whose NEXT chapter the ⅓ trigger (in the
      * reporter below) has already requested — once per
@@ -1229,10 +1256,20 @@ fun DocumentReader(
         config.autoScrollEnabled, config.autoScrollSpeed, autoPaused,
         index, wallActive, anchorChapterIndex
     ) {
-        if (!config.autoScrollEnabled || autoPaused) return@LaunchedEffect
+        // Code 117 (§5.7): a live selection drag stands the
+        // drift down — a drag and an auto-scroll must never
+        // drive the list in opposite directions in one frame.
+        if (!config.autoScrollEnabled || autoPaused ||
+            selectionController.dragSessionState.value != null
+        ) return@LaunchedEffect
         val velocity = AutoScrollController.velocityPxPerSecond(config.autoScrollSpeed)
         while (true) {
             delay(100L)
+            // §5.7, per tick: a session that begins mid-drift
+            // parks the drift until it settles.
+            if (selectionController.dragSessionState.value != null) {
+                continue
+            }
             val info = listState.layoutInfo
             val halted = listOfNotNull(
                 info.visibleItemsInfo.firstOrNull(),
@@ -1267,6 +1304,12 @@ fun DocumentReader(
     // screen); the follow is gated to that segment.
     LaunchedEffect(spokenRange, index) {
         if (spokenRange == null) return@LaunchedEffect
+        // Code 117 (§5.7): Listen's follow stands down while a
+        // selection drag owns the list; the next spoken range
+        // follows as usual once the drag settles.
+        if (selectionController.dragSessionState.value != null) {
+            return@LaunchedEffect
+        }
         val text = textOf(anchorChapterIndex) ?: return@LaunchedEffect
         val blockIndex = text.blockIndexAt(spokenRange.first)
         if (blockIndex < 0) return@LaunchedEffect
@@ -1301,6 +1344,62 @@ fun DocumentReader(
             return@LaunchedEffect
         }
     }
+
+    // ── Code 117: the selection's scroll rules (§5.6, §3.4) ──
+    // User scroll dismisses: the rising edge of
+    // isScrollInProgress with a live selection and no drag
+    // session clears the model — user scrolls and Listen's
+    // follow-scroll alike (§9.6). Edge auto-scroll during a
+    // drag is exempt by the drag-session condition, not by a
+    // special case.
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collect { scrolling ->
+                if (scrolling &&
+                    selectionController.selectionState.value != null &&
+                    selectionController.dragSessionState.value == null
+                ) {
+                    selectionController.clearSelection()
+                }
+            }
+    }
+    // §3.4: the anchor chapter changing, by ANY route — wall
+    // swap, Listen's chapter advance, segment-set replacement,
+    // a Contents jump to another chapter — clears the model.
+    // One explicit effect (the selection state is `remember`
+    // and would otherwise survive the change holding the old
+    // chapter's offsets); Revision 2 D3: the clear is the one
+    // operation, drag session included.
+    LaunchedEffect(anchorChapterIndex) {
+        selectionController.clearSelection()
+    }
+    // §4.1: a typography/config change that re-lays-out text
+    // clears — keyed on the layout inputs to DocumentBlock.
+    LaunchedEffect(
+        config.fontSizeSp, config.lineHeightMultiplier,
+        config.paragraphSpacingDp, config.marginHorizontalDp,
+        config.bionicReading, fontFamily
+    ) {
+        selectionController.clearSelection()
+    }
+    // §7.4: the back chain's clear nonce performs a REAL
+    // clear — tint, handles and bar die together. (Code 116's
+    // nonce could only hide the bar; the framework's tint and
+    // handles stood. That half-dismissal cannot recur: there
+    // is one state and it is null.)
+    LaunchedEffect(clearSelectionSignal) {
+        if (clearSelectionSignal > 0) {
+            selectionController.clearSelection()
+        }
+    }
+    // §5.6: edge auto-scroll while a drag session lives —
+    // hosted in its own composable scope so this body never
+    // reads the session state in composition.
+    SelectionEdgeAutoScroll(
+        controller = selectionController,
+        listState = listState
+    )
 
     // ── Seam patch + MR-2 Part S: the wall counts the ──
     // finger, not the pipeline.
@@ -1421,7 +1520,15 @@ fun DocumentReader(
                 } else if (tracked != null) {
                     val dy = tracked.positionChange().y
                     if (dy != 0f &&
-                        wallActiveNow && zoomLockedItems.isEmpty()
+                        wallActiveNow && zoomLockedItems.isEmpty() &&
+                        // Code 117 (§5.7): the wheel's
+                        // accumulation stands down while a
+                        // selection drag owns the pointer —
+                        // with accumulation disarmed, dragPx
+                        // stays 0, so the release branch below
+                        // cannot swap chapters off a selection
+                        // drag either.
+                        selectionController.dragSessionState.value == null
                     ) {
                         val layout = listState.layoutInfo
                         val pinnedAtStart =
@@ -1502,31 +1609,13 @@ fun DocumentReader(
         }
     }
 
-    // ── SelectionBar (§8.3): the selection episode's
-    // anchor — the (chapter, block) whose long-press began
-    // the current selection episode, written by the block's
-    // own long-press (onBlockLongPressed, threaded to the
-    // items below). The bar's passage arms (Highlight ·
-    // Note · Bookmark here) resolve against it through
-    // onParagraphAction. The anchor is EPISODE-SCOPED
-    // (Critic F3): it is cleared the moment the episode
-    // ends — the host's open report drives the flag — so a
-    // later episode that no long-press began (a double-tap
-    // word pick, a Select all) has NO anchor and the bar
-    // hides the passage arms for it (the hiddenActions set
-    // at the host call below). A wrong-passage highlight is
-    // worse than an absent action; absent is the rule.
-    var selectionAnchor by remember {
-        mutableStateOf<Pair<Int, Int>?>(null)
-    }
-    var selectionEpisodeOpen by remember { mutableStateOf(false) }
-    LaunchedEffect(selectionEpisodeOpen) {
-        if (!selectionEpisodeOpen) selectionAnchor = null
-    }
-    val onBlockLongPressed: (Int, Int) -> Unit =
-        { chapterIndex, blockIndex ->
-            selectionAnchor = chapterIndex to blockIndex
-        }
+    // Code 117: the code-116 selection-episode anchor
+    // (selectionAnchor / selectionEpisodeOpen /
+    // onBlockLongPressed) is DELETED with the framework
+    // manager it served (§10, §15). The bar's passage arms
+    // now fulfil against the model's own range (§8) — there
+    // is no anchor separate from the selection that could
+    // flap to null mid-episode (S1's mechanism).
 
     Box(
         modifier
@@ -1535,7 +1624,9 @@ fun DocumentReader(
             // toggles the chrome even when it lands on text.
             // The tap also drives auto-scroll's pause/resume
             // contract, as on the retired surfaces.
-            .readerTapToggle(chapters) { xFraction, _ ->
+            .readerTapToggle(
+                chapters, selectionController.tapAwayGate
+            ) { xFraction, _ ->
                 if (app.xreader.domain.reader.CentreTap.isCentre(xFraction)) {
                     autoPaused = false
                     onCenterTap()
@@ -1547,49 +1638,39 @@ fun DocumentReader(
             // its definition above) — a second Initial-pass
             // watcher on the same root; it consumes nothing.
             .then(wallReleaseObserver)
+            // Code 117 (§5.3): the root's own window offset —
+            // every window-coordinate conversion in the
+            // selection geometry reads it — and the standing
+            // Main-pass drag host loop. The root is an ancestor
+            // of every block, is in the entry pointer's hit
+            // path from its down, and is never disposed while
+            // the reader lives.
+            .onGloballyPositioned { coordinates ->
+                selectionController.rootWindowOffset =
+                    coordinates.positionInWindow()
+            }
+            .pointerInput(selectionController) {
+                selectionDragHostLoop(selectionController)
+            }
     ) {
-        ReaderSelectionMenuHost(
-            onAction = onSelectionAction,
-            onParagraphAction = { action ->
-                // The bar shows the passage arms only while
-                // an anchor exists (hiddenActions below);
-                // the let is the belt over that braces.
-                selectionAnchor?.let { (chapterIndex, blockIndex) ->
-                    onParagraphAction(chapterIndex, blockIndex, action)
-                }
-            },
-            hiddenActions = if (selectionAnchor == null) {
-                setOf(
-                    SelectionBarAction.HIGHLIGHT,
-                    SelectionBarAction.NOTE,
-                    SelectionBarAction.BOOKMARK
-                )
-            } else {
-                emptySet()
-            },
-            onSelectionOpenChanged = { open ->
-                selectionEpisodeOpen = open
-                onSelectionOpenChanged(open)
-            },
-            clearSelectionSignal = clearSelectionSignal,
+        ReaderSelectionLayer(
+            controller = selectionController,
+            selectionText = selectionText,
+            onSelectionAction = onSelectionAction,
+            onRangeAction = onRangeAction,
+            onSelectionOpenChanged = onSelectionOpenChanged,
             motionEnabled = motionEnabled
         ) {
-        // §8.4: the selection handles + tint in the app
-        // accent — the framework draws the handles from the
-        // layout results; what the app controls is this
-        // configuration (the conviction found NO app
-        // handle/tint configuration anywhere in the tree).
-        CompositionLocalProvider(
-            LocalTextSelectionColors provides TextSelectionColors(
-                handleColor = MaterialTheme.colorScheme.primary,
-                backgroundColor =
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
-            )
-        ) {
-        SelectionContainer {
             LazyColumn(
                 state = listState,
-                userScrollEnabled = zoomLockedItems.isEmpty(),
+                // Code 117 (§5.3): the drag scroll lock — the
+                // same channel zoomLockedItems uses. While a
+                // drag session lives the column does not
+                // scroll; the root host consumes the drag's
+                // moves besides. Either alone would do; both
+                // are specified (§5.3).
+                userScrollEnabled = zoomLockedItems.isEmpty() &&
+                    selectionController.dragSessionState.value == null,
                 contentPadding = PaddingValues(
                     start = config.marginHorizontalDp.dp,
                     end = config.marginHorizontalDp.dp,
@@ -1694,8 +1775,7 @@ fun DocumentReader(
                                         text.rangeOf(blockIndex)?.blockId ==
                                         overlayBlockId,
                                     assetFile = assetFile,
-                                    onParagraphAction = onParagraphAction,
-                                    onBlockLongPressed = onBlockLongPressed,
+                                    selectionController = selectionController,
                                     onZoomActiveChanged = { active ->
                                         val itemKey =
                                             "b-${chapter.id}-$blockIndex"
@@ -1766,9 +1846,16 @@ fun DocumentReader(
                     }
                 }
             }
-        }
-        } // TextSelectionColors provider (§8.4)
-        } // ReaderSelectionMenuHost
+        } // ReaderSelectionLayer's content lambda (the LazyColumn)
+        // Code 117 (§6.3): the selection overlay — composed
+        // after the LazyColumn, before the bar Popup (a
+        // separate window; the overlay's recognisers never
+        // see bar taps). Exists only while a selection lives.
+        ReaderSelectionOverlay(
+            controller = selectionController,
+            listState = listState,
+            palette = palette
+        )
         if (config.readingLine) {
             ReadingLineOverlay(palette = palette)
         }
@@ -1783,6 +1870,138 @@ fun DocumentReader(
                 topInset = topInset,
                 bottomInset = bottomInset
             )
+        }
+    }
+}
+
+/**
+ * Code 117: the bar layer's composition scope. This wrapper
+ * is the ONE place in the reader that reads the selection
+ * state in composition — the host gates the bar Popup on it —
+ * so a drag frame recomposes this small scope and the
+ * overlay, never DocumentReader's body and never a
+ * DocumentBlock (§6.4's budget).
+ */
+@Composable
+private fun ReaderSelectionLayer(
+    controller: ReaderSelectionController,
+    selectionText: (ReaderTextSelection) -> String,
+    onSelectionAction: (ReaderSelectionAction, String) -> Unit,
+    onRangeAction: (selection: ReaderTextSelection, action: ParagraphAction) -> Unit,
+    onSelectionOpenChanged: (Boolean) -> Unit,
+    motionEnabled: Boolean,
+    content: @Composable () -> Unit
+) {
+    val selection = controller.selectionState.value
+    ReaderSelectionMenuHost(
+        selection = selection,
+        selectionRect = { controller.selectionRect() ?: Rect.Zero },
+        selectionText = {
+            selection?.let(selectionText) ?: ""
+        },
+        onAction = onSelectionAction,
+        onRangeAction = { action ->
+            // The arms fulfil against the model's range at
+            // tap time (§8) — the belt over the bar's own
+            // gating (it composes only while a selection lives).
+            selection?.let { onRangeAction(it, action) }
+        },
+        onSelectAll = {
+            // §7.3: the model becomes the whole chapter the
+            // selection STARTED in; the bar re-seats over the
+            // widened range and does not dismiss.
+            val current = controller.selectionState.value
+            val text = current?.let {
+                controller.chapterTextOf(it.startChapter)
+            }
+            if (current != null && text != null && text.length > 0) {
+                controller.selectionState.value = ReaderTextSelection(
+                    current.startChapter, 0,
+                    current.startChapter, text.length
+                )
+            }
+        },
+        onClearSelection = { controller.clearSelection() },
+        onSelectionOpenChanged = onSelectionOpenChanged,
+        motionEnabled = motionEnabled,
+        content = content
+    )
+}
+
+/**
+ * Code 117 (§5.6): edge auto-scroll while a drag session
+ * lives. Composition-hosted here — never inside a list item —
+ * so the origin block's disposal cannot kill it (§5.1). Per
+ * frame: pressure = penetration into the 48 dp band / 48 dp;
+ * velocity = pressure × 480 dp/s; scroll by velocity × frame
+ * delta; then re-resolve the following edge from the
+ * session's last recorded finger position — the finger is
+ * stationary, the content moved — and write the range if it
+ * changed. The composed frontier is the honest bound (§5.6):
+ * the edge can only point into composed blocks; the §4.2
+ * clamp pins it at the frontier and it advances per frame.
+ */
+@Composable
+private fun SelectionEdgeAutoScroll(
+    controller: ReaderSelectionController,
+    listState: androidx.compose.foundation.lazy.LazyListState
+) {
+    val session = controller.dragSessionState.value
+    val density = LocalDensity.current
+    LaunchedEffect(session) {
+        val active = session ?: return@LaunchedEffect
+        val bandPx = with(density) { SELECTION_EDGE_BAND_DP.dp.toPx() }
+        val maxVelocityPx = with(density) {
+            SELECTION_EDGE_MAX_DP_PER_SECOND.dp.toPx()
+        }
+        var lastMillis = -1L
+        while (true) {
+            val frameMillis = withFrameMillis { it }
+            if (controller.dragSessionState.value !== active) break
+            val dtMillis = if (lastMillis < 0L) {
+                0L
+            } else {
+                frameMillis - lastMillis
+            }
+            lastMillis = frameMillis
+            if (dtMillis <= 0L) continue
+            val info = listState.layoutInfo
+            val viewportTop = controller.rootWindowOffset.y +
+                info.viewportStartOffset
+            val viewportBottom = controller.rootWindowOffset.y +
+                info.viewportEndOffset
+            val fingerY = active.lastFingerWindow.y
+            val direction: Float
+            val pressure: Float
+            when {
+                fingerY < viewportTop + bandPx -> {
+                    direction = -1f
+                    pressure = ((viewportTop + bandPx - fingerY) / bandPx)
+                        .coerceIn(0f, 1f)
+                }
+                fingerY > viewportBottom - bandPx -> {
+                    direction = 1f
+                    pressure = ((fingerY - (viewportBottom - bandPx)) / bandPx)
+                        .coerceIn(0f, 1f)
+                }
+                else -> {
+                    direction = 0f
+                    pressure = 0f
+                }
+            }
+            if (pressure > 0f) {
+                val delta = direction * pressure * maxVelocityPx *
+                    (dtMillis / 1000f)
+                listState.scroll { scrollBy(delta) }
+                val next = controller.advanceDrag(
+                    active, active.lastFingerWindow
+                )
+                if (next != null &&
+                    next != controller.selectionState.value
+                ) {
+                    controller.selectionState.value = next
+                }
+            }
         }
     }
 }
@@ -2073,13 +2292,11 @@ private fun DocumentBlock(
     spokenRange: IntRange?,
     overlayActive: Boolean,
     assetFile: (String) -> File,
-    onParagraphAction: (chapterIndex: Int, blockIndex: Int, action: ParagraphAction) -> Unit,
-    /** SelectionBar (§8.3): this block's long-press records
-     * the selection episode's anchor (its own chapter +
-     * block indices) with the reader — the passage menu
-     * that used to open here is gone; its three actions
-     * live in the selection bar now. */
-    onBlockLongPressed: (chapterIndex: Int, blockIndex: Int) -> Unit,
+    /** Code 117: the selection model + registry + recogniser
+     * target (§3–§5) — the prose branch captures its layout
+     * into the registry, hosts the entry recognisers, and
+     * carries the §9.1 semantics action, all through here. */
+    selectionController: ReaderSelectionController,
     onZoomActiveChanged: (Boolean) -> Unit = {}
 ) {
     val range = chapterText.rangeOf(blockIndex) ?: return
@@ -2162,31 +2379,86 @@ private fun DocumentBlock(
                     backgrounds = backgrounds
                 )
             }
-            // SelectionBar (§8.3): the paragraph DropdownMenu
-            // that used to open on this long-press is REMOVED
-            // — its three actions (Highlight passage · Add
-            // note to passage · Bookmark here) are in the
-            // selection bar now, and a second long-press
-            // surface beside the bar re-created the exact
-            // pile-up the MR-4 conviction named (and, composed
-            // inside the SelectionContainer, the code-114
-            // crash's trigger). The long-press now only
-            // RECORDS this block as the selection episode's
-            // anchor; the framework's own selection starts
-            // from the same press, and the bar that follows
-            // resolves its passage arms against the anchor.
+            // Code 117 (§10.2): the prose block's
+            // combinedClickable is DELETED — its unconditional
+            // click consumption was one of S2's door-shutters,
+            // and its long-click wrote the episode anchor that
+            // no longer exists. In its place (§5.1/§5.2): the
+            // §4.1 registry capture (layout + the two origins),
+            // the two entry pointerInputs, and the §9.1
+            // semantics action. The block stays a plain Text —
+            // with no SelectionContainer above it, absence of
+            // the container is the non-selectable mechanism.
+            val registryKey = chapterIndex to blockIndex
+            DisposableEffect(registryKey) {
+                onDispose {
+                    selectionController.registry.remove(registryKey)
+                }
+            }
+            val tapPairing = remember { SelectionTapPairing() }
+            val blockDensity = LocalDensity.current
             Text(
                 annotated,
                 style = blockTextStyle(block, config, fontFamily),
                 color = palette.text,
+                onTextLayout = { layout ->
+                    selectionController.registry.putLayout(
+                        registryKey, layout
+                    )
+                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .combinedClickable(
-                        onClick = {},
-                        onLongClick = {
-                            onBlockLongPressed(chapterIndex, blockIndex)
-                        }
-                    )
+                    .onGloballyPositioned { coordinates ->
+                        selectionController.registry.putPosition(
+                            key = registryKey,
+                            nodeOffset = coordinates.positionInWindow(),
+                            size = coordinates.size,
+                            // §4.1's text origin: the branch's
+                            // own top padding, read from the
+                            // block type — the same constant
+                            // the padding below applies.
+                            topInsetPx = if (
+                                block is ChapterBlock.Heading
+                            ) {
+                                with(blockDensity) { 16.dp.toPx() }
+                            } else {
+                                0f
+                            }
+                        )
+                    }
+                    .pointerInput(registryKey) {
+                        selectionEntryLongPressLoop(
+                            selectionController, chapterIndex, blockIndex
+                        )
+                    }
+                    .pointerInput(registryKey) {
+                        selectionTapTracker(
+                            selectionController, chapterIndex,
+                            blockIndex, tapPairing
+                        )
+                    }
+                    .semantics {
+                        // §9.1 (Revision 1's pinned form): the
+                        // accessibility floor — TalkBack's
+                        // creation path, paragraph granularity.
+                        customActions = listOf(
+                            CustomAccessibilityAction(
+                                "Select paragraph"
+                            ) {
+                                if (range.end > range.start) {
+                                    selectionController
+                                        .selectionState.value =
+                                        ReaderTextSelection(
+                                            chapterIndex, range.start,
+                                            chapterIndex, range.end
+                                        )
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                        )
+                    }
                     .padding(
                         // Stage 2's inset authority: a
                         // heading's rendered top padding

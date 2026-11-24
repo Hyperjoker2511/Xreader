@@ -27,8 +27,22 @@ import kotlin.math.sqrt
  */
 fun Modifier.readerTapToggle(
     key: Any,
+    /** Code 117 (§5.5): the selection tap-away gate — the
+     * core reader's stand-down channel. Writers elsewhere set
+     * [SelectionLiveAtDown.value] at every down they see
+     * (`selection != null` at that down); when it is true for
+     * a gesture, this toggle STANDS DOWN at its clean-tap
+     * branch: it skips the whole branch — neither `consume()`
+     * nor `onTap` runs (skipping the consume is load-bearing:
+     * the tap-away clear over text runs in the Main pass, and
+     * a consumed up would null its wait — §5.5). The gate is
+     * reset to false at EVERY gesture finish this loop
+     * observes, whether it fired, stood down, or the gesture
+     * ended as a drag or long-press: its life is exactly one
+     * gesture. Null (every other surface) = shipped behaviour. */
+    selectionGate: SelectionLiveAtDown? = null,
     onTap: (xFraction: Float, yFraction: Float) -> Unit
-): Modifier = pointerInput(key) {
+): Modifier = pointerInput(key, selectionGate) {
     awaitPointerEventScope {
         while (true) {
             val downEvent = awaitPointerEvent(PointerEventPass.Initial)
@@ -60,7 +74,12 @@ fun Modifier.readerTapToggle(
                             CentreTap.isTap(
                                 change.uptimeMillis - startMs,
                                 viewConfiguration.longPressTimeoutMillis
-                            )
+                            ) &&
+                            // §5.5: the stand-down — a tap-away
+                            // runs no callback (so it neither
+                            // pauses nor resumes auto-scroll)
+                            // and consumes nothing.
+                            selectionGate?.value != true
                         ) {
                             change.consume()
                             onTap(
@@ -80,6 +99,10 @@ fun Modifier.readerTapToggle(
                     !change.pressed -> finished = true
                 }
             }
+            // §5.5's reset: the gate's life is exactly one
+            // gesture — cleared at every finish this loop
+            // observes, fired, stood down, dragged or held.
+            selectionGate?.value = false
         }
     }
 }
