@@ -357,8 +357,11 @@ fun HistoryScreen(
     // grouping + density knobs. Under Nocturne both are inert
     // and the list is the settled flat list, byte-identical.
     val designState = app.xreader.ui.theme.LocalDesignState.current
-    val m3History = designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    // Code 124: the MATERIAL3 design is removed — this
+    // shared composition serves Nocturne only (the Material 3
+    // design routes to EditorialHistoryContent), so its M3
+    // knob gates read false.
+    val m3History = false
     val historyCompact = m3History &&
         designState.historyDensity ==
             app.xreader.data.prefs.M3DensityChoice.COMPACT
@@ -391,22 +394,10 @@ fun HistoryScreen(
     val startOfToday = LocalDate.now(ZoneId.systemDefault())
         .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
     val booksToday = entriesNow.count { it.recordedAt >= startOfToday }
-    // Code 121 (R3): the Material 3 History — medium flexible
-    // bar, day-grouped card-less list with sticky date headers,
-    // swipe-remove + snackbar Undo. The Nocturne composition
-    // below is unchanged.
-    if (m3History) {
-        M3HistoryContent(
-            entries = entriesNow,
-            viewModel = viewModel,
-            coverFile = coverFile,
-            compact = historyCompact,
-            byDay = historyByDay,
-            onBack = onBack,
-            onOpenBook = onOpenBook
-        )
-        return
-    }
+    // Code 124: the removed design's own History composition
+    // (M3HistoryContent) is deleted with that face — this
+    // screen now routes Editorial → EditorialHistoryContent,
+    // everything else → the Nocturne composition below.
     // Code 123: the Editorial History — the approved extension
     // (DESIGN-M3-HISTORY-DOWNLOADS-V6-EXTENSION): the Pulse
     // kept, "Clear history" visible in the header, day-grouped
@@ -996,394 +987,6 @@ private fun PulseCell(value: String, label: String, modifier: Modifier = Modifie
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,
     androidx.compose.foundation.ExperimentalFoundationApi::class
 )
-@Composable
-private fun M3HistoryContent(
-    entries: List<HistoryEntryUi>,
-    viewModel: HistoryViewModel,
-    coverFile: (String?) -> File?,
-    compact: Boolean,
-    /** Code 122 (R3, audit item #13): the stored grouping knob —
-     * true = day groups with sticky date headers; false = the
-     * flat form (one list, newest first, no headers). */
-    byDay: Boolean,
-    onBack: () -> Unit,
-    onOpenBook: (bookId: Long, chapterIndex: Int) -> Unit
-) {
-    val scrollBehavior = androidx.compose.material3.TopAppBarDefaults
-        .exitUntilCollapsedScrollBehavior()
-    val snackbarHostState = remember {
-        androidx.compose.material3.SnackbarHostState()
-    }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
-    var overflowOpen by remember { mutableStateOf(false) }
-    var confirmClear by remember { mutableStateOf(false) }
-    var deleteTarget by remember {
-        mutableStateOf<app.xreader.data.db.Book?>(null)
-    }
-
-    fun removeWithUndo(entry: HistoryEntryUi) {
-        viewModel.removeEntryWithUndo(entry.bookKey) { record ->
-            if (record != null) {
-                scope.launch {
-                    val result = snackbarHostState.showSnackbar(
-                        message = "Removed “${entry.title}” from history",
-                        actionLabel = "Undo",
-                        duration = androidx.compose.material3
-                            .SnackbarDuration.Short
-                    )
-                    if (result == androidx.compose.material3
-                            .SnackbarResult.ActionPerformed
-                    ) {
-                        viewModel.restoreEntry(record)
-                    }
-                }
-            }
-        }
-    }
-
-    androidx.compose.material3.Scaffold(
-        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        topBar = {
-            androidx.compose.material3.MediumFlexibleTopAppBar(
-                title = {
-                    Text(
-                        "History",
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                },
-                scrollBehavior = scrollBehavior,
-                actions = {
-                    Box {
-                        androidx.compose.material3.IconButton(
-                            onClick = { overflowOpen = true }
-                        ) {
-                            androidx.compose.material3.Icon(
-                                Icons.Filled.MoreVert,
-                                contentDescription = "History options"
-                            )
-                        }
-                        androidx.compose.material3.DropdownMenu(
-                            expanded = overflowOpen,
-                            onDismissRequest = { overflowOpen = false }
-                        ) {
-                            androidx.compose.material3.DropdownMenuItem(
-                                text = { Text("Clear all") },
-                                enabled = entries.isNotEmpty(),
-                                onClick = {
-                                    overflowOpen = false
-                                    confirmClear = true
-                                }
-                            )
-                        }
-                    }
-                }
-            )
-        },
-        snackbarHost = {
-            androidx.compose.material3.SnackbarHost(snackbarHostState)
-        }
-    ) { innerPadding ->
-        if (entries.isEmpty()) {
-            // S40 empty state (R3's copy + its Library door;
-            // onBack is wired by the shell to the Library tab).
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    "Nothing read yet",
-                    style = MaterialTheme.typography.headlineSmall
-                )
-                Text(
-                    "Books you read will show up here, newest first.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                androidx.compose.material3.Button(onClick = onBack) {
-                    Text("Library")
-                }
-            }
-            return@Scaffold
-        }
-        val nowMs = System.currentTimeMillis()
-        // Day groups in encounter order (entries are already
-        // most-recent-first; groupBy preserves it).
-        val grouped = entries.groupBy { historyDayLabel(it.recordedAt, nowMs) }
-        LazyColumn(
-            Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(bottom = 88.dp)
-        ) {
-            if (!byDay) {
-                // The flat form (the knob's stored default):
-                // one list, newest first, no date headers.
-                items(entries, key = { "m3-hist-flat-${it.bookKey}" }) { entry ->
-                    M3HistoryRow(
-                        entry = entry,
-                        coverFile = coverFile,
-                        compact = compact,
-                        onOpen = {
-                            entry.bookId?.let {
-                                onOpenBook(it, entry.chapterIndex)
-                            }
-                        },
-                        onAddBack = {
-                            entry.bookId?.let {
-                                viewModel.addBackToLibrary(it)
-                            }
-                        },
-                        onRemove = { removeWithUndo(entry) },
-                        onDeleteBook = { deleteTarget = entry.book }
-                    )
-                    androidx.compose.material3.HorizontalDivider(
-                        modifier = Modifier.padding(start = 16.dp)
-                    )
-                }
-            }
-            if (byDay) grouped.forEach { (label, dayEntries) ->
-                stickyHeader(key = "m3-hist-day-$label") {
-                    androidx.compose.material3.Surface(
-                        color = MaterialTheme.colorScheme.surface,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            label,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(
-                                start = 16.dp, end = 16.dp,
-                                top = 12.dp, bottom = 6.dp
-                            )
-                        )
-                    }
-                }
-                items(dayEntries, key = { "m3-hist-${it.bookKey}" }) { entry ->
-                    M3HistoryRow(
-                        entry = entry,
-                        coverFile = coverFile,
-                        compact = compact,
-                        onOpen = {
-                            entry.bookId?.let {
-                                onOpenBook(it, entry.chapterIndex)
-                            }
-                        },
-                        onAddBack = {
-                            entry.bookId?.let {
-                                viewModel.addBackToLibrary(it)
-                            }
-                        },
-                        onRemove = { removeWithUndo(entry) },
-                        onDeleteBook = { deleteTarget = entry.book }
-                    )
-                    androidx.compose.material3.HorizontalDivider(
-                        modifier = Modifier.padding(start = 16.dp)
-                    )
-                }
-            }
-        }
-    }
-    if (confirmClear) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("Clear history?") },
-            text = {
-                Text(
-                    "This clears the list on this screen only. " +
-                        "Clearing history never removes downloads " +
-                        "or books — your place in every book and " +
-                        "your bookmarks stay exactly as they are."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmClear = false
-                    viewModel.clearAll()
-                }) { Text("Clear history") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClear = false }) {
-                    Text("Keep it")
-                }
-            }
-        )
-    }
-    // S5's one delete dialog, shared with Library + Nocturne.
-    app.xreader.ui.common.BookDeleteDialogs(
-        book = deleteTarget,
-        downloadedSizeBytes = { viewModel.downloadedSizeBytes(it) },
-        onDismiss = { deleteTarget = null },
-        onRemoveBook = { book, deleteFiles ->
-            viewModel.removeBook(book, deleteFiles)
-        },
-        onRemoveLocalBook = { book, mode, context ->
-            viewModel.removeLocalBook(book, mode, context)
-        }
-    )
-}
-
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@Composable
-private fun M3HistoryRow(
-    entry: HistoryEntryUi,
-    coverFile: (String?) -> File?,
-    compact: Boolean,
-    onOpen: () -> Unit,
-    onAddBack: () -> Unit,
-    onRemove: () -> Unit,
-    onDeleteBook: () -> Unit
-) {
-    var menuOpen by remember { mutableStateOf(false) }
-    val dismissState = androidx.compose.material3
-        .rememberSwipeToDismissBoxState(
-            confirmValueChange = { value ->
-                if (value == androidx.compose.material3
-                        .SwipeToDismissBoxValue.EndToStart
-                ) {
-                    onRemove()
-                    true
-                } else {
-                    false
-                }
-            }
-        )
-    androidx.compose.material3.SwipeToDismissBox(
-        state = dismissState,
-        enableDismissFromStartToEnd = false,
-        backgroundContent = {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.errorContainer)
-                    .padding(horizontal = 20.dp),
-                contentAlignment = Alignment.CenterEnd
-            ) {
-                androidx.compose.material3.Icon(
-                    Icons.Filled.Delete,
-                    contentDescription = "Remove from history",
-                    tint = MaterialTheme.colorScheme.onErrorContainer
-                )
-            }
-        }
-    ) {
-        androidx.compose.material3.ListItem(
-            headlineContent = {
-                Text(
-                    entry.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            supportingContent = {
-                Column {
-                    Text(
-                        listOfNotNull(
-                            entry.chapterTitle?.takeIf { it.isNotBlank() }
-                                ?: "Chapter ${entry.chapterIndex + 1}",
-                            "${(entry.fraction * 100).toInt()}%"
-                        ).joinToString(" · "),
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        timeAgo(entry.recordedAt, System.currentTimeMillis()),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            leadingContent = {
-                app.xreader.ui.common.M3CoverThumbnail(
-                    title = entry.title,
-                    author = null,
-                    coverModel = coverFile(entry.coverPath)
-                        ?.takeIf { it.exists() }
-                        ?: entry.coverUrl?.takeIf { it.isNotBlank() },
-                    modifier = Modifier.size(
-                        width = if (compact) 32.dp else 40.dp,
-                        height = if (compact) 46.dp else 58.dp
-                    )
-                )
-            },
-            trailingContent = {
-                Box {
-                    androidx.compose.material3.IconButton(
-                        onClick = { menuOpen = true }
-                    ) {
-                        androidx.compose.material3.Icon(
-                            Icons.Filled.MoreVert,
-                            contentDescription = "Actions for ${entry.title}"
-                        )
-                    }
-                    androidx.compose.material3.DropdownMenu(
-                        expanded = menuOpen,
-                        onDismissRequest = { menuOpen = false }
-                    ) {
-                        if (entry.bookExists) {
-                            androidx.compose.material3.DropdownMenuItem(
-                                text = { Text("Open book page") },
-                                onClick = {
-                                    menuOpen = false
-                                    onOpen()
-                                }
-                            )
-                        }
-                        if (entry.bookExists && !entry.inLibrary) {
-                            androidx.compose.material3.DropdownMenuItem(
-                                text = { Text("Add back to Library") },
-                                onClick = {
-                                    menuOpen = false
-                                    onAddBack()
-                                }
-                            )
-                        }
-                        androidx.compose.material3.DropdownMenuItem(
-                            text = { Text("Remove from history") },
-                            onClick = {
-                                menuOpen = false
-                                onRemove()
-                            }
-                        )
-                        if (entry.bookExists) {
-                            androidx.compose.material3.DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "Delete book…",
-                                        color = MaterialTheme.colorScheme.error
-                                    )
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    onDeleteBook()
-                                }
-                            )
-                        }
-                    }
-                }
-            },
-            modifier = Modifier
-                .background(MaterialTheme.colorScheme.surface)
-                .clickable(enabled = entry.bookExists, onClick = onOpen)
-        )
-    }
-}
-
-
-// ── Code 123: the Editorial History ────────────────────────
-// The approved extension alive: kicker + serif headline with
-// "Clear history" visible in the header, the Reading Pulse
-// card, day-grouped rows when the grouping knob says BY_DAY
-// (flat otherwise — presentation only, §15 order and actions
-// unchanged), the full action rail on every row, both remove
-// mechanics (the Remove button opens the §15 confirm dialog;
-// a swipe removes with a snackbar Undo), and the shared
-// book-delete sheet behind "Delete book…".
 @OptIn(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.foundation.ExperimentalFoundationApi::class
@@ -1581,9 +1184,13 @@ private fun EditorialHistoryContent(
                     }
                 }
                 if (!byDay) {
-                    items(entries, key = { "ed-hist-${it.bookKey}" }) { entry ->
+                    androidx.compose.foundation.lazy.itemsIndexed(
+                        entries, key = { _, it -> "ed-hist-${it.bookKey}" }
+                    ) { index, entry ->
                         EditorialHistoryRow(
                             entry = entry,
+                            groupIndex = index,
+                            groupCount = entries.size,
                             coverFile = coverFile,
                             compact = compact,
                             onOpen = {
@@ -1621,12 +1228,14 @@ private fun EditorialHistoryContent(
                                 )
                             }
                         }
-                        items(
+                        androidx.compose.foundation.lazy.itemsIndexed(
                             dayEntries,
-                            key = { "ed-hist-${it.bookKey}" }
-                        ) { entry ->
+                            key = { _, it -> "ed-hist-${it.bookKey}" }
+                        ) { index, entry ->
                             EditorialHistoryRow(
                                 entry = entry,
+                                groupIndex = index,
+                                groupCount = dayEntries.size,
                                 coverFile = coverFile,
                                 compact = compact,
                                 onOpen = {
@@ -1726,6 +1335,11 @@ private fun EditorialHistoryContent(
 @Composable
 private fun EditorialHistoryRow(
     entry: HistoryEntryUi,
+    /** Code 124 (E3): this row's place in its segmented
+     * ListItem group (the flat list is one group; each day
+     * is its own group) — the official segmented shapes. */
+    groupIndex: Int = 0,
+    groupCount: Int = 1,
     coverFile: (String?) -> File?,
     compact: Boolean,
     onOpen: () -> Unit,
@@ -1770,9 +1384,17 @@ private fun EditorialHistoryRow(
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(colors.surface)
+                .padding(horizontal = 16.dp, vertical = 1.dp)
+                .clip(
+                    androidx.compose.material3.ListItemDefaults
+                        .segmentedShapes(
+                            index = groupIndex,
+                            count = groupCount
+                        ).shape
+                )
+                .background(colors.surfaceContainerLow)
                 .clickable(enabled = entry.bookExists, onClick = onOpen)
-                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)

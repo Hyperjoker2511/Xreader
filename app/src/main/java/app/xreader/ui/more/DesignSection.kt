@@ -55,7 +55,6 @@ import app.xreader.data.prefs.M3VocabSort
 import app.xreader.ui.common.ColourWheelPickerDialog
 import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.theme.m3DarkTheme
-import app.xreader.ui.theme.resolveM3ColorScheme
 // Code 121 (R30): the Material 3 Customise page's imports.
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.horizontalScroll
@@ -132,9 +131,9 @@ fun DesignPageContent(
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
     DesignChoiceCard(
-        name = "Editorial",
-        line = "Paper & sage — warm paper, Fraunces serif, " +
-            "and its own colours in light and dark.",
+        name = "Material 3",
+        line = "Paper-warm and editorial — Fraunces serif, " +
+            "and your phone's colours or any colour you pick.",
         selected = state.design == AppDesign.EDITORIAL
     ) { viewModel.setDesign(AppDesign.EDITORIAL) }
     DesignChoiceCard(
@@ -142,349 +141,17 @@ fun DesignPageContent(
         line = "Violet on black glass — Xreader's own design.",
         selected = state.design == AppDesign.NOCTURNE
     ) { viewModel.setDesign(AppDesign.NOCTURNE) }
-    DesignChoiceCard(
-        name = "Material 3",
-        line = "Google's Material 3 Expressive — dynamic " +
-            "colour and the official components.",
-        selected = state.design == AppDesign.MATERIAL3
-    ) { viewModel.setDesign(AppDesign.MATERIAL3) }
 
-    if (state.design == AppDesign.EDITORIAL) {
-        // Code 123: Editorial's own small set — its colours are
-        // its own (the colour bar below belongs to Material 3);
-        // Mode and the launch intro are shared machinery the
-        // Editorial theme root genuinely reads.
-        Text(
-            "Editorial wears its own colours — paper & sage in " +
-                "light, generated from the same sage in dark. " +
-                "The colour bar belongs to Material 3.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        DesignChoice(
-            label = "Mode",
-            options = listOf(
-                M3ThemeMode.DARK to "Dark",
-                M3ThemeMode.LIGHT to "Light",
-                M3ThemeMode.FOLLOW_SYSTEM to "Follow system"
-            ),
-            selected = state.themeMode,
-            onPick = viewModel::setM3ThemeMode
-        )
-        DesignSwitch(
-            label = "Launch intro",
-            description = "The short intro when the app opens.",
-            checked = state.launchIntro,
-            onChange = viewModel::setLaunchIntro
-        )
-        return
-    }
-
-    if (state.design != AppDesign.MATERIAL3) {
-        Text(
-            "Nocturne's knobs live on the pages below — Colour " +
-                "theme, Glass & surfaces, Navigation and the " +
-                "rest. Material 3's knobs appear here when " +
-                "Material 3 is the design.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        DesignSwitch(
-            label = "Launch intro",
-            description = "The short intro when the app opens.",
-            checked = state.launchIntro,
-            onChange = viewModel::setLaunchIntro
-        )
-        return
-    }
-
-    // ── Colour theme (§2.11) ────────────────────────────────
-    DesignSectionLabel("Colour theme")
-    DesignChoice(
-        label = "Colour source",
-        options = listOf(
-            M3ColourSource.DYNAMIC to "Dynamic colour",
-            M3ColourSource.PICKED to "Picked colour"
-        ),
-        selected = state.colourSource,
-        onPick = viewModel::setM3ColourSource
-    )
-    SeedRow(state = state, viewModel = viewModel)
-    DesignChoice(
-        label = "Colour style",
-        options = listOf(
-            M3ColourStyle.FIDELITY to "Fidelity",
-            M3ColourStyle.TONAL_SPOT to "Tonal Spot",
-            M3ColourStyle.VIBRANT to "Vibrant",
-            M3ColourStyle.EXPRESSIVE to "Expressive",
-            M3ColourStyle.CONTENT to "Content"
-        ),
-        selected = state.colourStyle,
-        onPick = viewModel::setM3ColourStyle
-    )
+    // This page composes inside Nocturne's Customise hub (the
+    // family hub carries the Material 3 design's own knobs),
+    // so what follows is Nocturne's standing note. Code 124:
+    // the code-120 knob set that stood below the cards served
+    // the removed MATERIAL3 design only and is gone with it.
     Text(
-        "Fidelity keeps your colour closest. The style " +
-            "applies the moment you pick a colour; Dynamic " +
-            "colour always comes from the phone as generated.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    DesignChoice(
-        label = "Mode",
-        options = listOf(
-            M3ThemeMode.DARK to "Dark",
-            M3ThemeMode.LIGHT to "Light",
-            M3ThemeMode.FOLLOW_SYSTEM to "Follow system"
-        ),
-        selected = state.themeMode,
-        onPick = viewModel::setM3ThemeMode
-    )
-    DesignSwitch(
-        label = "Book-page cover colour",
-        description = "A book's page takes its colours from " +
-            "its cover while you are on it.",
-        checked = state.bookPageCoverColour,
-        onChange = viewModel::setM3BookPageCoverColour
-    )
-
-    // ── Navigation (§2.11) ──────────────────────────────────
-    DesignSectionLabel("Navigation")
-    DesignChoice(
-        label = "Tab labels",
-        options = listOf(
-            M3TabLabels.ALWAYS to "Always",
-            M3TabLabels.SELECTED_ONLY to "Selected only"
-        ),
-        selected = state.tabLabels,
-        onPick = viewModel::setM3TabLabels
-    )
-    DesignChoice(
-        label = "Bar or rail",
-        options = listOf(
-            M3NavForm.AUTO to "Auto",
-            M3NavForm.BAR to "Bar",
-            M3NavForm.RAIL to "Rail"
-        ),
-        selected = state.navForm,
-        onPick = viewModel::setM3NavForm
-    )
-
-    // ── Library & book page (§2.11 + M1) ────────────────────
-    DesignSectionLabel("Library & book page")
-    DesignSwitch(
-        label = "Continue rail",
-        description = "The Continue row at the top of the Library.",
-        checked = state.libraryContinueRail,
-        onChange = viewModel::setM3LibraryContinueRail
-    )
-    DesignSwitch(
-        label = "Progress on covers",
-        description = "The reading-progress line on book covers.",
-        checked = state.libraryProgressOnCovers,
-        onChange = viewModel::setM3LibraryProgressOnCovers
-    )
-    DesignSwitch(
-        label = "Filter row",
-        description = "The status filter row in the Library.",
-        checked = state.libraryFilterRow,
-        onChange = viewModel::setM3LibraryFilterRow
-    )
-    DesignChoice(
-        label = "Book page header",
-        options = listOf(
-            M3BookHeader.COLLAPSING_COVER to "Collapsing cover",
-            M3BookHeader.COMPACT_BAR to "Compact bar"
-        ),
-        selected = state.bookHeader,
-        onPick = viewModel::setM3BookHeader
-    )
-    DesignChoice(
-        label = "Book page main action",
-        options = listOf(
-            M3BookAction.BUTTON_GROUP to "Button group",
-            M3BookAction.READ_FAB to "Floating Read button"
-        ),
-        selected = state.bookAction,
-        onPick = viewModel::setM3BookAction
-    )
-    DesignChoice(
-        label = "Words I'm learning — sort",
-        options = listOf(
-            M3VocabSort.RECENT to "Recent",
-            M3VocabSort.A_Z to "A–Z"
-        ),
-        selected = state.vocabSort,
-        onPick = viewModel::setM3VocabSort
-    )
-    DesignChoice(
-        label = "Lore — view",
-        options = listOf(
-            M3ListView.CARD_GRID to "Card grid",
-            M3ListView.LIST to "List"
-        ),
-        selected = state.loreView,
-        onPick = viewModel::setM3LoreView
-    )
-    // ── History (§2.11) ─────────────────────────────────
-    DesignSectionLabel("History")
-    DesignChoice(
-        label = "History grouping",
-        options = listOf(
-            M3HistoryGrouping.NONE to "None",
-            M3HistoryGrouping.BY_DAY to "By day"
-        ),
-        selected = state.historyGrouping,
-        onPick = viewModel::setM3HistoryGrouping
-    )
-    DesignChoice(
-        label = "History density",
-        options = listOf(
-            M3DensityChoice.COMFORTABLE to "Comfortable",
-            M3DensityChoice.COMPACT to "Compact"
-        ),
-        selected = state.historyDensity,
-        onPick = viewModel::setM3HistoryDensity
-    )
-    // ── Downloads (§2.4 R4) ───────────────────────────────
-    DesignSectionLabel("Downloads")
-    DesignChoice(
-        label = "Downloads sort",
-        options = listOf(
-            M3DownloadsSort.RECENT to "Recent",
-            M3DownloadsSort.TITLE to "Title",
-            M3DownloadsSort.SIZE to "Size"
-        ),
-        selected = state.downloadsSort,
-        onPick = viewModel::setM3DownloadsSort
-    )
-    DesignSwitch(
-        label = "Chapter sizes",
-        description = "Show the downloaded size on finished " +
-            "books in Downloads.",
-        checked = state.downloadsChapterSize,
-        onChange = viewModel::setM3DownloadsChapterSize
-    )
-    // ── Explore (§2.11 + M1) ──────────────────────────────
-    DesignSectionLabel("Explore")
-    DesignChoice(
-        label = "Explore opens on",
-        options = listOf(
-            M3ExploreSide.LAST_USED to "Last used",
-            M3ExploreSide.NOVELS to "Novels",
-            M3ExploreSide.MANGA to "Manga"
-        ),
-        selected = state.exploreSide,
-        onPick = viewModel::setM3ExploreSide
-    )
-    DesignSwitch(
-        label = "Group sources",
-        description = "Built-in, Repos and Link-added sources " +
-            "in their own groups on the Explore tab.",
-        checked = state.exploreGrouping,
-        onChange = viewModel::setM3ExploreGrouping
-    )
-    DesignChoice(
-        label = "Source list density",
-        options = listOf(
-            M3DensityChoice.COMFORTABLE to "Comfortable",
-            M3DensityChoice.COMPACT to "Compact"
-        ),
-        selected = state.exploreDensity,
-        onPick = viewModel::setM3ExploreDensity
-    )
-    DesignChoice(
-        label = "Source store view",
-        options = listOf(
-            M3ListView.LIST to "List",
-            M3ListView.CARD_GRID to "Card grid"
-        ),
-        selected = state.exploreStoreView,
-        onPick = viewModel::setM3ExploreStoreView
-    )
-    DesignChoice(
-        label = "Repository sort",
-        options = listOf(
-            M3RepoSort.A_Z to "A–Z",
-            M3RepoSort.RECENTLY_ADDED to "Recently added"
-        ),
-        selected = state.exploreRepoSort,
-        onPick = viewModel::setM3ExploreRepoSort
-    )
-    // ── Profile (§2.11 + M1) ──────────────────────────────
-    DesignSectionLabel("Profile")
-    DesignSwitch(
-        label = "Header card",
-        description = "Your name, level and streak in a card " +
-            "at the top of the Profile page. Off shows them " +
-            "as a plain row.",
-        checked = state.profileHeaderCard,
-        onChange = viewModel::setM3ProfileHeaderCard
-    )
-    DesignChoice(
-        label = "Profile doors",
-        options = listOf(
-            true to "List",
-            false to "Grid"
-        ),
-        selected = state.profileDoorsList,
-        onPick = viewModel::setM3ProfileDoorsList
-    )
-    DesignChoice(
-        label = "Generated art — columns",
-        options = listOf(
-            M3GalleryColumns.AUTO to "Auto",
-            M3GalleryColumns.TWO to "2",
-            M3GalleryColumns.THREE to "3"
-        ),
-        selected = state.galleryColumns,
-        onPick = viewModel::setM3GalleryColumns
-    )
-    // ── Reader (§2.11) ──────────────────────────────────────
-    DesignSectionLabel("Reader")
-    // W8: the Reader chrome choice is RETIRED (§8 Q3 — the
-    // floating toolbar is the one M3 form; no knob is offered).
-    DesignSwitch(
-        label = "Selection colour row",
-        description = "The colour row on the selection bar.",
-        checked = state.selectionColourRow,
-        onChange = viewModel::setM3SelectionColourRow
-    )
-    DesignChoice(
-        label = "Contents opens on",
-        options = listOf(
-            M3ContentsTab.CHAPTERS to "Chapters",
-            M3ContentsTab.BOOKMARKS to "Bookmarks",
-            M3ContentsTab.HIGHLIGHTS to "Highlights"
-        ),
-        selected = state.contentsTab,
-        onPick = viewModel::setM3ContentsTab
-    )
-    Text(
-        "In Material 3 the reader's chrome and control " +
-            "settings live here and in Customise → Reader.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-
-    // ── Motion & advanced (§2.11) ───────────────────────────
-    DesignSectionLabel("Motion & advanced")
-    DesignChoice(
-        label = "Motion",
-        options = listOf(
-            M3MotionChoice.EXPRESSIVE to "Expressive",
-            M3MotionChoice.STANDARD to "Standard",
-            M3MotionChoice.REDUCED to "Reduced"
-        ),
-        selected = state.motionChoice,
-        onPick = viewModel::setM3MotionChoice
-    )
-    Text(
-        "Standard and Reduced both use the Standard motion " +
-            "scheme — no spring overshoot. Reduced is lighter " +
-            "motion, for slower phones; you pick it yourself, " +
-            "it is never switched on for you. Reduce motion " +
-            "(Accessibility & motion) also selects the " +
-            "Standard scheme.",
+        "Nocturne's knobs live on the pages below — Colour " +
+            "theme, Glass & surfaces, Navigation and the " +
+            "rest. Material 3 keeps its own knobs in its own " +
+            "Customise.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
@@ -494,66 +161,6 @@ fun DesignPageContent(
         checked = state.launchIntro,
         onChange = viewModel::setLaunchIntro
     )
-}
-
-/** The seed row of the Colour theme group: the current seed,
- * the saved seeds ("Your seeds"), and the door to the S37
- * wheel — the app's existing colour-wheel dialog frame, whose
- * pick becomes the seed. */
-@Composable
-private fun SeedRow(state: DesignState, viewModel: CustomiseViewModel) {
-    val context = LocalContext.current
-    val dark = m3DarkTheme(state)
-    var showWheel by remember { mutableStateOf(false) }
-    Text("Your colour", style = MaterialTheme.typography.bodyLarge)
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        val seeds = buildList {
-            state.seedArgb?.let { add(it) }
-            addAll(state.savedSeeds)
-        }.distinct()
-        seeds.forEach { seed ->
-            val isCurrent = seed == state.seedArgb &&
-                state.colourSource == M3ColourSource.PICKED
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(Color(seed))
-                    .border(
-                        if (isCurrent) 2.dp else 1.dp,
-                        if (isCurrent) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline,
-                        CircleShape
-                    )
-                    .clickable {
-                        viewModel.setM3ColourSource(M3ColourSource.PICKED)
-                        viewModel.setM3Seed(seed)
-                    }
-            )
-        }
-        TextButton(onClick = { showWheel = true }) {
-            Text("Pick any colour")
-        }
-    }
-    if (showWheel) {
-        val initial = state.seedArgb ?: (
-            resolveM3ColorScheme(context, state, dark).primary
-                .toArgb().toLong() and 0xFFFFFFFFL
-            )
-        ColourWheelPickerDialog(
-            title = "Pick a colour",
-            initialArgb = initial,
-            onDismiss = { showWheel = false },
-            onPick = { argb ->
-                viewModel.setM3ColourSource(M3ColourSource.PICKED)
-                viewModel.setM3Seed(argb)
-                showWheel = false
-            }
-        )
-    }
 }
 
 /** One design card on the Design page — the Colour theme
@@ -700,6 +307,8 @@ fun M3CustomisePage(
     var confirmReset by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
     var confirmVoiceClear by remember { mutableStateOf(false) }
+    var confirmLegacy by remember { mutableStateOf(false) }
+    val legacyNote by viewModel.legacyClearNote.collectAsState()
     // The open focused page's door id, or null for the hub.
     var openDoor by rememberSaveable { mutableStateOf<String?>(null) }
     BackHandler(enabled = openDoor != null) { openDoor = null }
@@ -730,10 +339,21 @@ fun M3CustomisePage(
                 }
             }
         )
+        // Code 124 (audit D16): the terminal padding repays
+        // the shell's dock clearance — under the Material 3
+        // design's floating pill every branch of this page
+        // (the hub and all eleven focused pages share this one
+        // scroll column) trapped its tail 16dp short of the
+        // pill. One fix point, every branch.
+        val dockClearance = app.xreader.ui.theme.LocalDockClearance.current
         Column(
             Modifier
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(
+                    start = 16.dp, end = 16.dp, top = 8.dp,
+                    bottom = app.xreader.ui.theme
+                        .effectiveBottomPadding(16.dp, dockClearance)
+                ),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             when (openDoor) {
@@ -750,12 +370,13 @@ fun M3CustomisePage(
                         )
                     )
                     M3DoorCard(
+                        groupIndex = 0,
+                        groupCount = 11,
                         icon = Icons.Filled.Palette,
                         title = "Design",
                         summary = m3DoorSummary(
                             when (design.design) {
-                                AppDesign.EDITORIAL -> "Editorial"
-                                AppDesign.MATERIAL3 -> "Material 3"
+                                AppDesign.EDITORIAL -> "Material 3"
                                 AppDesign.NOCTURNE -> "Nocturne"
                             } to true,
                             " · " to false,
@@ -777,6 +398,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "design" }
                     )
                     M3DoorCard(
+                        groupIndex = 1,
+                        groupCount = 11,
                         icon = Icons.Filled.LibraryBooks,
                         title = "Library",
                         summary = m3DoorSummary(
@@ -795,6 +418,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "library" }
                     )
                     M3DoorCard(
+                        groupIndex = 2,
+                        groupCount = 11,
                         icon = Icons.AutoMirrored.Filled.MenuBook,
                         title = "Reader",
                         summary = m3DoorSummary(
@@ -810,6 +435,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "reader" }
                     )
                     M3DoorCard(
+                        groupIndex = 3,
+                        groupCount = 11,
                         icon = Icons.Filled.AutoStories,
                         title = "Manga reader",
                         summary = m3DoorSummary(
@@ -825,6 +452,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "manga" }
                     )
                     M3DoorCard(
+                        groupIndex = 4,
+                        groupCount = 11,
                         icon = Icons.Filled.Download,
                         title = "Downloads",
                         summary = m3DoorSummary(
@@ -840,6 +469,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "downloads" }
                     )
                     M3DoorCard(
+                        groupIndex = 5,
+                        groupCount = 11,
                         icon = Icons.Filled.Explore,
                         title = "Explore",
                         summary = m3DoorSummary(
@@ -855,6 +486,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "explore" }
                     )
                     M3DoorCard(
+                        groupIndex = 6,
+                        groupCount = 11,
                         icon = Icons.Filled.Speed,
                         title = "Performance",
                         summary = m3DoorSummary(
@@ -868,6 +501,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "performance" }
                     )
                     M3DoorCard(
+                        groupIndex = 7,
+                        groupCount = 11,
                         icon = Icons.Filled.Accessibility,
                         title = "Accessibility & motion",
                         summary = m3DoorSummary(
@@ -884,6 +519,8 @@ fun M3CustomisePage(
                     )
                     val hubSizes = storage
                     M3DoorCard(
+                        groupIndex = 8,
+                        groupCount = 11,
                         icon = Icons.Filled.Storage,
                         title = "Storage",
                         summary = if (hubSizes == null) {
@@ -901,6 +538,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "storage" }
                     )
                     M3DoorCard(
+                        groupIndex = 9,
+                        groupCount = 11,
                         icon = Icons.Filled.Healing,
                         title = "Sources & repairs",
                         summary = if (repairCount > 0) {
@@ -923,6 +562,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "sources" }
                     )
                     M3DoorCard(
+                        groupIndex = 10,
+                        groupCount = 11,
                         icon = Icons.Filled.Science,
                         title = "Advanced",
                         summary = m3DoorSummary(
@@ -944,10 +585,11 @@ fun M3CustomisePage(
                     // card, empty radio. The Nocturne card is TEXT
                     // ONLY — scheme colours, no violet drawn (T2).
                     M3DesignDoorCard(
-                        name = "Editorial",
-                        line = "Paper & sage — warm paper and " +
-                            "Fraunces serif. It wears its own " +
-                            "colours, in light and dark." +
+                        name = "Material 3",
+                        line = "Paper-warm and editorial — " +
+                            "Fraunces serif. It wears your " +
+                            "phone's colours, or any colour " +
+                            "you pick." +
                             if (design.design == AppDesign.EDITORIAL) {
                                 " This is the design you are " +
                                     "looking at now."
@@ -958,19 +600,6 @@ fun M3CustomisePage(
                         onClick = { viewModel.setDesign(AppDesign.EDITORIAL) }
                     )
                     M3DesignDoorCard(
-                        name = "Material 3",
-                        line = "Google's design language. Colours from " +
-                            "your phone, or any colour you pick." +
-                            if (design.design == AppDesign.MATERIAL3) {
-                                " This is the design you are " +
-                                    "looking at now."
-                            } else {
-                                ""
-                            },
-                        selected = design.design == AppDesign.MATERIAL3,
-                        onClick = { viewModel.setDesign(AppDesign.MATERIAL3) }
-                    )
-                    M3DesignDoorCard(
                         name = "Nocturne",
                         line = "A dark glass design with a violet " +
                             "accent, built around your library's " +
@@ -979,43 +608,11 @@ fun M3CustomisePage(
                         selected = design.design == AppDesign.NOCTURNE,
                         onClick = { viewModel.setDesign(AppDesign.NOCTURNE) }
                     )
-                    // Code 123: under Editorial the colour bar
-                    // would be a dead control — Editorial's
-                    // colours are its own. A plain note stands
-                    // in its place; Material 3's bar is unchanged.
-                    if (design.design == AppDesign.EDITORIAL) {
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor =
-                                    MaterialTheme.colorScheme
-                                        .surfaceContainerLow
-                            ),
-                            shape = RoundedCornerShape(24.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 10.dp)
-                        ) {
-                            Column(Modifier.padding(18.dp)) {
-                                Text(
-                                    "Colour",
-                                    style = MaterialTheme.typography
-                                        .bodyLarge
-                                )
-                                Text(
-                                    "Editorial wears its own " +
-                                        "colours — paper & sage in " +
-                                        "light, generated from the " +
-                                        "same sage in dark. The " +
-                                        "colour bar belongs to " +
-                                        "Material 3.",
-                                    style = MaterialTheme.typography
-                                        .bodySmall,
-                                    color = MaterialTheme.colorScheme
-                                        .onSurfaceVariant
-                                )
-                            }
-                        }
-                    } else Card(
+                    // Code 124: the colour bar is this
+                    // design's own (the owner's colour ruling)
+                    // — Dynamic, the wheel, the saved seeds,
+                    // and the six preset colours below.
+                    Card(
                         colors = CardDefaults.cardColors(
                             containerColor =
                                 MaterialTheme.colorScheme.surfaceContainerLow
@@ -1054,6 +651,10 @@ fun M3CustomisePage(
                                 },
                                 recentColours = design.savedSeeds,
                                 modifier = Modifier.fillMaxWidth()
+                            )
+                            EditorialPresetRow(
+                                state = design,
+                                viewModel = viewModel
                             )
                             HorizontalDivider(
                                 Modifier.padding(vertical = 10.dp),
@@ -1148,12 +749,6 @@ fun M3CustomisePage(
                 "reader" -> {
                     M3SettingsGroup("Reader")
                     M3GroupCard {
-                        M3SwitchRow(
-                            label = "Book-page cover colour",
-                            description = "A book's page takes its colours from its cover while you are on it.",
-                            checked = design.bookPageCoverColour,
-                            onChange = viewModel::setM3BookPageCoverColour
-                        )
                         M3SegmentedRow(
                             label = "Contents opens on",
                             options = listOf(
@@ -1499,6 +1094,48 @@ fun M3CustomisePage(
                                 color = MaterialTheme.colorScheme.primary
                             )
                         }
+                        // Code 124 (audit D10): the Auto-clean
+                        // cache cap — Nocturne's Storage page has
+                        // always carried it; the family page
+                        // reaches the same pref now.
+                        Text(
+                            "Auto-clean cache",
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.padding(top = 14.dp)
+                        )
+                        Text(
+                            "When the image cache grows past the " +
+                                "limit, the oldest covers are " +
+                                "removed first. Downloaded chapters " +
+                                "are never touched. Applies from " +
+                                "the next app start.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                        Row(
+                            horizontalArrangement =
+                                Arrangement.spacedBy(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                        ) {
+                            listOf(
+                                200 to "200 MB",
+                                500 to "500 MB",
+                                1024 to "1 GB",
+                                0 to "Off"
+                            ).forEach { (capMb, label) ->
+                                FilterChip(
+                                    selected = state.downloads
+                                        .autoCleanCapMb == capMb,
+                                    onClick = {
+                                        viewModel.setAutoCleanCapMb(capMb)
+                                    },
+                                    label = { Text(label) }
+                                )
+                            }
+                        }
                     }
                     Spacer(Modifier.height(16.dp))
                 }
@@ -1557,6 +1194,36 @@ fun M3CustomisePage(
                             checked = design.launchIntro,
                             onChange = viewModel::setLaunchIntro
                         )
+                        // Code 124 (audit D11): Clear Legacy
+                        // Data — the same manual door Nocturne's
+                        // Advanced page carries, same words,
+                        // same confirm, same action.
+                        ListItem(
+                            headlineContent = { Text("Clear Legacy Data") },
+                            supportingContent = {
+                                Text(
+                                    "Removes the converted chapter " +
+                                        "data left behind by older " +
+                                        "imports for books that now " +
+                                        "read straight from their " +
+                                        "file. The books themselves, " +
+                                        "your places in them and your " +
+                                        "bookmarks are kept." +
+                                        (legacyNote?.let { " $it" } ?: "")
+                                )
+                            },
+                            trailingContent = {
+                                TextButton(onClick = { confirmLegacy = true }) {
+                                    Text(
+                                        "Clear",
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            },
+                            colors = ListItemDefaults.colors(
+                                containerColor = Color.Transparent
+                            )
+                        )
                         ListItem(
                             headlineContent = { Text("Reset customisation") },
                             supportingContent = {
@@ -1583,6 +1250,31 @@ fun M3CustomisePage(
                 }
             }
         }
+    }
+    if (confirmLegacy) {
+        AlertDialog(
+            onDismissRequest = { confirmLegacy = false },
+            title = { Text("Clear Legacy Data?") },
+            text = {
+                Text(
+                    "Converted chapter data of books that now " +
+                        "read from their file will be deleted. " +
+                        "Books, reading places and bookmarks " +
+                        "are kept."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmLegacy = false
+                    viewModel.clearLegacyData()
+                }) { Text("Clear Legacy Data") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmLegacy = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
     if (confirmReset) {
         AlertDialog(
@@ -1680,11 +1372,6 @@ private fun m3DoorSummary(
     }
 }
 
-/** Code 122: one door card on the hub — filled tonal card,
- * tonal icon tile, group name, live state summary, chevron.
- * The Sources door's tile takes the tertiary container when
- * something needs repair ([warn]). The card is the only tap
- * target; the hub holds no controls. */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun M3DoorCard(
@@ -1692,62 +1379,62 @@ private fun M3DoorCard(
     title: String,
     summary: androidx.compose.ui.text.AnnotatedString,
     warn: Boolean = false,
+    /** Code 124 (E3): the door's place in the hub's
+     * segmented group — the official segmented ListItem
+     * shapes, as the Me hub's doors already wear. */
+    groupIndex: Int = 0,
+    groupCount: Int = 1,
     onClick: () -> Unit
 ) {
-    Card(
+    androidx.compose.material3.SegmentedListItem(
         onClick = onClick,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        shapes = ListItemDefaults.segmentedShapes(
+            index = groupIndex,
+            count = groupCount
         ),
-        shape = RoundedCornerShape(20.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 10.dp)
-    ) {
-        ListItem(
-            headlineContent = {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleMedium
-                )
-            },
-            supportingContent = { Text(summary) },
-            leadingContent = {
-                Box(
-                    Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(
-                            if (warn) {
-                                MaterialTheme.colorScheme.tertiaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.primaryContainer
-                            }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        icon,
-                        contentDescription = null,
-                        tint = if (warn) {
-                            MaterialTheme.colorScheme.onTertiaryContainer
+        colors = ListItemDefaults.colors(
+            containerColor = MaterialTheme.colorScheme
+                .surfaceContainerLow
+        ),
+        modifier = Modifier.fillMaxWidth(),
+        leadingContent = {
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        if (warn) {
+                            MaterialTheme.colorScheme.tertiaryContainer
                         } else {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        },
-                        modifier = Modifier.size(23.dp)
-                    )
-                }
-            },
-            trailingContent = {
+                            MaterialTheme.colorScheme.primaryContainer
+                        }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(
-                    Icons.Filled.ChevronRight,
+                    icon,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = if (warn) {
+                        MaterialTheme.colorScheme.onTertiaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    },
+                    modifier = Modifier.size(23.dp)
                 )
-            },
-            colors = ListItemDefaults.colors(
-                containerColor = Color.Transparent
+            }
+        },
+        trailingContent = {
+            Icon(
+                Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        },
+        supportingContent = { Text(summary) }
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium
         )
     }
 }
@@ -1965,6 +1652,71 @@ private fun <T> M3SegmentedRow(
                         label = { Text(text) }
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Code 124: the six preset colours of the Design page's
+ * colour card (owner, 2026-11-24: "Just add 5 or 6 custom
+ * colors also — to select easily and use them"). One tap
+ * picks the preset as the face's colour (source = Picked,
+ * seed = the preset); the face regenerates from it, light
+ * and dark, in its own recipe (EditorialTheme).
+ */
+@Composable
+private fun EditorialPresetRow(
+    state: DesignState,
+    viewModel: CustomiseViewModel
+) {
+    Text(
+        "Preset colours",
+        style = MaterialTheme.typography.bodyLarge,
+        modifier = Modifier.padding(top = 14.dp, bottom = 8.dp)
+    )
+    Row(
+        Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        app.xreader.ui.theme.EditorialColourPresets.forEach { (name, argb) ->
+            val seedLong = argb.toLong() and 0xFFFFFFFFL
+            val isCurrent = state.colourSource == M3ColourSource.PICKED &&
+                state.seedArgb == seedLong
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Color(argb))
+                        .border(
+                            if (isCurrent) 2.dp else 1.dp,
+                            if (isCurrent) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.outline
+                            },
+                            CircleShape
+                        )
+                        .clickable {
+                            viewModel.setM3ColourSource(
+                                M3ColourSource.PICKED
+                            )
+                            viewModel.setM3Seed(seedLong)
+                        }
+                )
+                Text(
+                    name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isCurrent) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
             }
         }
     }

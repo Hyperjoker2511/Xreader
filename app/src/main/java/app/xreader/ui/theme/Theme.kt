@@ -240,7 +240,7 @@ fun XreaderTheme(
      * Nocturne state, so every call site that does not pass it
      * (including the whole Komikku tree) renders exactly as
      * before. When the design is Material 3, the content delegates
-     * to [M3ThemeRoot] inside the shared providers below — the
+     * to [EditorialThemeRoot] inside the shared providers below — the
      * app-size density and UiMetrics apply to both designs (App
      * size is a settled behaviour rule, not a Nocturne feature),
      * while Nocturne's colour resolution is simply not read by
@@ -321,22 +321,19 @@ fun XreaderTheme(
     // a root provider only: nearer providers (Scaffold, Surface,
     // cards) still win wherever they set their own content colour.
     // Nocturne reads its resolved scheme's onBackground ([colors]);
-    // Material 3 resolves its own scheme the same way M3ThemeRoot
-    // does (its AMOLED floor never touches onBackground, so the
+    // Material 3 resolves its own scheme the same way
+    // EditorialThemeRoot does (its AMOLED floor never touches onBackground, so the
     // plain resolved value is the matching one).
     val m3Dark = m3DarkTheme(design)
     val activeOnBackground = when (design.design) {
-        app.xreader.data.prefs.AppDesign.MATERIAL3 -> {
-            remember(context, design, m3Dark) {
-                resolveM3ColorScheme(context, design, m3Dark).onBackground
-            }
-        }
-        // Code 123: Editorial resolves its own scheme the same
-        // way EditorialThemeRoot does (fixed palette; the dark
-        // form generated from the sage seed).
+        // Code 123/124: the Material 3 design (built as
+        // Editorial) resolves its scheme the same way
+        // EditorialThemeRoot does — from the shared colour
+        // state through the design's own recipe.
         app.xreader.data.prefs.AppDesign.EDITORIAL -> {
-            remember(m3Dark) {
-                resolveEditorialColorScheme(m3Dark).onBackground
+            remember(context, design, m3Dark) {
+                resolveEditorialColorScheme(context, design, m3Dark)
+                    .onBackground
             }
         }
         else -> colors.onBackground
@@ -377,13 +374,7 @@ fun XreaderTheme(
         // the other theme-level locals, so any screen can read
         // its scaled tier row.
         ProvideUiMetrics(appearance.appSize) {
-            if (design.design == app.xreader.data.prefs.AppDesign.MATERIAL3) {
-                M3ThemeRoot(
-                    design = design,
-                    reduceMotion = appearance.reduceMotion,
-                    content = content
-                )
-            } else if (design.design == app.xreader.data.prefs.AppDesign.EDITORIAL) {
+            if (design.design == app.xreader.data.prefs.AppDesign.EDITORIAL) {
                 // Code 123: the Editorial design's own root —
                 // its fixed palette, Fraunces display type and
                 // 24–28dp shapes (EditorialTheme.kt).

@@ -4309,6 +4309,33 @@ class ReaderViewModel(
         }
     }
 
+    /** Code 124 (A9): the colour row's re-tint of an existing
+     * Reflow highlight — the mirror of [removePdfReflowHighlight]
+     * over the same DataStore key. */
+    fun updatePdfReflowHighlightTint(
+        highlight: StoredSelectionHighlight,
+        tintArgb: Int
+    ) {
+        val next = _pdfReflowHighlights.value.map {
+            if (it.id == highlight.id) {
+                it.copy(tintArgb = tintArgb)
+            } else {
+                it
+            }
+        }
+        _pdfReflowHighlights.value = next
+        viewModelScope.launch(container.ioDispatcher) {
+            runCatching {
+                container.applicationContext.settingsDataStore.edit {
+                    prefs ->
+                    prefs[pdfReflowHighlightsKey(bookId)] =
+                        app.xreader.ui.localreader
+                            .encodeSelectionHighlights(next)
+                }
+            }
+        }
+    }
+
     fun removePdfReflowHighlight(highlight: StoredSelectionHighlight) {
         val next = _pdfReflowHighlights.value
             .filterNot { it.id == highlight.id }

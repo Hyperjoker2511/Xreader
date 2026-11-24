@@ -606,34 +606,7 @@ fun MainScaffold(
         val isWideLayout = maxWidth >= 840.dp
         val isM3RailLayout = maxWidth >= 600.dp
         Box(Modifier.fillMaxSize()) {
-        if (designState.design == app.xreader.data.prefs.AppDesign.MATERIAL3) {
-            // Code 120, corrected in code 121 (scratch §2.6):
-            // the Material 3 shell (S1). The Bar/Rail knob can
-            // pin a form; Auto follows the M3 width classes —
-            // rail from Medium (600dp), NOT the Nocturne shells'
-            // 840dp split (their isWideLayout is untouched).
-            if (m3UseRail(designState, isM3RailLayout)) {
-                M3RailShell(
-                    navController, snackbar, appearance, container, onPhaseNote,
-                    libraryViewModel, downloadsViewModel, opdsViewModel,
-                    sourcesViewModel, linkAddViewModel, onAddBook,
-                    onExport = { book, kind -> pendingExport = book to kind },
-                    designState = designState,
-                    appUpdateViewModel = appUpdateViewModel,
-                    packViewModel = packViewModel
-                )
-            } else {
-                M3PhoneShell(
-                    navController, snackbar, appearance, container, onPhaseNote,
-                    libraryViewModel, downloadsViewModel, opdsViewModel,
-                    sourcesViewModel, linkAddViewModel, onAddBook,
-                    onExport = { book, kind -> pendingExport = book to kind },
-                    designState = designState,
-                    appUpdateViewModel = appUpdateViewModel,
-                    packViewModel = packViewModel
-                )
-            }
-        } else if (designState.design == app.xreader.data.prefs.AppDesign.EDITORIAL) {
+        if (designState.design == app.xreader.data.prefs.AppDesign.EDITORIAL) {
             // Code 123 (S1): the Editorial shell — the floating
             // pill nav of the approved copies at phone widths;
             // the family rail (Editorial-dressed) from 600dp,
@@ -2218,6 +2191,7 @@ internal fun XreaderNavHost(
             ) {
             BookDetailScreen(
                 viewModel = viewModel,
+                container = container,
                 coverFile = coverFile,
                 assetFile = assetFile,
                 onBack = { navController.popBackStack() },

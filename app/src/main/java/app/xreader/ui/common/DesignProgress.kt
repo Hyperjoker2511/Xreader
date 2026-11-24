@@ -1,11 +1,8 @@
 package app.xreader.ui.common
 
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import app.xreader.data.prefs.AppDesign
-import app.xreader.ui.theme.LocalDesignState
 
 /**
  * Code 120, references updated in code 121 (scratch §3.10
@@ -24,26 +21,20 @@ fun DesignLinearProgress(
     progress: () -> Float,
     modifier: Modifier = Modifier
 ) {
-    if (LocalDesignState.current.design == AppDesign.MATERIAL3) {
-        LinearWavyProgressIndicator(
-            progress = progress,
-            modifier = modifier
-        )
-    } else {
-        LinearProgressIndicator(
-            progress = progress,
-            modifier = modifier
-        )
-    }
+    // Code 124: the wavy branch belonged to the removed
+    // MATERIAL3 design. Both surviving designs take the plain
+    // indicator here (the Material 3 design's own progress
+    // language is the plain bar — code 123 deviation #6);
+    // wavy progress still lives at its direct call sites.
+    LinearProgressIndicator(
+        progress = progress,
+        modifier = modifier
+    )
 }
 
 @Composable
 fun DesignLinearProgressIndeterminate(
     modifier: Modifier = Modifier
 ) {
-    if (LocalDesignState.current.design == AppDesign.MATERIAL3) {
-        LinearWavyProgressIndicator(modifier = modifier)
-    } else {
-        LinearProgressIndicator(modifier = modifier)
-    }
+    LinearProgressIndicator(modifier = modifier)
 }

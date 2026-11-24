@@ -939,8 +939,6 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             title = "Design",
             status = when (state.design.design) {
                 app.xreader.data.prefs.AppDesign.EDITORIAL ->
-                    "Editorial"
-                app.xreader.data.prefs.AppDesign.MATERIAL3 ->
                     "Material 3"
                 app.xreader.data.prefs.AppDesign.NOCTURNE ->
                     "Nocturne"

@@ -124,6 +124,14 @@ fun PdfReflowSurface(
     // PdfReaderHost.
     onSelectionTranslate: (String) -> Unit = {},
     onSelectionAskAi: (String) -> Unit = {},
+    // Code 124 (A7/A9): Illustrate paints exactly the
+    // selection; Remove / re-tint fulfil against the stored
+    // Reflow highlights (both were dead doors in this
+    // surface before 124 — its bar hard-wired a no-op).
+    onSelectionIllustrate: (String) -> Unit = {},
+    onRemoveHighlight: (StoredSelectionHighlight) -> Unit = {},
+    onUpdateHighlightTint: (StoredSelectionHighlight, Int) -> Unit =
+        { _, _ -> },
     onSelectionActiveChanged: (Boolean) -> Unit = {},
     onDialogOpenChanged: (Boolean) -> Unit = {},
     clearSelectionSignal: Int = 0,
@@ -153,6 +161,34 @@ fun PdfReflowSurface(
     // §9.3 dismissing flag, in this surface's own seat.
     var barState by remember(page, content) {
         mutableStateOf(SelectionBarState())
+    }
+    // Code 124 (A9): the stored highlight the live selection
+    // sits on (same page, selection range inside the stored
+    // range) — when one exists the bar opens in its existing
+    // state, so Remove highlight and the re-tint row act on
+    // THAT record instead of stacking a second highlight.
+    val overlappedHighlight = remember(selection, highlights) {
+        val sel = selection
+        if (sel == null) {
+            null
+        } else {
+            highlights.firstOrNull { stored ->
+                val cs = stored.charStart
+                val ce = stored.charEnd
+                stored.page == page && cs != null && ce != null &&
+                    sel.range.first >= cs &&
+                    (sel.range.last + 1) <= ce
+            }
+        }
+    }
+    LaunchedEffect(overlappedHighlight?.id) {
+        val hit = overlappedHighlight
+        if (hit != null) {
+            barState = SelectionBarState(
+                existingHighlight = true,
+                activeTintArgb = hit.tintArgb
+            )
+        }
     }
     // Code 120 fix pass (recheck L5): the note-draft save's
     // highlight tint — the design-aware default (under
@@ -551,6 +587,10 @@ fun PdfReflowSurface(
                                     onSelectionAskAi(selectedText)
                                     barDismissing = true
                                 }
+                                SelectionBarAction.ILLUSTRATE -> {
+                                    onSelectionIllustrate(selectedText)
+                                    barDismissing = true
+                                }
                                 SelectionBarAction.SHARE -> {
                                     val intent = Intent(
                                         Intent.ACTION_SEND
@@ -572,22 +612,45 @@ fun PdfReflowSurface(
                     },
                     onApplyHighlight = { tintArgb, _ ->
                         if (!barDismissing) {
-                            onAddHighlight(
-                                StoredSelectionHighlight(
-                                    id = UUID.randomUUID().toString(),
-                                    page = page,
-                                    charStart = activeStart,
-                                    charEnd = activeEnd,
-                                    selectedText = selectedText,
-                                    tintArgb = tintArgb,
-                                    createdAtEpochMillis =
-                                        System.currentTimeMillis()
+                            // Code 124 (A9): when the
+                            // selection sits on a stored
+                            // highlight the colour row
+                            // re-tints THAT record; only a
+                            // fresh range adds a new one.
+                            val existing = overlappedHighlight
+                            if (existing != null) {
+                                onUpdateHighlightTint(
+                                    existing, tintArgb
                                 )
-                            )
+                            } else {
+                                onAddHighlight(
+                                    StoredSelectionHighlight(
+                                        id = UUID.randomUUID()
+                                            .toString(),
+                                        page = page,
+                                        charStart = activeStart,
+                                        charEnd = activeEnd,
+                                        selectedText = selectedText,
+                                        tintArgb = tintArgb,
+                                        createdAtEpochMillis =
+                                            System
+                                                .currentTimeMillis()
+                                    )
+                                )
+                            }
                             barDismissing = true
                         }
                     },
-                    onRemoveHighlight = {},
+                    onRemoveHighlight = {
+                        // Code 124 (A9): was a hard-wired
+                        // no-op — the trash door now removes
+                        // the stored highlight the selection
+                        // sits on.
+                        overlappedHighlight?.let {
+                            onRemoveHighlight(it)
+                        }
+                        barDismissing = true
+                    },
                     onDismiss = {
                         selection = null
                         barDismissing = false

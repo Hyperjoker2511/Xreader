@@ -234,8 +234,10 @@ private fun DesignAskPage(
     // for the bar's selected state; the write itself goes
     // through onPickNocturneColour (the §5.2 "Custom" entry).
     var nocturnePicked by remember { mutableStateOf<Long?>(null) }
-    val isM3 = designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    // Code 124: the design named Material 3 is the EDITORIAL
+    // implementation (the separate MATERIAL3 design is
+    // removed); the ask's colour bar serves it exactly as it
+    // served the old M3 pick.
     val isEditorial = designState.design ==
         app.xreader.data.prefs.AppDesign.EDITORIAL
     Column(
@@ -259,25 +261,15 @@ private fun DesignAskPage(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             DesignAskCard(
-                name = "Editorial",
-                line = "Paper & sage — an editorial design in " +
-                    "its own colours, with a serif voice.",
+                name = "Material 3",
+                line = "Paper-warm and editorial, with a serif " +
+                    "voice — in your phone's colours, or any " +
+                    "colour you pick.",
                 selected = isEditorial,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 onPickDesign(
                     app.xreader.data.prefs.AppDesign.EDITORIAL
-                )
-            }
-            DesignAskCard(
-                name = "Material 3",
-                line = "Google's design language. Colours from " +
-                    "your phone, or any colour you pick.",
-                selected = isM3,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                onPickDesign(
-                    app.xreader.data.prefs.AppDesign.MATERIAL3
                 )
             }
             DesignAskCard(
@@ -293,17 +285,6 @@ private fun DesignAskPage(
                 )
             }
         }
-        if (isEditorial) {
-            // Editorial's palette is fixed by the design — the
-            // honest line instead of a colour bar that would
-            // do nothing (the owner's colour ruling).
-            Text(
-                "Editorial wears its own colours — paper & " +
-                    "sage, in light and dark.",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(top = 24.dp)
-            )
-        } else {
         Text(
             "Pick a colour — it applies to the design you chose.",
             style = MaterialTheme.typography.titleSmall,
@@ -311,12 +292,12 @@ private fun DesignAskPage(
         )
         // The one colour bar (§2.1.1), serving both designs:
         // W3's shared ColourBar in scheme mode. For Material 3
-        // a pick seeds the M3 scheme (Dynamic returns to the
+        // a pick seeds its scheme (Dynamic returns to the
         // phone's colour); for Nocturne a seed/pick-any colour
         // feeds §5.2's "Custom" generation. Dynamic has no
         // Nocturne meaning and is inert there.
         app.xreader.ui.common.ColourBar(
-            selection = if (isM3) {
+            selection = if (isEditorial) {
                 when (designState.colourSource) {
                     app.xreader.data.prefs.M3ColourSource.DYNAMIC ->
                         app.xreader.ui.common.ColourBarSelection.Dynamic
@@ -334,10 +315,10 @@ private fun DesignAskPage(
             onSelect = { picked ->
                 when (picked) {
                     app.xreader.ui.common.ColourBarSelection.Dynamic -> {
-                        if (isM3) onPickDynamicColour()
+                        if (isEditorial) onPickDynamicColour()
                     }
                     is app.xreader.ui.common.ColourBarSelection.Seed -> {
-                        if (isM3) {
+                        if (isEditorial) {
                             onPickSeedColour(picked.argb)
                         } else {
                             nocturnePicked = picked.argb

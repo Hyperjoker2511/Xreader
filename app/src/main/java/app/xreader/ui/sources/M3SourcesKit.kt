@@ -32,13 +32,13 @@ import coil.compose.AsyncImage
  * shipped atoms byte-identically.
  */
 
-/** True when the active design is Material 3 — the branch
- * condition every W4 surface uses.
+/** True when the active design is the Material 3 design
+ * — the branch condition every W4 surface uses.
  *
- * Code 123: widened to the M3 FAMILY (Material 3 + Editorial)
- * — the sources-depth surfaces wear the family form in the
- * Editorial face too, dressed by the Editorial scheme. Only
- * Nocturne keeps the shipped forms. */
+ * Code 123: widened to the M3 FAMILY (the design then
+ * named Editorial included). Code 124: the family IS the
+ * one Material 3 design (the separate code-120 face is
+ * removed); only Nocturne keeps the shipped forms. */
 @Composable
 internal fun isM3Design(): Boolean =
     LocalDesignState.current.design != AppDesign.NOCTURNE

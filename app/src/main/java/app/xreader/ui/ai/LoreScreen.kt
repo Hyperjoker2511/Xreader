@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -491,11 +492,97 @@ private fun MapTab(state: LoreUiState) {
     }
     var scale by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
+    var selectedId by remember { mutableStateOf<Long?>(null) }
     val measurer = rememberTextMeasurer()
     val nodeColor = MaterialTheme.colorScheme.primary
     val lineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
     val textColor = MaterialTheme.colorScheme.onSurface
     val textStyle = MaterialTheme.typography.labelSmall
+
+    // Code 124 (A6): the layout is computed ONCE per graph —
+    // hub clusters on a grid, never one ring. Every entity
+    // belongs to the cluster of the best-connected entity it
+    // links to (or heads its own cluster); each cluster draws
+    // its hub at a cell centre with its members on a ring
+    // around it, so connected names sit together and clusters
+    // sit apart. Positions live in a fixed virtual space
+    // (1000 x 750) mapped onto the canvas at draw time.
+    val layout = remember(
+        entities.map { it.id }, state.relations.map { it.id }
+    ) {
+        val adjacency = HashMap<Long, MutableSet<Long>>()
+        state.relations.forEach { relation ->
+            adjacency.getOrPut(relation.fromEntityId) { HashSet() }
+                .add(relation.toEntityId)
+            adjacency.getOrPut(relation.toEntityId) { HashSet() }
+                .add(relation.fromEntityId)
+        }
+        val degree = entities.associate { entity ->
+            entity.id to (adjacency[entity.id]?.size ?: 0)
+        }
+        var remaining = entities.sortedByDescending { degree[it.id] ?: 0 }
+        val clusters = ArrayList<List<LoreEntity>>()
+        while (remaining.isNotEmpty()) {
+            val hub = remaining.first()
+            val neighbours = adjacency[hub.id].orEmpty()
+            val members = remaining.filter {
+                it.id != hub.id && it.id in neighbours
+            }
+            clusters += listOf(hub) + members
+            val taken = (members.map { it.id } + hub.id).toSet()
+            remaining = remaining.filter { it.id !in taken }
+        }
+        val cols = kotlin.math.ceil(
+            kotlin.math.sqrt(clusters.size.toDouble())
+        ).toInt().coerceAtLeast(1)
+        val rows = (clusters.size + cols - 1) / cols
+        val cellW = 1000f / cols
+        val cellH = 750f / rows
+        val positions = HashMap<Long, Offset>()
+        val hubs = HashSet<Long>()
+        clusters.forEachIndexed { index, cluster ->
+            val cx = (index % cols + 0.5f) * cellW
+            val cy = (index / cols + 0.5f) * cellH
+            val hub = cluster.first()
+            hubs += hub.id
+            positions[hub.id] = Offset(cx, cy)
+            val members = cluster.drop(1)
+            // Members on up to three rings inside the cell.
+            val ringRadius = minOf(cellW, cellH)
+            members.forEachIndexed { memberIndex, member ->
+                val ring = when {
+                    memberIndex < 10 -> 0
+                    memberIndex < 26 -> 1
+                    else -> 2
+                }
+                val inRing = when (ring) {
+                    0 -> memberIndex
+                    1 -> memberIndex - 10
+                    else -> memberIndex - 26
+                }
+                val ringCount = when (ring) {
+                    0 -> minOf(members.size, 10)
+                    1 -> minOf(members.size - 10, 16).coerceAtLeast(1)
+                    else -> (members.size - 26).coerceAtLeast(1)
+                }
+                val angle = 2 * Math.PI * inRing / ringCount -
+                    Math.PI / 2
+                val r = ringRadius * (0.20f + 0.13f * ring)
+                positions[member.id] = Offset(
+                    cx + (r * cos(angle)).toFloat(),
+                    cy + (r * sin(angle)).toFloat()
+                )
+            }
+        }
+        Triple(positions, hubs, adjacency)
+    }
+    val positions = layout.first
+    val hubIds = layout.second
+    val adjacency = layout.third
+    val selectedNeighbours = selectedId?.let {
+        adjacency[it].orEmpty()
+    }.orEmpty()
+
     Column(Modifier.fillMaxSize()) {
         GlassCard(Modifier.fillMaxWidth()) {
             Box(
@@ -506,6 +593,36 @@ private fun MapTab(state: LoreUiState) {
                         detectTransformGestures { _, gesturePan, zoom, _ ->
                             scale = (scale * zoom).coerceIn(0.5f, 3f)
                             pan += gesturePan
+                        }
+                    }
+                    .pointerInput(positions) {
+                        detectTapGestures { tap ->
+                            // Project the tap back into the
+                            // virtual space (the inverse of
+                            // the draw mapping below) and take
+                            // the nearest node within reach.
+                            val centre = Offset(
+                                size.width / 2f, size.height / 2f
+                            )
+                            val fit = minOf(
+                                size.width / 1000f, size.height / 750f
+                            )
+                            val local = centre +
+                                (tap - centre - pan) / scale
+                            val vx = 500f + (local.x - centre.x) / fit
+                            val vy = 375f + (local.y - centre.y) / fit
+                            val tapVirtual = Offset(vx, vy)
+                            val reach = 30f / (fit * scale)
+                            val hit = positions.entries
+                                .minByOrNull {
+                                    (it.value - tapVirtual)
+                                        .getDistance()
+                                }
+                                ?.takeIf {
+                                    (it.value - tapVirtual)
+                                        .getDistance() <= reach
+                                }
+                            selectedId = hit?.key
                         }
                     }
             ) {
@@ -520,31 +637,108 @@ private fun MapTab(state: LoreUiState) {
                     }
             ) {
                 val centre = Offset(size.width / 2, size.height / 2)
-                val radius = minOf(size.width, size.height) / 2 - 70f
-                val positions = entities.mapIndexed { index, entity ->
-                    val angle = (2 * Math.PI * index / entities.size) - Math.PI / 2
-                    entity.id to Offset(
-                        centre.x + (radius * cos(angle)).toFloat(),
-                        centre.y + (radius * sin(angle)).toFloat()
-                    )
-                }.toMap()
+                val fit = minOf(size.width / 1000f, size.height / 750f)
+                fun project(point: Offset): Offset = centre + Offset(
+                    (point.x - 500f) * fit, (point.y - 375f) * fit
+                )
                 state.relations.forEach { relation ->
                     val from = positions[relation.fromEntityId]
                     val to = positions[relation.toEntityId]
                     if (from != null && to != null) {
-                        drawLine(lineColor, from, to, strokeWidth = 2f)
+                        val lit = selectedId != null &&
+                            (relation.fromEntityId == selectedId ||
+                                relation.toEntityId == selectedId)
+                        drawLine(
+                            if (lit) nodeColor else lineColor,
+                            project(from), project(to),
+                            strokeWidth = if (lit) 3.5f else 2f
+                        )
                     }
                 }
                 positions.forEach { (id, point) ->
-                    val entity = entities.first { it.id == id }
-                    drawCircle(nodeColor, radius = 10f, center = point)
-                    val layout = measurer.measure(entity.name.take(18), textStyle)
+                    val screenPoint = project(point)
+                    if (id in selectedNeighbours) {
+                        drawCircle(
+                            nodeColor, radius = 17f,
+                            center = screenPoint,
+                            style = androidx.compose.ui.graphics
+                                .drawscope.Stroke(width = 3f)
+                        )
+                    }
+                    drawCircle(
+                        nodeColor,
+                        radius = if (id in hubIds) 13f else 10f,
+                        center = screenPoint
+                    )
+                    if (id == selectedId) {
+                        drawCircle(
+                            textColor, radius = 5f, center = screenPoint
+                        )
+                    }
+                }
+            }
+            // Code 124 (A6): labels are drawn in SCREEN space
+            // (outside the zoom layer) at a constant size, so
+            // pinching spreads the names apart instead of
+            // inflating them. At fit zoom only the hub names
+            // are candidates; past 1.5x every name is. A
+            // greedy pass keeps a name only when its rect
+            // clears every name already kept — at first open
+            // no two labels can overlap, by construction. The
+            // tapped node always names itself.
+            Canvas(Modifier.fillMaxSize()) {
+                val centre = Offset(size.width / 2, size.height / 2)
+                val fit = minOf(size.width / 1000f, size.height / 750f)
+                fun project(point: Offset): Offset {
+                    val local = centre + Offset(
+                        (point.x - 500f) * fit, (point.y - 375f) * fit
+                    )
+                    return centre + (local - centre) * scale + pan
+                }
+                val candidates = entities
+                    .filter { entity ->
+                        entity.id == selectedId ||
+                            entity.id in hubIds || scale >= 1.5f
+                    }
+                    .sortedByDescending { entity ->
+                        when (entity.id) {
+                            selectedId -> Int.MAX_VALUE
+                            in hubIds -> 1
+                            else -> 0
+                        }
+                    }
+                val kept = ArrayList<androidx.compose.ui.geometry.Rect>()
+                candidates.forEach { entity ->
+                    val point = positions[entity.id]
+                        ?: return@forEach
+                    val screenPoint = project(point)
+                    if (screenPoint.x < -80f ||
+                        screenPoint.x > size.width + 80f ||
+                        screenPoint.y < -40f ||
+                        screenPoint.y > size.height + 40f
+                    ) {
+                        return@forEach
+                    }
+                    val label = measurer.measure(
+                        entity.name.take(18), textStyle
+                    )
+                    val rect = androidx.compose.ui.geometry.Rect(
+                        left = screenPoint.x - label.size.width / 2 - 4f,
+                        top = screenPoint.y + 14f,
+                        right = screenPoint.x + label.size.width / 2 + 4f,
+                        bottom = screenPoint.y + 14f +
+                            label.size.height + 4f
+                    )
+                    if (kept.any { it.overlaps(rect) }) {
+                        return@forEach
+                    }
+                    kept += rect
                     drawText(
-                        layout,
+                        label,
                         color = textColor,
                         topLeft = Offset(
-                            point.x - layout.size.width / 2,
-                            point.y + 14f
+                            screenPoint.x - label.size.width / 2,
+                            screenPoint.y + 14f
                         )
                     )
                 }
@@ -553,7 +747,15 @@ private fun MapTab(state: LoreUiState) {
         }
         Spacer(Modifier.height(12.dp))
         Text(
-            "Pinch to zoom, drag to pan. Who connects to whom:",
+            if (selectedId != null) {
+                val name = entities.firstOrNull {
+                    it.id == selectedId
+                }?.name ?: ""
+                "$name — its connections are lit. Tap empty space to clear."
+            } else {
+                "Pinch to zoom, drag to pan, tap a dot to name it. " +
+                    "Who connects to whom:"
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -1215,6 +1417,13 @@ private fun M3LoreContent(
         ) {
             item(key = "m3-lore-actions") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Code 124 (A5): the engine chip gets its
+                    // own line and the two buttons theirs —
+                    // in one shared row the chip + Build lore
+                    // starved "Add to lore" into a one-letter-
+                    // wide strip (the owner's code-123 proof,
+                    // finding #5). Every control now takes its
+                    // natural horizontal size.
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1233,7 +1442,15 @@ private fun M3LoreContent(
                                 },
                                 style = MaterialTheme.typography.bodyMedium
                             )
-                        } else {
+                        }
+                    }
+                    if (!state.building) {
+                        Row(
+                            verticalAlignment =
+                                Alignment.CenterVertically,
+                            horizontalArrangement =
+                                Arrangement.spacedBy(8.dp)
+                        ) {
                             androidx.compose.material3.Button(
                                 onClick = onBuild
                             ) { Text("Build lore") }

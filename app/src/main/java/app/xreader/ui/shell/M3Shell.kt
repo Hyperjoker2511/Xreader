@@ -73,55 +73,6 @@ import app.xreader.ui.theme.LocalDockClearance
  * shared [Tab] system's — pinned by ShellNavTest, unchanged.
  */
 @Composable
-internal fun M3PhoneShell(
-    navController: NavHostController,
-    snackbar: SnackbarHostState,
-    appearance: AppearanceState,
-    container: AppContainer,
-    onPhaseNote: (String) -> Unit,
-    libraryViewModel: LibraryViewModel,
-    downloadsViewModel: DownloadsViewModel,
-    opdsViewModel: OpdsViewModel,
-    sourcesViewModel: SourcesViewModel,
-    linkAddViewModel: LinkAddViewModel,
-    onAddBook: () -> Unit,
-    onExport: (Book, String) -> Unit,
-    designState: DesignState,
-    appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel,
-    packViewModel: app.xreader.ui.sources.ProviderPackViewModel
-) {
-    val dockVisible = !shellImmersive(navController) && dockShown(navController)
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface)
-    ) {
-        Box(Modifier.weight(1f)) {
-            M3NavHostContent(
-                navController, container, appearance, onPhaseNote,
-                libraryViewModel, downloadsViewModel, opdsViewModel,
-                sourcesViewModel, linkAddViewModel, onAddBook, onExport,
-                appUpdateViewModel, packViewModel
-            )
-            SnackbarHost(
-                snackbar,
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 8.dp)
-            )
-        }
-        if (dockVisible) {
-            M3TabBar(
-                navController = navController,
-                sourcesViewModel = sourcesViewModel,
-                downloadsViewModel = downloadsViewModel,
-                labelsAlways = designState.tabLabels == M3TabLabels.ALWAYS
-            )
-        }
-    }
-}
-
-@Composable
 internal fun M3RailShell(
     navController: NavHostController,
     snackbar: SnackbarHostState,
@@ -250,39 +201,6 @@ private fun M3TabIcon(
  * active label = secondary role — the library's mapping, not a
  * house one). The labels knob passes a label only where it
  * should show: always, or on the selected item only. */
-@Composable
-private fun M3TabBar(
-    navController: NavHostController,
-    sourcesViewModel: SourcesViewModel,
-    downloadsViewModel: DownloadsViewModel,
-    labelsAlways: Boolean
-) {
-    val selected = selectedTab(navController)
-    ShortNavigationBar {
-        Tab.entries.forEach { tab ->
-            val isSelected = tab == selected
-            ShortNavigationBarItem(
-                selected = isSelected,
-                onClick = { navigateToTab(navController, tab) },
-                icon = {
-                    M3TabIcon(tab, sourcesViewModel, downloadsViewModel)
-                },
-                label = if (labelsAlways || isSelected) {
-                    { Text(tab.label) }
-                } else {
-                    null
-                }
-            )
-        }
-    }
-}
-
-/** The rail form (§2.6): the stock navigation rail at Medium
- * (600–839dp), the wide rail at Expanded (840dp) and above —
- * the caller measures the window and passes [wideRail]. Items
- * follow the same labels knob in both forms: with Selected
- * only, an unselected wide-rail item passes no label, exactly
- * as the bar does. */
 @Composable
 private fun M3TabRail(
     navController: NavHostController,

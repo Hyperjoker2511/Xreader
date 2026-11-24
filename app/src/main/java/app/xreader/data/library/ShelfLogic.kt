@@ -58,7 +58,7 @@ object ShelfLogic {
         BUILTIN_BEHIND_ON -> "Behind on"
         BUILTIN_STATUS_READING -> "Reading"
         BUILTIN_STATUS_ON_HOLD -> "On-Hold"
-        BUILTIN_STATUS_PLAN_TO_READ -> "Plan to Read"
+        BUILTIN_STATUS_PLAN_TO_READ -> "Plan to read"
         BUILTIN_STATUS_COMPLETED -> "Completed"
         BUILTIN_STATUS_DROPPED -> "Dropped"
         else -> key

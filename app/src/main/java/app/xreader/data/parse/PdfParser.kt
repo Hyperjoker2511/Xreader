@@ -410,12 +410,7 @@ object PdfStripperLoop {
 
         private fun rectOf(
             position: com.tom_roush.pdfbox.text.TextPosition
-        ): PdfCharRect = PdfCharRect(
-            left = position.xDirAdj,
-            top = position.yDirAdj,
-            right = position.xDirAdj + position.widthDirAdj,
-            bottom = position.yDirAdj + position.heightDir
-        )
+        ): PdfCharRect = pdfCharCellOf(position)
 
         private fun record(rect: PdfCharRect, count: Int) {
             if (count <= 0) return
@@ -581,14 +576,18 @@ object PdfStripperLoop {
             textPositions: List<com.tom_roush.pdfbox.text.TextPosition>
         ) {
             for (position in textPositions) {
-                val w = position.widthDirAdj
-                val h = position.heightDir
-                if (w <= 0f || h <= 0f) continue
+                // Code 124 (A10): the same corrected char
+                // cell the geometry stripper records (see
+                // pdfCharCellOf) — the page's text bounds are
+                // the union of the cells the selection layer
+                // hit-tests, never a second, lower band.
+                val cell = pdfCharCellOf(position)
+                if (cell.width <= 0f || cell.height <= 0f) continue
                 val piece = PdfPageBounds(
-                    left = position.xDirAdj,
-                    top = position.yDirAdj,
-                    right = position.xDirAdj + w,
-                    bottom = position.yDirAdj + h
+                    left = cell.left,
+                    top = cell.top,
+                    right = cell.right,
+                    bottom = cell.bottom
                 )
                 pageBounds = pageBounds?.union(piece) ?: piece
             }
@@ -1732,4 +1731,69 @@ class PdfBookParser(private val extractor: PdfTextExtractor) : BookParser {
                 .maxByOrNull { it.pngBytes.size }
                 ?.pngBytes
     }
+}
+
+/**
+ * Code 124 (A10): ONE character's cell in page points,
+ * display space (origin top-left) — the cell every PDF
+ * selection surface hit-tests, draws and anchors its
+ * handles to (Moon+'s model: a char range over the page's
+ * own text layer, handles on the range's true first/last
+ * char cells).
+ *
+ * The vertical anchor is the BASELINE, because that is
+ * what PdfBox's `yDirAdj` IS — measured against the
+ * shipped pdfbox-android 2.0.27.0 binary with a probe page
+ * (Helvetica 100pt, baseline placed at display-y 192):
+ * every glyph reported yDirAdj = 192.00 regardless of its
+ * shape (H, g, x, j alike), while `heightDir` reported a
+ * font-level 57.80 that is no glyph's ink height. The
+ * pre-124 formula (top = yDirAdj, bottom = yDirAdj +
+ * heightDir) therefore built every cell BELOW the
+ * baseline — over the next line — so presses landed a
+ * line off, the wash sat under the words it named, and
+ * the handles floated detached from the range's ends
+ * (the owner's code-123 proof, finding #10).
+ *
+ * The cell spans the font's own ascent/descent around
+ * the baseline at the position's size (font-descriptor
+ * values are per-1000 glyph units): top = baseline −
+ * ascent, bottom = baseline − descent (descent is
+ * negative). Fallbacks, in order: the font's bounding
+ * box; then the heightDir band ABOVE the baseline —
+ * never below it.
+ */
+internal fun pdfCharCellOf(
+    position: com.tom_roush.pdfbox.text.TextPosition
+): PdfCharRect {
+    val baseline = position.yDirAdj
+    val sizePt = position.fontSizeInPt
+    var rise = 0f
+    var drop = 0f
+    if (sizePt > 0f) {
+        val font = runCatching { position.font }.getOrNull()
+        val descriptor = runCatching { font?.fontDescriptor }
+            .getOrNull()
+        if (descriptor != null) {
+            rise = descriptor.ascent * sizePt / 1000f
+            drop = -descriptor.descent * sizePt / 1000f
+        }
+        if (rise <= 0f && drop <= 0f) {
+            val bbox = runCatching { font?.boundingBox }.getOrNull()
+            if (bbox != null) {
+                rise = bbox.upperRightY * sizePt / 1000f
+                drop = -bbox.lowerLeftY * sizePt / 1000f
+            }
+        }
+    }
+    if (rise <= 0f && drop <= 0f) {
+        rise = position.heightDir
+        drop = 0f
+    }
+    return PdfCharRect(
+        left = position.xDirAdj,
+        top = baseline - rise,
+        right = position.xDirAdj + position.widthDirAdj,
+        bottom = baseline + drop
+    )
 }

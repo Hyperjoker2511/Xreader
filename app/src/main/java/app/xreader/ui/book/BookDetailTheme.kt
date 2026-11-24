@@ -118,36 +118,13 @@ fun BookDetailTheme(
         }
     }
 
-    // Code 120 (R8): the Material 3 cover scheme — placed after
-    // every remember above so this composable's hook order is
-    // the same on both paths (the file's own rule).
-    if (design.design == app.xreader.data.prefs.AppDesign.MATERIAL3 &&
-        design.bookPageCoverColour && coverPair != null
-    ) {
-        val coverColors = if (darkTheme) coverPair.first else coverPair.second
-        val coverAppScheme = app.xreader.ui.theme.AppScheme(
-            name = "Cover",
-            dark = coverPair.first,
-            light = coverPair.second,
-            primaryTextDark = coverPair.first.primary,
-            primaryTextLight = coverPair.second.primary,
-            aiTextDark = coverPair.first.tertiary,
-            aiTextLight = coverPair.second.tertiary,
-            errorTextDark = coverPair.first.error,
-            errorTextLight = coverPair.second.error,
-            sageTextDark = coverPair.first.secondary,
-            sageTextLight = coverPair.second.secondary
-        )
-        CompositionLocalProvider(LocalAppScheme provides coverAppScheme) {
-            MaterialTheme(
-                colorScheme = coverColors,
-                typography = MaterialTheme.typography,
-                shapes = MaterialTheme.shapes,
-                content = content
-            )
-        }
-        return
-    }
+    // Code 124: the cover-scheme branch that stood here
+    // belonged to the removed MATERIAL3 design (its
+    // book-page cover colour). The Material 3 design's book
+    // page (EditorialBookDetail) never takes a cover scheme —
+    // it wears the user's chosen colour — and Nocturne's pin
+    // above is untouched.
+
 
     // Code 120 fix pass (recheck L1 — BLOCKER): under Material
     // 3 the Nocturne colour pin NEVER resolves. The cover

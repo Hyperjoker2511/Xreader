@@ -206,25 +206,16 @@ fun BookPosterCard(
             )
         }
         if (progressFraction != null && progressFraction > 0f) {
-            // Code 120 (A3): under Material 3 the cover's
-            // progress line is the wavy indicator at its natural
-            // height; Nocturne keeps the 3dp pill line.
-            if (app.xreader.ui.theme.LocalDesignState.current.design ==
-                app.xreader.data.prefs.AppDesign.MATERIAL3
-            ) {
-                androidx.compose.material3.LinearWavyProgressIndicator(
-                    progress = { progressFraction.coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            } else {
-                LinearProgressIndicator(
-                    progress = { progressFraction.coerceIn(0f, 1f) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(3.dp)
-                        .clip(CircleShape)
-                )
-            }
+            // Code 124: the wavy variant belonged to the
+            // removed MATERIAL3 design; the 3dp pill line is
+            // every surviving design's cover progress line.
+            LinearProgressIndicator(
+                progress = { progressFraction.coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .clip(CircleShape)
+            )
         }
     }
 }

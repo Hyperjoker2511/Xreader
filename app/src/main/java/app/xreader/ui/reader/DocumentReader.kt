@@ -1697,6 +1697,25 @@ fun DocumentReader(
     ) {
         ReaderSelectionLayer(
             controller = selectionController,
+            // Code 124 (A9): the stored highlight the LIVE
+            // selection sits on, if any — the layer merges it
+            // into the bar's existing state so a selection
+            // over a highlight offers Remove + re-tint, not
+            // just a second highlight stacked on top.
+            selectionHighlight = run {
+                val sel = selectionController.selectionState.value
+                if (sel == null || sel.startChapter != sel.endChapter) {
+                    null
+                } else {
+                    val chapterId = chapters
+                        .getOrNull(sel.startChapter)?.id
+                    highlights.firstOrNull { stored ->
+                        stored.chapterId == chapterId &&
+                            sel.start >= stored.startOffset &&
+                            sel.end <= stored.endOffset
+                    }
+                }
+            },
             selectionText = selectionText,
             onSelectionAction = onSelectionAction,
             onRangeAction = onRangeAction,
@@ -1937,6 +1956,9 @@ private fun ReaderSelectionLayer(
     onUpdateHighlightColor: (highlight: Highlight, tintArgb: Int) -> Unit,
     onRemoveHighlight: (highlight: Highlight) -> Unit,
     onEditHighlightNote: (highlight: Highlight) -> Unit,
+    // Code 124 (A9): the stored highlight under the live
+    // selection (see the call site's derivation).
+    selectionHighlight: Highlight? = null,
     onSelectionOpenChanged: (Boolean) -> Unit,
     motionEnabled: Boolean,
     content: @Composable () -> Unit
@@ -1952,7 +1974,10 @@ private fun ReaderSelectionLayer(
     }
     ReaderSelectionMenuHost(
         selection = selection,
-        existingHighlight = existing,
+        // Code 124 (A9): the tap episode wins; otherwise a
+        // live selection sitting on a stored highlight opens
+        // the bar in that highlight's existing state.
+        existingHighlight = existing ?: selectionHighlight,
         selectionRect = {
             controller.selectionRect()
                 ?: controller.existingHighlightRect()
@@ -1975,15 +2000,27 @@ private fun ReaderSelectionLayer(
             // (a re-tint).
             val live = controller.selectionState.value
             val stored = controller.existingHighlightState.value
-            if (live != null) {
-                onApplyHighlight(live, tintArgb)
-            } else if (stored != null) {
-                onUpdateHighlightColor(stored, tintArgb)
+            when {
+                stored != null ->
+                    onUpdateHighlightColor(stored, tintArgb)
+                // Code 124 (A9): re-tint the highlight the
+                // selection sits on — never stack a second.
+                selectionHighlight != null ->
+                    onUpdateHighlightColor(
+                        selectionHighlight, tintArgb
+                    )
+                live != null -> onApplyHighlight(live, tintArgb)
             }
         },
         onRemoveHighlight = {
-            controller.existingHighlightState.value
-                ?.let(onRemoveHighlight)
+            // Code 124 (A9): the tap episode's record, or the
+            // highlight under the live selection.
+            val stored = controller.existingHighlightState.value
+            if (stored != null) {
+                onRemoveHighlight(stored)
+            } else {
+                selectionHighlight?.let(onRemoveHighlight)
+            }
         },
         onEditExistingNote = onEditHighlightNote,
         onClearExisting = { controller.clearExistingHighlight() },

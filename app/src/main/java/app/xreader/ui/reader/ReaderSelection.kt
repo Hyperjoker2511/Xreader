@@ -72,7 +72,7 @@ import kotlinx.coroutines.flow.first
  * text travels with the action — assembled from the model,
  * once, at tap time. */
 enum class ReaderSelectionAction {
-    REPLACE, TRANSLATE, DICTIONARY, SAVE_WORD, ASK_AI
+    REPLACE, TRANSLATE, DICTIONARY, SAVE_WORD, ASK_AI, ILLUSTRATE
 }
 
 /** Code 118: the bar's colour row speaks ARGB (its five
@@ -358,6 +358,15 @@ fun ReaderSelectionMenuHost(
                 onAction(ReaderSelectionAction.ASK_AI, activeText())
                 dismissNow()
             }
+            // Code 124 (A7): Illustrate paints exactly the
+            // selected passage — a dialog-class arm like
+            // Ask AI (the AI page opens over the result).
+            SelectionBarAction.ILLUSTRATE -> {
+                onAction(
+                    ReaderSelectionAction.ILLUSTRATE, activeText()
+                )
+                dismissNow()
+            }
             SelectionBarAction.REPLACE -> {
                 onAction(ReaderSelectionAction.REPLACE, activeText())
                 dismissNow()
@@ -429,6 +438,9 @@ fun ReaderSelectionMenuHost(
                     SelectionBarAction.ASK_AI, "Ask AI"
                 ),
                 SelectionBarMoreItem(
+                    SelectionBarAction.ILLUSTRATE, "Illustrate"
+                ),
+                SelectionBarMoreItem(
                     SelectionBarAction.SHARE, "Share"
                 )
             )
@@ -439,6 +451,9 @@ fun ReaderSelectionMenuHost(
                 ),
                 SelectionBarMoreItem(
                     SelectionBarAction.ASK_AI, "Ask AI"
+                ),
+                SelectionBarMoreItem(
+                    SelectionBarAction.ILLUSTRATE, "Illustrate"
                 ),
                 SelectionBarMoreItem(
                     SelectionBarAction.SHARE, "Share"

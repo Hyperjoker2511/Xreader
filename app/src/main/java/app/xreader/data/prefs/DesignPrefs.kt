@@ -34,7 +34,19 @@ import kotlinx.coroutines.flow.map
  * never switch an existing user to Material 3, and can never
  * switch a Material 3 user back.
  */
-enum class AppDesign { NOCTURNE, MATERIAL3, EDITORIAL }
+/**
+ * The app's designs. Code 124 (owner's ruling, 2026-11-24:
+ * "Editorial is material 3"): the separate MATERIAL3 design
+ * was removed — the design built as EDITORIAL in code 123 IS
+ * the app's Material 3 design and carries that name in every
+ * user-facing string. Stored "MATERIAL3" values migrate to
+ * [EDITORIAL] at parse time (see [DesignValidation.designOr]):
+ * the owner's explicit word for this removal overrides the
+ * never-switch rule for these installs only — they land on
+ * the renamed design, which is the same face they were
+ * already looking at, in its new name.
+ */
+enum class AppDesign { NOCTURNE, EDITORIAL }
 
 /** The M3 colour source (§2.11 Colour theme): the phone's dynamic
  * colour, or a colour the user picked. */
@@ -240,6 +252,16 @@ object DesignValidation {
     fun <T : Enum<T>> enumOr(raw: String?, values: Array<T>, fallback: T): T =
         values.firstOrNull { it.name == raw } ?: fallback
 
+    /** The design parse, with code 124's one migration: a
+     * stored "MATERIAL3" (the design removed in code 124)
+     * reads as [AppDesign.EDITORIAL] — the renamed design.
+     * Every other stored value parses exactly as before;
+     * junk degrades to NOCTURNE, as it always has. */
+    fun designOr(raw: String?): AppDesign = when (raw) {
+        "MATERIAL3" -> AppDesign.EDITORIAL
+        else -> enumOr(raw, AppDesign.values(), AppDesign.NOCTURNE)
+    }
+
     /** A stored seed is honoured only as a real opaque colour. */
     fun seedOrNull(raw: Long?): Long? =
         raw?.takeIf { it in 0L..0xFFFFFFFFL && (it ushr 24) == 0xFFL }
@@ -270,9 +292,7 @@ class DesignPrefs(
     val state: Flow<DesignState> = store.data.map { prefs -> prefs.toState() }
 
     private fun Preferences.toState(): DesignState = DesignState(
-        design = DesignValidation.enumOr(
-            this[KEY_DESIGN], AppDesign.values(), AppDesign.NOCTURNE
-        ),
+        design = DesignValidation.designOr(this[KEY_DESIGN]),
         colourSource = DesignValidation.enumOr(
             this[KEY_COLOUR_SOURCE], M3ColourSource.values(), M3ColourSource.DYNAMIC
         ),

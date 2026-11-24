@@ -241,6 +241,8 @@ fun PdfPagesSurface(
         { _, _ -> },
     onSelectionTranslate: (String) -> Unit = {},
     onSelectionAskAi: (String) -> Unit = {},
+    // Code 124 (A7): Illustrate paints exactly the selection.
+    onSelectionIllustrate: (String) -> Unit = {},
     onSelectionActiveChanged: (Boolean) -> Unit = {},
     onDialogOpenChanged: (Boolean) -> Unit = {},
     clearSelectionSignal: Int = 0,
@@ -291,6 +293,8 @@ fun PdfPagesSurface(
                 onUpdatePageTint = onUpdatePageTint,
                 onSelectionTranslate = onSelectionTranslate,
                 onSelectionAskAi = onSelectionAskAi,
+                            onSelectionIllustrate =
+                                onSelectionIllustrate,
                 onSelectionActiveChanged = onSelectionActiveChanged,
                 onDialogOpenChanged = onDialogOpenChanged,
                 clearSelectionSignal = clearSelectionSignal,
@@ -313,6 +317,8 @@ fun PdfPagesSurface(
                 onUpdatePageTint = onUpdatePageTint,
                 onSelectionTranslate = onSelectionTranslate,
                 onSelectionAskAi = onSelectionAskAi,
+                            onSelectionIllustrate =
+                                onSelectionIllustrate,
                 onSelectionActiveChanged = onSelectionActiveChanged,
                 onDialogOpenChanged = onDialogOpenChanged,
                 clearSelectionSignal = clearSelectionSignal,
@@ -1386,6 +1392,8 @@ private fun PdfPagedBody(
         { _, _ -> },
     onSelectionTranslate: (String) -> Unit = {},
     onSelectionAskAi: (String) -> Unit = {},
+    // Code 124 (A7): Illustrate paints exactly the selection.
+    onSelectionIllustrate: (String) -> Unit = {},
     onSelectionActiveChanged: (Boolean) -> Unit = {},
     onDialogOpenChanged: (Boolean) -> Unit = {},
     clearSelectionSignal: Int = 0,
@@ -1860,6 +1868,8 @@ private fun PdfPagedBody(
                             onUpdatePageTint = onUpdatePageTint,
                             onSelectionTranslate = onSelectionTranslate,
                             onSelectionAskAi = onSelectionAskAi,
+                            onSelectionIllustrate =
+                                onSelectionIllustrate,
                             clearSelectionSignal = clearSelectionSignal,
                             motionEnabled = motionEnabled,
                             onTrimStandDown = onTrimStandDown,
@@ -1972,6 +1982,8 @@ private fun PdfPageCell(
         { _, _ -> },
     onSelectionTranslate: (String) -> Unit = {},
     onSelectionAskAi: (String) -> Unit = {},
+    // Code 124 (A7): Illustrate paints exactly the selection.
+    onSelectionIllustrate: (String) -> Unit = {},
     clearSelectionSignal: Int = 0,
     motionEnabled: Boolean = true,
     onTrimStandDown: () -> Unit = {}
@@ -2052,8 +2064,33 @@ private fun PdfPageCell(
     // any existing-highlight bar with a clean state.
     LaunchedEffect(selection, existingBar) {
         if (selection != null) {
-            if (existingBar != null) existingBar = null
-            barState = SelectionBarState()
+            // Code 124 (A9): a fresh selection that sits ON a
+            // stored highlight of this page opens the bar in
+            // that highlight's existing state — Remove and
+            // the re-tint row act on the stored record (the
+            // callbacks below already fulfil both against
+            // existingBar) instead of stacking a second
+            // highlight. Any other fresh selection supersedes
+            // an existing-highlight bar with a clean state,
+            // as before.
+            val hit = pageHighlights.firstOrNull { stored ->
+                val cs = stored.charStart
+                val ce = stored.charEnd
+                stored.page == page && cs != null && ce != null &&
+                    selection.start >= cs && selection.end <= ce
+            }
+            if (hit != null) {
+                if (existingBar != hit) existingBar = hit
+                if (!barState.existingHighlight) {
+                    barState = SelectionBarState(
+                        existingHighlight = true,
+                        activeTintArgb = hit.tintArgb
+                    )
+                }
+            } else {
+                if (existingBar != null) existingBar = null
+                barState = SelectionBarState()
+            }
         } else if (existingBar == null) {
             barState = SelectionBarState()
         }
@@ -3557,6 +3594,12 @@ private fun PdfPageCell(
                                         )
                                         barDismissing = true
                                     }
+                                    SelectionBarAction.ILLUSTRATE -> {
+                                        onSelectionIllustrate(
+                                            barSelection.text
+                                        )
+                                        barDismissing = true
+                                    }
                                     SelectionBarAction.SHARE -> {
                                         val intent = Intent(
                                             Intent.ACTION_SEND
@@ -3781,6 +3824,8 @@ private fun PdfContinuousBody(
         { _, _ -> },
     onSelectionTranslate: (String) -> Unit = {},
     onSelectionAskAi: (String) -> Unit = {},
+    // Code 124 (A7): Illustrate paints exactly the selection.
+    onSelectionIllustrate: (String) -> Unit = {},
     onSelectionActiveChanged: (Boolean) -> Unit = {},
     onDialogOpenChanged: (Boolean) -> Unit = {},
     clearSelectionSignal: Int = 0,
@@ -4417,6 +4462,41 @@ private fun PdfContinuousBody(
                             itemGeometry == null
                         ) {
                             itemGeometry = session.pageGeometry(page)
+                        }
+                    }
+                    // Code 124 (A9, re-check fix): a fresh
+                    // selection that sits ON a stored highlight
+                    // of this page opens the bar in that
+                    // highlight's existing state — the paged
+                    // body's rule, mirrored here (this body
+                    // never derived it, so over a live
+                    // selection its Remove was a no-op and its
+                    // colour row stacked a second highlight).
+                    // The registration effect below keys on
+                    // existingBarHighlight, so the seeded
+                    // record flows into its Remove / re-tint
+                    // closures.
+                    LaunchedEffect(itemSelection) {
+                        val sel = itemSelection
+                        if (sel != null) {
+                            val hit = itemHighlights
+                                .firstOrNull { stored ->
+                                    val cs = stored.charStart
+                                    val ce = stored.charEnd
+                                    cs != null && ce != null &&
+                                        sel.start >= cs &&
+                                        sel.end <= ce
+                                }
+                            if (hit != null &&
+                                existingBarHighlight != hit
+                            ) {
+                                existingBarHighlight = hit
+                                itemBarState.value =
+                                    SelectionBarState(
+                                        existingHighlight = true,
+                                        activeTintArgb = hit.tintArgb
+                                    )
+                            }
                         }
                     }
                     // The body's scroll lock (C5): report the
@@ -5074,6 +5154,12 @@ private fun PdfContinuousBody(
                                 }
                                 SelectionBarAction.ASK_AI -> {
                                     onSelectionAskAi(
+                                        registration.selection.text
+                                    )
+                                    registration.dismissing.value = true
+                                }
+                                SelectionBarAction.ILLUSTRATE -> {
+                                    onSelectionIllustrate(
                                         registration.selection.text
                                     )
                                     registration.dismissing.value = true

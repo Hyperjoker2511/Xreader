@@ -1,5 +1,7 @@
 package app.xreader.ui.theme
 
+import android.content.Context
+import android.os.Build
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -7,13 +9,17 @@ import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.xreader.data.prefs.DesignState
+import app.xreader.data.prefs.M3ColourSource
 import app.xreader.data.prefs.M3ColourStyle
 import app.xreader.data.prefs.M3MotionChoice
 
@@ -25,30 +31,24 @@ import app.xreader.data.prefs.M3MotionChoice
  * extensions in its language; the remaining surfaces extended
  * in the same language under his "all in one build" word).
  *
- * COLOUR DOCTRINE (the owner's correction, 2026-11-24): the
- * design's beauty lives in its OWN palette. The light scheme
- * below is the design's `.theme-b` value set EXACTLY — paper
+ * COLOUR DOCTRINE (code 123, corrected by the owner's
+ * rulings of 2026-11-24 ~17:54–17:56 and the code-124 cut):
+ * this design IS the app's Material 3 design. Its LANGUAGE
+ * is fixed — paper character, Fraunces serif, its shapes and
+ * layouts — but its COLOUR is the user's: the face adopts
+ * the shared colour state (Dynamic = the phone's palette,
+ * or a picked colour / one of the six presets) and generates
+ * its scheme, light and dark, from that seed through the
+ * app's vendored MCU machinery ([McuScheme]) in this
+ * design's own tonal recipe. Sage #3b6a34 is only the
+ * starting colour for a fresh install that has chosen
+ * nothing; for the sage seed the light scheme keeps the
+ * approved design's `.theme-b` values verbatim (paper
  * #fbf9f3, sage primary #3b6a34, primary-container #bcf0ad,
  * secondary-container #d6e8cb, peach tertiary-container
- * #ffdbd0, ink #1b1c18 — carried verbatim into the matching
- * scheme roles. Roles the design never names (secondary,
- * inverse, surface-dim/bright, the lowest container) are
- * filled by the MCU generation from the same sage seed, so
- * the scheme is complete and coherent without inventing a
- * single design value. The DARK scheme is generated whole
- * from the sage seed through the app's vendored MCU machinery
- * ([McuScheme], FIDELITY — the same style the M3 free picker
- * defaults to): the design's own night form, derived, never
- * borrowed from another design.
- *
- * Editorial does NOT follow dynamic colour and does NOT read
- * the colour bar: its palette is fixed by the design (the
- * owner's ruling: "Default is editorial — another follows my
- * phone or color wheel"). The Material 3 design keeps its
- * dynamic → baseline → picked order untouched; Nocturne is
- * untouched. Editorial's dark/light choice rides the shared
- * M3-family theme-mode state, as its settings live in the
- * same Design page.
+ * #ffdbd0, ink #1b1c18). Nocturne's colour world is separate
+ * and untouched. The dark/light choice rides the shared
+ * family theme-mode state.
  *
  * TYPE: Fraunces (bundled, OFL) carries the display and
  * headline styles — the design's editorial voice — and the
@@ -102,8 +102,92 @@ fun editorialLightColorScheme(): ColorScheme =
 fun editorialDarkColorScheme(): ColorScheme =
     McuScheme.scheme(EDITORIAL_SEED_ARGB, dark = true, M3ColourStyle.FIDELITY)
 
-fun resolveEditorialColorScheme(dark: Boolean): ColorScheme =
-    if (dark) editorialDarkColorScheme() else editorialLightColorScheme()
+/**
+ * Code 124: the six one-tap preset colours of the Design
+ * page's colour bar (owner, 2026-11-24: "Just add 5 or 6
+ * custom colors also — to select easily and use them").
+ * Each is a seed the face generates from, light and dark,
+ * in its own recipe. Sage is the design's own; Indigo's seed
+ * is drawn from the banked Midnight Indigo design in the
+ * same Gemini zip (its primary-container #3e4285 family);
+ * Ocean blue, Violet (the settings-design violet #7c3aed),
+ * Ember and Rose are chosen in the same mid-tone register.
+ */
+val EditorialColourPresets: List<Pair<String, Int>> = listOf(
+    "Sage" to EDITORIAL_SEED_ARGB,
+    "Indigo" to 0xFF4F52A8.toInt(),
+    "Ocean blue" to 0xFF1D6FB8.toInt(),
+    "Violet" to 0xFF7C3AED.toInt(),
+    "Ember" to 0xFFBC4B1F.toInt(),
+    "Rose" to 0xFFBE3E77.toInt()
+)
+
+/**
+ * The seed this face wears right now, from the shared colour
+ * state (code 124, the owner's colour ruling): DYNAMIC takes
+ * the phone palette's primary as the seed (API 31+); PICKED
+ * takes the picked colour. Each falls back to the other, and
+ * then to sage — the fresh-install starting colour, reached
+ * only when nothing has been chosen and the phone offers no
+ * dynamic palette.
+ */
+fun editorialSeedArgb(context: Context, design: DesignState): Int {
+    val dynamicSeed: Int? =
+        if (Build.VERSION.SDK_INT >= 31) {
+            dynamicLightColorScheme(context).primary.toArgb()
+        } else {
+            null
+        }
+    return when (design.colourSource) {
+        M3ColourSource.PICKED ->
+            design.seedArgb?.toInt() ?: dynamicSeed ?: EDITORIAL_SEED_ARGB
+        M3ColourSource.DYNAMIC ->
+            dynamicSeed ?: design.seedArgb?.toInt() ?: EDITORIAL_SEED_ARGB
+    }
+}
+
+/**
+ * The scheme for one seed in this design's recipe: the sage
+ * seed keeps the approved design's verbatim light values
+ * (and its FIDELITY dark); every other seed generates whole
+ * through the MCU machinery in the user's chosen style.
+ */
+fun editorialSchemeFor(
+    seedArgb: Int,
+    dark: Boolean,
+    style: M3ColourStyle
+): ColorScheme =
+    if (seedArgb == EDITORIAL_SEED_ARGB) {
+        if (dark) editorialDarkColorScheme() else editorialLightColorScheme()
+    } else {
+        McuScheme.scheme(seedArgb, dark, style)
+    }
+
+fun resolveEditorialColorScheme(
+    context: Context,
+    design: DesignState,
+    dark: Boolean
+): ColorScheme = editorialSchemeFor(
+    editorialSeedArgb(context, design), dark, design.colourStyle
+)
+
+/**
+ * The AMOLED floor (owner approval A-121-4, carried into
+ * this face with the colour state in code 124): the dark
+ * scheme's floor roles go true black; High and Highest keep
+ * a minimal step so stacked containers stay legible. Every
+ * other role stays the generated scheme's own.
+ */
+internal fun ColorScheme.withAmoledFloor(): ColorScheme = copy(
+    background = Color.Black,
+    surface = Color.Black,
+    surfaceDim = Color.Black,
+    surfaceContainerLowest = Color.Black,
+    surfaceContainerLow = Color.Black,
+    surfaceContainer = Color.Black,
+    surfaceContainerHigh = Color(0xFF0A0A0A),
+    surfaceContainerHighest = Color(0xFF121212)
+)
 
 /** The Editorial type scale: the platform scale's sizes and
  * line heights, with the display / headline / large-title
@@ -162,7 +246,7 @@ private fun editorialAppScheme(
     darkColors: ColorScheme,
     lightColors: ColorScheme
 ): AppScheme = AppScheme(
-    name = "Editorial",
+    name = "Material 3",
     dark = darkColors,
     light = lightColors,
     primaryTextDark = darkColors.primary,
@@ -193,9 +277,28 @@ fun EditorialThemeRoot(
     reduceMotion: Boolean,
     content: @Composable () -> Unit
 ) {
+    val context = LocalContext.current
     val dark = m3DarkTheme(design)
-    val darkColors = remember { editorialDarkColorScheme() }
-    val lightColors = remember { editorialLightColorScheme() }
+    // Code 124: the scheme resolves from the shared colour
+    // state (the owner's colour ruling) — the phone's palette
+    // or the picked colour generates this face, light and
+    // dark; sage only when nothing has been chosen.
+    val seed = remember(context, design.colourSource, design.seedArgb) {
+        editorialSeedArgb(context, design)
+    }
+    val resolvedDark = remember(seed, design.colourStyle) {
+        editorialSchemeFor(seed, dark = true, design.colourStyle)
+    }
+    val darkColors = remember(resolvedDark, design.m3AmoledDark) {
+        if (design.m3AmoledDark) {
+            resolvedDark.withAmoledFloor()
+        } else {
+            resolvedDark
+        }
+    }
+    val lightColors = remember(seed, design.colourStyle) {
+        editorialSchemeFor(seed, dark = false, design.colourStyle)
+    }
     val colors = if (dark) darkColors else lightColors
     val motionScheme = if (
         design.motionChoice == M3MotionChoice.STANDARD ||

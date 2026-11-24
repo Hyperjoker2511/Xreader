@@ -2,8 +2,10 @@
 
 package app.xreader.ui.library
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -28,6 +30,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -184,8 +187,11 @@ fun LibraryScreen(
     // design — under Nocturne every condition below is
     // vacuously true and the screen is byte-identical.
     val designState = app.xreader.ui.theme.LocalDesignState.current
-    val m3Design = designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    // Code 124: the MATERIAL3 design is removed — the shared
+    // composition below serves Nocturne only (the Material 3
+    // design routes to EditorialLibraryContent above), so its
+    // M3 gates read false and Nocturne renders as shipped.
+    val m3Design = false
     val editorialDesign = designState.design ==
         app.xreader.data.prefs.AppDesign.EDITORIAL
     // v1.0.1 library power basics: in-library search / sort / filter.
@@ -349,34 +355,7 @@ fun LibraryScreen(
             onContinueReading = onContinueReading,
             onProfile = onProfile,
             onOpenUpdates = onOpenUpdates,
-            updateState = updateState,
-            onUpdateNow = onUpdateNow,
-            onDismissUpdate = onDismissUpdate,
-            onReadMoreUpdate = onReadMoreUpdate,
-            onInstallUpdate = onInstallUpdate,
-            onCancelUpdateDownload = onCancelUpdateDownload,
-            onOpenUpdateInstallSettings = onOpenUpdateInstallSettings
-        )
-        return
-    }
-
-    // Code 121 (R1/S4): the Material 3 design's Library is a
-    // separate composition (M3LibraryContent, below) — medium
-    // flexible bar, Continue carousel, status PrimaryTabRow,
-    // wide filled shelf cards, the S4 sheet. The Nocturne
-    // composition below is byte-identical to before this build.
-    if (m3Design) {
-        M3LibraryContent(
-            state = state,
-            candidates = candidates,
-            viewModel = viewModel,
-            coverFile = coverFile,
-            designState = designState,
-            onAddBook = onAddBook,
-            onOpenBook = onOpenBook,
-            onContinueReading = onContinueReading,
             onOpenAddList = onOpenAddList,
-            onOpenUpdates = onOpenUpdates,
             updateState = updateState,
             onUpdateNow = onUpdateNow,
             onDismissUpdate = onDismissUpdate,
@@ -1698,12 +1677,7 @@ private fun ShelfGridCard(
         metaLine = metaLine.ifBlank { null },
         onClick = onOpen,
         onLongClick = onLongPress,
-        progressFraction = if (showProgress &&
-            (app.xreader.ui.theme.LocalDesignState.current.design !=
-                app.xreader.data.prefs.AppDesign.MATERIAL3 ||
-                app.xreader.ui.theme.LocalDesignState.current
-                    .libraryProgressOnCovers)
-        ) {
+        progressFraction = if (showProgress) {
             shelfBook.fraction
         } else {
             null
@@ -2378,7 +2352,7 @@ private fun ManageShelvesDialog(
                     // get the same hideable treatment.
                     app.xreader.data.library.ShelfLogic.BUILTIN_STATUS_READING to "Reading",
                     app.xreader.data.library.ShelfLogic.BUILTIN_STATUS_ON_HOLD to "On-Hold",
-                    app.xreader.data.library.ShelfLogic.BUILTIN_STATUS_PLAN_TO_READ to "Plan to Read",
+                    app.xreader.data.library.ShelfLogic.BUILTIN_STATUS_PLAN_TO_READ to "Plan to read",
                     app.xreader.data.library.ShelfLogic.BUILTIN_STATUS_COMPLETED to "Completed",
                     app.xreader.data.library.ShelfLogic.BUILTIN_STATUS_DROPPED to "Dropped"
                 ).forEach { (key, label) ->
@@ -2502,16 +2476,6 @@ private val m3StatusTabs: List<Pair<String, String>> = listOf(
     "DROPPED" to "Dropped"
 )
 
-/** S4's sort list (spec order). AUTHOR and PROGRESS have no
- * LibrarySort key, so the M3 shelf orders locally for those. */
-private enum class M3LibSort(val label: String) {
-    RECENTLY_READ("Recently read"),
-    TITLE("Title A–Z"),
-    AUTHOR("Author A–Z"),
-    RECENTLY_ADDED("Recently added"),
-    PROGRESS("Progress")
-}
-
 private fun m3StatusLabel(
     status: app.xreader.data.library.ReadingStatus
 ): String = when (status) {
@@ -2533,18 +2497,6 @@ private fun m3StatusLabel(
 // whole library, manga is found via LibrarySplit.kindOf (the
 // same signal the split uses), and the Desk is a door onto a
 // manga wall where the five statuses still organise manga.
-
-/** The sections strip's chips: All + the five statuses, in the
- * mockup's short labels ("Plan", not "Plan to read"). Keys are
- * the same filter keys m3StatusTabs has always used. */
-private val editorialChips: List<Pair<String, String>> = listOf(
-    "ALL" to "All",
-    "READING" to "Reading",
-    "ON_HOLD" to "On hold",
-    "PLAN_TO_READ" to "Plan",
-    "COMPLETED" to "Completed",
-    "DROPPED" to "Dropped"
-)
 
 /** A book's effective department: its set status, else the
  * progress-derived one the M3 tabs have always used (finished
@@ -2824,1324 +2776,16 @@ private fun editorialCoverLine(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
 )
-@Composable
-private fun M3LibraryContent(
-    state: LibraryUiState,
-    candidates: List<CandidateState>,
-    viewModel: LibraryViewModel,
-    coverFile: (String?) -> File?,
-    designState: app.xreader.data.prefs.DesignState,
-    onAddBook: () -> Unit,
-    onOpenBook: (Long) -> Unit,
-    onContinueReading: (bookId: Long, chapterIndex: Int) -> Unit,
-    onOpenAddList: () -> Unit,
-    onOpenUpdates: () -> Unit,
-    updateState: app.xreader.ui.update.AppUpdateViewModel.UiState? = null,
-    onUpdateNow: () -> Unit = {},
-    onDismissUpdate: () -> Unit = {},
-    onReadMoreUpdate: () -> Unit = {},
-    onInstallUpdate: () -> Unit = {},
-    onCancelUpdateDownload: () -> Unit = {},
-    onOpenUpdateInstallSettings: () -> Unit = {}
-) {
-    var tabKey by remember { mutableStateOf("ALL") }
-    var m3Sort by remember { mutableStateOf(M3LibSort.RECENTLY_READ) }
-    var downloadedOnly by remember { mutableStateOf(false) }
-    var favouritesOnly by remember { mutableStateOf(false) }
-    var sheetOpen by remember { mutableStateOf(false) }
-    var searchOpen by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
-    var addMenuOpen by remember { mutableStateOf(false) }
-    var menuFor by remember { mutableStateOf<ShelfBook?>(null) }
-    var selection by remember { mutableStateOf<Set<Long>?>(null) }
-    var removeTarget by remember { mutableStateOf<ShelfBook?>(null) }
-    var bulkRemoveOpen by remember { mutableStateOf(false) }
-    var bulkRemoveSize by remember { mutableStateOf<String?>(null) }
-    var mangaWall by remember { mutableStateOf(false) }
-
-    val scheme = MaterialTheme.colorScheme
-    // The Editorial covers the WHOLE library (no side split):
-    // departments organise by status, manga by kind.
-    val allBooks = state.books
-    fun statusOf(shelf: ShelfBook) = editorialStatusOf(state, shelf)
-    fun isManga(shelf: ShelfBook) = editorialIsManga(state, shelf)
-    val mangaBooks = remember(allBooks, state.bookKinds, state.metas) {
-        allBooks.filter { isManga(it) }
-            .sortedByDescending { it.book.lastOpenedAt ?: 0L }
-    }
-    val mangaInProgress = mangaBooks.count {
-        statusOf(it) == app.xreader.data.library.ReadingStatus.READING
-    }
-    val deskLead = mangaBooks.firstOrNull {
-        statusOf(it) == app.xreader.data.library.ReadingStatus.READING
-    } ?: mangaBooks.firstOrNull()
-    // Continue: the state's hero first (its chapter index is the
-    // only one the state carries), else the most recent
-    // in-progress book.
-    val inProgress = remember(allBooks, state.metas) {
-        allBooks.filter {
-            statusOf(it) == app.xreader.data.library.ReadingStatus.READING &&
-                it.fraction < 1f
-        }.sortedByDescending { it.book.lastOpenedAt ?: 0L }
-    }
-    val lead = state.continueReading ?: inProgress.firstOrNull()
-    val alsoInProgress = inProgress.filter {
-        it.book.id != lead?.book?.id && it.book.id != deskLead?.book?.id
-    }
-    val departments = remember(allBooks, state.metas) {
-        listOf(
-            app.xreader.data.library.ReadingStatus.ON_HOLD,
-            app.xreader.data.library.ReadingStatus.PLAN_TO_READ,
-            app.xreader.data.library.ReadingStatus.COMPLETED,
-            app.xreader.data.library.ReadingStatus.DROPPED
-        ).map { status ->
-            status to allBooks.filter { statusOf(it) == status }
-                .sortedByDescending { it.book.lastOpenedAt ?: 0L }
-        }.filter { it.second.isNotEmpty() }
-    }
-    val unclassified = remember(allBooks, state.metas) {
-        allBooks.filter {
-            statusOf(it) == app.xreader.data.library.ReadingStatus.NONE
-        }
-    }
-    val finishedCount = allBooks.count {
-        statusOf(it) == app.xreader.data.library.ReadingStatus.COMPLETED
-    }
-    val filterLive = downloadedOnly || favouritesOnly ||
-        m3Sort != M3LibSort.RECENTLY_READ
-    val frontPage = tabKey == "ALL" && query.isBlank() &&
-        !downloadedOnly && !favouritesOnly && !mangaWall
-
-    fun matchesFlags(shelf: ShelfBook): Boolean =
-        (!downloadedOnly ||
-            (state.downloadCounts[shelf.book.id]?.downloaded ?: 0) > 0) &&
-            (!favouritesOnly || shelf.book.id in state.favourites)
-    fun matchesQuery(shelf: ShelfBook): Boolean = query.isBlank() ||
-        shelf.book.title.lowercase().contains(query.trim().lowercase()) ||
-        shelf.book.author.lowercase().contains(query.trim().lowercase())
-    fun sorted(books: List<ShelfBook>): List<ShelfBook> = when (m3Sort) {
-        M3LibSort.RECENTLY_READ -> books.sortedByDescending { it.book.lastOpenedAt ?: 0L }
-        M3LibSort.TITLE -> books.sortedBy { it.book.title.lowercase() }
-        M3LibSort.AUTHOR -> books.sortedBy { it.book.author.lowercase() }
-        M3LibSort.RECENTLY_ADDED -> books.sortedByDescending { it.book.addedAt }
-        M3LibSort.PROGRESS -> books.sortedByDescending { it.fraction }
-    }
-    // The collapsed view (a status pick, the manga wall, search,
-    // or a live flag): one department, expanded, as M3 cards.
-    val listBooks = remember(
-        allBooks, state.metas, state.favourites, state.downloadCounts,
-        tabKey, m3Sort, downloadedOnly, favouritesOnly, query, mangaWall,
-        state.bookKinds
-    ) {
-        val pool = if (mangaWall) mangaBooks else allBooks
-        val filtered = pool.filter { shelf ->
-            val matchesTab = when (tabKey) {
-                "READING" -> statusOf(shelf) ==
-                    app.xreader.data.library.ReadingStatus.READING
-                "PLAN_TO_READ" -> statusOf(shelf) ==
-                    app.xreader.data.library.ReadingStatus.PLAN_TO_READ
-                "COMPLETED" -> statusOf(shelf) ==
-                    app.xreader.data.library.ReadingStatus.COMPLETED
-                "ON_HOLD" -> statusOf(shelf) ==
-                    app.xreader.data.library.ReadingStatus.ON_HOLD
-                "DROPPED" -> statusOf(shelf) ==
-                    app.xreader.data.library.ReadingStatus.DROPPED
-                else -> true
-            }
-            matchesTab && matchesFlags(shelf) && matchesQuery(shelf)
-        }
-        sorted(filtered)
-    }
-
-    fun onCoverClick(shelf: ShelfBook) {
-        val current = selection
-        if (current != null) {
-            selection = if (shelf.book.id in current) {
-                (current - shelf.book.id).ifEmpty { null }
-            } else {
-                current + shelf.book.id
-            }
-        } else {
-            viewModel.markSeen(shelf.book.id)
-            onOpenBook(shelf.book.id)
-        }
-    }
-    fun onCoverLongClick(shelf: ShelfBook) {
-        val current = selection
-        selection = if (current == null) {
-            setOf(shelf.book.id)
-        } else if (shelf.book.id in current) {
-            (current - shelf.book.id).ifEmpty { null }
-        } else {
-            current + shelf.book.id
-        }
-    }
-
-    val libraryEmpty = !state.loading && state.books.isEmpty() &&
-        candidates.isEmpty()
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        // Selection bar (long-press multi-select) — unchanged
-        // actions from the code-121 M3 Library.
-        selection?.let { picked ->
-            androidx.compose.material3.Surface(
-                color = scheme.surfaceContainerHigh,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    Modifier
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        "${picked.size} selected",
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                    TextButton(onClick = {
-                        viewModel.bulkSetFavourite(picked, true)
-                    }) { Text("Favourite") }
-                    TextButton(onClick = {
-                        viewModel.bulkDownload(picked)
-                    }) { Text("Download") }
-                    TextButton(onClick = {
-                        viewModel.bulkSetStatus(
-                            picked,
-                            app.xreader.data.library.ReadingStatus.COMPLETED
-                        )
-                    }) { Text("Mark read") }
-                    TextButton(onClick = {
-                        bulkRemoveSize = null
-                        bulkRemoveOpen = true
-                    }) { Text("Remove…") }
-                    TextButton(onClick = { selection = null }) {
-                        Text("Done")
-                    }
-                }
-            }
-        }
-        if (state.loading && state.books.isEmpty() && candidates.isEmpty()) {
-            LoadingState(
-                whatIsHappening = "Loading your library…",
-                modifier = Modifier.weight(1f)
-            )
-            return@Column
-        }
-        if (libraryEmpty) {
-            Column(
-                Modifier.weight(1f).fillMaxWidth().padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    "No books yet",
-                    style = MaterialTheme.typography.headlineSmall
-                )
-                Text(
-                    "Add your first book (EPUB, PDF, TXT and more) " +
-                        "and it will live here, ready to read.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = scheme.onSurfaceVariant
-                )
-                androidx.compose.material3.ExtendedFloatingActionButton(
-                    onClick = onAddBook,
-                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                    text = { Text("Add a book") }
-                )
-            }
-            return@Column
-        }
-        androidx.compose.material3.pulltorefresh.PullToRefreshBox(
-            isRefreshing = state.pullRefreshing,
-            onRefresh = { viewModel.pullRefresh() },
-            modifier = Modifier.weight(1f)
-        ) {
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(top = 4.dp, bottom = 88.dp)
-            ) {
-                // ── 1. The masthead ──────────────────────────
-                item(key = "ed-masthead") {
-                    Column(Modifier.padding(horizontal = 16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            val dayName = remember {
-                                java.time.LocalDate.now().dayOfWeek
-                                    .getDisplayName(
-                                        java.time.format.TextStyle.FULL,
-                                        java.util.Locale.ENGLISH
-                                    ).uppercase()
-                            }
-                            Text(
-                                "$dayName · YOUR SHELF AT A GLANCE",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 2.sp
-                                ),
-                                color = scheme.primary,
-                                modifier = Modifier.weight(1f)
-                            )
-                            FilledTonalIconButton(
-                                onClick = { searchOpen = !searchOpen }
-                            ) {
-                                Icon(
-                                    Icons.Filled.Search,
-                                    contentDescription = "Search your library"
-                                )
-                            }
-                            Box {
-                                IconButton(
-                                    onClick = { addMenuOpen = true },
-                                    modifier = Modifier.background(
-                                        scheme.primary,
-                                        androidx.compose.foundation.shape.CircleShape
-                                    )
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Add,
-                                        contentDescription = "Add a book",
-                                        tint = scheme.onPrimary
-                                    )
-                                }
-                                DropdownMenu(
-                                    expanded = addMenuOpen,
-                                    onDismissRequest = { addMenuOpen = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Import a file") },
-                                        onClick = {
-                                            addMenuOpen = false
-                                            onAddBook()
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Add a list") },
-                                        onClick = {
-                                            addMenuOpen = false
-                                            onOpenAddList()
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                        Text(
-                            "Library",
-                            style = MaterialTheme.typography.displayMedium.copy(
-                                fontWeight = FontWeight.Black,
-                                letterSpacing = (-1.2).sp
-                            ),
-                            modifier = Modifier.padding(top = 10.dp)
-                        )
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.padding(top = 7.dp)
-                        ) {
-                            Text(
-                                "${allBooks.size} titles",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontWeight = FontWeight.Bold
-                                )
-                            )
-                            Text("·", style = MaterialTheme.typography.bodySmall,
-                                color = scheme.onSurfaceVariant)
-                            Text(
-                                "${inProgress.size} in progress",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = scheme.onSurfaceVariant
-                            )
-                            Text("·", style = MaterialTheme.typography.bodySmall,
-                                color = scheme.onSurfaceVariant)
-                            Text(
-                                "${mangaBooks.size} manga",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = scheme.onSurfaceVariant
-                            )
-                            Text("·", style = MaterialTheme.typography.bodySmall,
-                                color = scheme.onSurfaceVariant)
-                            Text(
-                                "$finishedCount finished",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = scheme.onSurfaceVariant
-                            )
-                        }
-                        // The double rule: one thick on-surface
-                        // line over one hairline.
-                        Box(
-                            Modifier.padding(top = 12.dp).fillMaxWidth()
-                                .height(3.dp).background(scheme.onSurface)
-                        )
-                        Box(
-                            Modifier.padding(top = 3.dp).fillMaxWidth()
-                                .height(1.dp).background(scheme.outlineVariant)
-                        )
-                    }
-                }
-                if (searchOpen) {
-                    item(key = "ed-search") {
-                        OutlinedTextField(
-                            value = query,
-                            onValueChange = { query = it },
-                            placeholder = {
-                                Text("Search your library — title or author")
-                            },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                        )
-                    }
-                }
-                // ── 2. The sections strip ────────────────────
-                item(key = "ed-sections") {
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .padding(start = 16.dp, end = 8.dp, top = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "SECTIONS",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.8.sp
-                            ),
-                            color = scheme.onSurfaceVariant
-                        )
-                        androidx.compose.foundation.lazy.LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            items(editorialChips, key = { "chip-${it.first}" }) { (key, label) ->
-                                FilterChip(
-                                    selected = tabKey == key,
-                                    onClick = { tabKey = key },
-                                    label = { Text(label) },
-                                    leadingIcon = if (tabKey == key) {
-                                        {
-                                            Icon(
-                                                Icons.Filled.Check,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(17.dp)
-                                            )
-                                        }
-                                    } else {
-                                        null
-                                    }
-                                )
-                            }
-                        }
-                        Box {
-                            IconButton(onClick = { sheetOpen = true }) {
-                                Icon(
-                                    Icons.Filled.Tune,
-                                    contentDescription = "Filter and sort",
-                                    tint = scheme.onSurfaceVariant
-                                )
-                            }
-                            if (filterLive) {
-                                Box(
-                                    Modifier.align(Alignment.TopEnd)
-                                        .padding(4.dp).size(8.dp)
-                                        .background(
-                                            scheme.primary,
-                                            androidx.compose.foundation.shape.CircleShape
-                                        )
-                                )
-                            }
-                        }
-                    }
-                }
-                // ── S36: the update card, in flow ────────────
-                if (updateState?.cardRelease != null) {
-                    item(key = "ed-update") {
-                        app.xreader.ui.update.UpdateCard(
-                            state = updateState,
-                            onUpdateNow = onUpdateNow,
-                            onDismiss = onDismissUpdate,
-                            onReadMore = onReadMoreUpdate,
-                            onInstall = onInstallUpdate,
-                            onCancelDownload = onCancelUpdateDownload,
-                            onOpenInstallSettings = onOpenUpdateInstallSettings,
-                            modifier = Modifier.padding(
-                                horizontal = 16.dp, vertical = 12.dp
-                            )
-                        )
-                    }
-                }
-                if (candidates.isNotEmpty()) {
-                    item(key = "ed-import-header") {
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                "Adding books",
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            TextButton(onClick = {
-                                viewModel.clearFinishedCandidates()
-                            }) { Text("Clear finished") }
-                        }
-                    }
-                    items(candidates, key = { "ed-cand-${it.token()}" }) { candidateState ->
-                        Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                            ImportCandidateCard(
-                                state = candidateState,
-                                onImport = { viewModel.importCandidate(it) },
-                                onDismiss = { viewModel.dismissCandidate(it) },
-                                onPassword = { cand, pw ->
-                                    viewModel.importCandidate(cand, pw)
-                                }
-                            )
-                        }
-                    }
-                }
-                if (mangaWall) {
-                    item(key = "ed-wall-head") {
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(onClick = { mangaWall = false }) {
-                                Icon(
-                                    Icons.Filled.ArrowBack,
-                                    contentDescription = "Back to the front page"
-                                )
-                            }
-                            Column {
-                                Text(
-                                    "THE MANGA DESK",
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        fontWeight = FontWeight.Black,
-                                        letterSpacing = 1.6.sp
-                                    )
-                                )
-                                Text(
-                                    "${mangaBooks.size} SERIES · " +
-                                        "$mangaInProgress IN PROGRESS",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 1.6.sp
-                                    ),
-                                    color = scheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-                if (!frontPage) {
-                    if (listBooks.isEmpty() && candidates.isEmpty()) {
-                        item(key = "ed-list-empty") {
-                            Text(
-                                if (mangaWall && mangaBooks.isEmpty()) {
-                                    "No manga here yet. Manga lives in " +
-                                        "Explore — open the Keiyoushi " +
-                                        "catalogue, add a series, and it " +
-                                        "will live at this desk."
-                                } else {
-                                    "Nothing matches these filters. " +
-                                        "Change the section or the Show " +
-                                        "filters to see more of your library."
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = scheme.onSurfaceVariant,
-                                modifier = Modifier.padding(16.dp)
-                            )
-                        }
-                    }
-                    items(listBooks, key = { "ed-book-${it.book.id}" }) { shelfBook ->
-                        val status = statusOf(shelfBook)
-                        val downloaded = state.downloadCounts[shelfBook.book.id]
-                            ?.downloaded ?: 0
-                        val supporting = listOfNotNull(
-                            m3StatusLabel(status).takeIf { it.isNotBlank() },
-                            if (shelfBook.fraction > 0f) {
-                                "${(shelfBook.fraction * 100).toInt()}%"
-                            } else {
-                                null
-                            },
-                            if (downloaded > 0) "$downloaded downloaded" else null,
-                            if (shelfBook.book.id in state.favourites) {
-                                "Favourite"
-                            } else {
-                                null
-                            }
-                        ).joinToString(" · ")
-                        Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                            app.xreader.ui.common.M3BookCard(
-                                title = shelfBook.book.title,
-                                author = shelfBook.book.author
-                                    .takeIf { it.isNotBlank() },
-                                coverModel = coverFile(shelfBook.book.coverPath)
-                                    ?.takeIf { it.exists() }
-                                    ?: shelfBook.book.coverUrl
-                                        ?.takeIf { it.isNotBlank() },
-                                supportingLine = supporting.ifBlank { null },
-                                progressFraction = if (
-                                    designState.libraryProgressOnCovers &&
-                                    shelfBook.fraction > 0f
-                                ) {
-                                    shelfBook.fraction
-                                } else {
-                                    null
-                                },
-                                selected = selection?.contains(shelfBook.book.id) == true,
-                                onClick = { onCoverClick(shelfBook) },
-                                onLongClick = { onCoverLongClick(shelfBook) },
-                                trailingContent = {
-                                    Box {
-                                        IconButton(
-                                            onClick = { menuFor = shelfBook }
-                                        ) {
-                                            Icon(
-                                                Icons.Filled.MoreVert,
-                                                contentDescription =
-                                                    "Actions for ${shelfBook.book.title}"
-                                            )
-                                        }
-                                        DropdownMenu(
-                                            expanded = menuFor?.book?.id ==
-                                                shelfBook.book.id,
-                                            onDismissRequest = { menuFor = null }
-                                        ) {
-                                            DropdownMenuItem(
-                                                text = { Text("Open book page") },
-                                                onClick = {
-                                                    menuFor = null
-                                                    viewModel.markSeen(shelfBook.book.id)
-                                                    onOpenBook(shelfBook.book.id)
-                                                }
-                                            )
-                                            DropdownMenuItem(
-                                                text = { Text("Download") },
-                                                onClick = {
-                                                    menuFor = null
-                                                    viewModel.bulkDownload(
-                                                        listOf(shelfBook.book.id)
-                                                    )
-                                                }
-                                            )
-                                            HorizontalDivider()
-                                            listOf(
-                                                app.xreader.data.library
-                                                    .ReadingStatus.READING,
-                                                app.xreader.data.library
-                                                    .ReadingStatus.PLAN_TO_READ,
-                                                app.xreader.data.library
-                                                    .ReadingStatus.COMPLETED,
-                                                app.xreader.data.library
-                                                    .ReadingStatus.ON_HOLD,
-                                                app.xreader.data.library
-                                                    .ReadingStatus.DROPPED
-                                            ).forEach { target ->
-                                                DropdownMenuItem(
-                                                    text = {
-                                                        Text(
-                                                            (if (status == target) {
-                                                                "✓ "
-                                                            } else {
-                                                                ""
-                                                            }) + m3StatusLabel(target)
-                                                        )
-                                                    },
-                                                    onClick = {
-                                                        menuFor = null
-                                                        viewModel.bulkSetStatus(
-                                                            listOf(shelfBook.book.id),
-                                                            target
-                                                        )
-                                                    }
-                                                )
-                                            }
-                                            HorizontalDivider()
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Text(
-                                                        "Remove from library…",
-                                                        color = scheme.error
-                                                    )
-                                                },
-                                                onClick = {
-                                                    menuFor = null
-                                                    removeTarget = shelfBook
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            )
-                        }
-                    }
-                } else {
-                    // ── 3. The Cover Story ───────────────────
-                    if (lead != null && designState.libraryContinueRail) {
-                        item(key = "ed-lead") {
-                            val hero = lead
-                            val isHero = state.continueReading?.book?.id ==
-                                hero.book.id
-                            Column(
-                                Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    EditorialPill("COVER STORY")
-                                    Text(
-                                        "CONTINUE READING",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            letterSpacing = 2.sp
-                                        ),
-                                        color = scheme.primary
-                                    )
-                                }
-                                Row(
-                                    Modifier.padding(top = 13.dp)
-                                        .combinedClickable(
-                                            onClick = { onCoverClick(hero) },
-                                            onLongClick = { onCoverLongClick(hero) }
-                                        ),
-                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                                ) {
-                                    EditorialCover(
-                                        shelf = hero, state = state,
-                                        coverFile = coverFile,
-                                        widthDp = 148, heightDp = 216,
-                                        selected = selection?.contains(hero.book.id) == true,
-                                        mangaTag = false
-                                    )
-                                    Column(Modifier.weight(1f)) {
-                                        Text(
-                                            hero.book.title,
-                                            style = MaterialTheme.typography.headlineSmall.copy(
-                                                fontWeight = FontWeight.Bold
-                                            ),
-                                            maxLines = 3,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        editorialStandfirst(hero)?.let { standfirst ->
-                                            Text(
-                                                standfirst,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = scheme.onSurfaceVariant,
-                                                maxLines = 3,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.padding(top = 8.dp)
-                                            )
-                                        }
-                                        // Byline: format + the
-                                        // continue chapter's place —
-                                        // "FORMAT · CH. <parsed> ·
-                                        // <TITLE>", from the VM's
-                                        // resolved place label
-                                        // (state.placeLabels: the
-                                        // chapter at the progress
-                                        // index, labelled by
-                                        // ChapterDisplayOrder from
-                                        // its own number + title,
-                                        // the book page's
-                                        // derivation). No resolved
-                                        // place → no place segment:
-                                        // a position is never
-                                        // printed as a chapter.
-                                        val formatName = hero.book.localFormat.name
-                                        val heroPlace =
-                                            state.placeLabels[hero.book.id]
-                                        val byline = listOfNotNull(
-                                            formatName.takeIf {
-                                                hero.book.localFormat !=
-                                                    app.xreader.data.db.BookFormat.UNKNOWN
-                                            },
-                                            // The resolved place
-                                            // belongs to the hero
-                                            // only; a non-hero lead
-                                            // shows its count.
-                                            if (!isHero) {
-                                                if (hero.book.totalChapters > 0) {
-                                                    "${hero.book.totalChapters} CHAPTERS"
-                                                } else {
-                                                    null
-                                                }
-                                            } else if (heroPlace != null) {
-                                                val isPdf =
-                                                    hero.book.localFormat ==
-                                                        app.xreader.data.db.BookFormat.PDF
-                                                val unit = if (isPdf) {
-                                                    "PAGE"
-                                                } else {
-                                                    "CH."
-                                                }
-                                                val word = if (isPdf) {
-                                                    "Page"
-                                                } else {
-                                                    "Chapter"
-                                                }
-                                                val num =
-                                                    heroPlace.chapterNumber
-                                                val title =
-                                                    heroPlace.chapterTitle
-                                                when {
-                                                    num == null -> title
-                                                    title.isNullOrBlank() ->
-                                                        "$unit $num"
-                                                    title.equals(
-                                                        "$word $num",
-                                                        ignoreCase = true
-                                                    ) || title.startsWith(
-                                                        "$word $num ",
-                                                        ignoreCase = true
-                                                    ) || title.startsWith(
-                                                        "$word $num:",
-                                                        ignoreCase = true
-                                                    ) -> title
-                                                    else ->
-                                                        "$unit $num · $title"
-                                                }
-                                            } else {
-                                                null
-                                            }
-                                        ).joinToString(" · ")
-                                        if (byline.isNotBlank()) {
-                                            Text(
-                                                byline,
-                                                style = MaterialTheme.typography.labelSmall.copy(
-                                                    fontWeight = FontWeight.Bold,
-                                                    letterSpacing = 1.4.sp
-                                                ),
-                                                color = scheme.onSurfaceVariant,
-                                                modifier = Modifier.padding(top = 10.dp)
-                                            )
-                                        }
-                                        Spacer(Modifier.weight(1f))
-                                        LinearWavyProgressIndicator(
-                                            progress = {
-                                                hero.fraction.coerceIn(0f, 1f)
-                                            },
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(top = 9.dp)
-                                        ) {
-                                            Text(
-                                                "${(hero.fraction * 100).toInt()}%",
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                            )
-                                            Spacer(Modifier.weight(1f))
-                                            Button(
-                                                onClick = {
-                                                    if (selection != null) {
-                                                        onCoverClick(hero)
-                                                    } else if (isHero) {
-                                                        onContinueReading(
-                                                            hero.book.id,
-                                                            state.continueChapterIndex
-                                                        )
-                                                    } else {
-                                                        viewModel.markSeen(hero.book.id)
-                                                        onOpenBook(hero.book.id)
-                                                    }
-                                                }
-                                            ) {
-                                                Icon(
-                                                    Icons.Filled.PlayArrow,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(19.dp)
-                                                )
-                                                Spacer(Modifier.width(6.dp))
-                                                Text("Resume")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        item(key = "ed-hairline") {
-                            Box(
-                                Modifier.padding(horizontal = 16.dp)
-                                    .fillMaxWidth().height(1.dp)
-                                    .background(scheme.outlineVariant)
-                            )
-                        }
-                    }
-                    // ── 4. The Manga Desk ────────────────────
-                    if (mangaBooks.isNotEmpty()) {
-                        item(key = "ed-desk") {
-                            Row(
-                                Modifier.padding(top = 14.dp).fillMaxWidth()
-                                    .background(scheme.tertiaryContainer)
-                                    .clickable { mangaWall = true }
-                                    .padding(
-                                        start = 16.dp, end = 16.dp,
-                                        top = 14.dp, bottom = 16.dp
-                                    ),
-                                horizontalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        "THE MANGA DESK",
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            fontWeight = FontWeight.Black,
-                                            letterSpacing = 1.6.sp
-                                        ),
-                                        color = scheme.onTertiaryContainer
-                                    )
-                                    Text(
-                                        "${mangaBooks.size} SERIES · " +
-                                            "$mangaInProgress IN PROGRESS",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            letterSpacing = 1.6.sp
-                                        ),
-                                        color = scheme.onTertiaryContainer
-                                            .copy(alpha = 0.75f),
-                                        modifier = Modifier.padding(top = 3.dp)
-                                    )
-                                    mangaBooks.forEach { shelf ->
-                                        Text(
-                                            buildAnnotatedString {
-                                                withStyle(
-                                                    SpanStyle(fontWeight = FontWeight.Bold)
-                                                ) {
-                                                    append(shelf.book.title)
-                                                }
-                                                append(" — ")
-                                                append(editorialCoverLine(state, shelf))
-                                            },
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = scheme.onTertiaryContainer,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.padding(top = 9.dp)
-                                        )
-                                    }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(top = 11.dp)
-                                    ) {
-                                        Text(
-                                            "Open the desk",
-                                            style = MaterialTheme.typography.bodyMedium.copy(
-                                                fontWeight = FontWeight.Bold
-                                            ),
-                                            color = scheme.onTertiaryContainer
-                                        )
-                                        Icon(
-                                            Icons.Filled.ChevronRight,
-                                            contentDescription = null,
-                                            tint = scheme.onTertiaryContainer,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                }
-                                if (deskLead != null) {
-                                    // The lead manga's tall cover
-                                    // breaks out of the band's top
-                                    // edge — the page's one
-                                    // deliberate overflow.
-                                    EditorialCover(
-                                        shelf = deskLead, state = state,
-                                        coverFile = coverFile,
-                                        widthDp = 92, heightDp = 148,
-                                        selected = false, mangaTag = true,
-                                        modifier = Modifier.offset(y = (-30).dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    // ── 5. Also in progress ──────────────────
-                    if (alsoInProgress.isNotEmpty()) {
-                        item(key = "ed-also-head") {
-                            Box(Modifier.padding(top = 18.dp, bottom = 10.dp)) {
-                                EditorialSectionHeader(
-                                    title = "ALSO IN PROGRESS",
-                                    countText = "${alsoInProgress.size} more",
-                                    onSeeAll = { tabKey = "READING" }
-                                )
-                            }
-                        }
-                        item(key = "ed-also-shelf") {
-                            val carouselState =
-                                androidx.compose.material3.carousel
-                                    .rememberCarouselState { alsoInProgress.size }
-                            androidx.compose.material3.carousel
-                                .HorizontalUncontainedCarousel(
-                                    state = carouselState,
-                                    itemWidth = 104.dp,
-                                    itemSpacing = 14.dp,
-                                    contentPadding = PaddingValues(horizontal = 16.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) { index ->
-                                    val shelf = alsoInProgress[index]
-                                    EditorialCoverCard(
-                                        shelf = shelf, state = state,
-                                        coverFile = coverFile,
-                                        subLine = "${(shelf.fraction * 100).toInt()}%",
-                                        selected = selection?.contains(shelf.book.id) == true,
-                                        onClick = { onCoverClick(shelf) },
-                                        onLongClick = { onCoverLongClick(shelf) }
-                                    )
-                                }
-                        }
-                    }
-                    // ── 6. Departments ───────────────────────
-                    departments.forEachIndexed { deptIndex, (status, books) ->
-                        val deptTitle = when (status) {
-                            app.xreader.data.library.ReadingStatus.ON_HOLD -> "ON HOLD"
-                            app.xreader.data.library.ReadingStatus.PLAN_TO_READ -> "PLAN"
-                            app.xreader.data.library.ReadingStatus.COMPLETED -> "COMPLETED"
-                            app.xreader.data.library.ReadingStatus.DROPPED -> "DROPPED"
-                            else -> m3StatusLabel(status).uppercase()
-                        }
-                        val deptKey = when (status) {
-                            app.xreader.data.library.ReadingStatus.PLAN_TO_READ ->
-                                "PLAN_TO_READ"
-                            else -> status.name
-                        }
-                        item(key = "ed-dept-head-$deptKey") {
-                            Box(Modifier.padding(top = 18.dp, bottom = 10.dp)) {
-                                EditorialSectionHeader(
-                                    title = deptTitle,
-                                    countText = if (books.size == 1) {
-                                        "1 title"
-                                    } else {
-                                        "${books.size} titles"
-                                    },
-                                    onSeeAll = { tabKey = deptKey }
-                                )
-                            }
-                        }
-                        item(key = "ed-dept-feature-$deptKey") {
-                            val feature = books.first()
-                            val flip = deptIndex % 2 == 1
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .padding(horizontal = 16.dp)
-                                    .combinedClickable(
-                                        onClick = { onCoverClick(feature) },
-                                        onLongClick = { onCoverLongClick(feature) }
-                                    ),
-                                horizontalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                if (!flip) {
-                                    EditorialCover(
-                                        shelf = feature, state = state,
-                                        coverFile = coverFile,
-                                        widthDp = 104, heightDp = 148,
-                                        selected = selection?.contains(feature.book.id) == true,
-                                        mangaTag = isManga(feature)
-                                    )
-                                }
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        feature.book.title,
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            fontWeight = FontWeight.Bold
-                                        ),
-                                        maxLines = 3,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    editorialStandfirst(feature)?.let { standfirst ->
-                                        Text(
-                                            standfirst,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = scheme.onSurfaceVariant,
-                                            maxLines = 3,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.padding(top = 5.dp)
-                                        )
-                                    }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        modifier = Modifier.padding(top = 8.dp)
-                                    ) {
-                                        if (feature.book.id in state.favourites) {
-                                            EditorialPill("FAVOURITE")
-                                        }
-                                        Text(
-                                            editorialFeatureLine(state, feature),
-                                            style = MaterialTheme.typography.bodySmall.copy(
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                        )
-                                    }
-                                }
-                                if (flip) {
-                                    EditorialCover(
-                                        shelf = feature, state = state,
-                                        coverFile = coverFile,
-                                        widthDp = 104, heightDp = 148,
-                                        selected = selection?.contains(feature.book.id) == true,
-                                        mangaTag = isManga(feature)
-                                    )
-                                }
-                            }
-                        }
-                        if (books.size > 1) {
-                            item(key = "ed-dept-beneath-$deptKey") {
-                                androidx.compose.foundation.lazy.LazyRow(
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                                    contentPadding = PaddingValues(horizontal = 16.dp),
-                                    modifier = Modifier.padding(top = 14.dp)
-                                ) {
-                                    items(
-                                        books.drop(1),
-                                        key = { "ed-beneath-${it.book.id}" }
-                                    ) { shelf ->
-                                        EditorialCoverCard(
-                                            shelf = shelf, state = state,
-                                            coverFile = coverFile,
-                                            subLine = editorialFeatureLine(state, shelf),
-                                            selected = selection?.contains(shelf.book.id) == true,
-                                            onClick = { onCoverClick(shelf) },
-                                            onLongClick = { onCoverLongClick(shelf) }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Books with no status and no progress belong
-                    // to no department — they still get a shelf
-                    // here so nothing in the library is unreachable
-                    // from the front page.
-                    if (unclassified.isNotEmpty()) {
-                        item(key = "ed-unclassified-head") {
-                            Box(Modifier.padding(top = 18.dp, bottom = 10.dp)) {
-                                EditorialSectionHeader(
-                                    title = "ON THE SHELF",
-                                    countText = if (unclassified.size == 1) {
-                                        "1 title"
-                                    } else {
-                                        "${unclassified.size} titles"
-                                    }
-                                )
-                            }
-                        }
-                        item(key = "ed-unclassified-shelf") {
-                            androidx.compose.foundation.lazy.LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                                contentPadding = PaddingValues(horizontal = 16.dp)
-                            ) {
-                                items(
-                                    unclassified,
-                                    key = { "ed-uncl-${it.book.id}" }
-                                ) { shelf ->
-                                    EditorialCoverCard(
-                                        shelf = shelf, state = state,
-                                        coverFile = coverFile,
-                                        subLine = editorialFeatureLine(state, shelf),
-                                        selected = selection?.contains(shelf.book.id) == true,
-                                        onClick = { onCoverClick(shelf) },
-                                        onLongClick = { onCoverLongClick(shelf) }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // S4 — the filter/sort sheet: Sort radio list, Show
-    // checkboxes (the flags' only home), "New chapters" door.
-    if (sheetOpen) {
-        androidx.compose.material3.ModalBottomSheet(
-            onDismissRequest = { sheetOpen = false },
-            sheetState = androidx.compose.material3
-                .rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 8.dp)
-                    .padding(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    "Sort",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
-                M3LibSort.entries.forEach { option ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { m3Sort = option }
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        androidx.compose.material3.RadioButton(
-                            selected = m3Sort == option,
-                            onClick = { m3Sort = option }
-                        )
-                        Text(
-                            option.label,
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                    }
-                }
-                Text(
-                    "Show",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
-                )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { downloadedOnly = !downloadedOnly }
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    androidx.compose.material3.Checkbox(
-                        checked = downloadedOnly,
-                        onCheckedChange = { downloadedOnly = it }
-                    )
-                    Text(
-                        "Downloaded only",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { favouritesOnly = !favouritesOnly }
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    androidx.compose.material3.Checkbox(
-                        checked = favouritesOnly,
-                        onCheckedChange = { favouritesOnly = it }
-                    )
-                    Text(
-                        "Favourites only",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                }
-                HorizontalDivider(Modifier.padding(vertical = 12.dp))
-                val newChapterCounts = state.metas.values
-                    .mapNotNull { it.newChapterCount.takeIf { n -> n > 0 } }
-                androidx.compose.material3.ListItem(
-                    headlineContent = { Text("New chapters") },
-                    supportingContent = {
-                        Text(
-                            if (newChapterCounts.isNotEmpty()) {
-                                "${newChapterCounts.sum()} new across " +
-                                    "${newChapterCounts.size} book(s)"
-                            } else {
-                                "Nothing new right now"
-                            }
-                        )
-                    },
-                    leadingContent = {
-                        Icon(
-                            Icons.Filled.NewReleases,
-                            contentDescription = null
-                        )
-                    },
-                    modifier = Modifier.clickable {
-                        sheetOpen = false
-                        onOpenUpdates()
-                    }
-                )
-            }
-        }
-    }
-
-    // Bulk remove (selection bar's Remove door).
-    if (bulkRemoveOpen) {
-        val picked = selection ?: emptySet()
-        val pickedBooks = state.books.filter { it.book.id in picked }
-        LaunchedEffect(picked) {
-            val bytes = viewModel.bulkDownloadedSizeBytes(picked)
-            bulkRemoveSize =
-                app.xreader.data.files.StorageMeter.formatBytes(bytes)
-        }
-        AlertDialog(
-            onDismissRequest = { bulkRemoveOpen = false },
-            title = { Text("Remove ${picked.size} book(s)?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        "Removing also removes reading progress and bookmarks. " +
-                            "Downloaded chapters take " +
-                            (bulkRemoveSize ?: "…") + "."
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    DialogDangerOption(
-                        label = "Remove books only",
-                        onClick = {
-                            bulkRemoveOpen = false
-                            selection = null
-                            viewModel.bulkRemoveBooks(
-                                pickedBooks.map { it.book }, deleteFiles = false
-                            )
-                        }
-                    )
-                    DialogDangerOption(
-                        label = "Remove books and downloads",
-                        onClick = {
-                            bulkRemoveOpen = false
-                            selection = null
-                            viewModel.bulkRemoveBooks(
-                                pickedBooks.map { it.book }, deleteFiles = true
-                            )
-                        }
-                    )
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { bulkRemoveOpen = false }) {
-                    Text("Keep them")
-                }
-            }
-        )
-    }
-
-    // S5's one delete dialog, shared with the Nocturne path.
-    app.xreader.ui.common.BookDeleteDialogs(
-        book = removeTarget?.book,
-        downloadedSizeBytes = { viewModel.downloadedSizeBytes(it) },
-        onDismiss = { removeTarget = null },
-        onRemoveBook = { book, deleteFiles ->
-            viewModel.removeBook(book, deleteFiles)
-        },
-        onRemoveLocalBook = { book, mode, context ->
-            viewModel.removeLocalBook(book, mode, context)
-        }
-    )
-}
-
-// ── Code 123 (R1): the Editorial Library — the approved ────
-// Paper & Sage copy, alive. Element-for-element the copy in
-// DESIGN-M3-LIBRARY-V6-PAPER-COPY-2026-11-24.md, with the
-// build rulings applied: the Novels/Manga pill is WIRED (the
-// app's real side split), the greeting is computed from the
-// clock, the tabs are the app's FIVE statuses in the design's
-// text-tab form, the carousel is the design's progress rule
-// (0% < progress < 100%) ordered by the app's real reading
-// recency with the state's hero leading, every number is the
-// book's own, the hamburger carries the filter/sort sheet
-// (a secondary door, never a primary one), the avatar disc
-// opens Profile, the card ⋮ carries real actions only, and
-// the update card takes the in-flow slot under the greeting
-// (K12's resolution for this build).
-
 /** The Editorial tab row: All + the five statuses, in the
  * app's canonical naming, in the design's text-tab form. */
+/** Code 124 (D6): the Editorial Library's sort set — the
+ * shared LibrarySort four plus Author and Progress, which
+ * have no LibrarySort key and order locally (the same
+ * arrangement the removed M3 face used). */
+private enum class EditorialLibSort {
+    RECENTLY_READ, TITLE, AUTHOR, MOST_CHAPTERS, PROGRESS, RECENTLY_ADDED
+}
+
 private val editorialTabs: List<Pair<String, String>> = listOf(
     "ALL" to "All",
     "READING" to "Reading",
@@ -4178,6 +2822,7 @@ private fun EditorialLibraryContent(
     onContinueReading: (bookId: Long, chapterIndex: Int) -> Unit,
     onProfile: () -> Unit,
     onOpenUpdates: () -> Unit,
+    onOpenAddList: () -> Unit = {},
     updateState: app.xreader.ui.update.AppUpdateViewModel.UiState? = null,
     onUpdateNow: () -> Unit = {},
     onDismissUpdate: () -> Unit = {},
@@ -4192,13 +2837,24 @@ private fun EditorialLibraryContent(
     }
     var query by remember { mutableStateOf("") }
     var sort by remember {
-        mutableStateOf(app.xreader.data.library.LibrarySort.RECENTLY_READ)
+        mutableStateOf(EditorialLibSort.RECENTLY_READ)
     }
     var downloadedOnly by remember { mutableStateOf(false) }
     var favouritesOnly by remember { mutableStateOf(false) }
     var sheetOpen by remember { mutableStateOf(false) }
     var statusDialogFor by remember { mutableStateOf<ShelfBook?>(null) }
     var removeTarget by remember { mutableStateOf<ShelfBook?>(null) }
+    // Code 124 (D2/D3): shelves + multi-select, the same
+    // state machinery the Nocturne Library runs — parity:
+    // one feature set, two faces.
+    var selection by remember { mutableStateOf<Set<Long>?>(null) }
+    var manageShelvesOpen by remember { mutableStateOf(false) }
+    var shelfPickerFor by remember { mutableStateOf<Set<Long>?>(null) }
+    var bulkStatusOpen by remember { mutableStateOf(false) }
+    var bulkRemoveOpen by remember { mutableStateOf(false) }
+    var bulkRemoveSize by remember { mutableStateOf<String?>(null) }
+    val carouselState = androidx.compose.foundation.lazy
+        .rememberLazyListState()
 
     val sideBooks = remember(state.books, state.bookKinds, state.librarySide) {
         app.xreader.data.library.LibrarySplit.onSide(
@@ -4217,14 +2873,42 @@ private fun EditorialLibraryContent(
         shelf.book.title.lowercase().contains(query.trim().lowercase()) ||
         shelf.book.author.lowercase().contains(query.trim().lowercase())
     fun sorted(books: List<ShelfBook>): List<ShelfBook> = when (sort) {
-        app.xreader.data.library.LibrarySort.RECENTLY_READ ->
+        EditorialLibSort.RECENTLY_READ ->
             books.sortedByDescending { it.book.lastOpenedAt ?: 0L }
-        app.xreader.data.library.LibrarySort.TITLE ->
+        EditorialLibSort.TITLE ->
             books.sortedBy { it.book.title.lowercase() }
-        app.xreader.data.library.LibrarySort.MOST_CHAPTERS ->
+        EditorialLibSort.AUTHOR ->
+            books.sortedBy { it.book.author.lowercase() }
+        EditorialLibSort.MOST_CHAPTERS ->
             books.sortedByDescending { it.book.totalChapters }
-        app.xreader.data.library.LibrarySort.RECENTLY_ADDED ->
+        EditorialLibSort.PROGRESS ->
+            books.sortedByDescending { it.fraction }
+        EditorialLibSort.RECENTLY_ADDED ->
             books.sortedByDescending { it.book.addedAt }
+    }
+    // Code 124 (D2): shelf facts, chips and membership —
+    // ShelfLogic over this face's own side split, exactly as
+    // the Nocturne composition computes them.
+    val nowMillis = System.currentTimeMillis()
+    val facts = remember(
+        sideBooks, state.metas, state.favourites,
+        state.bookTags, state.downloadCounts
+    ) { state.shelfFactsFor(sideBooks, nowMillis) }
+    val shelfChips = remember(
+        facts, state.userShelves, state.memberships, state.hiddenBuiltins
+    ) {
+        app.xreader.data.library.ShelfLogic.chips(
+            facts, state.userShelves, state.memberships,
+            state.hiddenBuiltins, nowMillis
+        )
+    }
+    val memberFilter = remember(
+        state.selectedShelf, facts, state.userShelves, state.memberships
+    ) {
+        app.xreader.data.library.ShelfLogic.membersFor(
+            state.selectedShelf, facts, state.userShelves,
+            state.memberships, nowMillis
+        )
     }
     // The carousel: the design's progress rule over the active
     // side, the state's hero leading, the rest by recency.
@@ -4242,10 +2926,15 @@ private fun EditorialLibraryContent(
     }
     val gridBooks = remember(
         sideBooks, state.metas, state.favourites, state.downloadCounts,
-        tabKey, sort, downloadedOnly, favouritesOnly, query
+        tabKey, sort, downloadedOnly, favouritesOnly, query, memberFilter
     ) {
+        val inShelf = if (memberFilter == null) {
+            sideBooks
+        } else {
+            sideBooks.filter { it.book.id in memberFilter }
+        }
         sorted(
-            sideBooks.filter { shelf ->
+            inShelf.filter { shelf ->
                 val tabMatch = when (tabKey) {
                     "ALL" -> true
                     "READING" -> statusOf(shelf) ==
@@ -4277,6 +2966,14 @@ private fun EditorialLibraryContent(
     }
 
     Box(Modifier.fillMaxSize()) {
+        // Code 124 (D5): pull to refresh, as the Nocturne
+        // Library has always had — silent; results land on
+        // the Updates page and the +N badges.
+        androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+            isRefreshing = state.pullRefreshing,
+            onRefresh = { viewModel.pullRefresh() },
+            modifier = Modifier.fillMaxSize()
+        ) {
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
@@ -4498,7 +3195,7 @@ private fun EditorialLibraryContent(
             }
             // ── 8–15: Continue reading ──────────────────────
             if (frontPage && designState.libraryContinueRail &&
-                carousel.isNotEmpty()
+                carousel.isNotEmpty() && memberFilter == null
             ) {
                 item(key = "paper-continue-head") {
                     Text(
@@ -4510,18 +3207,56 @@ private fun EditorialLibraryContent(
                 }
                 item(key = "paper-continue") {
                     LazyRow(
+                        state = carouselState,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         contentPadding = PaddingValues(end = 4.dp)
                     ) {
-                        items(
+                        androidx.compose.foundation.lazy.itemsIndexed(
                             carousel,
-                            key = { "paper-cont-${it.book.id}" }
-                        ) { shelf ->
-                            val lead = shelf.book.id ==
-                                carousel.first().book.id
+                            key = { _, it -> "paper-cont-${it.book.id}" }
+                        ) { index, shelf ->
+                            val lead = index == 0
+                            // A4 (code 124): scroll-coupled
+                            // centre focus — the card nearest
+                            // the row's centre is 250 wide,
+                            // cards at the edges 170, width
+                            // moving continuously with the
+                            // scroll offset.
+                            val cardWidth by androidx.compose.runtime
+                                .derivedStateOf {
+                                    val info = carouselState.layoutInfo
+                                    val itemInfo = info.visibleItemsInfo
+                                        .firstOrNull { it.index == index }
+                                    if (itemInfo == null) {
+                                        170.dp
+                                    } else {
+                                        val viewportCenter =
+                                            (info.viewportStartOffset +
+                                                info.viewportEndOffset) / 2f
+                                        val itemCenter = itemInfo.offset +
+                                            itemInfo.size / 2f
+                                        // The distance is measured
+                                        // against the HALF span
+                                        // (centre to edge), so a
+                                        // card centred on the row's
+                                        // edge really reaches the
+                                        // 170 floor — against the
+                                        // full span it could only
+                                        // ever reach ~210.
+                                        val halfSpan =
+                                            ((info.viewportEndOffset -
+                                                info.viewportStartOffset) / 2f)
+                                                .coerceAtLeast(1f)
+                                        val f = (kotlin.math.abs(
+                                            itemCenter - viewportCenter
+                                        ) / halfSpan).coerceIn(0f, 1f)
+                                        (250f - 80f * f).dp
+                                    }
+                                }
                             EditorialContinueCard(
                                 shelf = shelf,
                                 lead = lead,
+                                cardWidth = cardWidth,
                                 coverFile = coverFile,
                                 onClick = {
                                     if (lead &&
@@ -4601,6 +3336,41 @@ private fun EditorialLibraryContent(
                     )
                 }
             }
+            // ── Code 124 (D2/D4): the shelf rail — built-in
+            // and user shelves from ShelfLogic, the Manage
+            // door, and the Add-a-list door, as the Nocturne
+            // Library's chip row carries them.
+            item(key = "paper-shelves") {
+                androidx.compose.foundation.lazy.LazyRow(
+                    Modifier.padding(top = 14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(
+                        shelfChips,
+                        key = { "paper-shelf-${it.ref}" }
+                    ) { chip ->
+                        EditorialShelfChip(
+                            label = "${chip.name} · ${chip.count}",
+                            selected = state.selectedShelf == chip.ref,
+                            onClick = { viewModel.selectShelf(chip.ref) }
+                        )
+                    }
+                    item(key = "paper-shelf-add") {
+                        EditorialShelfChip(
+                            label = "+ Shelf",
+                            selected = false,
+                            onClick = { manageShelvesOpen = true }
+                        )
+                    }
+                    item(key = "paper-add-list") {
+                        EditorialShelfChip(
+                            label = "+ Add a list",
+                            selected = false,
+                            onClick = onOpenAddList
+                        )
+                    }
+                }
+            }
             // ── 19–26: the cover grid ───────────────────────
             if (state.loading) {
                 item(key = "paper-loading") {
@@ -4665,10 +3435,34 @@ private fun EditorialLibraryContent(
                             EditorialGridCard(
                                 shelf = shelf,
                                 favourite = shelf.book.id in state.favourites,
+                                selected = selection
+                                    ?.contains(shelf.book.id) == true,
                                 coverFile = coverFile,
                                 onClick = {
-                                    viewModel.markSeen(shelf.book.id)
-                                    onOpenBook(shelf.book.id)
+                                    val current = selection
+                                    if (current != null) {
+                                        selection =
+                                            if (shelf.book.id in current) {
+                                                (current - shelf.book.id)
+                                                    .ifEmpty { null }
+                                            } else {
+                                                current + shelf.book.id
+                                            }
+                                    } else {
+                                        viewModel.markSeen(shelf.book.id)
+                                        onOpenBook(shelf.book.id)
+                                    }
+                                },
+                                onLongPress = {
+                                    val current = selection
+                                    selection = if (current == null) {
+                                        setOf(shelf.book.id)
+                                    } else if (shelf.book.id in current) {
+                                        (current - shelf.book.id)
+                                            .ifEmpty { null }
+                                    } else {
+                                        current + shelf.book.id
+                                    }
                                 },
                                 onToggleFavourite = {
                                     viewModel.setFavourite(
@@ -4688,26 +3482,94 @@ private fun EditorialLibraryContent(
                 }
             }
         }
+        }
         // ── 27: the Add FAB ─────────────────────────────────
-        Surface(
-            color = scheme.tertiaryContainer,
-            shape = RoundedCornerShape(18.dp),
-            shadowElevation = 4.dp,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(
-                    end = 20.dp,
-                    bottom = dockClearance + 4.dp
-                )
-                .size(56.dp)
-                .clickable { onAddBook() }
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    Icons.Filled.Add,
-                    contentDescription = "Add a book",
-                    tint = scheme.onTertiaryContainer
-                )
+        if (selection == null) {
+            Surface(
+                color = scheme.tertiaryContainer,
+                shape = RoundedCornerShape(18.dp),
+                shadowElevation = 4.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(
+                        end = 20.dp,
+                        bottom = dockClearance + 4.dp
+                    )
+                    .size(56.dp)
+                    .clickable { onAddBook() }
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = "Add a book",
+                        tint = scheme.onTertiaryContainer
+                    )
+                }
+            }
+        }
+        // Code 124 (D3): the multi-select bar — the same
+        // bulk actions the Nocturne Library offers, in this
+        // face's capsule language.
+        selection?.let { picked ->
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = scheme.surfaceContainerHigh,
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(
+                        start = 16.dp, end = 16.dp,
+                        bottom = dockClearance + 16.dp
+                    )
+                    .fillMaxWidth()
+            ) {
+                Column(
+                    Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            "${picked.size} selected",
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                        TextButton(onClick = { shelfPickerFor = picked }) {
+                            Text("Add to shelf")
+                        }
+                        TextButton(onClick = {
+                            viewModel.bulkSetFavourite(picked, true)
+                        }) { Text("Favourite") }
+                        TextButton(onClick = { selection = null }) {
+                            Text("Done")
+                        }
+                    }
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        TextButton(onClick = {
+                            viewModel.bulkDownload(picked)
+                        }) { Text("Download") }
+                        TextButton(onClick = { bulkStatusOpen = true }) {
+                            Text("Set status…")
+                        }
+                        TextButton(onClick = {
+                            viewModel.bulkSetStatus(
+                                picked,
+                                app.xreader.data.library.ReadingStatus.COMPLETED
+                            )
+                            selection = null
+                        }) { Text("Mark read") }
+                        TextButton(onClick = {
+                            bulkRemoveSize = null
+                            bulkRemoveOpen = true
+                        }) { Text("Remove…") }
+                    }
+                }
             }
         }
     }
@@ -4776,6 +3638,147 @@ private fun EditorialLibraryContent(
             viewModel.removeLocalBook(book, mode, context)
         }
     )
+    // Code 124 (D2): the shelf picker + Manage shelves,
+    // shared with the Nocturne Library.
+    shelfPickerFor?.let { bookIds ->
+        AlertDialog(
+            onDismissRequest = { shelfPickerFor = null },
+            title = { Text("Add to shelf") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val manual = state.userShelves.filter {
+                        it.kind == app.xreader.data.db.ShelfKind.MANUAL
+                    }
+                    if (manual.isEmpty()) {
+                        Text(
+                            "No shelves yet — create one first.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    manual.forEach { shelf ->
+                        TextButton(onClick = {
+                            viewModel.addBooksToShelf(bookIds, shelf.id)
+                            shelfPickerFor = null
+                        }) { Text(shelf.name) }
+                    }
+                    TextButton(onClick = {
+                        shelfPickerFor = null
+                        manageShelvesOpen = true
+                    }) { Text("New shelf…") }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { shelfPickerFor = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+    if (manageShelvesOpen) {
+        ManageShelvesDialog(
+            state = state,
+            onDismiss = { manageShelvesOpen = false },
+            onCreate = { name, rule, value ->
+                viewModel.createShelf(name, rule, value)
+            },
+            onRename = { id, name -> viewModel.renameShelf(id, name) },
+            onDelete = { id -> viewModel.deleteShelf(id) },
+            onMove = { id, up -> viewModel.moveShelf(id, up) },
+            onBuiltinHidden = { key, hidden ->
+                viewModel.setBuiltinShelfHidden(key, hidden)
+            }
+        )
+    }
+    // Code 124 (D3): bulk Set status over the selection.
+    if (bulkStatusOpen) {
+        val picked = selection ?: emptySet()
+        AlertDialog(
+            onDismissRequest = { bulkStatusOpen = false },
+            title = { Text("Set status") },
+            text = {
+                Column {
+                    listOf(
+                        app.xreader.data.library.ReadingStatus.READING,
+                        app.xreader.data.library.ReadingStatus.ON_HOLD,
+                        app.xreader.data.library.ReadingStatus.PLAN_TO_READ,
+                        app.xreader.data.library.ReadingStatus.COMPLETED,
+                        app.xreader.data.library.ReadingStatus.DROPPED
+                    ).forEach { status ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.bulkSetStatus(picked, status)
+                                    bulkStatusOpen = false
+                                    selection = null
+                                }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(m3StatusLabel(status))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { bulkStatusOpen = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+    // Code 124 (D3): bulk remove — the confirm states the
+    // exact count + downloaded size, as Nocturne's does.
+    if (bulkRemoveOpen) {
+        val picked = selection ?: emptySet()
+        val pickedBooks = state.books.filter { it.book.id in picked }
+        LaunchedEffect(picked) {
+            val bytes = viewModel.bulkDownloadedSizeBytes(picked)
+            bulkRemoveSize =
+                app.xreader.data.files.StorageMeter.formatBytes(bytes)
+        }
+        AlertDialog(
+            onDismissRequest = { bulkRemoveOpen = false },
+            title = { Text("Remove ${picked.size} book(s)?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Removing also removes reading progress and " +
+                            "bookmarks. Downloaded chapters take " +
+                            (bulkRemoveSize ?: "…") + "."
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    DialogDangerOption(
+                        label = "Remove books only",
+                        onClick = {
+                            bulkRemoveOpen = false
+                            selection = null
+                            viewModel.bulkRemoveBooks(
+                                pickedBooks.map { it.book }, deleteFiles = false
+                            )
+                        }
+                    )
+                    DialogDangerOption(
+                        label = "Remove books and downloads",
+                        onClick = {
+                            bulkRemoveOpen = false
+                            selection = null
+                            viewModel.bulkRemoveBooks(
+                                pickedBooks.map { it.book }, deleteFiles = true
+                            )
+                        }
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { bulkRemoveOpen = false }) {
+                    Text("Keep them")
+                }
+            }
+        )
+    }
     // S4's extension: the filter/sort sheet behind the
     // hamburger — sort, two live flags, and the updates doors.
     if (sheetOpen) {
@@ -4804,14 +3807,12 @@ private fun EditorialLibraryContent(
                     color = scheme.primary
                 )
                 listOf(
-                    app.xreader.data.library.LibrarySort.RECENTLY_READ
-                        to "Recently read",
-                    app.xreader.data.library.LibrarySort.TITLE
-                        to "Title",
-                    app.xreader.data.library.LibrarySort.MOST_CHAPTERS
-                        to "Most chapters",
-                    app.xreader.data.library.LibrarySort.RECENTLY_ADDED
-                        to "Recently added"
+                    EditorialLibSort.RECENTLY_READ to "Recently read",
+                    EditorialLibSort.TITLE to "Title",
+                    EditorialLibSort.AUTHOR to "Author",
+                    EditorialLibSort.MOST_CHAPTERS to "Most chapters",
+                    EditorialLibSort.PROGRESS to "Progress",
+                    EditorialLibSort.RECENTLY_ADDED to "Recently added"
                 ).forEach { (value, label) ->
                     Row(
                         Modifier
@@ -4898,6 +3899,36 @@ private fun EditorialLibraryContent(
     }
 }
 
+/** Code 124 (D2): one shelf chip in this face's pill
+ * language — filled primary when picked, container ground
+ * otherwise. */
+@Composable
+private fun EditorialShelfChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(
+                if (selected) scheme.primary
+                else scheme.surfaceContainer
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (selected) scheme.onPrimary
+            else scheme.onSurfaceVariant
+        )
+    }
+}
+
 /** The copy's Continue carousel card: full-bleed cover, the
  * black scrim, serif title, the % · chapters sub-line, the
  * 4dp progress bar, and — on the lead card only — the play
@@ -4906,6 +3937,7 @@ private fun EditorialLibraryContent(
 private fun EditorialContinueCard(
     shelf: ShelfBook,
     lead: Boolean,
+    cardWidth: androidx.compose.ui.unit.Dp,
     coverFile: (String?) -> File?,
     onClick: () -> Unit
 ) {
@@ -4919,13 +3951,28 @@ private fun EditorialContinueCard(
     } else {
         "ch"
     }
+    // Code 124 (E5): shape-morph press feedback, as on the
+    // grid cards — corner 28 -> 36 dp under the finger.
+    val continueInteraction = remember {
+        androidx.compose.foundation.interaction.MutableInteractionSource()
+    }
+    val continuePressed by continueInteraction
+        .collectIsPressedAsState()
+    val continueCorner by androidx.compose.animation.core
+        .animateDpAsState(
+            if (continuePressed) 36.dp else 28.dp,
+            label = "editorialContinueCardMorph"
+        )
     Box(
         Modifier
-            .width(if (lead) 250.dp else 170.dp)
+            .width(cardWidth)
             .height(250.dp)
-            .clip(RoundedCornerShape(28.dp))
+            .clip(RoundedCornerShape(continueCorner))
             .background(scheme.surfaceContainerHigh)
-            .clickable { onClick() }
+            .clickable(
+                interactionSource = continueInteraction,
+                indication = androidx.compose.material3.ripple()
+            ) { onClick() }
     ) {
         EditorialCoverImage(
             shelf = shelf,
@@ -5015,11 +4062,14 @@ private fun EditorialContinueCard(
  * the 3:4 cover full-bleed, the ♥ Fav badge, the ⋮ button,
  * the progress chip on every card, title + author below. */
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 private fun EditorialGridCard(
     shelf: ShelfBook,
     favourite: Boolean,
+    selected: Boolean = false,
     coverFile: (String?) -> File?,
     onClick: () -> Unit,
+    onLongPress: () -> Unit = {},
     onToggleFavourite: () -> Unit,
     onSetStatus: () -> Unit,
     onRemove: () -> Unit,
@@ -5028,17 +4078,50 @@ private fun EditorialGridCard(
     var menuOpen by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     val pct = (shelf.fraction * 100).toInt()
+    // Code 124 (E5): shape-morph press feedback — the card's
+    // corner breathes 24 -> 32 dp while a finger holds it,
+    // the expressive shape language the SplitButton's own
+    // press morph speaks, driven by the press interaction.
+    val cardInteraction = remember {
+        androidx.compose.foundation.interaction.MutableInteractionSource()
+    }
+    val cardPressed by cardInteraction
+        .collectIsPressedAsState()
+    val cardCorner by androidx.compose.animation.core
+        .animateDpAsState(
+            if (cardPressed) 32.dp else 24.dp,
+            label = "editorialGridCardMorph"
+        )
+    val cardShape = RoundedCornerShape(cardCorner)
     Surface(
         color = scheme.surfaceContainerLow,
-        shape = RoundedCornerShape(24.dp),
+        shape = cardShape,
         shadowElevation = 2.dp,
-        modifier = modifier.clickable { onClick() }
+        modifier = modifier
+            .combinedClickable(
+                interactionSource = cardInteraction,
+                indication = androidx.compose.material3.ripple(),
+                onClick = onClick,
+                onLongClick = onLongPress
+            )
+            .then(
+                if (selected) {
+                    Modifier.border(
+                        2.dp, scheme.primary, cardShape
+                    )
+                } else {
+                    Modifier
+                }
+            )
     ) {
         Column(Modifier.padding(8.dp)) {
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(150.dp)
+                    // A1 (code 124): the design's own geometry
+                    // (DesignB.tsx:127) — portrait 3:4, never a
+                    // wide near-square crop.
+                    .aspectRatio(3f / 4f)
                     .clip(RoundedCornerShape(16.dp))
                     .background(scheme.surfaceContainerHigh)
             ) {
@@ -5057,6 +4140,7 @@ private fun EditorialGridCard(
                                     .CircleShape
                             )
                             .background(scheme.tertiaryContainer)
+                            .clickable { onToggleFavourite() }
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(3.dp)
@@ -5153,6 +4237,27 @@ private fun EditorialGridCard(
                             .copy(fontWeight = FontWeight.Bold),
                         color = scheme.onSurface
                     )
+                }
+                if (selected) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                            .size(24.dp)
+                            .clip(
+                                androidx.compose.foundation.shape
+                                    .CircleShape
+                            )
+                            .background(scheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = "Selected",
+                            tint = scheme.onPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
             }
             Text(

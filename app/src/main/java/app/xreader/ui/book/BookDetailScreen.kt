@@ -52,7 +52,9 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FiberNew
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PauseCircle
@@ -177,6 +179,10 @@ import java.io.File
 @Composable
 fun BookDetailScreen(
     viewModel: BookDetailViewModel,
+    /** Code 124: the container, for the book pages' Ask AI
+     * sheet brain (AiSheetViewModel's factory) — both faces
+     * host the same sheet (the parity rule). */
+    container: app.xreader.di.AppContainer,
     coverFile: (String?) -> File?,
     assetFile: (bookId: Long, fileName: String) -> File,
     onBack: () -> Unit,
@@ -221,8 +227,11 @@ fun BookDetailScreen(
     // unconditionally so composition slots never move; only
     // the M3 chrome and the M3 list connection read it.
     val designState = app.xreader.ui.theme.LocalDesignState.current
-    val isM3Book = designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    // Code 124: the MATERIAL3 design is removed — the shared
+    // page serves Nocturne only (the Material 3 design routes
+    // to EditorialBookDetail below), so its M3 gates read
+    // false and Nocturne renders exactly as shipped.
+    val isM3Book = false
     // Code 123: the Editorial book page — the approved Paper &
     // Sage Details copy, alive, in its own composition
     // (EditorialBookDetail). The shared dialogs it needs
@@ -234,7 +243,14 @@ fun BookDetailScreen(
             state = state,
             localOutline = localOutline,
             viewModel = viewModel,
+            container = container,
             coverFile = coverFile,
+            onOpenTag = onOpenTag,
+            onOpenRelated = onOpenRelated,
+            onFindTitle = onFindTitle,
+            onOpenSourceDetails = onOpenSourceDetails,
+            onSiteCheck = onSiteCheck,
+            onSessionHandoff = onSessionHandoff,
             onBack = onBack,
             onReadChapter = onReadChapter,
             onReadLocalTarget = onReadLocalTarget,
@@ -267,6 +283,11 @@ fun BookDetailScreen(
     /** v1.5.8 (J2/E3): the chapter-settings sheet's open state —
      * sort/display choices + the scanlator filter live there. */
     var chapterSettingsOpen by remember { mutableStateOf(false) }
+    // Code 124 (A7, parity fix): the Ask AI sheet's open
+    // state + the Illustrate door's request counter — the
+    // Material 3 page's AI doors, on this page too.
+    var aiSheetOpen by remember { mutableStateOf(false) }
+    var illustrateRequests by remember { mutableStateOf(0) }
     // v1.0.7 (draw-check ask): chapter search + filters — a
     // 1,692-chapter list can't be scrolled by hand, and a
     // novel split into parts buries Part 1 under Part 2.
@@ -688,7 +709,7 @@ fun BookDetailScreen(
             ReadingStatus.READING -> "Reading"
             ReadingStatus.COMPLETED -> "Completed"
             ReadingStatus.ON_HOLD -> "On hold"
-            ReadingStatus.PLAN_TO_READ -> "Plan to Read"
+            ReadingStatus.PLAN_TO_READ -> "Plan to read"
             ReadingStatus.DROPPED -> "Dropped"
             ReadingStatus.NONE -> null
         }
@@ -1350,6 +1371,32 @@ fun BookDetailScreen(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                    // Code 124 (A7, parity fix): the AI door
+                    // pair — Ask AI + Illustrate — in a second
+                    // tile row under the shipped four (the
+                    // Material 3 page carries the same doors;
+                    // one app, one feature set). Illustrate
+                    // opens the sheet and paints the continue
+                    // chapter's moment through it.
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        QuickActionTile(
+                            icon = Icons.Filled.AutoAwesome,
+                            label = "Ask AI",
+                            active = false,
+                            onClick = { aiSheetOpen = true },
+                            modifier = Modifier.weight(1f)
+                        )
+                        QuickActionTile(
+                            icon = Icons.Filled.Image,
+                            label = "Illustrate",
+                            active = false,
+                            onClick = {
+                                illustrateRequests++
+                                aiSheetOpen = true
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                     // v1.5.7 (owner-ordered 2026-11-04, re-demanded
                     // 2026-11-05 — "I told you to add refresh
                     // function on the novel page"): the first-class
@@ -1521,7 +1568,7 @@ fun BookDetailScreen(
                             // statuses, in the donor tab order.
                             ReadingStatus.READING to "Reading",
                             ReadingStatus.ON_HOLD to "On hold",
-                            ReadingStatus.PLAN_TO_READ to "Plan to Read",
+                            ReadingStatus.PLAN_TO_READ to "Plan to read",
                             ReadingStatus.COMPLETED to "Completed",
                             ReadingStatus.DROPPED to "Dropped"
                         ).forEach { (status, label) ->
@@ -3014,6 +3061,21 @@ fun BookDetailScreen(
         )
     }
 
+    // Code 124 (A7, parity fix): the Ask AI sheet host —
+    // the same BookPageAiSheetHost the Material 3 page
+    // hosts, bound to this book's continue chapter.
+    BookPageAiSheetHost(
+        container = container,
+        bookId = book.id,
+        chapterIndex = state.continueChapterIndex,
+        chapterId = state.chapters.firstOrNull {
+            it.index == state.continueChapterIndex
+        }?.id,
+        open = aiSheetOpen,
+        illustrateRequests = illustrateRequests,
+        onDismiss = { aiSheetOpen = false }
+    )
+
     // v1.5.8 (J2/E3): the chapter-settings sheet — the donor's
     // sort/display choices the page lacked, plus the per-book
     // scanlator filter (E3's surface). Every control binds the
@@ -3423,7 +3485,7 @@ private fun QuickActionTile(
  * INFERRED tags are labelled as suggestions. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun TagsSection(
+internal fun TagsSection(
     state: BookDetailUiState,
     engineLabel: String,
     onOpenTag: (String) -> Unit,
@@ -3558,7 +3620,7 @@ private fun TagsSection(
  * severs a wrong link for good. Additive rows in the page's
  * existing section style. */
 @Composable
-private fun ProgressLinkSection(
+internal fun ProgressLinkSection(
     state: BookDetailUiState,
     onOpenCopy: (Long) -> Unit,
     onUnlink: (Long) -> Unit
@@ -3605,7 +3667,7 @@ private fun ProgressLinkSection(
  * library, and copies this book has absorbed — all with visible,
  * reversible actions. */
 @Composable
-private fun SourcesMergeSection(
+internal fun SourcesMergeSection(
     state: BookDetailUiState,
     onLoadOtherSources: () -> Unit,
     onOpenCopy: (Long) -> Unit,
@@ -4326,7 +4388,7 @@ private fun M3ChapterRow(
  * offers it but has none says that instead. Local books hide the
  * sections entirely (they were never offered). */
 @Composable
-private fun EnrichmentSections(
+internal fun EnrichmentSections(
     state: BookDetailUiState,
     onOpenRelated: (app.xreader.extensionapi.SourceBook) -> Unit
 ) {
@@ -4481,7 +4543,7 @@ private fun EnrichmentSections(
  * global search, where adding works like any other result.
  */
 @Composable
-private fun AiSuggestionsSection(
+internal fun AiSuggestionsSection(
     state: BookDetailUiState,
     engineLabel: String,
     onAsk: () -> Unit,
@@ -4491,9 +4553,7 @@ private fun AiSuggestionsSection(
     // Code 122 (Wave 3, The Stage): under Material 3 the
     // READY suggestions render as the mockup's cover grid;
     // Nocturne keeps the shipped rows.
-    val isM3Suggestions =
-        app.xreader.ui.theme.LocalDesignState.current.design ==
-            app.xreader.data.prefs.AppDesign.MATERIAL3
+    val isM3Suggestions = false
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -4605,7 +4665,7 @@ private fun AiSuggestionsSection(
  * BEFORE confirming and honest consequences in plain words. */
 /** v1.5.6 (§3.4(b)): the legacy lane's re-add offer card. */
 @Composable
-private fun LegacyReAddCard(viewModel: BookDetailViewModel) {
+internal fun LegacyReAddCard(viewModel: BookDetailViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val picker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
@@ -4650,7 +4710,7 @@ private fun LegacyReAddCard(viewModel: BookDetailViewModel) {
 }
 
 @Composable
-private fun BookCleanupActions(
+internal fun BookCleanupActions(
     viewModel: BookDetailViewModel,
     bookTitle: String,
     isLocalFile: Boolean = false,

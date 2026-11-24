@@ -727,7 +727,13 @@ private fun M3VocabContent(
                         Modifier.weight(1f),
                         contentPadding = PaddingValues(
                             start = 16.dp, end = 16.dp,
-                            top = 12.dp, bottom = 88.dp
+                            top = 12.dp,
+                            bottom = app.xreader.ui.theme
+                                .effectiveBottomPadding(
+                                    88.dp,
+                                    app.xreader.ui.theme
+                                        .LocalDockClearance.current
+                                )
                         ),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
@@ -792,7 +798,13 @@ private fun M3VocabContent(
                     Modifier.weight(1f),
                     contentPadding = PaddingValues(
                         start = 16.dp, end = 16.dp,
-                        top = 12.dp, bottom = 88.dp
+                        top = 12.dp,
+                        bottom = app.xreader.ui.theme
+                            .effectiveBottomPadding(
+                                88.dp,
+                                app.xreader.ui.theme
+                                    .LocalDockClearance.current
+                            )
                     ),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {

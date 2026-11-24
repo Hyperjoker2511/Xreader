@@ -490,6 +490,14 @@ fun ReaderScreen(
                 ReaderSelectionAction.ASK_AI -> {
                     askAiAboutSelection(text)
                 }
+                // Code 124 (A7): Illustrate paints exactly
+                // the selected passage; the AI page opens
+                // over the run so its progress + saved line
+                // are visible, like Ask AI.
+                ReaderSelectionAction.ILLUSTRATE -> {
+                    aiViewModel.illustratePassage(text)
+                    onOpenAiPage()
+                }
             }
         }
     var editingNoteFor by remember { mutableStateOf<Highlight?>(null) }
@@ -943,6 +951,10 @@ fun ReaderScreen(
                 onBack = onBack,
                 onSelectionTranslate = translateSelection,
                 onSelectionAskAi = askAiAboutSelection,
+                onSelectionIllustrate = { text ->
+                    aiViewModel.illustratePassage(text)
+                    onOpenAiPage()
+                },
                 onSelectionActiveChanged = { pdfSelectionOpen = it },
                 onDialogOpenChanged = { pdfDialogOpen = it },
                 clearSelectionSignal = clearPdfSelection,
@@ -2916,6 +2928,7 @@ private fun PdfReaderHost(
     // only — Reflow has no tint-update path (§7.4).
     onSelectionTranslate: (String) -> Unit,
     onSelectionAskAi: (String) -> Unit,
+    onSelectionIllustrate: (String) -> Unit = {},
     onSelectionActiveChanged: (Boolean) -> Unit,
     onDialogOpenChanged: (Boolean) -> Unit,
     clearSelectionSignal: Int,
@@ -3042,6 +3055,8 @@ private fun PdfReaderHost(
                             },
                             onSelectionTranslate = onSelectionTranslate,
                             onSelectionAskAi = onSelectionAskAi,
+                            onSelectionIllustrate =
+                                onSelectionIllustrate,
                             onSelectionActiveChanged =
                                 onSelectionActiveChanged,
                             onDialogOpenChanged = onDialogOpenChanged,
@@ -3072,6 +3087,20 @@ private fun PdfReaderHost(
                                 onSelectionTranslate =
                                     onSelectionTranslate,
                                 onSelectionAskAi = onSelectionAskAi,
+                                onSelectionIllustrate =
+                                    onSelectionIllustrate,
+                                onRemoveHighlight = { stored ->
+                                    viewModel
+                                        .removePdfReflowHighlight(
+                                            stored
+                                        )
+                                },
+                                onUpdateHighlightTint = { stored, tint ->
+                                    viewModel
+                                        .updatePdfReflowHighlightTint(
+                                            stored, tint
+                                        )
+                                },
                                 onSelectionActiveChanged =
                                     onSelectionActiveChanged,
                                 onDialogOpenChanged = onDialogOpenChanged,

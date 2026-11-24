@@ -123,8 +123,10 @@ fun DownloadsScreen(
     // screen behaves exactly as shipped (local sort, size
     // always shown).
     val designState = app.xreader.ui.theme.LocalDesignState.current
-    val isM3Downloads = designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    // Code 124: the MATERIAL3 design is removed — the
+    // Nocturne composition here is the only shared one left
+    // (the family face has its own EditorialDownloadsContent
+    // above, which reads the downloads knobs itself).
     // Hoisted local (run #54's lesson): read the delegated state
     // once, then work from plain vals.
     val stateNow = state
@@ -136,18 +138,6 @@ fun DownloadsScreen(
     // list items for finished books, and the storage header
     // card only above its threshold. The Nocturne composition
     // below is unchanged.
-    if (isM3Downloads) {
-        M3DownloadsContent(
-            state = stateNow,
-            viewModel = viewModel,
-            coverFile = coverFile,
-            designState = designState,
-            onMakeEpub = onMakeEpub,
-            onOpenBook = onOpenBook,
-            onDownloadsSortChange = onDownloadsSortChange
-        )
-        return
-    }
     // Code 123: the Editorial Downloads — the approved
     // extension (DESIGN-M3-HISTORY-DOWNLOADS-V6-EXTENSION):
     // the storage card always present, counted connected
@@ -210,25 +200,11 @@ fun DownloadsScreen(
             // didn't show.
             val usedBytes = novelsBytes + coversBytes + imageCacheBytes
             if (stateNow.deviceTotalBytes > 0L) {
-                // Code 120 (A3): the storage card's bar is a
-                // wavy indicator under Material 3.
-                if (app.xreader.ui.theme.LocalDesignState.current.design ==
-                    app.xreader.data.prefs.AppDesign.MATERIAL3
-                ) {
-                    androidx.compose.material3.LinearWavyProgressIndicator(
-                        progress = {
-                            (usedBytes.toFloat() / stateNow.deviceTotalBytes.toFloat())
-                                .coerceIn(0f, 1f)
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                } else {
-                    ProgressPillBar(
-                        fraction = (usedBytes.toFloat() / stateNow.deviceTotalBytes.toFloat())
-                            .coerceIn(0f, 1f),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                ProgressPillBar(
+                    fraction = (usedBytes.toFloat() / stateNow.deviceTotalBytes.toFloat())
+                        .coerceIn(0f, 1f),
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "${formatBytes(usedBytes)} of ${formatBytes(stateNow.deviceTotalBytes)} " +
@@ -444,91 +420,31 @@ fun DownloadsScreen(
             } else {
                 if (stateNow.finished.isNotEmpty()) {
                     item(key = "finished-header") {
-                        if (isM3Downloads) {
-                            // R4: the header action cycles the
-                            // design's sort knob (Recent → Title
-                            // → Size), persisted by the shell.
-                            SectionHeader(
-                                title = "Downloaded",
-                                modifier = Modifier.fillMaxWidth(),
-                                actionText = "Sort: " + when (
-                                    designState.downloadsSort
-                                ) {
-                                    app.xreader.data.prefs
-                                        .M3DownloadsSort.RECENT ->
-                                        "Recent"
-                                    app.xreader.data.prefs
-                                        .M3DownloadsSort.TITLE ->
-                                        "Title"
-                                    app.xreader.data.prefs
-                                        .M3DownloadsSort.SIZE ->
-                                        "Size"
-                                },
-                                onAction = {
-                                    onDownloadsSortChange(
-                                        when (designState.downloadsSort) {
-                                            app.xreader.data.prefs
-                                                .M3DownloadsSort.RECENT ->
-                                                app.xreader.data.prefs
-                                                    .M3DownloadsSort.TITLE
-                                            app.xreader.data.prefs
-                                                .M3DownloadsSort.TITLE ->
-                                                app.xreader.data.prefs
-                                                    .M3DownloadsSort.SIZE
-                                            app.xreader.data.prefs
-                                                .M3DownloadsSort.SIZE ->
-                                                app.xreader.data.prefs
-                                                    .M3DownloadsSort.RECENT
-                                        }
-                                    )
-                                }
-                            )
-                        } else {
-                            SectionHeader(
-                                title = "Downloaded",
-                                modifier = Modifier.fillMaxWidth(),
-                                actionText = "Sort: ${finishedSort.label}",
-                                onAction = {
-                                    finishedSort = when (finishedSort) {
-                                        FinishedSort.SHELF -> FinishedSort.TITLE
-                                        FinishedSort.TITLE -> FinishedSort.NEWEST
-                                        FinishedSort.NEWEST -> FinishedSort.SHELF
-                                    }
-                                }
-                            )
-                        }
-                    }
-                }
-                // R4 sort: under Material 3 the knob orders the
-                // finished list (Recent = newest book activity
-                // first, the shipped Newest order; Size = the
-                // bytes the row itself prints). The transfer
-                // queue keeps its shipped order in both designs —
-                // DesignState carries no separate Active order.
-                val finishedSorted = if (isM3Downloads) {
-                    when (designState.downloadsSort) {
-                        app.xreader.data.prefs.M3DownloadsSort.RECENT ->
-                            stateNow.finished
-                                .sortedByDescending { it.book.updatedAt }
-                        app.xreader.data.prefs.M3DownloadsSort.TITLE ->
-                            stateNow.finished
-                                .sortedBy { it.book.title.lowercase() }
-                        app.xreader.data.prefs.M3DownloadsSort.SIZE ->
-                            stateNow.finished.sortedByDescending {
-                                if (it.isLocalFile) {
-                                    it.localFileBytes
-                                } else {
-                                    it.bytesOnDisk
+                                                SectionHeader(
+                            title = "Downloaded",
+                            modifier = Modifier.fillMaxWidth(),
+                            actionText = "Sort: ${finishedSort.label}",
+                            onAction = {
+                                finishedSort = when (finishedSort) {
+                                    FinishedSort.SHELF -> FinishedSort.TITLE
+                                    FinishedSort.TITLE -> FinishedSort.NEWEST
+                                    FinishedSort.NEWEST -> FinishedSort.SHELF
                                 }
                             }
+                        )
                     }
-                } else {
-                    when (finishedSort) {
-                        FinishedSort.SHELF -> stateNow.finished
-                        FinishedSort.TITLE -> stateNow.finished.sortedBy { it.book.title.lowercase() }
-                        FinishedSort.NEWEST -> stateNow.finished
-                            .sortedByDescending { it.book.updatedAt }
-                    }
+                }
+                // Nocturne's finished-list order: the local
+                // sort (Shelf / Title / Newest), cycled by the
+                // header action above. (The Material 3 face's
+                // own sort knob lives in EditorialDownloads-
+                // Content, which reads DesignState itself.)
+                // The transfer queue keeps its shipped order.
+                val finishedSorted = when (finishedSort) {
+                    FinishedSort.SHELF -> stateNow.finished
+                    FinishedSort.TITLE -> stateNow.finished.sortedBy { it.book.title.lowercase() }
+                    FinishedSort.NEWEST -> stateNow.finished
+                        .sortedByDescending { it.book.updatedAt }
                 }
                 items(finishedSorted, key = { "finished-${it.book.id}" }) { group ->
                     FinishedDownloadRow(
@@ -537,8 +453,10 @@ fun DownloadsScreen(
                         onMakeEpub = { onMakeEpub(group) },
                         onOpen = { onOpenBook(group.book.id) },
                         modifier = Modifier.animateItem(placementSpec = listPlacementSpec()),
-                        showSize = !isM3Downloads ||
-                            designState.downloadsChapterSize
+                        // Nocturne: the size line always
+                        // shows (the family face's switch
+                        // lives in its own composition).
+                        showSize = true
                     )
                 }
                 if (stateNow.finished.isEmpty()) {
@@ -656,21 +574,10 @@ private fun ActiveDownloadCard(
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Code 120 (A3): active-download rows take
-                    // the wavy indicator under Material 3.
-                    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-                        app.xreader.data.prefs.AppDesign.MATERIAL3
-                    ) {
-                        androidx.compose.material3.LinearWavyProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier.weight(1f)
-                        )
-                    } else {
-                        ProgressPillBar(
-                            fraction = progress,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
+                    ProgressPillBar(
+                        fraction = progress,
+                        modifier = Modifier.weight(1f)
+                    )
                     Text(
                         "${(progress * 100).toInt()}%",
                         style = MaterialTheme.typography.labelMedium,
@@ -830,584 +737,6 @@ private fun FinishedDownloadRow(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
 )
-@Composable
-private fun M3DownloadsContent(
-    state: DownloadsUiState,
-    viewModel: DownloadsViewModel,
-    coverFile: (String?) -> File?,
-    designState: app.xreader.data.prefs.DesignState,
-    onMakeEpub: (BookDownloads) -> Unit,
-    onOpenBook: (Long) -> Unit,
-    onDownloadsSortChange: (app.xreader.data.prefs.M3DownloadsSort) -> Unit
-) {
-    val scrollBehavior = androidx.compose.material3.TopAppBarDefaults
-        .exitUntilCollapsedScrollBehavior()
-    var menuFor by remember { mutableStateOf<Long?>(null) }
-    // W8 (R4 delete doors): the pending delete confirm —
-    // (bookId, wholeBookDownloads) or null.
-    var pendingDelete by remember {
-        mutableStateOf<Pair<Long, Boolean>?>(null)
-    }
-    val usedBytes = state.storageBytes + state.coverCacheBytes +
-        state.imageCacheBytes
-    val finishedSorted = when (designState.downloadsSort) {
-        app.xreader.data.prefs.M3DownloadsSort.RECENT ->
-            state.finished.sortedByDescending { it.book.updatedAt }
-        app.xreader.data.prefs.M3DownloadsSort.TITLE ->
-            state.finished.sortedBy { it.book.title.lowercase() }
-        app.xreader.data.prefs.M3DownloadsSort.SIZE ->
-            state.finished.sortedByDescending {
-                if (it.isLocalFile) it.localFileBytes else it.bytesOnDisk
-            }
-    }
-    androidx.compose.material3.Scaffold(
-        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        topBar = {
-            androidx.compose.material3.MediumFlexibleTopAppBar(
-                title = {
-                    Text(
-                        "Downloads",
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                },
-                subtitle = {
-                    Text("${formatBytes(state.storageBytes)} used")
-                },
-                scrollBehavior = scrollBehavior
-            )
-        }
-    ) { innerPadding ->
-        if (state.loading) {
-            LoadingState(
-                whatIsHappening = "Counting your downloads and storage…",
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(16.dp)
-            )
-            return@Scaffold
-        }
-        if (state.active.isEmpty() && state.finished.isEmpty()) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    "Nothing downloading",
-                    style = MaterialTheme.typography.headlineSmall
-                )
-                Text(
-                    "Chapters you queue will download here in the " +
-                        "background, with progress you can check " +
-                        "any time.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            return@Scaffold
-        }
-        LazyColumn(
-            Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(
-                start = 16.dp, end = 16.dp, top = 12.dp, bottom = 88.dp
-            )
-        ) {
-            // Storage header card — ONLY above the threshold
-            // (W8: the W1 knob, DesignState.downloadsStorageThreshold,
-            // default 2 GB — D-121-W2-04 retired).
-            if (state.storageBytes >=
-                designState.downloadsStorageThreshold.bytes
-            ) {
-                item(key = "m3-storage-card") {
-                    androidx.compose.material3.Card(
-                        colors = androidx.compose.material3.CardDefaults
-                            .cardColors(
-                                containerColor = MaterialTheme.colorScheme
-                                    .surfaceContainerLow
-                            ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                "${formatBytes(usedBytes)} used by Xreader",
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            if (state.deviceTotalBytes > 0L) {
-                                androidx.compose.material3
-                                    .LinearProgressIndicator(
-                                        progress = {
-                                            (usedBytes.toFloat() /
-                                                state.deviceTotalBytes.toFloat())
-                                                .coerceIn(0f, 1f)
-                                        },
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                Text(
-                                    "of ${formatBytes(state.deviceTotalBytes)} " +
-                                        "on this device",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme
-                                        .onSurfaceVariant
-                                )
-                            }
-                            TextButton(
-                                onClick = {
-                                    onDownloadsSortChange(
-                                        app.xreader.data.prefs
-                                            .M3DownloadsSort.SIZE
-                                    )
-                                }
-                            ) { Text("Review largest") }
-                        }
-                    }
-                }
-            }
-            if (state.failedCount > 0) {
-                item(key = "m3-failed-banner") {
-                    androidx.compose.material3.Card(
-                        colors = androidx.compose.material3.CardDefaults
-                            .cardColors(
-                                containerColor = MaterialTheme.colorScheme
-                                    .errorContainer
-                            ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Filled.ErrorOutline,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme
-                                    .onErrorContainer
-                            )
-                            Column(
-                                Modifier
-                                    .weight(1f)
-                                    .padding(horizontal = 12.dp)
-                            ) {
-                                Text(
-                                    "${state.failedCount} couldn't download",
-                                    style = MaterialTheme.typography.titleSmall
-                                )
-                                Text(
-                                    "Retry puts them back in the queue.",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                            androidx.compose.material3.Button(
-                                onClick = { viewModel.retryAllFailed() }
-                            ) { Text("Retry all") }
-                        }
-                    }
-                }
-            }
-            item(key = "m3-downloading-header") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Downloading",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (state.hasPausable) {
-                        TextButton(onClick = { viewModel.pauseAll() }) {
-                            Text("Pause all")
-                        }
-                    }
-                    if (state.hasResumable) {
-                        TextButton(onClick = { viewModel.resumeAll() }) {
-                            Text("Resume all")
-                        }
-                    }
-                }
-            }
-            if (state.active.isEmpty()) {
-                item(key = "m3-downloading-empty") {
-                    Text(
-                        "Nothing in progress right now. Downloads you " +
-                            "start from a book page will show here " +
-                            "while they run.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            items(state.active, key = { "m3-active-${it.book.id}" }) { group ->
-                M3ActiveDownloadRow(
-                    group = group,
-                    coverFile = coverFile,
-                    errorText = viewModel.firstError(group),
-                    waitingForWifi = group.waitingForWifi(state),
-                    onPause = { viewModel.pauseBook(group) },
-                    onResume = {
-                        group.activeItems.forEach { viewModel.resume(it) }
-                        viewModel.retryFailed(group)
-                    },
-                    onCancel = { viewModel.cancelBook(group) }
-                )
-            }
-            item(key = "m3-downloaded-header") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Downloaded",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(
-                        onClick = {
-                            onDownloadsSortChange(
-                                when (designState.downloadsSort) {
-                                    app.xreader.data.prefs
-                                        .M3DownloadsSort.RECENT ->
-                                        app.xreader.data.prefs
-                                            .M3DownloadsSort.TITLE
-                                    app.xreader.data.prefs
-                                        .M3DownloadsSort.TITLE ->
-                                        app.xreader.data.prefs
-                                            .M3DownloadsSort.SIZE
-                                    app.xreader.data.prefs
-                                        .M3DownloadsSort.SIZE ->
-                                        app.xreader.data.prefs
-                                            .M3DownloadsSort.RECENT
-                                }
-                            )
-                        }
-                    ) {
-                        Text(
-                            "Sort: " + when (designState.downloadsSort) {
-                                app.xreader.data.prefs
-                                    .M3DownloadsSort.RECENT -> "Recent"
-                                app.xreader.data.prefs
-                                    .M3DownloadsSort.TITLE -> "Title"
-                                app.xreader.data.prefs
-                                    .M3DownloadsSort.SIZE -> "Size"
-                            }
-                        )
-                    }
-                }
-            }
-            if (state.finished.isEmpty()) {
-                item(key = "m3-downloaded-empty") {
-                    Text(
-                        "No finished downloads yet. When a download " +
-                            "completes, the book waits here, ready to " +
-                            "read offline.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            item(key = "m3-downloaded-group") {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    finishedSorted.forEachIndexed { index, group ->
-                        val sizeBytes = if (group.isLocalFile) {
-                            group.localFileBytes
-                        } else {
-                            group.bytesOnDisk
-                        }
-                        androidx.compose.material3.SegmentedListItem(
-                            onClick = { onOpenBook(group.book.id) },
-                            shapes = androidx.compose.material3
-                                .ListItemDefaults.segmentedShapes(
-                                    index = index,
-                                    count = finishedSorted.size
-                                ),
-                            leadingContent = {
-                                app.xreader.ui.common.M3CoverThumbnail(
-                                    title = group.book.title,
-                                    author = group.book.author
-                                        .takeIf { it.isNotBlank() },
-                                    coverModel = coverFile(group.book.coverPath)
-                                        ?.takeIf { it.exists() }
-                                        ?: group.book.coverUrl
-                                            ?.takeIf { it.isNotBlank() },
-                                    modifier = Modifier
-                                        .size(width = 40.dp, height = 58.dp)
-                                )
-                            },
-                            trailingContent = {
-                                Box {
-                                    androidx.compose.material3.IconButton(
-                                        onClick = { menuFor = group.book.id }
-                                    ) {
-                                        Icon(
-                                            Icons.Filled.MoreVert,
-                                            contentDescription =
-                                                "Actions for ${group.book.title}"
-                                        )
-                                    }
-                                    androidx.compose.material3.DropdownMenu(
-                                        expanded = menuFor == group.book.id,
-                                        onDismissRequest = { menuFor = null }
-                                    ) {
-                                        androidx.compose.material3
-                                            .DropdownMenuItem(
-                                                text = { Text("Read offline") },
-                                                onClick = {
-                                                    menuFor = null
-                                                    onOpenBook(group.book.id)
-                                                }
-                                            )
-                                        androidx.compose.material3
-                                            .DropdownMenuItem(
-                                                text = { Text("Make EPUB") },
-                                                onClick = {
-                                                    menuFor = null
-                                                    onMakeEpub(group)
-                                                }
-                                            )
-                                        // W8 (R4): the delete
-                                        // doors — hidden for
-                                        // in-place local books,
-                                        // whose "download" is
-                                        // the user's own file.
-                                        if (!group.isLocalFile) {
-                                            androidx.compose.material3
-                                                .DropdownMenuItem(
-                                                    text = {
-                                                        Text("Delete chapters")
-                                                    },
-                                                    onClick = {
-                                                        menuFor = null
-                                                        pendingDelete =
-                                                            group.book.id to
-                                                                false
-                                                    }
-                                                )
-                                            androidx.compose.material3
-                                                .DropdownMenuItem(
-                                                    text = {
-                                                        Text(
-                                                            "Delete book's downloads"
-                                                        )
-                                                    },
-                                                    onClick = {
-                                                        menuFor = null
-                                                        pendingDelete =
-                                                            group.book.id to
-                                                                true
-                                                    }
-                                                )
-                                        }
-                                    }
-                                }
-                            },
-                            supportingContent = {
-                                Text(
-                                    listOfNotNull(
-                                        if (group.isLocalFile) {
-                                            group.statusLine
-                                        } else {
-                                            "${group.readyChapters} chapters"
-                                        },
-                                        if (designState.downloadsChapterSize) {
-                                            formatBytes(sizeBytes)
-                                        } else {
-                                            null
-                                        }
-                                    ).joinToString(" · ")
-                                )
-                            }
-                        ) {
-                            Text(
-                                group.book.title,
-                                style = MaterialTheme.typography
-                                    .titleSmallEmphasized,
-                                maxLines = 1
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        // W8 (R4): the delete confirm (S5 pattern) — the book
-        // and the reader's place are always kept.
-        pendingDelete?.let { (bookId, wholeBook) ->
-            val title = (state.active + state.finished)
-                .firstOrNull { it.book.id == bookId }
-                ?.book?.title ?: "this book"
-            androidx.compose.material3.AlertDialog(
-                onDismissRequest = { pendingDelete = null },
-                title = {
-                    Text(
-                        if (wholeBook) {
-                            "Delete this book's downloads?"
-                        } else {
-                            "Delete downloaded chapters?"
-                        }
-                    )
-                },
-                text = {
-                    Text(
-                        if (wholeBook) {
-                            "Every downloaded chapter and download " +
-                                "record for “$title” is deleted. " +
-                                "The book and your place in it are kept."
-                        } else {
-                            "The downloaded chapters of “$title” " +
-                                "are deleted. The book and your " +
-                                "place in it are kept."
-                        }
-                    )
-                },
-                confirmButton = {
-                    androidx.compose.material3.TextButton(
-                        onClick = {
-                            pendingDelete = null
-                            if (wholeBook) {
-                                viewModel.deleteBookDownloads(bookId)
-                            } else {
-                                viewModel.deleteDownloadedChapters(bookId)
-                            }
-                        }
-                    ) { Text("Delete") }
-                },
-                dismissButton = {
-                    androidx.compose.material3.TextButton(
-                        onClick = { pendingDelete = null }
-                    ) { Text("Cancel") }
-                }
-            )
-        }
-    }
-}
-
-@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun M3ActiveDownloadRow(
-    group: BookDownloads,
-    coverFile: (String?) -> File?,
-    errorText: String?,
-    waitingForWifi: Boolean,
-    onPause: () -> Unit,
-    onResume: () -> Unit,
-    onCancel: () -> Unit
-) {
-    val progress = animateProgressAsState(
-        group.fraction, label = "m3DownloadProgress"
-    )
-    val paused = group.activeItems.any { it.state == QueueState.PAUSED } &&
-        group.activeItems.none { it.state == QueueState.RUNNING }
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        app.xreader.ui.common.M3CoverThumbnail(
-            title = group.book.title,
-            author = group.book.author.takeIf { it.isNotBlank() },
-            coverModel = coverFile(group.book.coverPath)
-                ?.takeIf { it.exists() }
-                ?: group.book.coverUrl?.takeIf { it.isNotBlank() },
-            modifier = Modifier.size(width = 48.dp, height = 68.dp)
-        )
-        Column(Modifier.weight(1f)) {
-            Text(
-                group.book.title,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1
-            )
-            Text(
-                if (group.isLocalFile) {
-                    group.statusLine
-                } else if (group.totalChapters > 0) {
-                    "Chapter ${group.readyChapters} of ${group.totalChapters}"
-                } else {
-                    group.statusLine
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (waitingForWifi) {
-                Text(
-                    "Waiting for Wi-Fi",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                androidx.compose.material3.LinearWavyProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    "${(progress * 100).toInt()}%",
-                    style = MaterialTheme.typography.labelMedium
-                )
-            }
-            val detailLine = when {
-                group.failedItems.isNotEmpty() ->
-                    "${group.failedItems.size} couldn't download — tap play to retry"
-                paused && group.totalChapters > 0 -> "Paused"
-                else -> null
-            }
-            if (detailLine != null) {
-                Text(
-                    detailLine,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (group.failedItems.isNotEmpty()) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                )
-            }
-            if (errorText != null && group.failedItems.isNotEmpty()) {
-                Text(
-                    errorText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        Column {
-            IconButton(
-                onClick = if (paused || group.failedItems.isNotEmpty()) {
-                    onResume
-                } else {
-                    onPause
-                }
-            ) {
-                Icon(
-                    if (paused || group.failedItems.isNotEmpty()) {
-                        Icons.Filled.PlayArrow
-                    } else {
-                        Icons.Filled.Pause
-                    },
-                    contentDescription = if (paused) "Resume" else "Pause"
-                )
-            }
-            IconButton(onClick = onCancel) {
-                Icon(Icons.Filled.Close, contentDescription = "Cancel download")
-            }
-        }
-    }
-}
-
-
-// ── Code 123: the Editorial Downloads ──────────────────────
-// The approved extension alive: kicker + serif headline, the
-// Offline Storage card ALWAYS present (F-D4 — it is the
-// page's metering home), the failures banner on both
-// segments, counted connected segments, active cards with
-// the wavy live progress (F-D2) and the Wi-Fi chip's rust dot
-// (F-D5), finished rows with the delete doors VISIBLE
-// (F-D3 — never in a ⋮), hidden for in-place local books,
-// behind the code's own confirm dialog.
 @OptIn(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
@@ -2276,8 +1605,18 @@ private fun EditorialFinishedDownloadRow(
                         )
                     )
                 }
-                Spacer(Modifier.weight(1f))
-                if (!group.isLocalFile) {
+            }
+            // Code 124 (D22): the two deletes get their OWN
+            // row — on one line with Read offline + Make EPUB
+            // they ran ≈450dp wide in a ≈383dp row and the
+            // labels wrapped/crushed.
+            if (!group.isLocalFile) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
                     TextButton(onClick = onDeleteChapters) {
                         Text(
                             "Delete chapters",

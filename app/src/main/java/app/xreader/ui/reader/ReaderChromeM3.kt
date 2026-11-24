@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Description
@@ -316,6 +317,7 @@ fun M3ReaderChromeBar(
                             onOpenToc = onOpenToc,
                             onOpenSearch = onOpenSearch,
                             onOpenListen = onOpenListen,
+                            onOpenAi = onOpenAi,
                             onOpenFocus = onOpenFocus,
                             onTogglePdfMode = onTogglePdfMode,
                             onOpenPageGrid = onOpenPageGrid,
@@ -372,12 +374,13 @@ private fun M3SeekRow(
 }
 
 /** The toolbar's action row — the same doors and gating as
- * the shipped chrome: Contents · Search · Listen in the text
- * world, the PDF page chip + Reflow toggle in a PDF's world,
- * then Focus · seek expand · Settings. Ask AI is NOT a chrome
- * door in this design (R28's element list carries no AI door;
- * it stays reachable from the book page and the selection
- * menu, exactly as before). */
+ * the shipped chrome: Contents · Search · Listen · Ask AI
+ * in the text world, the PDF page chip + Reflow toggle in
+ * a PDF's world, then Focus · seek expand · Settings.
+ * Code 124 (A7 + the owner's feature-parity rule): Ask AI
+ * is a visible chrome door here, as it is in Nocturne's
+ * chrome — never in the overflow menu. (The 121 note that
+ * this design carries no AI door is superseded.) */
 @Composable
 private fun M3ChromeActions(
     cbzPageLabel: String?,
@@ -388,6 +391,7 @@ private fun M3ChromeActions(
     onOpenToc: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenListen: () -> Unit,
+    onOpenAi: () -> Unit,
     onOpenFocus: () -> Unit,
     onTogglePdfMode: () -> Unit,
     onOpenPageGrid: (() -> Unit)?,
@@ -403,6 +407,9 @@ private fun M3ChromeActions(
         }
         IconButton(onClick = onOpenListen) {
             Icon(Icons.Filled.Headphones, "Listen")
+        }
+        IconButton(onClick = onOpenAi) {
+            Icon(Icons.Filled.AutoAwesome, "Ask AI")
         }
     }
     if (pdfPageLabel != null) {

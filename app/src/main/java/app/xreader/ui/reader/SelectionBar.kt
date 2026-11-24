@@ -78,7 +78,7 @@ import app.xreader.ui.localreader.HIGHLIGHT_TINT_ARGB
  * hiddenActions), never wired to a no-op. */
 enum class SelectionBarAction {
     COPY, HIGHLIGHT, NOTE, DICTIONARY,
-    TRANSLATE, ASK_AI, SHARE,                 // More, owner's order
+    TRANSLATE, ASK_AI, ILLUSTRATE, SHARE,     // More, owner's order
     REPLACE, SAVE_WORD, SELECT_ALL, BOOKMARK  // More, core reader only
 }
 
@@ -168,6 +168,9 @@ fun defaultHighlightTintArgb(): Int =
 val PdfSelectionMoreItems: List<SelectionBarMoreItem> = listOf(
     SelectionBarMoreItem(SelectionBarAction.TRANSLATE, "Translate"),
     SelectionBarMoreItem(SelectionBarAction.ASK_AI, "Ask AI"),
+    // Code 124 (A7): Illustrate — paints exactly the
+    // selected passage (the owner's settled Patch 7 design).
+    SelectionBarMoreItem(SelectionBarAction.ILLUSTRATE, "Illustrate"),
     SelectionBarMoreItem(SelectionBarAction.SHARE, "Share")
 )
 
@@ -265,11 +268,17 @@ fun SelectionBar(
     Surface(
         modifier = modifier.widthIn(max = 344.dp),
         // Code 121 (S23): under Material 3 the bar is a filled
-        // card in scheme colours — surfaceContainerHigh, the
-        // MEDIUM shape, a 1dp outlineVariant border. Nocturne
-        // keeps its shipped 16dp form exactly.
+        // card in scheme colours — surfaceContainerHigh, a
+        // 1dp outlineVariant border. Nocturne keeps its
+        // shipped 16dp form exactly. Code 124 (E2): the
+        // shape is the FloatingToolbar's own extraLarge —
+        // the same container language as the reader chrome's
+        // HorizontalFloatingToolbar (whose standard container
+        // colour surfaceContainerHigh already is); the bar's
+        // anatomy (colour row + fit procedure) is unchanged,
+        // as a toolbar's icon slots cannot carry it.
         shape = if (isM3Bar) {
-            MaterialTheme.shapes.medium
+            MaterialTheme.shapes.extraLarge
         } else {
             RoundedCornerShape(16.dp)
         },

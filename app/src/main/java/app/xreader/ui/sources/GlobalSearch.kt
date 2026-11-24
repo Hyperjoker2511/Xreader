@@ -494,11 +494,18 @@ internal fun M3SearchResults(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Code 124 (D20): the results' tail repays the shell's
+    // dock clearance (the Material 3 design's floating pill
+    // publishes 100dp; docked shells publish 0).
+    val dockClearance = app.xreader.ui.theme.LocalDockClearance.current
     androidx.compose.foundation.lazy.LazyColumn(
         modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = androidx.compose.foundation.layout
-            .PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+            .PaddingValues(
+                start = 16.dp, end = 16.dp, top = 8.dp,
+                bottom = dockClearance + 8.dp
+            )
     ) {
         if (state.searching) {
             item(key = "m3gs-progress") {

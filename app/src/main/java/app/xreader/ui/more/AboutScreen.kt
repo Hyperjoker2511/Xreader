@@ -521,7 +521,15 @@ private fun M3AboutContent(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp),
+                .padding(
+                    start = 20.dp, end = 20.dp, top = 16.dp,
+                    bottom = app.xreader.ui.theme
+                        .effectiveBottomPadding(
+                            16.dp,
+                            app.xreader.ui.theme
+                                .LocalDockClearance.current
+                        )
+                ),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(

@@ -141,7 +141,10 @@ fun MoreScreen(
             onProviders = onProviders,
             onGeneratedArt = onGeneratedArt,
             onVocab = onVocab,
-            onAbout = onAbout
+            onAbout = onAbout,
+            onLabs = onLabs,
+            onMigration = onMigration,
+            onUpdatesAbout = onUpdatesAbout
         )
         return
     }
@@ -206,10 +209,11 @@ fun MoreScreen(
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        "The Editorial Library, The Stage book page, " +
-                            "settings rebuilt as a door hub, and sources " +
-                            "restored and repaired. The full list lives " +
-                            "in About.",
+                        "The design is now named Material 3, the " +
+                            "book page's download and AI doors are " +
+                            "back, PDF selection is rebuilt, and the " +
+                            "Lore map is readable. The full list " +
+                            "lives in About.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -567,7 +571,10 @@ private fun M3MeHub(
     onProviders: () -> Unit,
     onGeneratedArt: () -> Unit,
     onVocab: () -> Unit,
-    onAbout: () -> Unit
+    onAbout: () -> Unit,
+    onLabs: () -> Unit,
+    onMigration: () -> Unit,
+    onUpdatesAbout: () -> Unit
 ) {
     val avatarShape = androidx.compose.material3.MaterialShapes
         .Cookie9Sided.toShape()
@@ -580,7 +587,13 @@ private fun M3MeHub(
                 .verticalScroll(
                     androidx.compose.foundation.rememberScrollState()
                 )
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(
+                    start = 16.dp, end = 16.dp, top = 8.dp,
+                    bottom = effectiveBottomPadding(
+                        8.dp,
+                        app.xreader.ui.theme.LocalDockClearance.current
+                    )
+                ),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             if (healNote != null) {
@@ -741,6 +754,27 @@ private fun M3MeHub(
                     title = "Vocabulary",
                     subtitle = "Words you saved while reading",
                     onClick = onVocab
+                ),
+                MeDoorData(
+                    icon = Icons.Filled.SwapHoriz,
+                    title = "Migration studio",
+                    subtitle =
+                        "Bring your library from Mihon and other readers",
+                    onClick = onMigration
+                ),
+                MeDoorData(
+                    icon = Icons.Filled.Science,
+                    title = "Labs",
+                    subtitle =
+                        "Experimental features — eye-tracking page turns",
+                    onClick = onLabs
+                ),
+                MeDoorData(
+                    icon = Icons.Filled.SystemUpdate,
+                    title = "Updates & about",
+                    subtitle =
+                        "Check for updates, version, links and app details",
+                    onClick = onUpdatesAbout
                 ),
                 MeDoorData(
                     icon = Icons.Filled.Info,

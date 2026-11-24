@@ -512,6 +512,73 @@ class AiSheetViewModel(
     }
 
     /**
+     * Code 124 (A7): Illustrate exactly this passage — the
+     * selection bar's Illustrate door (the owner's settled
+     * Patch 7 design: select text in the reader → Illustrate
+     * paints THAT selection, not the chapter's first long
+     * paragraph). Same engine, same state fields, same
+     * saved line as [illustrateMoment].
+     */
+    fun illustratePassage(passageText: String) {
+        val passage = passageText.trim()
+        if (passage.isBlank()) {
+            _state.value = _state.value.copy(
+                illustrateMessage =
+                    "Select some text first, then Illustrate."
+            )
+            return
+        }
+        if (_state.value.illustrating) return
+        _state.value = _state.value.copy(
+            illustrating = true,
+            illustrateMessage = null
+        )
+        viewModelScope.launch {
+            val book = container.database.bookDao().getById(bookId)
+            val chapter = container.database.chapterDao()
+                .getById(boundChapterId)
+            if (book == null || chapter == null) {
+                _state.value = _state.value.copy(
+                    illustrating = false,
+                    illustrateMessage =
+                        "This chapter has no passage to illustrate yet."
+                )
+                return@launch
+            }
+            when (
+                val result = container.conceptArt
+                    .generateForPassage(book, chapter, passage)
+            ) {
+                is AppResult.Ok -> {
+                    val note = app.xreader.data.ai.ImageFallbackNotes
+                        .take()
+                    _state.value = _state.value.copy(
+                        illustrating = false,
+                        illustrateMessage =
+                            "Saved — see it in the book's Lore & Art." +
+                                (note?.let { "\n$it" } ?: "")
+                    )
+                }
+                is AppResult.Err -> {
+                    app.xreader.data.ai.ImageFallbackNotes.take()
+                    _state.value = _state.value.copy(
+                        illustrating = false,
+                        illustrateMessage = if (
+                            result.error is
+                            app.xreader.core.error.AppError.NeutralVerdict
+                        ) {
+                            result.error.message
+                        } else {
+                            "Couldn't paint this moment.\n" +
+                                plainWords(result.error)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    /**
      * v1.5.40 (honest error words): the Ask AI sheet shows the
      * PLAIN summary only — never [ErrorText.displayText]'s
      * Details line, which carries the provider's own raw error
