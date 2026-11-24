@@ -627,6 +627,7 @@ private fun historyDayLabel(recordedAt: Long, nowMillis: Long): String {
     }
 }
 
+@Composable
 private fun HistoryEntryRow(
     entry: HistoryEntryUi,
     coverRequest: ImageRequest?,
