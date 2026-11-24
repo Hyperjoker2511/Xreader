@@ -41,7 +41,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -284,6 +286,19 @@ fun DocumentReader(
      * screen fulfils Highlight / Note / Bookmark against it
      * (the split rule for spanning ranges lives there). */
     onRangeAction: (selection: ReaderTextSelection, action: ParagraphAction) -> Unit,
+    /** Code 118: the colour row's apply for a LIVE selection
+     * — the screen fulfils it against the model's range,
+     * writing the tint's token (the split rule rides the
+     * same loop as the Highlight arm). */
+    onApplyHighlight: (selection: ReaderTextSelection, tintArgb: Int) -> Unit = { _, _ -> },
+    /** Code 118: the colour row's apply for the EXISTING
+     * state — re-tints the stored highlight's row. */
+    onUpdateHighlightColor: (highlight: Highlight, tintArgb: Int) -> Unit = { _, _ -> },
+    /** Code 118: the existing state's trash slot. */
+    onRemoveHighlight: (highlight: Highlight) -> Unit = {},
+    /** Code 118: the existing state's Note arm — the note
+     * editor opens over the stored highlight. */
+    onEditHighlightNote: (highlight: Highlight) -> Unit = {},
     /** Code 117 (§7.3): the model's selected text, assembled
      * by the screen from its segment texts — the bar host's
      * Copy/Share arms and text actions consume it. */
@@ -523,6 +538,15 @@ fun DocumentReader(
     // composition (a plain assignment — the seed-tracker
     // pattern, never a snapshot write).
     selectionController.chapterTextOf = { segment -> textOf(segment) }
+    // Code 118: the controller's tap hit-test door — the
+    // test itself (storedHighlightAt, below) needs this
+    // body's highlights list and chapter list; the entry
+    // recognisers reach it through the controller.
+    selectionController.highlightAtPoint = { windowPoint ->
+        storedHighlightAt(
+            selectionController, chapters, highlights, windowPoint
+        )
+    }
 
     /** The anchor whose NEXT chapter the ⅓ trigger (in the
      * reporter below) has already requested — once per
@@ -1357,10 +1381,16 @@ fun DocumentReader(
             .distinctUntilChanged()
             .collect { scrolling ->
                 if (scrolling &&
-                    selectionController.selectionState.value != null &&
-                    selectionController.dragSessionState.value == null
+                    selectionController.dragSessionState.value == null &&
+                    (selectionController.selectionState.value != null ||
+                        selectionController.existingHighlightState.value != null)
                 ) {
                     selectionController.clearSelection()
+                    // Code 118: the existing-highlight bar
+                    // dies on scroll too — its seat geometry
+                    // leaves with the composed blocks (the
+                    // PDF bodies clear theirs on page change).
+                    selectionController.clearExistingHighlight()
                 }
             }
     }
@@ -1373,6 +1403,7 @@ fun DocumentReader(
     // operation, drag session included.
     LaunchedEffect(anchorChapterIndex) {
         selectionController.clearSelection()
+        selectionController.clearExistingHighlight()
     }
     // §4.1: a typography/config change that re-lays-out text
     // clears — keyed on the layout inputs to DocumentBlock.
@@ -1382,15 +1413,18 @@ fun DocumentReader(
         config.bionicReading, fontFamily
     ) {
         selectionController.clearSelection()
+        selectionController.clearExistingHighlight()
     }
     // §7.4: the back chain's clear nonce performs a REAL
     // clear — tint, handles and bar die together. (Code 116's
     // nonce could only hide the bar; the framework's tint and
     // handles stood. That half-dismissal cannot recur: there
-    // is one state and it is null.)
+    // is one state and it is null.) Code 118: the nonce
+    // clears the existing-highlight episode by the same door.
     LaunchedEffect(clearSelectionSignal) {
         if (clearSelectionSignal > 0) {
             selectionController.clearSelection()
+            selectionController.clearExistingHighlight()
         }
     }
     // §5.6: edge auto-scroll while a drag session lives —
@@ -1627,6 +1661,14 @@ fun DocumentReader(
             .readerTapToggle(
                 chapters, selectionController.tapAwayGate
             ) { xFraction, _ ->
+                // Code 118: a plain tap that reaches the
+                // toggle (non-prose ground — taps over prose
+                // are the tap tracker's, and stand the toggle
+                // down through the gate) also retires the
+                // existing-highlight bar: any tap off the
+                // highlight retires it, as on the PDF
+                // surfaces.
+                selectionController.clearExistingHighlight()
                 if (app.xreader.domain.reader.CentreTap.isCentre(xFraction)) {
                     autoPaused = false
                     onCenterTap()
@@ -1658,6 +1700,10 @@ fun DocumentReader(
             selectionText = selectionText,
             onSelectionAction = onSelectionAction,
             onRangeAction = onRangeAction,
+            onApplyHighlight = onApplyHighlight,
+            onUpdateHighlightColor = onUpdateHighlightColor,
+            onRemoveHighlight = onRemoveHighlight,
+            onEditHighlightNote = onEditHighlightNote,
             onSelectionOpenChanged = onSelectionOpenChanged,
             motionEnabled = motionEnabled
         ) {
@@ -1853,8 +1899,7 @@ fun DocumentReader(
         // see bar taps). Exists only while a selection lives.
         ReaderSelectionOverlay(
             controller = selectionController,
-            listState = listState,
-            palette = palette
+            listState = listState
         )
         if (config.readingLine) {
             ReadingLineOverlay(palette = palette)
@@ -1888,14 +1933,31 @@ private fun ReaderSelectionLayer(
     selectionText: (ReaderTextSelection) -> String,
     onSelectionAction: (ReaderSelectionAction, String) -> Unit,
     onRangeAction: (selection: ReaderTextSelection, action: ParagraphAction) -> Unit,
+    onApplyHighlight: (selection: ReaderTextSelection, tintArgb: Int) -> Unit,
+    onUpdateHighlightColor: (highlight: Highlight, tintArgb: Int) -> Unit,
+    onRemoveHighlight: (highlight: Highlight) -> Unit,
+    onEditHighlightNote: (highlight: Highlight) -> Unit,
     onSelectionOpenChanged: (Boolean) -> Unit,
     motionEnabled: Boolean,
     content: @Composable () -> Unit
 ) {
     val selection = controller.selectionState.value
+    // Code 118: the existing-highlight episode, read in the
+    // same sanctioned scope as the model. Mutual exclusion
+    // (the PDF bodies' reset rule): a live selection
+    // supersedes the existing bar the moment it exists.
+    val existing = controller.existingHighlightState.value
+    LaunchedEffect(selection) {
+        if (selection != null) controller.clearExistingHighlight()
+    }
     ReaderSelectionMenuHost(
         selection = selection,
-        selectionRect = { controller.selectionRect() ?: Rect.Zero },
+        existingHighlight = existing,
+        selectionRect = {
+            controller.selectionRect()
+                ?: controller.existingHighlightRect()
+                ?: Rect.Zero
+        },
         selectionText = {
             selection?.let(selectionText) ?: ""
         },
@@ -1906,6 +1968,25 @@ private fun ReaderSelectionLayer(
             // gating (it composes only while a selection lives).
             selection?.let { onRangeAction(it, action) }
         },
+        onApplyHighlight = { tintArgb ->
+            // Code 118: the tint fulfils against whichever
+            // episode is live — the model's range (a new
+            // highlight in that colour) or the stored row
+            // (a re-tint).
+            val live = controller.selectionState.value
+            val stored = controller.existingHighlightState.value
+            if (live != null) {
+                onApplyHighlight(live, tintArgb)
+            } else if (stored != null) {
+                onUpdateHighlightColor(stored, tintArgb)
+            }
+        },
+        onRemoveHighlight = {
+            controller.existingHighlightState.value
+                ?.let(onRemoveHighlight)
+        },
+        onEditExistingNote = onEditHighlightNote,
+        onClearExisting = { controller.clearExistingHighlight() },
         onSelectAll = {
             // §7.3: the model becomes the whole chapter the
             // selection STARTED in; the bar re-seats over the
@@ -2353,6 +2434,14 @@ private fun DocumentBlock(
             // Remembered per block — keyed by the block, its
             // range, the highlights and the rendering inputs
             // (bionic, palette, and the spoken/overlay washes).
+            // Code 118: the stored wash is each highlight's
+            // OWN colour — its stored token mapped through
+            // the bar's row tints, at the shipped wash alpha.
+            // (Code 117 painted every highlight in the single
+            // accent wash and never read the token: on a
+            // Custom palette the accent is the ink colour, so
+            // every wash rendered grey — CONVICTION-CODE117
+            // items 1–2.)
             val highlightColor = palette.accent.copy(alpha = 0.38f)
             val spokenColor = palette.accent.copy(alpha = 0.30f)
             val overlayColor = palette.accent.copy(alpha = 0.20f)
@@ -2369,7 +2458,11 @@ private fun DocumentBlock(
                     overlayActive = overlayActive,
                     highlightColor = highlightColor,
                     spokenColor = spokenColor,
-                    overlayColor = overlayColor
+                    overlayColor = overlayColor,
+                    highlightColors = highlights.map { highlight ->
+                        Color(highlightTintForToken(highlight.color))
+                            .copy(alpha = 0.38f)
+                    }
                 )
             }
             val annotated = remember(block, config.bionicReading, backgrounds) {
@@ -2502,4 +2595,64 @@ fun ReadingLineOverlay(palette: ReaderPalette, modifier: Modifier = Modifier) {
                 .background(palette.accent.copy(alpha = 0.35f))
         )
     }
+}
+
+/**
+ * Code 118: the tap hit-test for stored highlights — the
+ * core reader's mirror of the PDF geometry overlay's
+ * highlight tap, run over the selection registry (§4.1).
+ * A window point resolves through the composed block whose
+ * NODE bounds contain it (bounds tests use the node origin,
+ * as §4.1 orders), then through that block layout's own
+ * line geometry: the point must sit on the resolved char's
+ * line, within the line's ink extent — a tap in the
+ * paragraph gap below a highlighted line, or past a short
+ * line's end, hits nothing. The resolved chapter offset is
+ * then tested against the chapter's stored highlights.
+ * Returns the highlight and its chapter index, or null.
+ * One-shot at a gesture's down/up — never per frame.
+ */
+private fun storedHighlightAt(
+    controller: ReaderSelectionController,
+    chapters: List<Chapter>,
+    highlights: List<Highlight>,
+    windowPoint: Offset
+): Pair<Highlight, Int>? {
+    if (highlights.isEmpty()) return null
+    for ((key, entry) in controller.registry.all()) {
+        val layout = entry.layout ?: continue
+        if (!entry.positioned) continue
+        if (windowPoint.x < entry.nodeOffset.x ||
+            windowPoint.x > entry.nodeOffset.x + entry.size.width ||
+            windowPoint.y < entry.nodeOffset.y ||
+            windowPoint.y > entry.nodeOffset.y + entry.size.height
+        ) {
+            continue
+        }
+        val chapterText = controller.chapterTextOf(key.first) ?: continue
+        val range = chapterText.rangeOf(key.second) ?: continue
+        if (range.end <= range.start) continue
+        val local = windowPoint - entry.textOrigin
+        val localOffset = layout.getOffsetForPosition(local)
+        val line = layout.getLineForOffset(localOffset)
+        if (local.y < layout.getLineTop(line) ||
+            local.y > layout.getLineBottom(line)
+        ) {
+            continue
+        }
+        if (local.x < layout.getLineLeft(line) ||
+            local.x > layout.getLineRight(line)
+        ) {
+            continue
+        }
+        val chapterOffset = range.start + localOffset
+        val chapterId = chapters.getOrNull(key.first)?.id ?: continue
+        val hit = highlights.firstOrNull { highlight ->
+            highlight.chapterId == chapterId &&
+                chapterOffset >= highlight.startOffset &&
+                chapterOffset < highlight.endOffset
+        }
+        if (hit != null) return hit to key.first
+    }
+    return null
 }

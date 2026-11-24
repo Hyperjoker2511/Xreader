@@ -35,8 +35,10 @@ import app.xreader.core.error.AppResult
 import app.xreader.core.error.ErrorText
 import app.xreader.data.ai.LanguageDetect
 import app.xreader.data.ai.SourceLanguage
+import app.xreader.data.db.Highlight
 import app.xreader.data.prefs.AiFeature
 import app.xreader.di.AppContainer
+import app.xreader.ui.localreader.HIGHLIGHT_TINT_ARGB
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 
@@ -73,6 +75,33 @@ enum class ReaderSelectionAction {
     REPLACE, TRANSLATE, DICTIONARY, SAVE_WORD, ASK_AI
 }
 
+/** Code 118: the bar's colour row speaks ARGB (its five
+ * tints, SelectionBar §7.2); the core Highlight store speaks
+ * token names ([Highlight.color]). This pair is the one
+ * translation between them — the host seeds the row's
+ * active tint from a stored token, and the screen's
+ * fulfilment writes a picked tint back as its token. An
+ * unknown token reads as amber, the store's own default. */
+fun highlightTokenForTint(tintArgb: Int): String =
+    when (tintArgb) {
+        HIGHLIGHT_TINT_ARGB -> "violet"
+        0xFFFFB020.toInt() -> "amber"
+        0xFF99AA77.toInt() -> "sage"
+        0xFFFF9200.toInt() -> "orange"
+        0xFFCC99C0.toInt() -> "pink"
+        else -> "amber"
+    }
+
+/** The stored token's bar tint (see [highlightTokenForTint]). */
+fun highlightTintForToken(token: String): Int =
+    when (token) {
+        "violet" -> HIGHLIGHT_TINT_ARGB
+        "sage" -> 0xFF99AA77.toInt()
+        "orange" -> 0xFFFF9200.toInt()
+        "pink" -> 0xFFCC99C0.toInt()
+        else -> 0xFFFFB020.toInt()
+    }
+
 /** Positions the menu above the selection rect (below it when
  * the top has no room), clamped inside the window. The rect
  * arrives in window coordinates — the coordinates the popup
@@ -105,10 +134,13 @@ private class SelectionMenuPositionProvider(
 
 /**
  * Hosts the selection bar over one scroll reader's content.
- * The bar composes iff [selection] is non-null (modulo the
- * §7.3 dismiss fade); its seat rect comes from the model's
- * own geometry ([selectionRect] — the union rect of the
- * selection in window coordinates, §7.2).
+ * The bar composes while an episode lives — a live
+ * [selection], or (code 118) a tapped stored highlight in
+ * [existingHighlight] — modulo the §7.3 dismiss fade; its
+ * seat rect comes from the model's own geometry
+ * ([selectionRect] — the union rect of the selection in
+ * window coordinates, §7.2; the existing episode's stored
+ * range arrives through the same door).
  *
  * Action routing (§7.3):
  * - Completing actions (Copy · Highlight · Bookmark ·
@@ -138,6 +170,27 @@ fun ReaderSelectionMenuHost(
     /** §8: the true-range arms (Highlight · Note · Bookmark),
      * fulfilled by the caller against the model's range. */
     onRangeAction: (ParagraphAction) -> Unit = {},
+    /** Code 118: the stored highlight whose tap opened the
+     * bar in its existing-highlight state (Revision 1 §7.2's
+     * deferral reversed; the PDF surfaces' existingBar
+     * mirrored). Non-null only while no live selection
+     * lives — the two episodes are mutually exclusive, and
+     * the seat rect for this episode arrives through the
+     * same [selectionRect] door. */
+    existingHighlight: Highlight? = null,
+    /** Code 118: the colour row's apply — a colour-circle
+     * tap, or Highlight tapped with the row already open.
+     * The caller fulfils the tint: a new highlight in that
+     * colour for the live model, a re-tint of the stored
+     * row for the existing state. */
+    onApplyHighlight: (tintArgb: Int) -> Unit = {},
+    /** Code 118: the existing state's trash slot. */
+    onRemoveHighlight: () -> Unit = {},
+    /** Code 118: the existing state's Note arm — the note
+     * editor opens over the stored highlight. */
+    onEditExistingNote: (Highlight) -> Unit = {},
+    /** Code 118: the existing episode's one clear. */
+    onClearExisting: () -> Unit = {},
     /** §7.3: Select all — the model becomes the starting
      * chapter; the bar re-seats, it does not dismiss. */
     onSelectAll: () -> Unit = {},
@@ -145,7 +198,7 @@ fun ReaderSelectionMenuHost(
      * dies by this single door. */
     onClearSelection: () -> Unit,
     /** The back chain's report (§7.4): true exactly while
-     * [selection] is non-null. */
+     * an episode — live or existing — is open. */
     onSelectionOpenChanged: (Boolean) -> Unit = {},
     motionEnabled: Boolean = true,
     content: @Composable () -> Unit
@@ -153,53 +206,100 @@ fun ReaderSelectionMenuHost(
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
     val currentSelection by rememberUpdatedState(selection)
+    val currentExisting by rememberUpdatedState(existingHighlight)
 
     // §7.3's dismiss fade: a completing action's effect fires
     // at tap; the model clears 150 ms later, as the fade
     // completes. The fade is bound to the selection it began
     // on — a different selection living when the timer ends
-    // is never cleared by a stale fade.
+    // is never cleared by a stale fade. Code 118: the
+    // existing-highlight episode fades through its own
+    // clear, on the same rule.
     var barDismissing by remember { mutableStateOf(false) }
     LaunchedEffect(barDismissing) {
         if (barDismissing) {
-            val dismissing = currentSelection
+            val dismissingSelection = currentSelection
+            val dismissingExisting = currentExisting
             delay(150)
-            if (currentSelection == dismissing) onClearSelection()
+            if (dismissingSelection != null &&
+                currentSelection == dismissingSelection
+            ) {
+                onClearSelection()
+            } else if (dismissingExisting != null &&
+                currentExisting == dismissingExisting
+            ) {
+                onClearExisting()
+            }
             barDismissing = false
         }
     }
-    // §7.4: the back chain's selection layer is exactly
-    // `selection != null`, reported through the existing door.
-    val open = selection != null
+    // §7.4 + code 118: the back chain's selection layer is
+    // `selection != null || existingHighlight != null`,
+    // reported through the existing door — an open
+    // existing-highlight bar is a selection layer the chain
+    // must see (the PDF bodies' selectionLayerOpen).
+    val open = selection != null || existingHighlight != null
     LaunchedEffect(open) { onSelectionOpenChanged(open) }
 
-    // The bar's state, hoisted here: the colour row stays
-    // DISABLED in this host (the core reader's Highlight model
-    // carries no per-highlight tint — an unchanged data
-    // limitation), and `existingHighlight` stays false — the
-    // core bar has no existing-highlight state (Revision 1
-    // §7.2). The state resets whenever the model clears.
-    var barState by remember {
-        mutableStateOf(SelectionBarState(colourRowEnabled = false))
-    }
+    // The bar's state, hoisted here. Code 118: the colour
+    // row is ENABLED in this host (Revision 1 §7.2's disable
+    // is reversed — the store carried a colour token all
+    // along, and the renderer reads it now), and a tapped
+    // stored highlight seeds the existing state with its
+    // own tint active (the PDF hosts' §7.4 entry). A live
+    // selection always starts from the clean default. The
+    // state resets whenever the episode closes.
+    var barState by remember { mutableStateOf(SelectionBarState()) }
     LaunchedEffect(open) {
-        if (!open) {
-            barState = SelectionBarState(colourRowEnabled = false)
+        if (!open) barState = SelectionBarState()
+    }
+    LaunchedEffect(existingHighlight?.id, selection != null) {
+        barState = when {
+            existingHighlight != null -> SelectionBarState(
+                existingHighlight = true,
+                activeTintArgb =
+                    highlightTintForToken(existingHighlight.color)
+            )
+            selection != null -> SelectionBarState()
+            else -> barState
+        }
+    }
+
+    // Code 118: the active episode's text and clear. In the
+    // existing state the text is the stored highlight's own
+    // quote (there is no model to assemble from) and
+    // dismissal runs through the existing clear; the arms
+    // below are shared by both episodes.
+    fun activeText(): String =
+        if (selection != null) {
+            selectionText()
+        } else {
+            existingHighlight?.quotedText ?: ""
+        }
+
+    fun dismissNow() {
+        if (selection != null) {
+            onClearSelection()
+        } else {
+            onClearExisting()
         }
     }
 
     fun barAction(action: SelectionBarAction) {
         when (action) {
-            // Copy: our own write of the model's text; nothing
-            // is read back, ever (§7.3).
+            // Copy: our own write of the episode's text;
+            // nothing is read back, ever (§7.3).
             SelectionBarAction.COPY -> {
                 clipboardManager.setText(
-                    AnnotatedString(selectionText())
+                    AnnotatedString(activeText())
                 )
                 barDismissing = true
             }
             // The true-range arms: no text, no clipboard — the
             // caller fulfils against the model's range (§8).
+            // (With the colour row enabled the bar routes
+            // Highlight taps to the row and its apply door;
+            // this arm remains the row-disabled fallback.)
             SelectionBarAction.HIGHLIGHT -> {
                 barDismissing = true
                 onRangeAction(ParagraphAction.HIGHLIGHT)
@@ -209,37 +309,46 @@ fun ReaderSelectionMenuHost(
                 onRangeAction(ParagraphAction.BOOKMARK)
             }
             SelectionBarAction.NOTE -> {
-                onRangeAction(ParagraphAction.NOTE)
-                onClearSelection()
+                val existing = existingHighlight
+                if (selection == null && existing != null) {
+                    // Code 118: the note editor over the
+                    // stored highlight (the PDF §7.4 arm);
+                    // the episode clears as the dialog opens.
+                    onEditExistingNote(existing)
+                    onClearExisting()
+                } else {
+                    onRangeAction(ParagraphAction.NOTE)
+                    onClearSelection()
+                }
             }
             SelectionBarAction.DICTIONARY -> {
                 onAction(
-                    ReaderSelectionAction.DICTIONARY, selectionText()
+                    ReaderSelectionAction.DICTIONARY, activeText()
                 )
-                onClearSelection()
+                dismissNow()
             }
             SelectionBarAction.TRANSLATE -> {
                 onAction(
-                    ReaderSelectionAction.TRANSLATE, selectionText()
+                    ReaderSelectionAction.TRANSLATE, activeText()
                 )
-                onClearSelection()
+                dismissNow()
             }
             SelectionBarAction.ASK_AI -> {
-                onAction(ReaderSelectionAction.ASK_AI, selectionText())
-                onClearSelection()
+                onAction(ReaderSelectionAction.ASK_AI, activeText())
+                dismissNow()
             }
             SelectionBarAction.REPLACE -> {
-                onAction(ReaderSelectionAction.REPLACE, selectionText())
-                onClearSelection()
+                onAction(ReaderSelectionAction.REPLACE, activeText())
+                dismissNow()
             }
             SelectionBarAction.SAVE_WORD -> {
-                onAction(ReaderSelectionAction.SAVE_WORD, selectionText())
+                onAction(ReaderSelectionAction.SAVE_WORD, activeText())
                 barDismissing = true
             }
             SelectionBarAction.SHARE -> {
                 val intent = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, selectionText())
+                    putExtra(Intent.EXTRA_TEXT, activeText())
                 }
                 context.startActivity(
                     Intent.createChooser(intent, null)
@@ -252,7 +361,7 @@ fun ReaderSelectionMenuHost(
     }
 
     content()
-    if (selection == null) return
+    if (selection == null && existingHighlight == null) return
     // One position provider per host composition, reading the
     // live model rect — a range change re-seats the Popup
     // without recomposing its content.
@@ -264,8 +373,8 @@ fun ReaderSelectionMenuHost(
         // Dismissal is exclusively the model's (§7.2): the
         // Popup is non-focusable and dismisses nothing itself;
         // a dismiss request, if one ever arrives, routes into
-        // the one clear.
-        onDismissRequest = { onClearSelection() },
+        // the active episode's one clear.
+        onDismissRequest = { dismissNow() },
         properties = PopupProperties(
             focusable = false,
             dismissOnBackPress = false,
@@ -281,30 +390,52 @@ fun ReaderSelectionMenuHost(
         // — Translate · Ask AI · Share — and the legacy items
         // follow. Select all is always present now: it is the
         // model's own arm, not a manager callback that may or
-        // may not exist.
-        val moreItems = listOf(
-            SelectionBarMoreItem(
-                SelectionBarAction.TRANSLATE, "Translate"
-            ),
-            SelectionBarMoreItem(
-                SelectionBarAction.ASK_AI, "Ask AI"
-            ),
-            SelectionBarMoreItem(
-                SelectionBarAction.SHARE, "Share"
-            ),
-            SelectionBarMoreItem(
-                SelectionBarAction.REPLACE, "Replace"
-            ),
-            SelectionBarMoreItem(
-                SelectionBarAction.SAVE_WORD, "Save word"
-            ),
-            SelectionBarMoreItem(
-                SelectionBarAction.SELECT_ALL, "Select all"
-            ),
-            SelectionBarMoreItem(
-                SelectionBarAction.BOOKMARK, "Bookmark here"
+        // may not exist. Code 118: in the existing state the
+        // More list is the PDF bar's own — Translate · Ask AI
+        // · Share, the arms that act on a stored passage's
+        // text; the model-only arms (Replace · Save word ·
+        // Select all · Bookmark here) belong to a live
+        // selection and are not offered over a stored
+        // highlight.
+        val moreItems = if (selection == null &&
+            existingHighlight != null
+        ) {
+            listOf(
+                SelectionBarMoreItem(
+                    SelectionBarAction.TRANSLATE, "Translate"
+                ),
+                SelectionBarMoreItem(
+                    SelectionBarAction.ASK_AI, "Ask AI"
+                ),
+                SelectionBarMoreItem(
+                    SelectionBarAction.SHARE, "Share"
+                )
             )
-        )
+        } else {
+            listOf(
+                SelectionBarMoreItem(
+                    SelectionBarAction.TRANSLATE, "Translate"
+                ),
+                SelectionBarMoreItem(
+                    SelectionBarAction.ASK_AI, "Ask AI"
+                ),
+                SelectionBarMoreItem(
+                    SelectionBarAction.SHARE, "Share"
+                ),
+                SelectionBarMoreItem(
+                    SelectionBarAction.REPLACE, "Replace"
+                ),
+                SelectionBarMoreItem(
+                    SelectionBarAction.SAVE_WORD, "Save word"
+                ),
+                SelectionBarMoreItem(
+                    SelectionBarAction.SELECT_ALL, "Select all"
+                ),
+                SelectionBarMoreItem(
+                    SelectionBarAction.BOOKMARK, "Bookmark here"
+                )
+            )
+        }
         SelectionBar(
             state = barState,
             onStateChange = { barState = it },
@@ -313,12 +444,28 @@ fun ReaderSelectionMenuHost(
                 onAction = { action ->
                     if (!barDismissing) barAction(action)
                 },
-                // The colour row is disabled in this host
-                // (colourRowEnabled = false), so this never fires.
-                onApplyHighlight = { _, _ -> },
+                // Code 118: the colour row's apply — the
+                // caller fulfils the tint (a new highlight in
+                // that colour for the live model; a re-tint
+                // of the stored row for the existing state),
+                // then the episode fades, exactly as the PDF
+                // hosts run it.
+                onApplyHighlight = { tintArgb, _ ->
+                    if (!barDismissing) {
+                        onApplyHighlight(tintArgb)
+                        barDismissing = true
+                    }
+                },
+                // Code 118: the existing state's trash slot.
+                onRemoveHighlight = {
+                    if (!barDismissing) {
+                        onRemoveHighlight()
+                        barDismissing = true
+                    }
+                },
                 onDismiss = {
                     barDismissing = false
-                    onClearSelection()
+                    dismissNow()
                 }
             ),
             // §7.2: always empty — Highlight / Note / Bookmark

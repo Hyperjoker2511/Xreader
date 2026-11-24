@@ -5111,7 +5111,12 @@ class ReaderViewModel(
         chapterIndex: Int,
         start: Int,
         end: Int,
-        note: String? = null
+        note: String? = null,
+        /** Code 118: the stored colour token — the bar's
+         * colour row writes the picked tint's token here.
+         * The default keeps every pre-118 caller on the
+         * store's own default. */
+        color: String = "amber"
     ) {
         val stateNow = _state.value
         val chapter = stateNow.chapters.getOrNull(chapterIndex) ?: return
@@ -5132,9 +5137,23 @@ class ReaderViewModel(
                     startOffset = start,
                     endOffset = end,
                     quotedText = text.text.substring(start, end).take(500),
-                    color = "amber",
+                    color = color,
                     note = note?.takeIf { it.isNotBlank() },
                     createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    /** Code 118: the existing-highlight bar's re-tint — the
+     * colour row's apply over a stored highlight (the core
+     * reader's analogue of [updatePdfPageHighlightTint]). */
+    fun updateHighlightColor(highlight: Highlight, color: String) {
+        viewModelScope.launch {
+            container.database.highlightDao().update(
+                highlight.copy(
+                    color = color,
                     updatedAt = System.currentTimeMillis()
                 )
             )

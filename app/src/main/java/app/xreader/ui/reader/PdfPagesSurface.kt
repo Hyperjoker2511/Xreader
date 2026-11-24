@@ -1524,6 +1524,36 @@ private fun PdfPagedBody(
                     }
                 }
             }
+            // Code 118 (S6 ghosting, CONVICTION-S6 claim B):
+            // while a settled page is zoomed the pager must
+            // never sit PARKED mid-turn. A turn-drag combined
+            // with a pinch can interrupt the pager's own snap
+            // (the gesture is claimed by the cell's zoom), and
+            // the zoom lock (userScrollEnabled above) then
+            // holds the fractional offset for the whole zoom
+            // session — the settled cell and its neighbour,
+            // each in its own zoom transform, both on screen.
+            // This effect settles the pager onto its nearest
+            // unit in exactly that state: zoom engaged, pager
+            // idle, offset non-zero. The pager's own snap owns
+            // every normal gesture end (it runs while
+            // isScrollInProgress is still true, so the offset
+            // is already 0 when this could fire), and the
+            // effect stands down the moment the zoom does —
+            // unzoomed paging is never touched.
+            LaunchedEffect(pagerState, activeZoomed) {
+                if (!activeZoomed) return@LaunchedEffect
+                snapshotFlow {
+                    pagerState.isScrollInProgress to
+                        pagerState.currentPageOffsetFraction
+                }.collect { (scrolling, fraction) ->
+                    if (!scrolling && fraction != 0f) {
+                        pagerState.animateScrollToPage(
+                            pagerState.currentPage
+                        )
+                    }
+                }
+            }
             LaunchedEffect(session, handlers, spreadActive) {
                 handlers.jumps.collect { jump ->
                     // F-1: a jump first resets a live transform —
@@ -2192,8 +2222,20 @@ private fun PdfPageCell(
     ) {
         pdfCellSlotWidthPx(session, page, viewportWidthPx, viewportHeightPx, settings.fitMode)
     }
-    var previewBitmap by remember(page, renderWidthPx) { mutableStateOf<Bitmap?>(null) }
-    var bitmap by remember(page, renderWidthPx) { mutableStateOf<Bitmap?>(null) }
+    // Code 118 (S6 flicker, CONVICTION-S6 claim A): the
+    // DISPLAYED bitmaps are keyed on the page ONLY — never on
+    // renderWidthPx. They used to be remember(page,
+    // renderWidthPx): when the async size fill landed, the
+    // width re-keyed (provisional → true slot width), both
+    // states reset to null, and a page that had ALREADY
+    // landed dropped back to the placeholder for the whole
+    // re-render (~150 ms). Now a width change only re-runs
+    // the render effect below (it stays keyed on
+    // renderWidthPx); the landed bitmap stays on screen —
+    // same page, same aspect, drawn at its own size — until
+    // the render at the new width swaps in atomically.
+    var previewBitmap by remember(page) { mutableStateOf<Bitmap?>(null) }
+    var bitmap by remember(page) { mutableStateOf<Bitmap?>(null) }
     // v1.5.12 (P1): keyed ALSO on the session's published
     // pager state — the publication catching up re-runs this
     // effect and re-issues the page's request at top priority

@@ -1249,6 +1249,54 @@ fun ReaderScreen(
                             }
                         }
                     },
+                    // Code 118: the colour row's apply for a
+                    // live selection — the Highlight arm's
+                    // split loop, writing the picked tint's
+                    // token instead of the constant.
+                    onApplyHighlight = { sel, tintArgb ->
+                        val token = highlightTokenForTint(tintArgb)
+                        for (chapterIndex in
+                            sel.startChapter..sel.endChapter) {
+                            val chapterText = state.chapters
+                                .getOrNull(chapterIndex)
+                                ?.let { state.segmentTexts[it.id] }
+                                ?: continue
+                            val from = if (
+                                chapterIndex == sel.startChapter
+                            ) {
+                                sel.start
+                            } else {
+                                0
+                            }
+                            val to = if (
+                                chapterIndex == sel.endChapter
+                            ) {
+                                sel.end
+                            } else {
+                                chapterText.length
+                            }
+                            if (from < to) {
+                                viewModel.addHighlightInChapter(
+                                    chapterIndex, from, to,
+                                    color = token
+                                )
+                            }
+                        }
+                    },
+                    // Code 118: the existing-highlight bar's
+                    // doors — re-tint, remove, and the note
+                    // editor, the same ViewModel/state doors
+                    // the Contents sheet uses.
+                    onUpdateHighlightColor = { highlight, tintArgb ->
+                        viewModel.updateHighlightColor(
+                            highlight,
+                            highlightTokenForTint(tintArgb)
+                        )
+                    },
+                    onRemoveHighlight = {
+                        viewModel.deleteHighlight(it)
+                    },
+                    onEditHighlightNote = { editingNoteFor = it },
                     onCenterTap = { chromeVisible = !chromeVisible },
                     onChromeWanted = { wanted -> chromeVisible = wanted },
                     onSelectionAction = handleSelectionAction,

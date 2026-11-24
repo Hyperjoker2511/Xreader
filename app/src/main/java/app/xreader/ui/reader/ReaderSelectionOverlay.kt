@@ -25,10 +25,11 @@ import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import app.xreader.data.db.Highlight
 import app.xreader.domain.reader.CentreTap
 import app.xreader.domain.reader.ChapterText
+import app.xreader.ui.localreader.ReaderViolet
 import app.xreader.ui.localreader.expandWordRange
-import app.xreader.ui.theme.ReaderPalette
 import kotlin.math.max
 import kotlin.math.min
 
@@ -205,6 +206,44 @@ class ReaderSelectionController(
         dragSessionState.value = null
     }
 
+    /** Code 118: the stored highlight whose tap opened the
+     * bar in its existing-highlight state (Revision 1 §7.2's
+     * deferral, reversed — the PDF surfaces' existingBar,
+     * mirrored). Mutually exclusive with the live model: a
+     * selection entry clears it (the bar layer's effect) and
+     * opening it never touches the model. Its RANGE travels
+     * with it so the bar's seat reads live geometry exactly
+     * like the model's (§7.2's rect, via [rectFor]). */
+    val existingHighlightState: MutableState<Highlight?> =
+        mutableStateOf(null)
+    val existingRangeState: MutableState<ReaderTextSelection?> =
+        mutableStateOf(null)
+
+    /** Code 118: the tap hit-test door — DocumentReader
+     * installs the real test (it owns the highlights list
+     * and the chapter list); the entry recognisers and the
+     * tap-toggle gate read through here. A window point →
+     * the stored highlight under it and its chapter index,
+     * or null. A plain field, refreshed at composition like
+     * [chapterTextOf]. */
+    var highlightAtPoint: (Offset) -> Pair<Highlight, Int>? = { null }
+
+    /** Code 118: open the existing-highlight episode — the
+     * two states move together, by this single operation. */
+    fun openExistingHighlight(
+        highlight: Highlight,
+        range: ReaderTextSelection
+    ) {
+        existingHighlightState.value = highlight
+        existingRangeState.value = range
+    }
+
+    /** Code 118: the existing episode's one clear. */
+    fun clearExistingHighlight() {
+        existingHighlightState.value = null
+        existingRangeState.value = null
+    }
+
     // ── §4.2: position resolution ─────────────────────────
 
     private fun offsetInBlock(
@@ -326,6 +365,16 @@ class ReaderSelectionController(
             ArrayList<Triple<Pair<Int, Int>, BlockLayoutEntry, Pair<Int, Int>>>()
         for ((key, entry) in registry.all()) {
             if (entry.layout == null || !entry.positioned) continue
+            // Code 118 (first-frame trim): a block outside the
+            // selection's chapter span can never intersect —
+            // skip its text/range resolution entirely. The
+            // result is unchanged: blockLocalRange's first
+            // two arms returned null for exactly these.
+            if (key.first < selection.startChapter ||
+                key.first > selection.endChapter
+            ) {
+                continue
+            }
             val chapterText = chapterTextOf(key.first) ?: continue
             val range = chapterText.rangeOf(key.second) ?: continue
             val local = blockLocalRange(key.first, chapterText, range, selection)
@@ -338,8 +387,17 @@ class ReaderSelectionController(
     /** §7.2: the union rect of the selection in window
      * coordinates, from the same registry + layout calls as
      * the tint — the bar's seat source. */
-    fun selectionRect(): Rect? {
-        val selection = selectionState.value ?: return null
+    fun selectionRect(): Rect? =
+        selectionState.value?.let { rectFor(it) }
+
+    /** Code 118: the existing-highlight bar's seat rect —
+     * the same union over its stored range. */
+    fun existingHighlightRect(): Rect? =
+        existingRangeState.value?.let { rectFor(it) }
+
+    /** The union rect of [selection] in window coordinates,
+     * from the same registry + layout calls as the tint. */
+    fun rectFor(selection: ReaderTextSelection): Rect? {
         var union: Rect? = null
         for ((_, entry, local) in intersectedRanges(selection)) {
             val layout = entry.layout ?: continue
@@ -381,7 +439,12 @@ class ReaderSelectionController(
      * char's bottom-right, each converted through its block's
      * TEXT origin (§4.1, Revision 1 §6.2). Either is null when
      * its block is not composed (scrolled out of the window
-     * mid-drag — the handle is off-screen by construction). */
+     * mid-drag — the handle is off-screen by construction).
+     * Code 118: the tip's y is the char bbox's OWN bottom —
+     * code 117 used the LINE box's bottom, which at the
+     * reader's line-height multiplier hangs below the glyphs
+     * by the extra leading, so the tips visibly floated under
+     * the words (CONVICTION-CODE117 item 6). */
     fun handleAnchors(): Pair<Offset?, Offset?> {
         val selection = selectionState.value ?: return null to null
         val startTip = entryFor(selection.startChapter, selection.start)
@@ -391,10 +454,7 @@ class ReaderSelectionController(
                 val local = (selection.start - range.start)
                     .coerceIn(0, length)
                 val bbox = layout.getBoundingBox(local)
-                Offset(
-                    bbox.left,
-                    layout.getLineBottom(layout.getLineForOffset(local))
-                ) + entry.textOrigin
+                Offset(bbox.left, bbox.bottom) + entry.textOrigin
             }
         val endTip = entryFor(selection.endChapter, selection.end - 1)
             ?.let { (entry, range) ->
@@ -403,10 +463,7 @@ class ReaderSelectionController(
                 val local = (selection.end - 1 - range.start)
                     .coerceIn(0, (length - 1).coerceAtLeast(0))
                 val bbox = layout.getBoundingBox(local)
-                Offset(
-                    bbox.right,
-                    layout.getLineBottom(layout.getLineForOffset(local))
-                ) + entry.textOrigin
+                Offset(bbox.right, bbox.bottom) + entry.textOrigin
             }
         return startTip to endTip
     }
@@ -593,9 +650,23 @@ suspend fun PointerInputScope.selectionEntryLongPressLoop(
 ) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
-        // §5.5 writer (2): the flag for this gesture.
+        // §5.5 writer (2): the flag for this gesture. Code
+        // 118: the gate ALSO stands the toggle down while the
+        // existing-highlight bar is up (its taps belong to
+        // the bar, not the chrome) and when this down lands
+        // on a stored highlight (the tap tracker will open
+        // the bar at the up — the toggle must not also fire
+        // on that tap; the PDF surfaces' handled-tap rule,
+        // run through the gate this reader already has).
+        val downEntry = controller.registry.get(
+            chapterIndex to blockIndex
+        )
         controller.tapAwayGate.value =
-            controller.selectionState.value != null
+            controller.selectionState.value != null ||
+            controller.existingHighlightState.value != null ||
+            (downEntry != null && controller.highlightAtPoint(
+                down.position + downEntry.nodeOffset
+            ) != null)
         val longPress = awaitLongPressOrCancellation(down.id)
             ?: return@awaitEachGesture
         val entry = controller.registry.get(chapterIndex to blockIndex)
@@ -683,6 +754,42 @@ suspend fun PointerInputScope.selectionTapTracker(
             pairing.lastCleanTapUptime = -1L
             controller.clearSelection()
             return@awaitEachGesture
+        }
+        // Code 118: the tap-on-a-highlight test (Revision 1
+        // §7.2's deferral reversed; the PDF surfaces'
+        // onHighlightTap mirrored). A clean tap whose down
+        // lands on a stored highlight opens the bar in its
+        // existing state — the hit wins the tap: it is
+        // consumed here, the toggle already stood down at
+        // the down (the gate), and no double-tap pair is
+        // seeded. A clean tap on plain text while that bar
+        // is up is its tap-away: the bar closes, the tap is
+        // consumed, nothing else fires.
+        val tapEntry = controller.registry.get(
+            chapterIndex to blockIndex
+        )
+        if (tapEntry != null) {
+            val hit = controller.highlightAtPoint(
+                down.position + tapEntry.nodeOffset
+            )
+            if (hit != null) {
+                pairing.lastCleanTapUptime = -1L
+                upChange.consume()
+                controller.openExistingHighlight(
+                    hit.first,
+                    ReaderTextSelection(
+                        hit.second, hit.first.startOffset,
+                        hit.second, hit.first.endOffset
+                    )
+                )
+                return@awaitEachGesture
+            }
+            if (controller.existingHighlightState.value != null) {
+                pairing.lastCleanTapUptime = -1L
+                upChange.consume()
+                controller.clearExistingHighlight()
+                return@awaitEachGesture
+            }
         }
         val last = pairing.lastCleanTapUptime
         if (last > 0L &&
@@ -784,7 +891,6 @@ private class TintPathCache {
 fun ReaderSelectionOverlay(
     controller: ReaderSelectionController,
     listState: LazyListState,
-    palette: ReaderPalette,
     modifier: Modifier = Modifier
 ) {
     val selection = controller.selectionState.value ?: return
@@ -928,11 +1034,17 @@ fun ReaderSelectionOverlay(
     ) {
         Canvas(Modifier.fillMaxSize()) {
             val origin = controller.rootWindowOffset
-            // §6.1: the live tint — accent at 0.55 over the
-            // stored washes, drawn from layout selection paths,
-            // never folded into the blocks' span pipeline (a
-            // span change would re-layout text per drag frame).
-            val tint = palette.accent.copy(alpha = 0.55f)
+            // §6.1: the live tint — at 0.55 over the stored
+            // washes, drawn from layout selection paths, never
+            // folded into the blocks' span pipeline (a span
+            // change would re-layout text per drag frame).
+            // Code 118: the colour is ReaderViolet — the
+            // selection system's own constant, the one the
+            // PDF side draws — never palette.accent: on a
+            // Custom palette accent IS the ink colour, so the
+            // tint and handles rendered grey on the owner's
+            // setup (CONVICTION-CODE117 item 1).
+            val tint = ReaderViolet.copy(alpha = 0.55f)
             for ((key, entry, local) in
                 controller.intersectedRanges(selection)) {
                 val layout = entry.layout ?: continue
@@ -970,13 +1082,13 @@ fun ReaderSelectionOverlay(
             startTip?.let { tip ->
                 drawPath(
                     selectionTeardropPath(tip - origin, tipPx, radiusPx),
-                    palette.accent
+                    ReaderViolet
                 )
             }
             endTip?.let { tip ->
                 drawPath(
                     selectionTeardropPath(tip - origin, tipPx, radiusPx),
-                    palette.accent
+                    ReaderViolet
                 )
             }
         }

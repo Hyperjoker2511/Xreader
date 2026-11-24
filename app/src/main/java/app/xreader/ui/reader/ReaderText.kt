@@ -343,14 +343,24 @@ fun blockBackgrounds(
     overlayActive: Boolean,
     highlightColor: Color,
     spokenColor: Color,
-    overlayColor: Color
+    overlayColor: Color,
+    /** Code 118: per-range wash colours, parallel to
+     * [highlightRanges] when supplied — the core reader
+     * passes each stored highlight's OWN colour (its token,
+     * mapped at the call site). Null (the default, and
+     * PagedReader's call) keeps the shipped behaviour:
+     * every range in the single [highlightColor]. */
+    highlightColors: List<Color>? = null
 ): List<Triple<Int, Int, Color>> {
     val out = ArrayList<Triple<Int, Int, Color>>()
     if (overlayActive) out += Triple(0, blockEnd - blockStart, overlayColor)
-    for ((start, end) in highlightRanges) {
+    for ((index, range) in highlightRanges.withIndex()) {
+        val (start, end) = range
         val s = maxOf(start, blockStart) - blockStart
         val e = minOf(end, blockEnd) - blockStart
-        if (s < e) out += Triple(s, e, highlightColor)
+        if (s < e) out += Triple(
+            s, e, highlightColors?.getOrNull(index) ?: highlightColor
+        )
     }
     if (spokenRange != null) {
         val s = maxOf(spokenRange.first, blockStart) - blockStart
