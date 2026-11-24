@@ -678,8 +678,10 @@ fun BookDetailScreen(
         // index. The hero label, the Stage line and the
         // shared progress card all print this one derivation.
         val continueChapterNumber =
-            app.xreader.domain.reader.ChapterDisplayOrder
-                .displayNumber(continueChapter)
+            continueChapter?.let {
+                app.xreader.domain.reader.ChapterDisplayOrder
+                    .displayNumber(it)
+            }
         val continuePlaceLabel = when {
             book.localFormat ==
                 app.xreader.data.db.BookFormat.PDF ->

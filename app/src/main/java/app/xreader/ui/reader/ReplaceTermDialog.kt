@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -149,7 +150,7 @@ fun ReplaceTermDialog(
                         .SingleChoiceSegmentedButtonRow(
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            androidx.compose.material3.SegmentedButton(
+                            SegmentedButton(
                                 selected = !scopeAllBooks,
                                 onClick = { scopeAllBooks = false },
                                 shape = androidx.compose.material3
@@ -157,7 +158,7 @@ fun ReplaceTermDialog(
                                         index = 0, count = 2
                                     )
                             ) { Text("This book") }
-                            androidx.compose.material3.SegmentedButton(
+                            SegmentedButton(
                                 selected = scopeAllBooks,
                                 onClick = { scopeAllBooks = true },
                                 enabled = existing == null,

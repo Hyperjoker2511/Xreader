@@ -48,6 +48,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -686,8 +687,7 @@ fun ReaderSettingsSheet(
                                     )
                                     scopeOptions.forEachIndexed {
                                         index, (scope, label) ->
-                                        androidx.compose.material3
-                                            .SegmentedButton(
+                                        SegmentedButton(
                                                 selected =
                                                     settingsScope == scope,
                                                 onClick = {

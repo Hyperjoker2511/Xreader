@@ -1178,9 +1178,8 @@ private fun M3LoreContent(
             val ask = onAskAboutBook
             if (ask != null) {
                 androidx.compose.material3.ExtendedFloatingActionButton(
-                    onClick = ask,
-                    text = { Text("Ask about this book") }
-                )
+                    onClick = ask
+                ) { Text("Ask about this book") }
             }
         }
     ) { innerPadding ->

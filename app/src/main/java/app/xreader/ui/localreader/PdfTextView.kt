@@ -1,5 +1,7 @@
 package app.xreader.ui.localreader
 
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Description
 import app.xreader.data.engine.PdfStripState
 
 /**
