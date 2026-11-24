@@ -61,7 +61,7 @@ fun ChapterTransitionCard(
     // card. The transition BEHAVIOUR (when the card appears,
     // what crossing does) is the engine's and is untouched;
     // under Nocturne the shipped bare-column form renders.
-    if (app.xreader.ui.theme.isMaterial3Design()) {
+    if (app.xreader.ui.theme.isM3FamilyDesign()) {
         androidx.compose.foundation.layout.Box(
             Modifier
                 .fillMaxSize()
@@ -96,7 +96,7 @@ private fun ChapterTransitionContent(
     val isNext = transition is ChapterTransition.Next
     val from = transition.from
     val to = transition.to
-    val m3 = app.xreader.ui.theme.isMaterial3Design()
+    val m3 = app.xreader.ui.theme.isM3FamilyDesign()
     Column(
         modifier
             .then(if (m3) Modifier.fillMaxWidth() else Modifier.fillMaxSize())

@@ -837,8 +837,8 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
     // Nocturne doors inside M3 (trace T3). The Nocturne hub
     // below is untouched and renders exactly as shipped when
     // Nocturne is the active design.
-    if (state.design.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (state.design.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         M3CustomisePage(
             state = state,
@@ -937,12 +937,13 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
         CustomiseDoor(
             icon = Icons.Filled.DesignServices,
             title = "Design",
-            status = if (state.design.design ==
-                app.xreader.data.prefs.AppDesign.MATERIAL3
-            ) {
-                "Material 3"
-            } else {
-                "Nocturne"
+            status = when (state.design.design) {
+                app.xreader.data.prefs.AppDesign.EDITORIAL ->
+                    "Editorial"
+                app.xreader.data.prefs.AppDesign.MATERIAL3 ->
+                    "Material 3"
+                app.xreader.data.prefs.AppDesign.NOCTURNE ->
+                    "Nocturne"
             }
         ),
         CustomiseDoor(

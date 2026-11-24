@@ -197,8 +197,8 @@ fun FootnoteBoxView(
     // colour (the box is content furniture drawn from the page
     // palette). Nocturne keeps Moon+'s shipped dashed box above
     // exactly as before.
-    val footnoteIsM3 = app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val footnoteIsM3 = app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     val boxModifier = if (footnoteIsM3) {
         modifier
             .padding(em * 0.5f)

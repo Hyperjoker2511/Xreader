@@ -68,7 +68,7 @@ fun RecoveryScreen(
     // shell's handler resets only M3's own settings and never
     // writes Nocturne's Tinted glass. The Nocturne form below
     // is untouched.
-    if (app.xreader.ui.theme.isMaterial3Design()) {
+    if (app.xreader.ui.theme.isM3FamilyDesign()) {
         RecoveryScreenM3(
             note = note,
             onContinue = onContinue,

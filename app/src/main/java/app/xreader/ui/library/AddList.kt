@@ -175,8 +175,8 @@ fun AddListScreen(viewModel: AddListViewModel, onBack: () -> Unit) {
     // add toggle buttons on the candidate rows, the pinned
     // bottom button group. The Nocturne composition below is
     // unchanged.
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         M3AddListContent(viewModel = viewModel, onBack = onBack)
         return

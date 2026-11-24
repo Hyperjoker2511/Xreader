@@ -96,8 +96,8 @@ fun BookTermsScreen(
     val pairs by viewModel.pairs.collectAsStateWithLifecycle()
     // Code 121 W8 (R13): the Material 3 per-book terms page —
     // the shared M3TermsContent at this book's scope.
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         app.xreader.ui.more.M3TermsContent(
             title = viewModel.bookTitle.ifBlank { "This book" },

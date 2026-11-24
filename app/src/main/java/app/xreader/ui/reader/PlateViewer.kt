@@ -72,8 +72,8 @@ fun CorePlateViewer(
     // and a floating toolbar at the foot carrying the caption
     // and the Close door. Nocturne keeps the shipped black
     // full-screen box with its steady Close chip below.
-    val plateIsM3 = app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val plateIsM3 = app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     Box(
         Modifier
             .fillMaxSize()

@@ -74,8 +74,8 @@ fun GeneratedArtScreen(
     // two columns stand and the knob is never read.
     val designState = app.xreader.ui.theme.LocalDesignState.current
     val artColumns = if (
-        designState.design ==
-            app.xreader.data.prefs.AppDesign.MATERIAL3
+        designState.design !=
+            app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         when (designState.galleryColumns) {
             app.xreader.data.prefs.M3GalleryColumns.AUTO ->
@@ -92,8 +92,8 @@ fun GeneratedArtScreen(
     // Code 121 W8 (R33, D-121-W7-03 retired): the Material 3
     // gallery — poster-card grid, per-card menu, provenance
     // chip. Nocturne keeps the form below, untouched.
-    if (designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (designState.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         M3GeneratedArtContent(
             state = state,

@@ -113,8 +113,8 @@ fun MoreScreen(
     // rides its GlassCard and the doors keep the shipped
     // Orion arrangement, whatever the knobs say.
     val designState = app.xreader.ui.theme.LocalDesignState.current
-    val isM3Me = designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val isM3Me = designState.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     // Code 121 (R5): under Material 3 the Me hub is the spec's
     // page — medium top app bar, identity header, doors as a
     // divider list, the heal note as a filled tonal card, and

@@ -77,7 +77,7 @@ fun UpdateCard(
     // at the top of the shelf) — no floating overlay, no
     // glass. The Nocturne centred-modal form below is
     // untouched.
-    if (app.xreader.ui.theme.isMaterial3Design()) {
+    if (app.xreader.ui.theme.isM3FamilyDesign()) {
         UpdateCardM3(
             state = state,
             onUpdateNow = onUpdateNow,

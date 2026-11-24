@@ -93,8 +93,8 @@ fun BookSearchSheet(
     // result count and results are list items; the search
     // behaviour (one hit per chapter, tap lands and closes)
     // is unchanged.
-    val searchIsM3 = app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val searchIsM3 = app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     Column(
         Modifier
             .fillMaxWidth()

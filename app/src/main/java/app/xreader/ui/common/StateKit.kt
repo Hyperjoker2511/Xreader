@@ -50,7 +50,7 @@ fun LoadingState(
     longJob: Boolean = false,
     contained: Boolean = false
 ) {
-    if (LocalDesignState.current.design == AppDesign.MATERIAL3) {
+    if (LocalDesignState.current.design != AppDesign.NOCTURNE) {
         M3LoadingState(
             whatIsHappening = whatIsHappening,
             modifier = modifier,
@@ -147,7 +147,7 @@ fun DesignCircularWavyProgress(
     progress: (() -> Float)?,
     modifier: Modifier = Modifier
 ) {
-    if (LocalDesignState.current.design == AppDesign.MATERIAL3) {
+    if (LocalDesignState.current.design != AppDesign.NOCTURNE) {
         if (progress != null) {
             CircularWavyProgressIndicator(
                 progress = progress,
@@ -176,7 +176,7 @@ fun ErrorState(
     onAction: (() -> Unit)? = null,
     detail: String? = null
 ) {
-    if (LocalDesignState.current.design == AppDesign.MATERIAL3) {
+    if (LocalDesignState.current.design != AppDesign.NOCTURNE) {
         M3ErrorState(
             reason = reason,
             modifier = modifier,

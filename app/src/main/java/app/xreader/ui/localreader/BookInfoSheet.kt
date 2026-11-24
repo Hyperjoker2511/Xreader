@@ -442,8 +442,8 @@ internal fun BookInfoSheetContent(
     // ListItem pairs + a five toggle-star rating row, in the
     // one sheet language. Same model, same callbacks; the
     // Nocturne form below is untouched.
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         BookInfoSheetContentM3(
             model = model,

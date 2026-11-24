@@ -85,8 +85,8 @@ fun SourceStoreScreen(
     // Nocturne (and at the List view) the shipped column below
     // renders exactly as before.
     val designState = app.xreader.ui.theme.LocalDesignState.current
-    val isM3Store = designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val isM3Store = designState.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
 
     // v1.3.3 (V132-CHECK 9, scope S7e): the built-in sources
     // appear ONCE — as the friendly card below — never ALSO

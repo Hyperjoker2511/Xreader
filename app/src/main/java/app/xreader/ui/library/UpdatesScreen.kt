@@ -65,8 +65,8 @@ fun UpdatesScreen(
     // Code 121 (R6): the Material 3 form — small top app bar,
     // segmented list items grouped by book, "New" badges. The
     // Nocturne composition below is unchanged.
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         M3UpdatesContent(
             viewModel = viewModel,

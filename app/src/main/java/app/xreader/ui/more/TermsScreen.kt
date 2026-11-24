@@ -91,8 +91,8 @@ fun TermsScreen(
 ) {
     val pairs by viewModel.pairs.collectAsStateWithLifecycle()
     // Code 121 W8 (R14): the Material 3 global terms page.
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         M3TermsContent(
             title = "Reader terms",

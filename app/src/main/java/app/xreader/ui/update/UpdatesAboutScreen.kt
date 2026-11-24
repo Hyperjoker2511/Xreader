@@ -79,7 +79,7 @@ fun UpdatesAboutScreen(
     // the Auto-check switch, the update state (S36's card lives
     // here too when present), and doors to What's New and
     // About. The Nocturne form below is untouched.
-    if (app.xreader.ui.theme.isMaterial3Design()) {
+    if (app.xreader.ui.theme.isM3FamilyDesign()) {
         UpdatesAboutScreenM3(
             state = state,
             onBack = onBack,

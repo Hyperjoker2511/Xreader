@@ -151,8 +151,8 @@ data class SelectionBarState(
  */
 @Composable
 fun defaultHighlightTintArgb(): Int =
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         app.xreader.ui.theme.LocalSelectionTint.current
             .copy(alpha = 0.4f).toArgb()
@@ -202,8 +202,8 @@ fun SelectionBar(
     modifier: Modifier = Modifier
 ) {
     val designState = app.xreader.ui.theme.LocalDesignState.current
-    val isM3Bar = designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val isM3Bar = designState.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     // Code 120 fix pass (recheck L5): the default tint under
     // Material 3. A live-selection episode whose hoisted state
     // still carries the untouched Nocturne default is

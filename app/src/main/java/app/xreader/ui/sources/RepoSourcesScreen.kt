@@ -96,8 +96,8 @@ fun RepoSourcesScreen(
     // the list below keeps the shipped novel-led ORDER and the
     // shipped list form.
     val designState = app.xreader.ui.theme.LocalDesignState.current
-    val isM3Repo = designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val isM3Repo = designState.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     // Manga programme (M3): the Keiyoushi repository renders
     // its own catalogue screen (KeiyoushiIndex.rows — the true
     // Ready / Needs-the-manga-conversion states), not the

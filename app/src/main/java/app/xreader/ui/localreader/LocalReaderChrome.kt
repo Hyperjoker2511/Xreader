@@ -148,7 +148,7 @@ val ReaderViolet: Color = Color(0xFF8B5CF6)
  */
 @Composable
 internal fun readerChromeAccent(): Color =
-    if (LocalDesignState.current.design == AppDesign.MATERIAL3) {
+    if (LocalDesignState.current.design != AppDesign.NOCTURNE) {
         MaterialTheme.colorScheme.primary
     } else {
         ReaderViolet

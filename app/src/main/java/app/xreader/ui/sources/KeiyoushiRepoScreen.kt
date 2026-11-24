@@ -106,8 +106,8 @@ fun KeiyoushiRepoScreen(
     // and per-row actions unchanged. Under Nocturne (and at
     // the List view) the shipped column renders as before.
     val designState = app.xreader.ui.theme.LocalDesignState.current
-    val isM3Shelf = designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val isM3Shelf = designState.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     var query by remember(repo.id) { mutableStateOf("") }
     var language by remember(repo.id) { mutableStateOf<String?>(null) }
 

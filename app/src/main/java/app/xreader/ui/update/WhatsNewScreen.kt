@@ -55,7 +55,7 @@ fun WhatsNewScreen(
     // a plain list and never glass cards. It wears the ACTIVE
     // design, as the page always has (only the reveal wears
     // the new design). The Nocturne form below is untouched.
-    if (app.xreader.ui.theme.isMaterial3Design()) {
+    if (app.xreader.ui.theme.isM3FamilyDesign()) {
         WhatsNewScreenM3(
             state = state,
             onBack = onBack,

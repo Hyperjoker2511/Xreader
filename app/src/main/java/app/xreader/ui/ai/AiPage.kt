@@ -58,7 +58,7 @@ fun AiPage(
     // in a pinned bottom bar. Errors stay inline with Retry
     // inside the shared content. The Nocturne frame below is
     // untouched.
-    val isM3 = app.xreader.ui.theme.isMaterial3Design()
+    val isM3 = app.xreader.ui.theme.isM3FamilyDesign()
     Column(
         Modifier
             .fillMaxSize()

@@ -128,8 +128,8 @@ fun SyncScreen(
     // Code 121 W8 (R34, D-121-W7-03 retired): the Material 3
     // Sync & backup page — list rows over the same view model
     // and launchers. Nocturne keeps the card page below.
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         M3SyncContent(
             state = state,

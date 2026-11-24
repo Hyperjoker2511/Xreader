@@ -312,8 +312,8 @@ fun VocabScreen(
     // the knob is never read.
     val designState = app.xreader.ui.theme.LocalDesignState.current
     val allWords = if (
-        designState.design ==
-            app.xreader.data.prefs.AppDesign.MATERIAL3 &&
+        designState.design !=
+            app.xreader.data.prefs.AppDesign.NOCTURNE &&
         designState.vocabSort ==
             app.xreader.data.prefs.M3VocabSort.A_Z
     ) {
@@ -342,8 +342,8 @@ fun VocabScreen(
     // Code 121 (R10): the Material 3 Vocabulary — small top
     // app bar, TabRow (Saved · Looked up), word list grouped
     // by book. The Nocturne composition below is unchanged.
-    if (designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (designState.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         M3VocabContent(
             viewModel = viewModel,

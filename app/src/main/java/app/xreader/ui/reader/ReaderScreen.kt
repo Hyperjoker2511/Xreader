@@ -1323,9 +1323,9 @@ fun ReaderScreen(
                         // above); every other tint keeps the
                         // shipped token mapping.
                         val token = if (
-                            designState.design ==
+                            designState.design !=
                                 app.xreader.data.prefs.AppDesign
-                                    .MATERIAL3 &&
+                                    .NOCTURNE &&
                             tintArgb == m3DefaultTint &&
                             tintArgb != HIGHLIGHT_TINT_ARGB
                         ) {
@@ -1373,9 +1373,9 @@ fun ReaderScreen(
                             // re-tint under M3 names the design
                             // default, not "amber".
                             if (
-                                designState.design ==
+                                designState.design !=
                                     app.xreader.data.prefs
-                                        .AppDesign.MATERIAL3 &&
+                                        .AppDesign.NOCTURNE &&
                                 tintArgb == m3DefaultTint &&
                                 tintArgb != HIGHLIGHT_TINT_ARGB
                             ) {
@@ -1476,8 +1476,8 @@ fun ReaderScreen(
         // estimates — has nothing honest to say about a page
         // list and stays away.
         if (state.mangaPages == null) {
-        if (designState.design ==
-            app.xreader.data.prefs.AppDesign.MATERIAL3
+        if (designState.design !=
+            app.xreader.data.prefs.AppDesign.NOCTURNE
         ) {
         M3ReaderChromeBar(
             visible = chromeVisible,
@@ -1992,8 +1992,8 @@ fun ReaderScreen(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             // Code 121 (§3.7): M3 sheets take the extraLarge
             // top; Nocturne keeps its settled 24dp sheet top.
-            shape = if (designState.design ==
-                app.xreader.data.prefs.AppDesign.MATERIAL3
+            shape = if (designState.design !=
+                app.xreader.data.prefs.AppDesign.NOCTURNE
             ) {
                 RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
             } else {
@@ -2292,8 +2292,8 @@ fun ReaderScreen(
                 // Code 121 (S24): under M3 the note editor
                 // carries the quoted passage above the field.
                 if (noteTarget != null &&
-                    designState.design ==
-                    app.xreader.data.prefs.AppDesign.MATERIAL3
+                    designState.design !=
+                    app.xreader.data.prefs.AppDesign.NOCTURNE
                 ) {
                     Text(
                         noteTarget.quotedText,
@@ -3412,8 +3412,8 @@ private fun PdfSearchSheet(
             // Code 121 (S21): the M3 sheet head carries the
             // result count, as S20's does.
             if (hits != null &&
-                app.xreader.ui.theme.LocalDesignState.current.design ==
-                app.xreader.data.prefs.AppDesign.MATERIAL3
+                app.xreader.ui.theme.LocalDesignState.current.design !=
+                app.xreader.data.prefs.AppDesign.NOCTURNE
             ) {
                 "Search · ${hits.size} results"
             } else {

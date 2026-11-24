@@ -33,10 +33,15 @@ import coil.compose.AsyncImage
  */
 
 /** True when the active design is Material 3 — the branch
- * condition every W4 surface uses. */
+ * condition every W4 surface uses.
+ *
+ * Code 123: widened to the M3 FAMILY (Material 3 + Editorial)
+ * — the sources-depth surfaces wear the family form in the
+ * Editorial face too, dressed by the Editorial scheme. Only
+ * Nocturne keeps the shipped forms. */
 @Composable
 internal fun isM3Design(): Boolean =
-    LocalDesignState.current.design == AppDesign.MATERIAL3
+    LocalDesignState.current.design != AppDesign.NOCTURNE
 
 /** R2/S8: a source's tonal circle avatar carrying its initial —
  * the leading element of every M3 source list item and search

@@ -196,8 +196,8 @@ fun ReaderSettingsSheet(
     // above the sheet. Every setting and every wire below is
     // unchanged; Nocturne renders exactly as shipped.
     val isM3Settings = app.xreader.ui.theme.LocalDesignState
-        .current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+        .current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     Column(
         Modifier
             .fillMaxWidth()
@@ -1760,8 +1760,8 @@ fun ListenSheet(
     // Code 121 (S17): under M3 the transport's play/pause is a
     // FAB; Nocturne keeps its shipped icon-button transport.
     val listenDesignState = app.xreader.ui.theme.LocalDesignState.current
-    val listenIsM3 = listenDesignState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val listenIsM3 = listenDesignState.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     Column(
         Modifier
             .fillMaxWidth()
@@ -2215,8 +2215,8 @@ fun TocSheet(
     val designState = app.xreader.ui.theme.LocalDesignState.current
     var tab by remember {
         mutableIntStateOf(
-            if (designState.design ==
-                app.xreader.data.prefs.AppDesign.MATERIAL3
+            if (designState.design !=
+                app.xreader.data.prefs.AppDesign.NOCTURNE
             ) {
                 when (designState.contentsTab) {
                     app.xreader.data.prefs.M3ContentsTab.CHAPTERS -> 0
@@ -2244,8 +2244,8 @@ fun TocSheet(
                 selected = tab == 0, onClick = { tab = 0 },
                 text = {
                     Text(
-                        if (designState.design ==
-                            app.xreader.data.prefs.AppDesign.MATERIAL3
+                        if (designState.design !=
+                            app.xreader.data.prefs.AppDesign.NOCTURNE
                         ) "Contents" else "Chapters"
                     )
                 }
@@ -2273,8 +2273,8 @@ fun TocSheet(
             chapters.size
         }
         val contentsGrouped =
-            designState.design ==
-                app.xreader.data.prefs.AppDesign.MATERIAL3 &&
+            designState.design !=
+                app.xreader.data.prefs.AppDesign.NOCTURNE &&
                 contentsRowCount > CHAPTER_RANGE_THRESHOLD
         val contentsListState = rememberLazyListState()
         val contentsScope = rememberCoroutineScope()
@@ -2340,9 +2340,9 @@ fun TocSheet(
                                 // chapter sits in
                                 // secondaryContainer under M3.
                                 .background(
-                                    if (designState.design ==
+                                    if (designState.design !=
                                         app.xreader.data.prefs
-                                            .AppDesign.MATERIAL3 &&
+                                            .AppDesign.NOCTURNE &&
                                         index == currentTocEntryIndex
                                     ) {
                                         MaterialTheme.colorScheme
@@ -2426,9 +2426,9 @@ fun TocSheet(
                             .fillMaxWidth()
                             .clickable { onJumpChapter(index) }
                             .background(
-                                if (designState.design ==
+                                if (designState.design !=
                                     app.xreader.data.prefs
-                                        .AppDesign.MATERIAL3 &&
+                                        .AppDesign.NOCTURNE &&
                                     index == currentChapterIndex
                                 ) {
                                     MaterialTheme.colorScheme
@@ -2647,8 +2647,8 @@ fun FocusSheet(
     // Code 121 (S22): under M3 the sheet's form is the
     // expressive time picker + the wavy progress ring; the
     // Nocturne form below is untouched.
-    val focusIsM3 = app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val focusIsM3 = app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     val focusTimePickerState =
         rememberTimePickerState(
             initialHour = 0, initialMinute = 25, is24Hour = true

@@ -158,7 +158,12 @@ fun BookDetailTheme(
     // not fall through to the pin below, which would dress the
     // page in a Nocturne preset / custom snapshot. Nocturne's
     // pin path below is untouched.
-    if (design.design == app.xreader.data.prefs.AppDesign.MATERIAL3) {
+    // Code 123: Editorial joins this line — its book page must
+    // never fall through to the Nocturne pin either; it wears
+    // the ambient Editorial scheme. (The cover-colour branch
+    // above stays Material 3 only: Editorial's palette is its
+    // own and never follows a cover.)
+    if (design.design != app.xreader.data.prefs.AppDesign.NOCTURNE) {
         content()
         return
     }

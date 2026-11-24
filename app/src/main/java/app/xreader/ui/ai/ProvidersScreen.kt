@@ -81,8 +81,8 @@ fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
     // a full-screen dialog form. A raw key is never rendered:
     // key fields are password fields and saved keys show only
     // as "Key saved". Nocturne keeps the card page below.
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         M3ProvidersContent(state = state, viewModel = viewModel, onBack = onBack)
         return

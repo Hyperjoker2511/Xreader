@@ -46,8 +46,8 @@ fun AboutScreen(
     // Code 121 W8 (R37, D-121-W7-04 retired): the Material 3
     // About page — a document page. Nocturne keeps the card
     // page below, untouched.
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         M3AboutContent(onBack = onBack, container = container)
         return

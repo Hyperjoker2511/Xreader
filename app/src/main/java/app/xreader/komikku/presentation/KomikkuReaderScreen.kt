@@ -195,7 +195,7 @@ fun KomikkuReaderScreen(
     // shipped Komikku chrome when Nocturne is. The branch is
     // presentation only: every handler, preference and engine
     // call is shared between the two forms.
-    val m3 = app.xreader.ui.theme.isMaterial3Design()
+    val m3 = app.xreader.ui.theme.isM3FamilyDesign()
     val context = LocalContext.current
     val view = LocalView.current
     val configuration = LocalConfiguration.current

@@ -112,8 +112,8 @@ fun LoreScreen(
     // Code 121 W8 (R11, D-121-W7-03 retired): the Material 3
     // form of this page — a single column per the scratch
     // spec. Nocturne keeps the tabbed form below, untouched.
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         M3LoreContent(
             state = state,
@@ -316,8 +316,8 @@ private fun LoreTab(
     // Nocturne the shipped card column after this branch
     // renders exactly as before and the knob is never read.
     val designState = app.xreader.ui.theme.LocalDesignState.current
-    if (designState.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (designState.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         when (designState.loreView) {
             app.xreader.data.prefs.M3ListView.CARD_GRID ->

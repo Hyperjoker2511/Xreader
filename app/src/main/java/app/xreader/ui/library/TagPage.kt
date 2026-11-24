@@ -126,8 +126,8 @@ fun TagPageScreen(
     // new screen type: medium flexible bar (tag + book count)
     // over the R1 shelf card list filtered to the tag. The
     // Nocturne composition below is unchanged.
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    if (app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     ) {
         M3TagContent(
             viewModel = viewModel,

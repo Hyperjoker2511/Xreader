@@ -77,7 +77,7 @@ fun MigrationScreen(
     // Code 121 (R35): under Material 3, Migration is door rows
     // + wavy progress in the M3 list language. The Nocturne
     // form below is untouched.
-    if (app.xreader.ui.theme.isMaterial3Design()) {
+    if (app.xreader.ui.theme.isM3FamilyDesign()) {
         MigrationScreenM3(
             state = state,
             onBack = onBack,

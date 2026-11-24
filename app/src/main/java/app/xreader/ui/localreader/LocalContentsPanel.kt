@@ -200,8 +200,8 @@ internal fun TabbedContentsPanel(
     // with local data — the first tab is "Contents" and the
     // current row sits in secondaryContainer. Nocturne's form
     // is untouched.
-    val panelIsM3 = app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val panelIsM3 = app.xreader.ui.theme.LocalDesignState.current.design !=
+        app.xreader.data.prefs.AppDesign.NOCTURNE
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         if (sortOrder != null && onSortOrderChange != null) {
             // F5: the toggle rides ABOVE the tabs (the return's
