@@ -1,7 +1,7 @@
 package app.xreader.ui.reader
 
 import android.content.Intent
-import androidx.compose.foundation.gestures.AwaitPointerEventScope
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation

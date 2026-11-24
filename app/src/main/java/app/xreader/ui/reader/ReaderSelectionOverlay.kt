@@ -343,7 +343,7 @@ class ReaderSelectionController(
         var union: Rect? = null
         for ((_, entry, local) in intersectedRanges(selection)) {
             val layout = entry.layout ?: continue
-            val bounds = layout.getSelectionPath(local.first, local.second)
+            val bounds = layout.getPathForRange(local.first, local.second)
                 .getBounds()
             if (bounds.isEmpty) continue
             val window = bounds.translate(entry.textOrigin)
@@ -944,7 +944,7 @@ fun ReaderSelectionOverlay(
                 ) {
                     cached.path
                 } else {
-                    layout.getSelectionPath(local.first, local.second)
+                    layout.getPathForRange(local.first, local.second)
                         .also {
                             tintPaths.entries[key] =
                                 TintPathCache.Entry(
