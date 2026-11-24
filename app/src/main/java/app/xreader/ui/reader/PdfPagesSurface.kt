@@ -1450,6 +1450,19 @@ private fun PdfPagedBody(
             var selectionReports by remember {
                 mutableStateOf<Map<Int, Boolean>>(emptyMap())
             }
+            // Code 119 (CONVICTION-CODE118-PDF-SELECT §6):
+            // the cells' entry-shield reports (entry pending
+            // OR a selection drag live), aggregated beside
+            // the selection reports — the settle effect
+            // below stands down while any is up, because a
+            // stationary long-press hold reads as
+            // not-scrolling and the settle could otherwise
+            // animate mid-press.
+            var entryReports by remember {
+                mutableStateOf<Map<Int, Boolean>>(emptyMap())
+            }
+            val anyEntryGestureActive =
+                entryReports.values.any { it }
             // SelectionBar (Critic F1): the cells' follow-on
             // dialog reports, aggregated beside the selection
             // reports — the body's dialog-open boolean and
@@ -1541,8 +1554,20 @@ private fun PdfPagedBody(
             // is already 0 when this could fire), and the
             // effect stands down the moment the zoom does —
             // unzoomed paging is never touched.
-            LaunchedEffect(pagerState, activeZoomed) {
+            // Code 119 (CONVICTION-CODE118-PDF-SELECT §6):
+            // the effect ALSO stands down while a selection
+            // entry is pending or a selection drag is live
+            // on any page (anyEntryGestureActive, keyed so
+            // the effect restarts around the press): a
+            // stationary hold is "not scrolling", so without
+            // this the settle could animate mid-press and a
+            // cell leaving the settled set would clear the
+            // entry's state mid-gesture. When the press
+            // resolves the effect re-keys and settles as
+            // before.
+            LaunchedEffect(pagerState, activeZoomed, anyEntryGestureActive) {
                 if (!activeZoomed) return@LaunchedEffect
+                if (anyEntryGestureActive) return@LaunchedEffect
                 snapshotFlow {
                     pagerState.isScrollInProgress to
                         pagerState.currentPageOffsetFraction
@@ -1815,6 +1840,10 @@ private fun PdfPagedBody(
                                 selectionReports = selectionReports +
                                     (reportedPage to active)
                             },
+                            onEntryActivity = { reportedPage, active ->
+                                entryReports = entryReports +
+                                    (reportedPage to active)
+                            },
                             onDialogActivity = { reportedPage, open ->
                                 dialogReports = dialogReports +
                                     (reportedPage to open)
@@ -1921,6 +1950,10 @@ private fun PdfPageCell(
     searchMark: PdfSearchMark? = null,
     isSettledPage: Boolean = true,
     onSelectionActivity: (Int, Boolean) -> Unit = { _, _ -> },
+    // Code 119: the entry-shield report — entry pending
+    // OR a selection drag live on this page; the body
+    // aggregates it for the settle effect's stand-down.
+    onEntryActivity: (Int, Boolean) -> Unit = { _, _ -> },
     onAddPageHighlight: (StoredSelectionHighlight) -> Unit = {},
     onRemovePageHighlight: (StoredSelectionHighlight) -> Unit = {},
     onUpdatePageNote: (StoredSelectionHighlight, String) -> Unit =
@@ -1951,6 +1984,19 @@ private fun PdfPageCell(
         mutableStateOf<PageCharGeometry?>(null)
     }
     val selectionDragActive = remember(page) { mutableStateOf(false) }
+    // Code 119 (CONVICTION-CODE118-PDF-SELECT §2): the
+    // entry shield. True from the entry recogniser's
+    // awaitFirstDown until its gesture resolves (its
+    // try/finally clears it on every exit). While it is
+    // up, this cell's transform loop must not consume
+    // single-pointer changes — a consumed change kills
+    // awaitLongPressOrCancellation (foundation 1.7.6
+    // reads isConsumed in its wait loop), which is
+    // exactly how a zoomed long-press died on any
+    // finger drift. Reported to the body beside the
+    // selection reports (onEntryActivity) so the
+    // pager's settle effect stands down mid-press too.
+    val entryPending = remember(page) { mutableStateOf(false) }
     // Code 117 (§11.1): the live drag range, hoisted out of
     // the geometry overlay so the entry recogniser writes
     // through the same channel the overlay renders from
@@ -2054,6 +2100,16 @@ private fun PdfPageCell(
     val selectionLayerOpen = selection != null || existingBar != null
     LaunchedEffect(selectionLayerOpen) {
         onSelectionActivity(page, selectionLayerOpen)
+    }
+    // Code 119: the entry-shield report — the pager's
+    // settle effect stands down while an entry press is
+    // pending or a selection drag is live on this page
+    // (a stationary hold reads as not-scrolling, so the
+    // settle's own gate cannot see it).
+    val entryGestureActive =
+        entryPending.value || selectionDragActive.value
+    LaunchedEffect(entryGestureActive) {
+        onEntryActivity(page, entryGestureActive)
     }
     // C4 clear site — page change: a cell that leaves the
     // settled set drops its selection and its dialogs.
@@ -2175,6 +2231,9 @@ private fun PdfPageCell(
             // selection report dies with the cell, so the
             // pager's derivation can never strand on it.
             onSelectionActivity(page, false)
+            // Code 119: the entry-shield report dies with
+            // the cell too, on the same rule.
+            onEntryActivity(page, false)
             // SelectionBar (Critic F1): the dialog report
             // dies with the cell too, on the same rule.
             onDialogActivity(page, false)
@@ -2547,174 +2606,199 @@ private fun PdfPageCell(
                 // overlay's handle drags do.
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    val longPress = awaitLongPressOrCancellation(down.id)
-                        ?: return@awaitEachGesture
-                    // MR-2b (Revision 1, C3): under an edge
-                    // trim the entry stands down — the press
-                    // reports the stand-down and no drag
-                    // begins (the branch is unchanged).
-                    if (trimStandsDown) {
-                        onTrimStandDown()
-                        longPress.consume()
-                        drainPdfEntryGesture(down.id)
-                        return@awaitEachGesture
-                    }
-                    longPress.consume()
-                    if (cellSizePx == IntSize.Zero) {
-                        drainPdfEntryGesture(down.id)
-                        return@awaitEachGesture
-                    }
-                    val slotBitmap = bitmap ?: previewBitmap
-                    val points = session.pagePointsSizePeek(page)
-                    if (slotBitmap == null || points == null) {
-                        drainPdfEntryGesture(down.id)
-                        return@awaitEachGesture
-                    }
-                    // The inversion (MR-2b's maths,
-                    // unchanged): offsets arrive
-                    // POST-transform (this box's screen
-                    // space); invert the centre-anchored
-                    // layer transform FIRST (screen =
-                    // C + (s − C)·z + pan), then the fitted
-                    // rect takes layer points to page points.
-                    // Null when the point falls outside the
-                    // displayed page rect.
-                    fun pagePointOf(
-                        screen: Offset
-                    ): Pair<Float, Float>? {
-                        val centre = Offset(
-                            cellSizePx.width / 2f,
-                            cellSizePx.height / 2f
-                        )
-                        val z = zoomState.zoom
-                        val local = if (z != 0f) {
-                            centre + (screen - centre -
-                                zoomState.pan) / z
-                        } else {
-                            screen
-                        }
-                        val (dispW, dispH) = pdfDisplayedSizePx(
-                            slotBitmap.width, slotBitmap.height,
-                            cellSizePx.width, cellSizePx.height,
-                            settings.fitMode
-                        )
-                        if (dispW <= 0f || dispH <= 0f) return null
-                        val originX = (cellSizePx.width - dispW) / 2f
-                        val originY = (cellSizePx.height - dispH) / 2f
-                        if (local.x !in originX..(originX + dispW) ||
-                            local.y !in originY..(originY + dispH)
-                        ) {
-                            return null
-                        }
-                        return ((local.x - originX) *
-                            points.first / dispW) to
-                            ((local.y - originY) *
-                                points.second / dispH)
-                    }
-                    val pressPoint = pagePointOf(longPress.position)
-                    if (pressPoint == null) {
-                        drainPdfEntryGesture(down.id)
-                        return@awaitEachGesture
-                    }
-                    // The geometry: the cell's copy if held,
-                    // else suspend for it — still holding the
-                    // pointer and tracking its latest
-                    // position; if the pointer lifts or
-                    // cancels before the geometry arrives,
-                    // the entry abandons silently (§11.5's
-                    // rule, shared by both entries).
-                    var latestPosition = longPress.position
-                    var geometry = pageGeometry
-                    if (geometry == null) {
-                        val holder = object {
-                            var value: PageCharGeometry? = null
-                            var done = false
-                        }
-                        val fetch = cellScope.launch {
-                            holder.value = session.pageGeometry(page)
-                            if (holder.value != null) {
-                                pageGeometry = holder.value
-                            }
-                            holder.done = true
-                        }
-                        var lifted = false
-                        while (!holder.done && !lifted) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes
-                                .firstOrNull { it.id == down.id }
-                                ?: continue
-                            change.consume()
-                            if (change.pressed) {
-                                latestPosition = change.position
-                            } else {
-                                lifted = true
-                            }
-                        }
-                        if (lifted) {
-                            fetch.cancel()
-                            return@awaitEachGesture
-                        }
-                        geometry = holder.value
-                        if (geometry == null) {
+                    // Code 119 (CONVICTION-CODE118-PDF-SELECT
+                    // §2): the entry shield — set before the
+                    // long-press wait, cleared in the finally
+                    // below on EVERY exit (fire, fail, drain,
+                    // cancel), so the flag can never stick.
+                    // While it is up the transform loop skips
+                    // single-pointer consumption (its consume
+                    // block) and the pager's settle effect
+                    // stands down (the onEntryActivity report).
+                    entryPending.value = true
+                    try {
+                        val longPress = awaitLongPressOrCancellation(down.id)
+                            ?: return@awaitEachGesture
+                        // MR-2b (Revision 1, C3): under an edge
+                        // trim the entry stands down — the press
+                        // reports the stand-down and no drag
+                        // begins (the branch is unchanged).
+                        if (trimStandsDown) {
+                            onTrimStandDown()
+                            longPress.consume()
                             drainPdfEntryGesture(down.id)
                             return@awaitEachGesture
                         }
-                    }
-                    val geo = geometry!!
-                    // §9.3: a new selection entry cancels a
-                    // fade still running.
-                    barDismissing = false
-                    val entered = pdfSelectionAt(
-                        geo, pressPoint.first, pressPoint.second
-                    )
-                    if (entered == null) {
-                        drainPdfEntryGesture(down.id)
-                        return@awaitEachGesture
-                    }
-                    selection = entered
-                    selectionDragActive.value = true
-                    dragRangeState.value =
-                        entered.start..entered.end - 1
-                    val entryLineIndex = PdfLineIndex(geo)
-                    var anchor: Int? = null
-                    fun extend(screen: Offset) {
-                        val point = pagePointOf(screen) ?: return
-                        val index = entryLineIndex.charIndexAt(
-                            point.first, point.second
-                        ) ?: pdfCharIndexAt(
-                            geo, point.first, point.second
-                        ) ?: return
-                        val (range, newAnchor) = pdfEntryDragRange(
-                            entered.start, entered.end, anchor, index
-                        )
-                        anchor = newAnchor
-                        dragRangeState.value = range
-                    }
-                    try {
-                        if (latestPosition != longPress.position) {
-                            extend(latestPosition)
+                        longPress.consume()
+                        if (cellSizePx == IntSize.Zero) {
+                            drainPdfEntryGesture(down.id)
+                            return@awaitEachGesture
                         }
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes
-                                .firstOrNull { it.id == down.id }
-                                ?: continue
-                            change.consume()
-                            if (!change.pressed) break
-                            extend(change.position)
+                        val slotBitmap = bitmap ?: previewBitmap
+                        val points = session.pagePointsSizePeek(page)
+                        if (slotBitmap == null || points == null) {
+                            drainPdfEntryGesture(down.id)
+                            return@awaitEachGesture
+                        }
+                        // The inversion (MR-2b's maths,
+                        // unchanged): offsets arrive
+                        // POST-transform (this box's screen
+                        // space); invert the centre-anchored
+                        // layer transform FIRST (screen =
+                        // C + (s − C)·z + pan), then the fitted
+                        // rect takes layer points to page points.
+                        // Null when the point falls outside the
+                        // displayed page rect.
+                        fun pagePointOf(
+                            screen: Offset
+                        ): Pair<Float, Float>? {
+                            val centre = Offset(
+                                cellSizePx.width / 2f,
+                                cellSizePx.height / 2f
+                            )
+                            val z = zoomState.zoom
+                            val local = if (z != 0f) {
+                                centre + (screen - centre -
+                                    zoomState.pan) / z
+                            } else {
+                                screen
+                            }
+                            val (dispW, dispH) = pdfDisplayedSizePx(
+                                slotBitmap.width, slotBitmap.height,
+                                cellSizePx.width, cellSizePx.height,
+                                settings.fitMode
+                            )
+                            if (dispW <= 0f || dispH <= 0f) return null
+                            val originX = (cellSizePx.width - dispW) / 2f
+                            val originY = (cellSizePx.height - dispH) / 2f
+                            if (local.x !in originX..(originX + dispW) ||
+                                local.y !in originY..(originY + dispH)
+                            ) {
+                                return null
+                            }
+                            return ((local.x - originX) *
+                                points.first / dispW) to
+                                ((local.y - originY) *
+                                    points.second / dispH)
+                        }
+                        // The geometry: the cell's copy if held,
+                        // else suspend for it — still holding the
+                        // pointer and tracking its latest
+                        // position; if the pointer lifts or
+                        // cancels before the geometry arrives,
+                        // the entry abandons silently (§11.5's
+                        // rule, shared by both entries).
+                        var latestPosition = longPress.position
+                        var geometry = pageGeometry
+                        if (geometry == null) {
+                            val holder = object {
+                                var value: PageCharGeometry? = null
+                                var done = false
+                            }
+                            val fetch = cellScope.launch {
+                                holder.value = session.pageGeometry(page)
+                                if (holder.value != null) {
+                                    pageGeometry = holder.value
+                                }
+                                holder.done = true
+                            }
+                            var lifted = false
+                            while (!holder.done && !lifted) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes
+                                    .firstOrNull { it.id == down.id }
+                                    ?: continue
+                                change.consume()
+                                if (change.pressed) {
+                                    latestPosition = change.position
+                                } else {
+                                    lifted = true
+                                }
+                            }
+                            if (lifted) {
+                                fetch.cancel()
+                                return@awaitEachGesture
+                            }
+                            geometry = holder.value
+                            if (geometry == null) {
+                                drainPdfEntryGesture(down.id)
+                                return@awaitEachGesture
+                            }
+                        }
+                        // Code 119 (CONVICTION-CODE118-PDF-SELECT
+                        // §5): the press point is read AFTER the
+                        // geometry wait, from the finger's latest
+                        // position — the wait already tracks it.
+                        // Reading it from the long-press position
+                        // before the wait pinned the entry word
+                        // wherever the finger STARTED, so a moved
+                        // finger folded an unexpected word into a
+                        // cold page's first selection. (On a warm
+                        // page no wait runs and latestPosition IS
+                        // the long-press position — unchanged.)
+                        val pressPoint = pagePointOf(latestPosition)
+                        if (pressPoint == null) {
+                            drainPdfEntryGesture(down.id)
+                            return@awaitEachGesture
+                        }
+                        val geo = geometry!!
+                        // §9.3: a new selection entry cancels a
+                        // fade still running.
+                        barDismissing = false
+                        val entered = pdfSelectionAt(
+                            geo, pressPoint.first, pressPoint.second
+                        )
+                        if (entered == null) {
+                            drainPdfEntryGesture(down.id)
+                            return@awaitEachGesture
+                        }
+                        selection = entered
+                        selectionDragActive.value = true
+                        dragRangeState.value =
+                            entered.start..entered.end - 1
+                        val entryLineIndex = PdfLineIndex(geo)
+                        var anchor: Int? = null
+                        fun extend(screen: Offset) {
+                            val point = pagePointOf(screen) ?: return
+                            val index = entryLineIndex.charIndexAt(
+                                point.first, point.second
+                            ) ?: pdfCharIndexAt(
+                                geo, point.first, point.second
+                            ) ?: return
+                            val (range, newAnchor) = pdfEntryDragRange(
+                                entered.start, entered.end, anchor, index
+                            )
+                            anchor = newAnchor
+                            dragRangeState.value = range
+                        }
+                        try {
+                            if (latestPosition != longPress.position) {
+                                extend(latestPosition)
+                            }
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes
+                                    .firstOrNull { it.id == down.id }
+                                    ?: continue
+                                change.consume()
+                                if (!change.pressed) break
+                                extend(change.position)
+                            }
+                        } finally {
+                            // The settle (R2.3's rule): the one
+                            // write of the settled selection (and
+                            // its text) per drag; the range
+                            // stands — no rollback.
+                            val settled = dragRangeState.value
+                            if (settled != null) {
+                                entered.start = settled.first
+                                entered.end = settled.last + 1
+                                dragRangeState.value = null
+                            }
+                            selectionDragActive.value = false
                         }
                     } finally {
-                        // The settle (R2.3's rule): the one
-                        // write of the settled selection (and
-                        // its text) per drag; the range
-                        // stands — no rollback.
-                        val settled = dragRangeState.value
-                        if (settled != null) {
-                            entered.start = settled.first
-                            entered.end = settled.last + 1
-                            dragRangeState.value = null
-                        }
-                        selectionDragActive.value = false
+                        entryPending.value = false
                     }
                 }
             }
@@ -2920,8 +3004,26 @@ private fun PdfPageCell(
                                         }
                                     }
                                 }
+                                // Code 119 (CONVICTION-CODE118-
+                                // PDF-SELECT §2): while a
+                                // selection entry is pending on
+                                // this cell, single-pointer
+                                // changes are NOT consumed —
+                                // consumption is what kills the
+                                // entry's long-press wait
+                                // (foundation reads isConsumed
+                                // in the wait loop), so a
+                                // zoomed hold died on ≥1 px of
+                                // drift. A second pointer (a
+                                // real pinch, pressed >= 2)
+                                // consumes exactly as shipped:
+                                // the pinch flips transform
+                                // mode above and proceeds.
                                 event.changes.forEach { change ->
-                                    if (change.positionChanged()) {
+                                    if (change.positionChanged() &&
+                                        !(entryPending.value &&
+                                            pressed < 2)
+                                    ) {
                                         change.consume()
                                     }
                                 }
@@ -4536,8 +4638,6 @@ private fun PdfContinuousBody(
                                             itemSizePx.width) to
                                             (local.y * points.second /
                                                 itemSizePx.height)
-                                    val pressPoint =
-                                        pagePointOf(longPress.position)
                                     // §11.5's async geometry
                                     // wait: suspend for the
                                     // geometry still holding
@@ -4589,6 +4689,17 @@ private fun PdfContinuousBody(
                                             return@awaitEachGesture
                                         }
                                     }
+                                    // Code 119 (CONVICTION-CODE118-
+                                    // PDF-SELECT §5): the press
+                                    // point is read AFTER the
+                                    // geometry wait, from the
+                                    // finger's latest position —
+                                    // the same re-read as the
+                                    // paged entry. (No wait on a
+                                    // warm page: latestPosition
+                                    // IS the long-press position.)
+                                    val pressPoint =
+                                        pagePointOf(latestPosition)
                                     val geo = geometry!!
                                     // §9.3 + §6.1: a new entry
                                     // cancels a running fade,
