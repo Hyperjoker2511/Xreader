@@ -40,6 +40,13 @@ import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SectionHeader
+// Code 121 (W4): the scratch-M3 (S7) sheet's components.
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedButton
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 
@@ -71,6 +78,72 @@ fun SourceFilterSheet(
     var revision by remember { mutableIntStateOf(0) }
     val rows = remember(revision, filters) {
         FilterSheetModel.rows(filters)
+    }
+
+    // ── Code 121 (W4, scratch S7): the Material 3 filter sheet ──
+    // Filter-chip groups from the source's own filter model, in
+    // a modal bottom sheet, with the Reset / Show N results
+    // button group at its foot (N = the catalogue's current
+    // result count, live from the catalogue state). Under
+    // Nocturne the shipped sheet below renders byte-identically.
+    if (isM3Design()) {
+        val catalogState by viewModel.state
+            .collectAsStateWithLifecycle()
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = rememberModalBottomSheetState(
+                skipPartiallyExpanded = true
+            )
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 40.dp)
+            ) {
+                Text(
+                    "Filters",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Spacer(Modifier.height(8.dp))
+                Column(
+                    Modifier
+                        .heightIn(max = 440.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    rows.forEach { row ->
+                        M3FilterRowView(
+                            row = row,
+                            root = filters,
+                            onMutated = { revision++ }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.resetFilters()
+                            revision++
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Reset") }
+                    Button(
+                        onClick = { viewModel.applyFilters() },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            "Show ${catalogState.books.size} results"
+                        )
+                    }
+                }
+            }
+        }
+        return
     }
 
     ModalBottomSheet(
@@ -320,6 +393,181 @@ private fun FilterRowView(
             Column(Modifier.padding(start = 12.dp)) {
                 row.children.forEach { child ->
                     FilterRowView(
+                        row = child,
+                        root = root,
+                        onMutated = onMutated
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Code 121 (W4, scratch S7): one filter row in the M3 sheet —
+ * chip groups for the chip-shaped filters (check / tri-state /
+ * select / sort), a text field for text filters, labelLarge
+ * headers for groups. Every edit goes through the same
+ * [FilterStateOps] transitions the shipped sheet uses.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun M3FilterRowView(
+    row: FilterRow,
+    root: FilterList,
+    onMutated: () -> Unit
+) {
+    val filter = FilterSheetModel.filterAt(root, row.id)
+    when (row) {
+        is FilterRow.Header -> {
+            M3GroupHeader(row.name)
+        }
+        is FilterRow.Separator -> {
+            HorizontalDivider(
+                Modifier.padding(vertical = 8.dp),
+                color = MaterialTheme.colorScheme.outlineVariant
+            )
+        }
+        is FilterRow.Text -> {
+            val text = filter as? Filter.Text
+            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Text(
+                    row.name,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = row.value,
+                    onValueChange = { value ->
+                        if (text != null) {
+                            FilterStateOps.setText(text, value)
+                            onMutated()
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+        is FilterRow.Check -> {
+            val checkBox = filter as? Filter.CheckBox
+            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                FilterChip(
+                    selected = row.checked,
+                    onClick = {
+                        if (checkBox != null) {
+                            FilterStateOps.toggle(checkBox)
+                            onMutated()
+                        }
+                    },
+                    label = { Text(row.name) },
+                    enabled = checkBox != null
+                )
+            }
+        }
+        is FilterRow.Tri -> {
+            val triState = filter as? Filter.TriState
+            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Text(
+                    row.name,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(Modifier.height(4.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(
+                        "Any" to Filter.TriState.STATE_IGNORE,
+                        "Include" to Filter.TriState.STATE_INCLUDE,
+                        "Exclude" to Filter.TriState.STATE_EXCLUDE
+                    ).forEach { (word, value) ->
+                        FilterChip(
+                            selected = row.state == value,
+                            onClick = {
+                                if (triState != null) {
+                                    triState.state = value
+                                    onMutated()
+                                }
+                            },
+                            label = { Text(word) },
+                            enabled = triState != null
+                        )
+                    }
+                }
+            }
+        }
+        is FilterRow.Select -> {
+            val select = filter as? Filter.Select<*>
+            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Text(
+                    row.name,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(Modifier.height(4.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    row.options.forEachIndexed { index, option ->
+                        FilterChip(
+                            selected = index == row.selectedIndex,
+                            onClick = {
+                                if (select != null) {
+                                    FilterStateOps.select(select, index)
+                                    onMutated()
+                                }
+                            },
+                            label = { Text(option) },
+                            enabled = select != null
+                        )
+                    }
+                }
+            }
+        }
+        is FilterRow.Sort -> {
+            val sort = filter as? Filter.Sort
+            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Text(
+                    row.name,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(Modifier.height(4.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    row.options.forEachIndexed { index, option ->
+                        val chosen = index == row.selectedIndex
+                        FilterChip(
+                            selected = chosen,
+                            onClick = {
+                                if (sort != null) {
+                                    FilterStateOps.sortTap(sort, index)
+                                    onMutated()
+                                }
+                            },
+                            label = {
+                                Text(
+                                    if (chosen) {
+                                        option + if (row.ascending) {
+                                            " ↑"
+                                        } else {
+                                            " ↓"
+                                        }
+                                    } else {
+                                        option
+                                    }
+                                )
+                            },
+                            enabled = sort != null
+                        )
+                    }
+                }
+            }
+        }
+        is FilterRow.Group -> {
+            M3GroupHeader(row.name)
+            Column(Modifier.padding(start = 12.dp)) {
+                row.children.forEach { child ->
+                    M3FilterRowView(
                         row = child,
                         root = root,
                         onMutated = onMutated

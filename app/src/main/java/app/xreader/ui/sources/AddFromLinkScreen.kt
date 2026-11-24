@@ -36,6 +36,15 @@ import app.xreader.ui.common.LoadingState
 import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.QuickActionTile
+// Code 121 (W4): the scratch-M3 (R24) branch's components.
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.TopAppBar
 import app.xreader.ui.theme.LocalUiMetrics
 
 /**
@@ -63,6 +72,652 @@ fun AddFromLinkScreen(
 
     LaunchedEffect(viewModel) {
         sessionSaved.collect { key -> viewModel.onSessionSaved(key) }
+    }
+
+    // ── Code 121 (W4, scratch R24): Add from link in Material 3 ──
+    // A form page (URL field + paste, filled "Check this link")
+    // with the rules editor as the second tab (TabRow: Add ·
+    // Rules). The five-leg test read is BEHAVIOUR, unchanged:
+    // the view model saves only on a proven read. A failed probe
+    // is ONE plain line naming the failed stage. The Q6–Q9
+    // candidates (checklist UI, duplicate warning, two-level
+    // failure report, probe Cancel) are UNAPPROVED and are NOT
+    // built here. Guided picking has no engine in the tree (no
+    // picking flow exists in LinkAddViewModel/LinkProber), so no
+    // door is drawn for it — see D-121-W4-1. Under Nocturne the
+    // shipped screen below renders byte-identically.
+    if (isM3Design()) {
+        var m3Tab by remember { mutableStateOf(0) }
+        Column(Modifier.fillMaxSize()) {
+            TopAppBar(
+                title = { Text("Add from link") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                }
+            )
+            TabRow(selectedTabIndex = m3Tab) {
+                Tab(
+                    selected = m3Tab == 0,
+                    onClick = { m3Tab = 0 },
+                    text = { Text("Add") }
+                )
+                Tab(
+                    selected = m3Tab == 1,
+                    onClick = { m3Tab = 1 },
+                    text = { Text("Rules") }
+                )
+            }
+            if (m3Tab == 1) {
+                val notProven = state as? LinkAddUiState.NotProven
+                if (notProven != null) {
+                    ParserRulesEditorScreen(
+                        config = notProven.outcome.config,
+                        saving = false,
+                        message = null,
+                        onSave = {},
+                        onBack = { m3Tab = 0 },
+                        editable = false,
+                        readOnlyNote = "These are the rules Xreader " +
+                            "worked out for this site. Save the " +
+                            "source first — after that, its rules " +
+                            "can be edited from the source's " +
+                            "Details page."
+                    )
+                } else {
+                    Text(
+                        "No rules yet. Check a link first — when " +
+                            "Xreader works out how to read a site, " +
+                            "the rules it derived show here.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(24.dp)
+                    )
+                }
+            } else {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        "Paste the link of a book page from a site " +
+                            "you read. Xreader will look at the page, " +
+                            "work out where the chapters and text " +
+                            "live, and test itself on the book " +
+                            "before saving anything.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    val clipboard = androidx.compose.ui.platform
+                        .LocalClipboardManager.current
+                    OutlinedTextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        label = { Text("Book page link") },
+                        placeholder = {
+                            Text("https://site.example/novel/my-book")
+                        },
+                        singleLine = true,
+                        enabled = state is LinkAddUiState.Idle ||
+                            state is LinkAddUiState.Failed,
+                        trailingIcon = {
+                            IconButton(
+                                onClick = {
+                                    clipboard.getText()?.text
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let { url = it }
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Filled.ContentPaste,
+                                    contentDescription = "Paste"
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    when (val current = state) {
+                        is LinkAddUiState.Idle -> {
+                            Button(
+                                onClick = { viewModel.probe(url) },
+                                enabled = url.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Check this link") }
+                            Text(
+                                "Or skip the test read entirely:",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                            FilledTonalButton(
+                                onClick = { viewModel.installLive(url) },
+                                enabled = url.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    "Install as a Live Source — works " +
+                                        "for any site"
+                                )
+                            }
+                            Text(
+                                "A Live Source is read fresh from " +
+                                    "the site every time you open " +
+                                    "it, in Xreader's own screens — " +
+                                    "nothing is saved that can go " +
+                                    "stale, and it can be pinned to " +
+                                    "your home screen like an app.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                        }
+                        is LinkAddUiState.Probing -> {
+                            LoadingState(
+                                whatIsHappening = "Looking at the " +
+                                    "site and test-reading a chapter…",
+                                longJob = true
+                            )
+                        }
+                        is LinkAddUiState.AiProbing -> {
+                            LoadingState(
+                                whatIsHappening = "The AI is studying " +
+                                    "the page — then Xreader " +
+                                    "test-reads a chapter with what " +
+                                    "it proposes. Nothing is saved " +
+                                    "unless the test passes.",
+                                longJob = true
+                            )
+                        }
+                        is LinkAddUiState.LoginRequired -> {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme
+                                        .colorScheme.surfaceContainerLow
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    Modifier.padding(16.dp),
+                                    verticalArrangement =
+                                        Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        if (current.siteCheck) {
+                                            "This site needs a quick " +
+                                                "check first"
+                                        } else {
+                                            "This site needs a " +
+                                                "sign-in first"
+                                        },
+                                        style = MaterialTheme
+                                            .typography.titleMedium
+                                    )
+                                    Text(
+                                        if (current.siteCheck) {
+                                            "Open the site inside " +
+                                                "Xreader and do the " +
+                                                "check yourself, then " +
+                                                "Xreader will look at " +
+                                                "the site again with " +
+                                                "your session."
+                                        } else {
+                                            "Log in inside Xreader's " +
+                                                "browser (you'll pass " +
+                                                "any checks yourself), " +
+                                                "then Xreader will look " +
+                                                "at the site again with " +
+                                                "your session."
+                                        },
+                                        style = MaterialTheme
+                                            .typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                    Button(
+                                        onClick = {
+                                            viewModel.loginRequest()
+                                                ?.let(onRequestLogin)
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            if (current.siteCheck) {
+                                                "Open ${current.host}"
+                                            } else {
+                                                "Log in to ${current.host}"
+                                            }
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { viewModel.reset() },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) { Text("Use a different link") }
+                                }
+                            }
+                        }
+                        is LinkAddUiState.Ready -> {
+                            val drive = current.draft.testDrive
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme
+                                        .colorScheme.surfaceContainerLow
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    Modifier.padding(16.dp),
+                                    verticalArrangement =
+                                        Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        "It works — here's the proof",
+                                        style = MaterialTheme
+                                            .typography.titleMedium
+                                    )
+                                    Text(
+                                        "Book found: “${drive.bookTitle}”",
+                                        style = MaterialTheme
+                                            .typography.bodyLarge
+                                    )
+                                    Text(
+                                        "${drive.chapterCount} chapters " +
+                                            "found • first chapter " +
+                                            "“${drive.firstChapterTitle}”",
+                                        style = MaterialTheme
+                                            .typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                    val searchProof = drive.searchProof
+                                    if (drive.searchVerified &&
+                                        searchProof != null
+                                    ) {
+                                        Text(
+                                            searchProof,
+                                            style = MaterialTheme
+                                                .typography.bodyMedium
+                                        )
+                                    } else {
+                                        Text(
+                                            drive.searchFailure?.let {
+                                                "Search isn't proven " +
+                                                    "yet: $it. You can " +
+                                                    "still save it — " +
+                                                    "browsing and " +
+                                                    "reading work, and " +
+                                                    "the source's page " +
+                                                    "has a “Set up " +
+                                                    "search” button."
+                                            } ?: (
+                                                "Search couldn't be set " +
+                                                    "up for this site " +
+                                                    "yet. You can still " +
+                                                    "save it — browsing " +
+                                                    "and reading work, " +
+                                                    "and the source's " +
+                                                    "page has a “Set up " +
+                                                    "search” button."
+                                                ),
+                                            style = MaterialTheme
+                                                .typography.bodyMedium,
+                                            color = MaterialTheme
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                        )
+                                    }
+                                    if (drive.lockedChapterCount > 0) {
+                                        Text(
+                                            "${drive.lockedChapterCount} " +
+                                                "of the chapters are " +
+                                                "paid or locked on the " +
+                                                "site — those can't " +
+                                                "be read.",
+                                            style = MaterialTheme
+                                                .typography.bodyMedium,
+                                            color = MaterialTheme
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                        )
+                                    }
+                                    val coverWarning = drive.coverWarning
+                                    if (coverWarning != null) {
+                                        Text(
+                                            coverWarning,
+                                            style = MaterialTheme
+                                                .typography.bodyMedium,
+                                            color = MaterialTheme
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                        )
+                                    }
+                                    if (drive.reviewsFound) {
+                                        Text(
+                                            "Reader reviews were found " +
+                                                "on this site — they'll " +
+                                                "show on book pages.",
+                                            style = MaterialTheme
+                                                .typography.bodyMedium,
+                                            color = MaterialTheme
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                        )
+                                    }
+                                    Text(
+                                        "The chapter starts:",
+                                        style = MaterialTheme
+                                            .typography.labelMedium,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                    Text(
+                                        "“${drive.chapterTextPreview}…”",
+                                        style = MaterialTheme
+                                            .typography.bodyMedium
+                                    )
+                                    Text(
+                                        "Adding “${current.sourceName}” now…",
+                                        style = MaterialTheme
+                                            .typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                        is LinkAddUiState.RedirectChoice -> {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme
+                                        .colorScheme.surfaceContainerLow
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    Modifier.padding(16.dp),
+                                    verticalArrangement =
+                                        Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        "This link leads to a " +
+                                            "different site",
+                                        style = MaterialTheme
+                                            .typography.titleMedium
+                                    )
+                                    Text(
+                                        "You pasted ${current.pastedHost}, " +
+                                            "but the check ended at " +
+                                            "${current.finalHost} — a " +
+                                            "different site. Nothing " +
+                                            "has been added yet.",
+                                        style = MaterialTheme
+                                            .typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                    Button(
+                                        onClick = {
+                                            viewModel
+                                                .confirmRedirectedInstall()
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            "Add ${current.finalHost} instead"
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.cancelRedirect()
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) { Text("Cancel") }
+                                }
+                            }
+                        }
+                        is LinkAddUiState.NotProven -> {
+                            Column(
+                                verticalArrangement =
+                                    Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    "Added, reading not proven",
+                                    style = MaterialTheme
+                                        .typography.titleMedium
+                                )
+                                Text(
+                                    "Xreader found rules for " +
+                                        "${current.sourceName}, but " +
+                                        "couldn't prove reading yet — " +
+                                        "these parts didn't check " +
+                                        "out: " +
+                                        current.outcome.missingLegs
+                                            .joinToString() +
+                                        ". You can save it now and " +
+                                        "it will be marked as needing " +
+                                        "a check, or try again later.",
+                                    style = MaterialTheme
+                                        .typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                                Button(
+                                    onClick = { viewModel.saveNotProven() },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("Save it anyway") }
+                                TextButton(
+                                    onClick = onBack,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("Don't save") }
+                            }
+                        }
+                        is LinkAddUiState.Failed -> {
+                            // R24: ONE plain line naming the
+                            // failed stage — the probe's last
+                            // stage line when it recorded one,
+                            // the failure's own words otherwise.
+                            Text(
+                                current.steps.lastOrNull()
+                                    ?: current.message,
+                                style = MaterialTheme
+                                    .typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            if (aiAvailable) {
+                                Button(
+                                    onClick = { viewModel.probeWithAi() },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("Try the AI detector") }
+                            }
+                            FilledTonalButton(
+                                onClick = { viewModel.installLive(url) },
+                                enabled = url.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Install as a Live Source instead")
+                            }
+                            Text(
+                                "A Live Source skips the test read: " +
+                                    "it's installed as-is and read " +
+                                    "fresh from the site each time, " +
+                                    "in Xreader's own screens.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                            TextButton(
+                                onClick = { viewModel.probe(url) },
+                                enabled = url.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Try again") }
+                            TextButton(
+                                onClick = { viewModel.reset() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Start over") }
+                        }
+                        is LinkAddUiState.Saving -> {
+                            LoadingState(
+                                whatIsHappening = "Saving the source " +
+                                    "and adding the book…"
+                            )
+                        }
+                        is LinkAddUiState.Saved -> {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme
+                                        .colorScheme.surfaceContainerLow
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    Modifier.padding(16.dp),
+                                    verticalArrangement =
+                                        Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        "Source saved",
+                                        style = MaterialTheme
+                                            .typography.titleMedium
+                                    )
+                                    Text(
+                                        "“${current.bookTitle}” is " +
+                                            "ready in your library, " +
+                                            "and the source is in " +
+                                            "Sources like any other — " +
+                                            "with the same site " +
+                                            "permissions and trust " +
+                                            "settings.",
+                                        style = MaterialTheme
+                                            .typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                    if (current.bookId != null) {
+                                        val savedBookId = current.bookId
+                                        Button(
+                                            onClick = {
+                                                onOpenBook(savedBookId)
+                                            },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                        ) { Text("Open the book") }
+                                    }
+                                    TextButton(
+                                        onClick = onBack,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) { Text("Back to Sources") }
+                                }
+                            }
+                        }
+                        is LinkAddUiState.InstallingLive -> {
+                            LoadingState(
+                                whatIsHappening = "Installing the " +
+                                    "Live Source…"
+                            )
+                        }
+                        is LinkAddUiState.LiveInstalled -> {
+                            val context = androidx.compose.ui.platform
+                                .LocalContext.current
+                            val scope = androidx.compose.runtime
+                                .rememberCoroutineScope()
+                            var pinFailed by remember {
+                                mutableStateOf(false)
+                            }
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme
+                                        .colorScheme.surfaceContainerLow
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    Modifier.padding(16.dp),
+                                    verticalArrangement =
+                                        Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        "Live Source installed",
+                                        style = MaterialTheme
+                                            .typography.titleMedium
+                                    )
+                                    Text(
+                                        "“${current.name}” is in " +
+                                            "Browse like any other " +
+                                            "source, and it reads the " +
+                                            "site fresh every time — " +
+                                            "in Xreader's own screens. " +
+                                            "You can also pin it to " +
+                                            "your home screen, where " +
+                                            "it opens in its own " +
+                                            "window like an app.",
+                                        style = MaterialTheme
+                                            .typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                    if (current.bookId != null) {
+                                        Button(
+                                            onClick = {
+                                                onOpenBook(current.bookId)
+                                            },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                        ) { Text("Open the book") }
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            scope.launch {
+                                                val bytes = viewModel
+                                                    .liveIconBytes(
+                                                        current.iconUrl
+                                                    )
+                                                pinFailed = !SiteShortcut
+                                                    .requestPin(
+                                                        context = context,
+                                                        extensionId =
+                                                            current
+                                                                .extensionId,
+                                                        sourceId =
+                                                            current.sourceId,
+                                                        name = current.name,
+                                                        iconBytes = bytes
+                                                    )
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) { Text("Add to home screen") }
+                                    if (pinFailed) {
+                                        Text(
+                                            "Your launcher doesn't " +
+                                                "allow pinning from " +
+                                                "apps — the source is " +
+                                                "still in Browse.",
+                                            style = MaterialTheme
+                                                .typography.bodySmall,
+                                            color = MaterialTheme
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = onBack,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) { Text("Back to Sources") }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(96.dp))
+                }
+            }
+        }
+        return
     }
 
     // v1.0.7 gate-fix round: this column SCROLLS. It did not —

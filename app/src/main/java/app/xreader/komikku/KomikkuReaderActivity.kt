@@ -114,13 +114,25 @@ class KomikkuReaderActivity : ComponentActivity() {
         // StateFlow form.
         val appearanceState = (application as app.xreader.XreaderApp)
             .container.appearancePrefs.state
+        // Code 121 (W6, §3.8): the design switch reaches the
+        // manga reader too — the same collected state the shell
+        // reads. Under Nocturne nothing changes (XreaderTheme's
+        // default design is the Nocturne state); under Material 3
+        // XreaderTheme delegates to M3ThemeRoot, and the reader
+        // surfaces branch on LocalDesignState like every other
+        // surface. The ENGINE is untouched either way.
+        val designStateFlow = (application as app.xreader.XreaderApp)
+            .container.designPrefs.state
         setContent {
             val appearance by appearanceState.collectAsState(
                 initial = app.xreader.data.prefs.AppearanceState()
             )
+            val designState by designStateFlow.collectAsState(
+                initial = app.xreader.data.prefs.DesignState()
+            )
             val darkTheme =
                 appearance.themeMode != app.xreader.data.prefs.ThemeMode.LIGHT
-            XreaderTheme(darkTheme = darkTheme) {
+            XreaderTheme(darkTheme = darkTheme, design = designState) {
                 KomikkuReaderScreen(
                     viewModel = viewModel,
                     volumeTurns = volumeTurns,

@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -49,12 +50,25 @@ fun BookSearchSheet(
     onJump: (CoreSearchHit) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
+    // Code 121 (S20): under M3 the sheet head carries the
+    // result count and results are list items; the search
+    // behaviour (one hit per chapter, tap lands and closes)
+    // is unchanged.
+    val searchIsM3 = app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
     Column(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        SectionHeader(title = "Search", eyebrow = "This book")
+        SectionHeader(
+            title = if (searchIsM3 && hits != null) {
+                "Search · ${hits.size} results"
+            } else {
+                "Search"
+            },
+            eyebrow = "This book"
+        )
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
@@ -103,22 +117,30 @@ fun BookSearchSheet(
             )
             else -> LazyColumn(Modifier.heightIn(max = 480.dp)) {
                 items(hits, key = { it.chapterId }) { hit ->
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onJump(hit) }
-                            .padding(horizontal = 8.dp, vertical = 10.dp)
-                    ) {
-                        Text(
-                            hit.chapterTitle,
-                            style = MaterialTheme.typography.titleSmall
+                    if (searchIsM3) {
+                        ListItem(
+                            headlineContent = { Text(hit.chapterTitle) },
+                            supportingContent = { Text(hit.snippet) },
+                            modifier = Modifier.clickable { onJump(hit) }
                         )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            hit.snippet,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    } else {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onJump(hit) }
+                                .padding(horizontal = 8.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                hit.chapterTitle,
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                hit.snippet,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

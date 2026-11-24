@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -168,6 +170,16 @@ class AddListViewModel(private val container: AppContainer) : ViewModel() {
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun AddListScreen(viewModel: AddListViewModel, onBack: () -> Unit) {
+    // Code 121 (R7): the Material 3 form — small top app bar,
+    // add toggle buttons on the candidate rows, the pinned
+    // bottom button group. The Nocturne composition below is
+    // unchanged.
+    if (app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        M3AddListContent(viewModel = viewModel, onBack = onBack)
+        return
+    }
     val state by viewModel.state.collectAsStateWithLifecycle()
     var text by remember { mutableStateOf("") }
     Column(
@@ -275,5 +287,209 @@ fun AddListScreen(viewModel: AddListViewModel, onBack: () -> Unit) {
             }
         }
         TextButton(onClick = onBack) { Text("Back") }
+    }
+}
+
+// ── Code 121 (R7): the Material 3 Add-to-list ──────────────
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
+)
+@Composable
+private fun M3AddListContent(
+    viewModel: AddListViewModel,
+    onBack: () -> Unit
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    var text by remember { mutableStateOf("") }
+    // Rows the reader has toggled on; the bottom group's
+    // "Add N books" adds exactly these (the review list is the
+    // decision point — nothing is added during search).
+    var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val pickedFound = state.rows.filter {
+        it.state == AddListRowState.FOUND && it.title in picked
+    }
+    androidx.compose.material3.Scaffold(
+        topBar = {
+            androidx.compose.material3.TopAppBar(
+                title = { Text("Add books") },
+                navigationIcon = {
+                    androidx.compose.material3.IconButton(onClick = onBack) {
+                        androidx.compose.material3.Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                }
+            )
+        },
+        bottomBar = {
+            if (state.rows.isNotEmpty()) {
+                androidx.compose.material3.Surface(
+                    color = androidx.compose.material3.MaterialTheme
+                        .colorScheme.surfaceContainer
+                ) {
+                    androidx.compose.material3.ButtonGroup(
+                        overflowIndicator = { },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                    ) {
+                        clickableItem(
+                            onClick = onBack,
+                            label = "Cancel"
+                        )
+                        clickableItem(
+                            onClick = {
+                                pickedFound.forEach { viewModel.add(it) }
+                                picked = emptySet()
+                            },
+                            label = "Add ${pickedFound.size} books",
+                            enabled = pickedFound.isNotEmpty()
+                        )
+                    }
+                }
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            if (state.searching) {
+                // Import progress: wavy line under the app bar.
+                androidx.compose.material3.LinearWavyProgressIndicator(
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            Column(
+                Modifier
+                    .weight(1f)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    "Paste the books you want — one title per line. Pick " +
+                        "the source to look on; you'll review every match " +
+                        "before anything is added.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                if (state.sources.isEmpty()) {
+                    Text(
+                        "You need a source first — add one from Browse, " +
+                            "then come back with your list.",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    return@Column
+                }
+                Text(
+                    "Look on:",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    state.sources.take(6).forEachIndexed { index, handle ->
+                        androidx.compose.material3.FilterChip(
+                            selected = state.selectedSourceIndex == index,
+                            onClick = { viewModel.selectSource(index) },
+                            label = { Text(handle.source.name) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("Book titles, one per line") },
+                    minLines = 4,
+                    maxLines = 8,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.Button(
+                    onClick = { viewModel.findMatches(text) },
+                    enabled = text.isNotBlank() && !state.searching,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (state.searching) "Looking…" else "Find these books")
+                }
+                Spacer(Modifier.height(12.dp))
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(state.rows, key = { it.title }) { row ->
+                        val line = when (row.state) {
+                            AddListRowState.SEARCHING -> "Looking…"
+                            AddListRowState.NOT_FOUND -> row.note
+                            AddListRowState.ADDED -> "In your Library"
+                            AddListRowState.FAILED ->
+                                "Couldn't be added — try again"
+                            AddListRowState.FOUND -> row.note
+                            AddListRowState.WAITING -> ""
+                        }
+                        androidx.compose.material3.ListItem(
+                            headlineContent = {
+                                Text(row.match?.title ?: row.title)
+                            },
+                            supportingContent = if (line.isNotBlank()) {
+                                { Text(line) }
+                            } else {
+                                null
+                            },
+                            leadingContent = {
+                                app.xreader.ui.common.M3CoverThumbnail(
+                                    title = row.match?.title ?: row.title,
+                                    author = row.match?.author,
+                                    coverModel = row.match?.coverUrl
+                                        ?.takeIf { it.isNotBlank() },
+                                    modifier = Modifier
+                                        .size(width = 36.dp, height = 52.dp)
+                                )
+                            },
+                            trailingContent = if (
+                                row.state == AddListRowState.FOUND ||
+                                row.state == AddListRowState.ADDED
+                            ) {
+                                {
+                                    androidx.compose.material3.ToggleButton(
+                                        checked = row.state ==
+                                            AddListRowState.ADDED ||
+                                            row.title in picked,
+                                        onCheckedChange = { checked ->
+                                            picked = if (checked) {
+                                                picked + row.title
+                                            } else {
+                                                picked - row.title
+                                            }
+                                        },
+                                        enabled = row.state ==
+                                            AddListRowState.FOUND
+                                    ) {
+                                        Text(
+                                            if (row.state ==
+                                                AddListRowState.ADDED
+                                            ) {
+                                                "Added"
+                                            } else {
+                                                "Add"
+                                            }
+                                        )
+                                    }
+                                }
+                            } else {
+                                null
+                            }
+                        )
+                    }
+                }
+            }
+        }
     }
 }

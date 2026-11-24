@@ -1,5 +1,6 @@
 package app.xreader.ui.ai
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -72,6 +73,18 @@ fun geminiModelLabel(model: String): String = when (model) {
 @Composable
 fun ProvidersScreen(viewModel: ProvidersViewModel, onBack: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // Code 121 W8 (R32, D-121-W7-03 retired): the Material 3
+    // providers page — settings-list rows; each row's setup is
+    // a full-screen dialog form. A raw key is never rendered:
+    // key fields are password fields and saved keys show only
+    // as "Key saved". Nocturne keeps the card page below.
+    if (app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        M3ProvidersContent(state = state, viewModel = viewModel, onBack = onBack)
+        return
+    }
 
     Column(
         Modifier
@@ -884,5 +897,856 @@ private fun ModelRow(
             },
             modifier = Modifier.padding(start = 8.dp)
         )
+    }
+}
+
+// ────────────────────────────────────────────────────────────────
+// Code 121 W8 (R32): the Material 3 Providers & keys page.
+// Settings-list rows (name · model line · key state as TEXT —
+// never a key), each opening its setup as a full-screen dialog
+// form. Every control calls the same ProvidersViewModel doors
+// the Nocturne cards call; the key fields are password fields
+// whose contents go straight to the VM (test & save), exactly
+// as shipped.
+// ────────────────────────────────────────────────────────────────
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun M3ProvidersContent(
+    state: ProvidersUiState,
+    viewModel: ProvidersViewModel,
+    onBack: () -> Unit
+) {
+    var openForm by remember { mutableStateOf<String?>(null) }
+    val pick = state.settings.enginePick
+    val pickLine = when (pick) {
+        is EnginePick.Specific -> {
+            val name = state.providers
+                .firstOrNull { it.def.id == pick.providerId }
+                ?.def?.name ?: "One provider"
+            if (pick.model.isBlank()) name else "$name · ${pick.model}"
+        }
+        EnginePick.Automatic -> "Automatic"
+    }
+    androidx.compose.material3.Scaffold(
+        topBar = {
+            androidx.compose.material3.TopAppBar(
+                title = { Text("Providers & keys") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 32.dp)
+        ) {
+            state.statusMessage?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (state.statusIsError) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(
+                        horizontal = 16.dp, vertical = 8.dp
+                    )
+                )
+            }
+            M3ProviderRow(
+                title = "AI engine",
+                line = pickLine,
+                onClick = { openForm = "engine" }
+            )
+            Text(
+                "Providers",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(
+                    start = 16.dp, top = 16.dp, bottom = 4.dp
+                )
+            )
+            state.providers.forEach { card ->
+                val keyState = when {
+                    card.def.protocol == AiProtocol.OLLAMA ->
+                        if (card.configured) "Set up" else "Not set up"
+                    card.configured -> "Key saved"
+                    else -> "No key"
+                }
+                val modelLine = card.chosenModel
+                    ?: card.models.firstOrNull()
+                M3ProviderRow(
+                    title = card.def.name,
+                    line = listOfNotNull(modelLine, keyState)
+                        .joinToString(" · "),
+                    onClick = { openForm = "provider:${card.def.id}" }
+                )
+            }
+            M3ProviderRow(
+                title = "Add a provider",
+                line = "Paste a site — it is checked before anything is added",
+                onClick = { openForm = "add" }
+            )
+            Text(
+                "More engines",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(
+                    start = 16.dp, top = 16.dp, bottom = 4.dp
+                )
+            )
+            M3ProviderRow(
+                title = "Image engine",
+                line = when (state.settings.imageEngine) {
+                    ImageEngine.HORDE -> "AI Horde — free, no key"
+                    ImageEngine.CLOUDFLARE -> "Cloudflare FLUX"
+                    ImageEngine.POLLINATIONS -> "Pollinations FLUX"
+                },
+                onClick = { openForm = "image" }
+            )
+            M3ProviderRow(
+                title = "Voice engine",
+                line = when (state.voiceSettings.engine) {
+                    VoiceEngine.DEVICE -> "Device voice — on this phone"
+                    VoiceEngine.EDGE -> "Online voice — Microsoft Edge"
+                },
+                onClick = { openForm = "voice" }
+            )
+            Text(
+                "AI features",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(
+                    start = 16.dp, top = 16.dp, bottom = 4.dp
+                )
+            )
+            Text(
+                "Turn individual features off to save quota. They " +
+                    "light up once any provider above is set up — " +
+                    "nothing here is needed for reading.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            AiFeature.entries.forEach { feature ->
+                androidx.compose.material3.ListItem(
+                    headlineContent = { Text(feature.label) },
+                    trailingContent = {
+                        androidx.compose.material3.Switch(
+                            checked = state.settings.enabled(feature),
+                            onCheckedChange = {
+                                viewModel.setFeature(feature, it)
+                            }
+                        )
+                    }
+                )
+            }
+        }
+    }
+    when (val form = openForm) {
+        "engine" -> M3EngineForm(
+            state = state,
+            viewModel = viewModel,
+            onClose = { openForm = null }
+        )
+        "image" -> M3ImageEngineForm(
+            state = state,
+            viewModel = viewModel,
+            onClose = { openForm = null }
+        )
+        "voice" -> M3VoiceEngineForm(
+            state = state,
+            viewModel = viewModel,
+            onClose = { openForm = null }
+        )
+        "add" -> M3AddProviderForm(
+            state = state,
+            viewModel = viewModel,
+            onClose = { openForm = null }
+        )
+        else -> if (form != null && form.startsWith("provider:")) {
+            val card = state.providers.firstOrNull {
+                it.def.id == form.removePrefix("provider:")
+            }
+            if (card != null) {
+                M3ProviderSetupForm(
+                    state = state,
+                    card = card,
+                    viewModel = viewModel,
+                    onClose = { openForm = null }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun M3ProviderRow(
+    title: String,
+    line: String,
+    onClick: () -> Unit
+) {
+    androidx.compose.material3.ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = { Text(line) },
+        trailingContent = {
+            Icon(
+                androidx.compose.material.icons.Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        modifier = Modifier.clickable(onClick = onClick)
+    )
+}
+
+/** A full-screen dialog form (R32's setup form shape): the
+ * M3 dialog frame at full size, its own top bar + Close. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun M3FullScreenForm(
+    title: String,
+    onClose: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        androidx.compose.material3.Scaffold(
+            topBar = {
+                androidx.compose.material3.TopAppBar(
+                    title = { Text(title) },
+                    navigationIcon = {
+                        IconButton(onClick = onClose) {
+                            Icon(
+                                androidx.compose.material.icons.Icons
+                                    .Filled.Close,
+                                contentDescription = "Close"
+                            )
+                        }
+                    }
+                )
+            }
+        ) { innerPadding ->
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+private fun M3RadioRow(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    androidx.compose.material3.ListItem(
+        headlineContent = { Text(label) },
+        leadingContent = {
+            RadioButton(
+                selected = selected,
+                onClick = onClick,
+                enabled = enabled
+            )
+        },
+        modifier = Modifier.clickable(enabled = enabled, onClick = onClick)
+    )
+}
+
+@Composable
+private fun M3EngineForm(
+    state: ProvidersUiState,
+    viewModel: ProvidersViewModel,
+    onClose: () -> Unit
+) {
+    val pick = state.settings.enginePick
+    M3FullScreenForm(title = "AI engine", onClose = onClose) {
+        Text(
+            "Automatic routes across your set-up providers and says " +
+                "which one answered. Pick one provider to use exactly " +
+                "that one — its failures are reported, never quietly " +
+                "swapped for another.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        M3RadioRow(
+            label = "Automatic (recommended)",
+            selected = pick is EnginePick.Automatic,
+            onClick = { viewModel.setEngineAutomatic() }
+        )
+        state.providers.forEach { card ->
+            val isPicked = pick is EnginePick.Specific &&
+                pick.providerId == card.def.id
+            M3RadioRow(
+                label = if (card.configured) {
+                    card.def.name
+                } else {
+                    "${card.def.name} — no key yet"
+                },
+                selected = isPicked,
+                enabled = card.configured,
+                onClick = { viewModel.setEngineSpecific(card.def.id) }
+            )
+            if (isPicked) {
+                val specific = pick as EnginePick.Specific
+                when (card.def.protocol) {
+                    AiProtocol.GEMINI -> {
+                        M3RadioRow(
+                            label = "Automatic model (lightest first)",
+                            selected = specific.model == GeminiModels.AUTO,
+                            onClick = {
+                                viewModel.setEngineModel(
+                                    card.def.id, GeminiModels.AUTO
+                                )
+                            }
+                        )
+                        GeminiModels.CASCADE.forEach { model ->
+                            M3RadioRow(
+                                label = geminiModelLabel(model),
+                                selected = specific.model == model,
+                                onClick = {
+                                    viewModel.setEngineModel(
+                                        card.def.id, model
+                                    )
+                                }
+                            )
+                        }
+                    }
+                    AiProtocol.OLLAMA -> {
+                        val models = card.models.ifEmpty {
+                            listOfNotNull(
+                                state.settings.ollamaModel
+                                    .takeIf { it.isNotBlank() }
+                            )
+                        }
+                        models.forEach { model ->
+                            M3RadioRow(
+                                label = model,
+                                selected = specific.model == model,
+                                onClick = {
+                                    viewModel.setEngineModel(
+                                        card.def.id, model
+                                    )
+                                }
+                            )
+                        }
+                    }
+                    else -> {
+                        val models = card.models.ifEmpty {
+                            listOfNotNull(card.chosenModel)
+                        }
+                        models.forEach { model ->
+                            M3RadioRow(
+                                label = modelLabel(model, card),
+                                selected = specific.model == model,
+                                onClick = {
+                                    viewModel.setEngineModel(
+                                        card.def.id, model
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (pick is EnginePick.Automatic && state.geminiConfigured) {
+            Text(
+                "When Gemini answers under Automatic, it starts with:",
+                style = MaterialTheme.typography.titleSmall
+            )
+            M3RadioRow(
+                label = "Lightest first",
+                selected = state.settings.modelChoice == GeminiModels.AUTO,
+                onClick = { viewModel.setModelChoice(GeminiModels.AUTO) }
+            )
+            GeminiModels.CASCADE.forEach { model ->
+                M3RadioRow(
+                    label = geminiModelLabel(model),
+                    selected = state.settings.modelChoice == model,
+                    onClick = { viewModel.setModelChoice(model) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun M3ProviderSetupForm(
+    state: ProvidersUiState,
+    card: ProviderCardState,
+    viewModel: ProvidersViewModel,
+    onClose: () -> Unit
+) {
+    M3FullScreenForm(title = card.def.name, onClose = onClose) {
+        when (card.def.protocol) {
+            AiProtocol.GEMINI -> M3GeminiSetup(state, card, viewModel)
+            AiProtocol.OLLAMA -> M3OllamaSetup(state, card, viewModel)
+            else -> M3KeyedSetup(state, card, viewModel)
+        }
+    }
+}
+
+@Composable
+private fun M3GeminiSetup(
+    state: ProvidersUiState,
+    card: ProviderCardState,
+    viewModel: ProvidersViewModel
+) {
+    var keyInput by remember { mutableStateOf("") }
+    val testing = state.testingId == AiProviders.GEMINI_ID
+    Text(
+        "One free Gemini key powers the AI extras: chapter summaries, " +
+            "Catch me up, LoreKeeper, RAW translation and more. Get a " +
+            "free key at aistudio.google.com — it stays encrypted on " +
+            "this phone and is never synced or backed up.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    if (!card.configured) {
+        OutlinedTextField(
+            value = keyInput,
+            onValueChange = { keyInput = it },
+            label = { Text("Gemini API key") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        androidx.compose.material3.Button(
+            onClick = { viewModel.testAndSave(keyInput) },
+            enabled = !testing && keyInput.isNotBlank(),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(if (testing) "Testing…" else "Test & save key") }
+    } else {
+        Text(
+            "Key saved — your key is in the encrypted vault. To change " +
+                "it, remove it and add the new one.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        TextButton(
+            onClick = { viewModel.removeKey(AiProviders.GEMINI_ID) }
+        ) { Text("Remove key") }
+        TextButton(
+            onClick = { viewModel.checkAiHealth() },
+            enabled = !state.checkingHealth
+        ) {
+            Text(
+                if (state.checkingHealth) {
+                    "Checking AI health…"
+                } else {
+                    "Check AI health"
+                }
+            )
+        }
+        state.aiHealth?.let { lines ->
+            Text(
+                "AI health — each model, asked once:",
+                style = MaterialTheme.typography.titleSmall
+            )
+            lines.forEach { line ->
+                Text(
+                    "• " + geminiModelLabel(line.model)
+                        .substringBefore(" — ") +
+                        if (line.ok) {
+                            " — working"
+                        } else {
+                            " — " + line.note
+                        },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (line.ok) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun M3KeyedSetup(
+    state: ProvidersUiState,
+    card: ProviderCardState,
+    viewModel: ProvidersViewModel
+) {
+    var keyInput by remember(card.def.id) { mutableStateOf("") }
+    val testing = state.testingId == card.def.id
+    Text(
+        card.def.blurb,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    if (!card.def.builtIn) {
+        Text(
+            card.def.baseUrl,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+    if (!card.configured) {
+        OutlinedTextField(
+            value = keyInput,
+            onValueChange = { keyInput = it },
+            label = { Text("${card.def.name} API key") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        androidx.compose.material3.Button(
+            onClick = { viewModel.testAndSaveKey(card.def.id, keyInput) },
+            enabled = !testing && keyInput.isNotBlank(),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(if (testing) "Testing…" else "Test & save key") }
+    } else {
+        if (card.models.isNotEmpty()) {
+            Text(
+                "${card.models.size} models" +
+                    if (card.freeModels.isNotEmpty()) {
+                        " · ${card.freeModels.size} listed as free by " +
+                            card.def.name
+                    } else {
+                        ""
+                    } +
+                    (card.chosenModel?.let { " · using $it" } ?: ""),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            Text(
+                "Key saved — your key is in the encrypted vault.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Row {
+            TextButton(onClick = { viewModel.removeKey(card.def.id) }) {
+                Text("Remove key")
+            }
+            if (!card.def.builtIn) {
+                TextButton(
+                    onClick = { viewModel.removeCustomProvider(card.def.id) }
+                ) { Text("Remove provider") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun M3OllamaSetup(
+    state: ProvidersUiState,
+    card: ProviderCardState,
+    viewModel: ProvidersViewModel
+) {
+    var address by remember(state.settings.ollamaBaseUrl) {
+        mutableStateOf(state.settings.ollamaBaseUrl)
+    }
+    var model by remember(state.settings.ollamaModel) {
+        mutableStateOf(state.settings.ollamaModel)
+    }
+    Text(
+        card.def.blurb + " On the computer: run Ollama, then put its " +
+            "address here (for a phone on the same Wi-Fi, that's " +
+            "usually the computer's local address, like " +
+            "http://192.168.1.10:11434).",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    OutlinedTextField(
+        value = address,
+        onValueChange = { address = it },
+        label = { Text("Ollama address") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+    OutlinedTextField(
+        value = model,
+        onValueChange = { model = it },
+        label = { Text("Model name (as Ollama lists it)") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+    if (card.models.isNotEmpty()) {
+        Text(
+            "On that computer: ${card.models.joinToString(", ")}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.material3.Button(
+            onClick = { viewModel.testOllama(address, model) },
+            enabled = !state.testingOllama && address.isNotBlank(),
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(if (state.testingOllama) "Testing…" else "Test & save")
+        }
+        androidx.compose.material3.OutlinedButton(
+            onClick = { viewModel.saveOllama(address, model) }
+        ) { Text("Save") }
+    }
+}
+
+@Composable
+private fun M3ImageEngineForm(
+    state: ProvidersUiState,
+    viewModel: ProvidersViewModel,
+    onClose: () -> Unit
+) {
+    val engine = state.settings.imageEngine
+    var accountInput by remember(state.settings.cloudflareAccountId) {
+        mutableStateOf(state.settings.cloudflareAccountId)
+    }
+    var tokenInput by remember { mutableStateOf("") }
+    var pollinationsInput by remember { mutableStateOf("") }
+    M3FullScreenForm(title = "Image engine", onClose = onClose) {
+        Text(
+            "Which service paints Illustrate pictures. AI Horde is " +
+                "free and needs no key. If the engine you pick can't " +
+                "paint, AI Horde paints instead and the picture's " +
+                "screen tells you it did.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        M3RadioRow(
+            label = "AI Horde — free, no key (default)",
+            selected = engine == ImageEngine.HORDE,
+            onClick = { viewModel.setImageEngine(ImageEngine.HORDE) }
+        )
+        M3RadioRow(
+            label = "Cloudflare FLUX — free daily allowance",
+            selected = engine == ImageEngine.CLOUDFLARE,
+            onClick = { viewModel.setImageEngine(ImageEngine.CLOUDFLARE) }
+        )
+        M3RadioRow(
+            label = "Pollinations FLUX — free with a key",
+            selected = engine == ImageEngine.POLLINATIONS,
+            onClick = { viewModel.setImageEngine(ImageEngine.POLLINATIONS) }
+        )
+        if (engine == ImageEngine.CLOUDFLARE) {
+            OutlinedTextField(
+                value = accountInput,
+                onValueChange = { accountInput = it },
+                label = { Text("Cloudflare account ID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            androidx.compose.material3.Button(
+                onClick = { viewModel.saveCloudflareAccountId(accountInput) },
+                enabled = accountInput.isNotBlank() &&
+                    accountInput.trim() != state.settings.cloudflareAccountId,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Save account ID") }
+            if (!state.cloudflareTokenSaved) {
+                OutlinedTextField(
+                    value = tokenInput,
+                    onValueChange = { tokenInput = it },
+                    label = { Text("Cloudflare API token") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                androidx.compose.material3.Button(
+                    onClick = {
+                        viewModel.saveCloudflareToken(tokenInput)
+                        tokenInput = ""
+                    },
+                    enabled = tokenInput.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Save token") }
+            } else {
+                Text(
+                    "Token saved — in the encrypted vault. To change " +
+                        "it, remove it and add the new one.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = { viewModel.removeCloudflareToken() }) {
+                    Text("Remove token")
+                }
+            }
+        }
+        if (engine == ImageEngine.POLLINATIONS) {
+            if (!state.pollinationsKeySaved) {
+                OutlinedTextField(
+                    value = pollinationsInput,
+                    onValueChange = { pollinationsInput = it },
+                    label = { Text("Pollinations key") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                androidx.compose.material3.Button(
+                    onClick = {
+                        viewModel.savePollinationsKey(pollinationsInput)
+                        pollinationsInput = ""
+                    },
+                    enabled = pollinationsInput.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Save key") }
+            } else {
+                Text(
+                    "Key saved — in the encrypted vault. To change it, " +
+                        "remove it and add the new one.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = { viewModel.removePollinationsKey() }) {
+                    Text("Remove key")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun M3VoiceEngineForm(
+    state: ProvidersUiState,
+    viewModel: ProvidersViewModel,
+    onClose: () -> Unit
+) {
+    val engine = state.voiceSettings.engine
+    M3FullScreenForm(title = "Voice engine", onClose = onClose) {
+        Text(
+            "Which voice reads chapters aloud. The device voice stays " +
+                "on this phone. The online voice sounds better and is " +
+                "free, but sends chapter text to Microsoft to read it.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        M3RadioRow(
+            label = "Device voice — on this phone (default)",
+            selected = engine == VoiceEngine.DEVICE,
+            onClick = { viewModel.setVoiceEngine(VoiceEngine.DEVICE) }
+        )
+        M3RadioRow(
+            label = "Online voice — Microsoft Edge voices, free, no key",
+            selected = engine == VoiceEngine.EDGE,
+            onClick = { viewModel.setVoiceEngine(VoiceEngine.EDGE) }
+        )
+        if (engine == VoiceEngine.EDGE) {
+            Text(
+                "Chapter text is sent to Microsoft for online voices. " +
+                    "If the online voice can't be reached, the device " +
+                    "voice reads instead and the Listen sheet says so.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun M3AddProviderForm(
+    state: ProvidersUiState,
+    viewModel: ProvidersViewModel,
+    onClose: () -> Unit
+) {
+    val add = state.add
+    var site by remember { mutableStateOf("") }
+    var key by remember { mutableStateOf("") }
+    M3FullScreenForm(title = "Add a provider", onClose = onClose) {
+        Text(
+            "Using another AI service? Paste its site here. Xreader " +
+                "checks that it answers like an AI provider, then " +
+                "checks your key, and only then adds it. Your book " +
+                "text will pass through that service.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedTextField(
+            value = site,
+            onValueChange = { site = it },
+            label = { Text("Provider site or API address") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (add.phase == AddPhase.NEEDS_KEY ||
+            add.phase == AddPhase.CONFIRMED_KEY
+        ) {
+            OutlinedTextField(
+                value = key,
+                onValueChange = { key = it },
+                label = { Text("Your key from that site") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        add.message?.let { message ->
+            Text(
+                message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (add.phase == AddPhase.FAILED) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+        if (add.phase == AddPhase.CONFIRMED_KEY) {
+            val freeCount = add.models.count { it.listedFree }
+            Text(
+                "Checked and working: ${add.models.size} models" +
+                    if (freeCount > 0) {
+                        ", $freeCount listed as free by the provider."
+                    } else {
+                        "."
+                    },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.secondary
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.Button(
+                    onClick = { viewModel.addCheckedProvider() },
+                    modifier = Modifier.weight(1f)
+                ) { Text("Add provider") }
+                androidx.compose.material3.OutlinedButton(
+                    onClick = { viewModel.cancelAdd() }
+                ) { Text("Cancel") }
+            }
+        } else {
+            androidx.compose.material3.Button(
+                onClick = { viewModel.checkSite(site, key) },
+                enabled = add.phase != AddPhase.CHECKING &&
+                    site.isNotBlank() &&
+                    (add.phase != AddPhase.NEEDS_KEY || key.isNotBlank()),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    if (add.phase == AddPhase.CHECKING) {
+                        "Checking…"
+                    } else if (add.phase == AddPhase.NEEDS_KEY) {
+                        "Check with key"
+                    } else {
+                        "Check site"
+                    }
+                )
+            }
+        }
     }
 }

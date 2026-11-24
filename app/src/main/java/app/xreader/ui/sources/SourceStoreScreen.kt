@@ -42,6 +42,19 @@ import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.KitEmptyState
 import app.xreader.ui.common.PrimaryPill
+// Code 121 (W4): the scratch-M3 (R17) branch's components.
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.MediumTopAppBar
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.OutlinedTextField
 import app.xreader.ui.theme.primaryTextColor
 import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.bottomContentPadding
@@ -106,6 +119,34 @@ fun SourceStoreScreen(
         state.foreignRepos[repo.id]?.sites?.size
             ?: state.catalogues[repo.id]?.size
             ?: state.extensions.count { it.repoId == repo.id }
+
+    // ── Code 121 (W4, scratch R17): the Material 3 Source store ──
+    // A medium top app bar over repository sections: each repo a
+    // section header (name + source count) with its sources as a
+    // grid of outlined cards (initial avatar, name, language
+    // line, Install/Installed toggle). Provider packs are
+    // full-width filled cards. The search field under the bar
+    // filters the grid. Under Nocturne the shipped screen below
+    // renders byte-identically.
+    if (isM3Store) {
+        M3SourceStore(
+            state = state,
+            orderedRepos = orderedRepos,
+            builtInCount = builtInCount,
+            packViewModel = packViewModel,
+            onBack = onBack,
+            onOpenRepo = onOpenRepo,
+            onOpenBuiltIn = onOpenBuiltIn,
+            onAddRepo = onAddRepo,
+            onInstall = { repo, pkg -> viewModel.install(repo, pkg) },
+            onUninstall = { viewModel.uninstallExtension(it) },
+            onInstallFamilySite = { viewModel.installFamilySource(it) },
+            onCreateFromSite = { viewModel.createSourceFromSite(it) },
+            onAcceptChanged = { viewModel.acceptChangedIndex(it) },
+            onDismissChanged = { viewModel.dismissChangedIndex(it) }
+        )
+        return
+    }
 
     Column(
         Modifier
@@ -622,6 +663,451 @@ private fun StoreSafetyLine() {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/** One store entry in the M3 store grid (R17): a package from
+ * a repo index, a site from a foreign repo, or an installed
+ * extension standing in its repo's section. */
+private data class M3StoreEntry(
+    val key: String,
+    val name: String,
+    val languageLine: String,
+    val installed: Boolean,
+    val pkg: app.xreader.data.extension.IndexPackage? = null,
+    val pkgRepo: ExtensionRepo? = null,
+    val site: app.xreader.data.extension.ForeignSite? = null
+)
+
+/**
+ * Code 121 (W4, scratch R17): the Material 3 source store.
+ * Sections and install actions are the store's own (the same
+ * view-model calls the shipped store and the per-repo screens
+ * make); only the dress is new.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun M3SourceStore(
+    state: SourcesUiState,
+    orderedRepos: List<ExtensionRepo>,
+    builtInCount: Int,
+    packViewModel: ProviderPackViewModel?,
+    onBack: () -> Unit,
+    onOpenRepo: (Long) -> Unit,
+    onOpenBuiltIn: () -> Unit,
+    onAddRepo: () -> Unit,
+    onInstall: (ExtensionRepo, app.xreader.data.extension.IndexPackage) -> Unit,
+    onUninstall: (app.xreader.data.db.InstalledExtension) -> Unit,
+    onInstallFamilySite: (app.xreader.data.extension.ForeignSite) -> Unit,
+    onCreateFromSite: (app.xreader.data.extension.ForeignSite) -> Unit,
+    onAcceptChanged: (ExtensionRepo) -> Unit,
+    onDismissChanged: (ExtensionRepo) -> Unit
+) {
+    var query by remember { mutableStateOf("") }
+    var pendingInstall by remember {
+        mutableStateOf<
+            Pair<ExtensionRepo, app.xreader.data.extension.IndexPackage>?
+        >(null)
+    }
+    val installedByPkg = remember(state.extensions) {
+        state.extensions.associateBy { it.packageId }
+    }
+    val installedNames = remember(state.extensions) {
+        state.extensions.map {
+            app.xreader.data.extension.WorkMatcher
+                .normaliseTitle(it.displayName)
+        }.toSet()
+    }
+    fun entriesFor(repo: ExtensionRepo): List<M3StoreEntry> {
+        val foreign = state.foreignRepos[repo.id]
+        val catalogue = state.catalogues[repo.id]
+        return when {
+            foreign != null -> foreign.sites.map { site ->
+                M3StoreEntry(
+                    key = "site-${repo.id}-${site.pluginId ?: site.baseUrl}",
+                    name = site.name,
+                    languageLine = listOfNotNull(
+                        site.lang.takeIf { it.isNotBlank() }
+                            ?.uppercase(),
+                        RepoSourceFilter.hostOf(site.baseUrl)
+                            .takeIf { it.isNotBlank() },
+                        site.contentRating.badge
+                    ).joinToString(" · "),
+                    installed = app.xreader.data.extension.WorkMatcher
+                        .normaliseTitle(site.name) in installedNames,
+                    site = site
+                )
+            }
+            catalogue != null -> catalogue.map { pkg ->
+                M3StoreEntry(
+                    key = "pkg-${repo.id}-${pkg.pkg}",
+                    name = pkg.name,
+                    languageLine = listOfNotNull(
+                        pkg.languages.joinToString(", ")
+                            .takeIf { it.isNotBlank() },
+                        pkg.sources.firstOrNull()
+                            ?.let { RepoSourceFilter.hostOf(it.baseUrl) }
+                            ?.takeIf { it.isNotBlank() }
+                    ).joinToString(" · "),
+                    installed = pkg.pkg in installedByPkg,
+                    pkg = pkg,
+                    pkgRepo = repo
+                )
+            }
+            else -> state.extensions
+                .filter { it.repoId == repo.id }
+                .map { ext ->
+                    M3StoreEntry(
+                        key = "ext-${ext.id}",
+                        name = ext.displayName,
+                        languageLine = ext.languages.split(",")
+                            .firstOrNull()?.uppercase()
+                            ?.takeIf { it.isNotBlank() } ?: "",
+                        installed = true
+                    )
+                }
+        }
+    }
+    val builtInEntries = remember(state.extensions, query) {
+        state.extensions
+            .filter { it.packageId.startsWith("bundled.") }
+            .map { ext ->
+                M3StoreEntry(
+                    key = "ext-${ext.id}",
+                    name = ext.displayName,
+                    languageLine = ext.languages.split(",")
+                        .firstOrNull()?.uppercase()
+                        ?.takeIf { it.isNotBlank() } ?: "",
+                    installed = true
+                )
+            }
+    }
+    fun matches(entry: M3StoreEntry): Boolean =
+        query.isBlank() ||
+            entry.name.contains(query, ignoreCase = true)
+    Column(Modifier.fillMaxSize()) {
+        MediumTopAppBar(
+            title = { Text("Source store") },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back"
+                    )
+                }
+            }
+        )
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            label = { Text("Search sources") },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+        )
+        if (state.busy) {
+            LinearWavyProgressIndicator(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+        }
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = androidx.compose.foundation.layout
+                .PaddingValues(16.dp)
+        ) {
+            item(
+                key = "m3store-add",
+                span = { GridItemSpan(maxLineSpan) }
+            ) {
+                Button(
+                    onClick = onAddRepo,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Add repository") }
+            }
+            items(
+                state.repos.filter { it.id in state.changedRepos },
+                key = { "m3store-changed-${it.id}" },
+                span = { GridItemSpan(maxLineSpan) }
+            ) { repo ->
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme
+                            .errorContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            "“${repo.name}” changed its list",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            "The repository's list no longer matches " +
+                                "the fingerprint from when you added " +
+                                "it. That can be a normal update — or " +
+                                "a sign the repository was taken " +
+                                "over. Only accept if you trust it.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                        Button(
+                            onClick = { onAcceptChanged(repo) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Accept the new list") }
+                        TextButton(
+                            onClick = { onDismissChanged(repo) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Not now") }
+                    }
+                }
+            }
+            if (packViewModel != null) {
+                item(
+                    key = "m3store-pack",
+                    span = { GridItemSpan(maxLineSpan) }
+                ) {
+                    ProviderPackCardM3(packViewModel)
+                }
+            }
+            val visibleBuiltIn = builtInEntries.filter { matches(it) }
+            if (visibleBuiltIn.isNotEmpty()) {
+                item(
+                    key = "m3store-builtin-head",
+                    span = { GridItemSpan(maxLineSpan) }
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        M3GroupHeader(
+                            "Built-in · $builtInCount sources",
+                            Modifier.weight(1f)
+                        )
+                        TextButton(onClick = onOpenBuiltIn) {
+                            Text("Open")
+                        }
+                    }
+                }
+                items(
+                    visibleBuiltIn,
+                    key = { "m3store-${it.key}" }
+                ) { entry ->
+                    M3StoreEntryCard(entry = entry)
+                }
+            }
+            orderedRepos.forEach { repo ->
+                val entries = entriesFor(repo).filter { matches(it) }
+                if (entries.isNotEmpty()) {
+                    item(
+                        key = "m3store-repo-head-${repo.id}",
+                        span = { GridItemSpan(maxLineSpan) }
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            M3GroupHeader(
+                                "${repo.name} · ${entries.size} sources",
+                                Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = { onOpenRepo(repo.id) }
+                            ) { Text("Open") }
+                        }
+                    }
+                    items(entries, key = { "m3store-${it.key}" }) { entry ->
+                        M3StoreEntryCard(
+                            entry = entry,
+                            busy = state.busy,
+                            onInstallPkg = { r, p ->
+                                pendingInstall = r to p
+                            },
+                            onUninstallPkg = { pkg ->
+                                installedByPkg[pkg.pkg]?.let(onUninstall)
+                            },
+                            onSiteAction = { site ->
+                                if (app.xreader.data.extension
+                                        .FamilyTemplates
+                                        .hasTemplate(site.family)
+                                ) {
+                                    onInstallFamilySite(site)
+                                } else {
+                                    onCreateFromSite(site)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+            if (orderedRepos.isEmpty() && query.isBlank()) {
+                item(
+                    key = "m3store-empty",
+                    span = { GridItemSpan(maxLineSpan) }
+                ) {
+                    Text(
+                        "No repositories added yet. Add one and its " +
+                            "sources will appear here.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            item(
+                key = "m3store-safety",
+                span = { GridItemSpan(maxLineSpan) }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.Shield,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        "Sources can only open the sites you allow.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+
+    pendingInstall?.let { (repo, pkg) ->
+        val permissions = pkg.installPermissions()
+        AlertDialog(
+            onDismissRequest = { pendingInstall = null },
+            title = { Text("Add “${pkg.name}”?") },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        permissions.consentSummary(
+                            pkg.kindEnum?.label ?: "source"
+                        )
+                    )
+                    Text(
+                        "Version ${pkg.versionName}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingInstall = null
+                    onInstall(repo, pkg)
+                }) { Text("Install") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingInstall = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+/** R17: one outlined store card — initial avatar, name,
+ * language line, and the Install/Installed toggle button. */
+@Composable
+private fun M3StoreEntryCard(
+    entry: M3StoreEntry,
+    busy: Boolean = false,
+    onInstallPkg: (ExtensionRepo, app.xreader.data.extension.IndexPackage) -> Unit =
+        { _, _ -> },
+    onUninstallPkg: (app.xreader.data.extension.IndexPackage) -> Unit = {},
+    onSiteAction: (app.xreader.data.extension.ForeignSite) -> Unit = {}
+) {
+    OutlinedCard(
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            M3InitialAvatar(entry.name)
+            Text(
+                entry.name,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            if (entry.languageLine.isNotBlank()) {
+                Text(
+                    entry.languageLine,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            when {
+                entry.installed && entry.pkg != null -> {
+                    FilledTonalButton(
+                        onClick = {
+                            entry.pkg?.let { onUninstallPkg(it) }
+                        },
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            "Installed",
+                            modifier = Modifier.padding(start = 6.dp)
+                        )
+                    }
+                }
+                entry.installed -> {
+                    FilledTonalButton(
+                        onClick = {},
+                        enabled = false,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            "Installed",
+                            modifier = Modifier.padding(start = 6.dp)
+                        )
+                    }
+                }
+                entry.pkg != null && entry.pkgRepo != null -> {
+                    Button(
+                        onClick = {
+                            val pkg = entry.pkg
+                            val pkgRepo = entry.pkgRepo
+                            if (pkg != null && pkgRepo != null) {
+                                onInstallPkg(pkgRepo, pkg)
+                            }
+                        },
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Install") }
+                }
+                entry.site != null -> {
+                    Button(
+                        onClick = {
+                            entry.site?.let { onSiteAction(it) }
+                        },
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Install") }
+                }
+            }
+        }
     }
 }
 

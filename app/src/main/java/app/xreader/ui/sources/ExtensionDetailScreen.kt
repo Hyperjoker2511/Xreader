@@ -40,6 +40,14 @@ import app.xreader.data.db.TrustState
 import app.xreader.data.extension.ExtensionKind
 import app.xreader.data.extension.healthDot
 import app.xreader.ui.common.EmptyState
+// Code 121 (W4): the scratch-M3 (R22) branch's components.
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.Button
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TopAppBar
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.NocturneChip
@@ -78,6 +86,666 @@ fun ExtensionDetailScreen(
     }
 
     val ext = state.extension
+
+    // ── Code 121 (W4, scratch R22): extension details in ──
+    // Material 3 — a small top app bar; a header list item
+    // (avatar, name, version line); then list rows: Health
+    // (state line + Check now), Permissions (a row per
+    // permission), Sign in (the R23 door, only where the source
+    // supports it), the source's own doors (open, instances,
+    // parser rules, search setup), and Remove in the error
+    // role. The deeper Nocturne sections (cleaner rules,
+    // Bring-my-library, AI matches) are not carried into this
+    // branch — see D-121-W4-6. Under Nocturne the shipped page
+    // below renders byte-identically.
+    if (isM3Design()) {
+        if (ext != null && state.parserEditorOpen &&
+            state.linkConfig != null
+        ) {
+            ParserRulesEditorScreen(
+                config = state.linkConfig!!,
+                saving = state.parserSaving,
+                message = state.parserMessage,
+                onSave = { viewModel.saveParserRules(it) },
+                onBack = { viewModel.closeParserEditor() },
+                editable = app.xreader.data.extension
+                    .SourceRebuildability
+                    .hasEditableRules(state.rebuildKind),
+                readOnlyNote = app.xreader.data.extension
+                    .SourceRebuildability
+                    .parserRulesLine(state.rebuildKind)
+            )
+            return
+        }
+        Column(Modifier.fillMaxSize()) {
+            TopAppBar(
+                title = {
+                    Text(
+                        ext?.displayName ?: "Source",
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style
+                            .TextOverflow.Ellipsis
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                }
+            )
+            if (ext == null) {
+                Column(
+                    Modifier.padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        "Source not found",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        "It may have been uninstalled.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Button(onClick = onBack) { Text("Back") }
+                }
+                return
+            }
+            val permissions = state.permissions
+            val kind = kindOf(ext.kind)
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout
+                    .PaddingValues(bottom = 24.dp)
+            ) {
+                item(key = "m3ext-header") {
+                    ListItem(
+                        headlineContent = {
+                            Text(
+                                ext.displayName,
+                                style = MaterialTheme
+                                    .typography.titleMedium
+                            )
+                        },
+                        supportingContent = {
+                            Text(
+                                listOfNotNull(
+                                    "Version ${ext.versionName}",
+                                    ext.languages.split(",")
+                                        .firstOrNull()?.uppercase()
+                                        ?.takeIf { it.isNotBlank() },
+                                    app.xreader.data.extension
+                                        .SourceProvenance.label(ext)
+                                ).joinToString(" · "),
+                                style = MaterialTheme
+                                    .typography.bodySmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                        },
+                        leadingContent = {
+                            M3InitialAvatar(ext.displayName, size = 48)
+                        }
+                    )
+                }
+                item(key = "m3ext-enabled") {
+                    ListItem(
+                        headlineContent = { Text("Enabled") },
+                        supportingContent = {
+                            Text(
+                                if (ext.enabled) {
+                                    "Shown in Explore and search"
+                                } else {
+                                    "Hidden from Explore and search"
+                                }
+                            )
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = ext.enabled,
+                                onCheckedChange = {
+                                    viewModel.setEnabled(it)
+                                }
+                            )
+                        }
+                    )
+                }
+                if (!ext.enabled) {
+                    item(key = "m3ext-off") {
+                        Column(
+                            Modifier.padding(horizontal = 16.dp),
+                            verticalArrangement =
+                                Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                "This source is off. While it's off, " +
+                                    "its books can't refresh and new " +
+                                    "chapters can't load. Xreader " +
+                                    "never switches a source off by " +
+                                    "itself — if you didn't turn it " +
+                                    "off, an older version's failure " +
+                                    "breaker may have.",
+                                style = MaterialTheme
+                                    .typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Button(
+                                onClick = { viewModel.setEnabled(true) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Turn back on") }
+                        }
+                    }
+                }
+                if (ext.trustState ==
+                    TrustState.CHANGED_REQUIRES_RETRUST &&
+                    state.pending == null
+                ) {
+                    item(key = "m3ext-retrust") {
+                        Column(
+                            Modifier.padding(horizontal = 16.dp),
+                            verticalArrangement =
+                                Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                "This source changed — its file no " +
+                                    "longer matches the fingerprint " +
+                                    "from when you trusted it, so " +
+                                    "Xreader froze it. If you didn't " +
+                                    "expect a change, uninstall it " +
+                                    "instead.",
+                                style = MaterialTheme
+                                    .typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Row(
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = { viewModel.retrust() }
+                                ) { Text("Re-trust it") }
+                                TextButton(
+                                    onClick = {
+                                        showUninstallConfirm = true
+                                    }
+                                ) { Text("Uninstall") }
+                            }
+                        }
+                    }
+                }
+                state.pending?.let { pending ->
+                    item(key = "m3ext-pending") {
+                        Column(
+                            Modifier.padding(horizontal = 16.dp),
+                            verticalArrangement =
+                                Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                "Update waiting: v${pending.versionName}",
+                                style = MaterialTheme
+                                    .typography.bodyMedium
+                            )
+                            Row(
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = { viewModel.acceptPending() }
+                                ) { Text("Accept update") }
+                                TextButton(
+                                    onClick = { viewModel.rejectPending() }
+                                ) { Text("Reject") }
+                            }
+                        }
+                    }
+                }
+                if (state.instances.size > 1) {
+                    item(key = "m3ext-instances-head") {
+                        M3GroupHeader(
+                            "Sources in this package",
+                            Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                    items(state.instances.size) { index ->
+                        val instance = state.instances[index]
+                        ListItem(
+                            headlineContent = {
+                                Text(instance.label)
+                            },
+                            supportingContent = {
+                                if (instance.sourceId ==
+                                    state.currentInstanceId
+                                ) {
+                                    Text("Opens from Explore")
+                                }
+                            },
+                            trailingContent = {
+                                TextButton(
+                                    onClick = {
+                                        viewModel.openInstance(
+                                            instance.sourceId
+                                        )
+                                        onOpenSource(instance.sourceId)
+                                    }
+                                ) { Text("Open") }
+                            }
+                        )
+                    }
+                } else {
+                    val onlyInstance = state.currentInstanceId
+                        ?: ext.sourceIds.split(",")
+                            .firstOrNull()?.trim()
+                            ?.takeIf { it.isNotBlank() }
+                    if (onlyInstance != null) {
+                        item(key = "m3ext-open") {
+                            ListItem(
+                                headlineContent = { Text("Open source") },
+                                trailingContent = {
+                                    Icon(
+                                        Icons.Filled.ChevronRight,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                },
+                                modifier = Modifier.clickable {
+                                    onOpenSource(onlyInstance)
+                                }
+                            )
+                        }
+                    }
+                }
+                item(key = "m3ext-health-head") {
+                    M3GroupHeader(
+                        "Health",
+                        Modifier.padding(horizontal = 16.dp)
+                    )
+                }
+                item(key = "m3ext-health") {
+                    ListItem(
+                        headlineContent = {
+                            Text(
+                                state.health?.shortStateWord()
+                                    ?: "Not checked yet"
+                            )
+                        },
+                        supportingContent = {
+                            Column {
+                                state.healthResults.forEach { result ->
+                                    Text(
+                                        (when (result.capability) {
+                                            app.xreader.data.extension
+                                                .SourceCapability.LIST ->
+                                                "Book list"
+                                            app.xreader.data.extension
+                                                .SourceCapability.SEARCH ->
+                                                "Search"
+                                            app.xreader.data.extension
+                                                .SourceCapability.DETAILS ->
+                                                "Book pages"
+                                            app.xreader.data.extension
+                                                .SourceCapability.CHAPTERS ->
+                                                "Chapter lists"
+                                            app.xreader.data.extension
+                                                .SourceCapability.TEXT ->
+                                                "Chapter text"
+                                            app.xreader.data.extension
+                                                .SourceCapability.REVIEWS ->
+                                                "Reviews"
+                                            app.xreader.data.extension
+                                                .SourceCapability.COMMENTS ->
+                                                "Comments"
+                                            app.xreader.data.extension
+                                                .SourceCapability.RELATED ->
+                                                "More like this"
+                                            else -> result.capability.name
+                                        }) + ": " +
+                                            if (result.notApplicable) {
+                                                result.detail
+                                            } else if (result.ok) {
+                                                "Working"
+                                            } else {
+                                                result.detail
+                                            },
+                                        style = MaterialTheme
+                                            .typography.bodySmall,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                }
+                                if (state.browserViewNeeded) {
+                                    Text(
+                                        "This site started serving " +
+                                            "app-built pages — Repair " +
+                                            "can switch it to the " +
+                                            "browser view.",
+                                        style = MaterialTheme
+                                            .typography.bodySmall,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                }
+                            }
+                        },
+                        trailingContent = {
+                            Button(
+                                onClick = { viewModel.runTestDrive() },
+                                enabled = !state.testing && ext.enabled
+                            ) {
+                                Text(
+                                    if (state.testing) {
+                                        "Testing…"
+                                    } else {
+                                        "Check now"
+                                    }
+                                )
+                            }
+                        }
+                    )
+                }
+                item(key = "m3ext-repair") {
+                    ListItem(
+                        headlineContent = { Text("Repair") },
+                        supportingContent = {
+                            Text(
+                                app.xreader.data.extension
+                                    .SourceRebuildability
+                                    .repairLine(state.rebuildKind)
+                            )
+                        },
+                        trailingContent = {
+                            TextButton(
+                                onClick = { repairConfirm = true },
+                                enabled = !state.repairing
+                            ) {
+                                Text(
+                                    if (state.repairing) {
+                                        "Repairing…"
+                                    } else {
+                                        "Repair"
+                                    }
+                                )
+                            }
+                        }
+                    )
+                }
+                item(key = "m3ext-perms-head") {
+                    M3GroupHeader(
+                        "Permissions",
+                        Modifier.padding(horizontal = 16.dp)
+                    )
+                }
+                if (permissions.domains.isEmpty()) {
+                    item(key = "m3ext-perms-none") {
+                        ListItem(
+                            headlineContent = {
+                                Text("No sites declared")
+                            }
+                        )
+                    }
+                } else {
+                    items(permissions.domains.size) { index ->
+                        val domain = permissions.domains[index]
+                        ListItem(
+                            headlineContent = { Text(domain) },
+                            trailingContent = {
+                                Switch(
+                                    checked = domain !in
+                                        permissions.blockedDomains,
+                                    onCheckedChange = {
+                                        viewModel.toggleDomain(
+                                            domain, it
+                                        )
+                                    }
+                                )
+                            }
+                        )
+                    }
+                }
+                item(key = "m3ext-notify") {
+                    ListItem(
+                        headlineContent = { Text("Notifications") },
+                        supportingContent = {
+                            Text(
+                                "Declared by the source; off " +
+                                    "unless you allow it."
+                            )
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = permissions.canNotify,
+                                onCheckedChange = {
+                                    viewModel.setCanNotify(it)
+                                }
+                            )
+                        }
+                    )
+                }
+                if (kind == ExtensionKind.DEX) {
+                    item(key = "m3ext-dex") {
+                        ListItem(
+                            headlineContent = { Text("Run app code") },
+                            supportingContent = {
+                                Text(
+                                    "This source runs real program " +
+                                        "code inside Xreader. It " +
+                                        "still can't open sites you " +
+                                        "haven't allowed, but only " +
+                                        "enable this for sources you " +
+                                        "fully trust.",
+                                    color = MaterialTheme
+                                        .colorScheme.error
+                                )
+                            },
+                            trailingContent = {
+                                Switch(
+                                    checked = permissions.dexOptIn,
+                                    onCheckedChange = { wanted ->
+                                        if (wanted) {
+                                            showDexConsent = true
+                                        } else {
+                                            viewModel.setDexOptIn(false)
+                                        }
+                                    }
+                                )
+                            }
+                        )
+                    }
+                }
+                if (state.linkConfig?.signInNeeded == true ||
+                    state.linkConfig?.needsRendering == true ||
+                    state.sessionSaved
+                ) {
+                    item(key = "m3ext-signin-head") {
+                        M3GroupHeader(
+                            "Sign in",
+                            Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                    item(key = "m3ext-signin") {
+                        ListItem(
+                            headlineContent = {
+                                Text(
+                                    when {
+                                        state.sessionSaved ->
+                                            "Sign in again"
+                                        state.linkConfig
+                                            ?.signInNeeded == true ->
+                                            "Sign in"
+                                        else -> "Solve the site check"
+                                    }
+                                )
+                            },
+                            supportingContent = {
+                                Text(
+                                    if (state.sessionSaved) {
+                                        "Session saved for this source"
+                                    } else {
+                                        "On the site's own page — " +
+                                            "Xreader keeps only the " +
+                                            "session, never your password"
+                                    }
+                                )
+                            },
+                            trailingContent = {
+                                Icon(
+                                    Icons.Filled.ChevronRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            },
+                            modifier = Modifier.clickable {
+                                onLogin()
+                            }
+                        )
+                    }
+                    if (state.sessionSaved) {
+                        item(key = "m3ext-forget") {
+                            TextButton(
+                                onClick = { viewModel.forgetSession() },
+                                modifier = Modifier
+                                    .padding(horizontal = 16.dp)
+                            ) { Text("Forget session") }
+                        }
+                    }
+                }
+                if (state.linkConfig != null) {
+                    item(key = "m3ext-rules") {
+                        ListItem(
+                            headlineContent = {
+                                Text("Edit parser rules")
+                            },
+                            trailingContent = {
+                                Icon(
+                                    Icons.Filled.ChevronRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            },
+                            modifier = Modifier.clickable {
+                                viewModel.openParserEditor()
+                            }
+                        )
+                    }
+                    item(key = "m3ext-search-setup") {
+                        ListItem(
+                            headlineContent = { Text("Set up search") },
+                            trailingContent = {
+                                Icon(
+                                    Icons.Filled.ChevronRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            },
+                            modifier = Modifier.clickable {
+                                viewModel.setupSearch()
+                            }
+                        )
+                    }
+                }
+                item(key = "m3ext-remove") {
+                    ListItem(
+                        headlineContent = {
+                            Text(
+                                "Remove source",
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        },
+                        modifier = Modifier.clickable {
+                            showUninstallConfirm = true
+                        }
+                    )
+                }
+            }
+        }
+        if (repairConfirm) {
+            AlertDialog(
+                onDismissRequest = { repairConfirm = false },
+                title = { Text("Repair this source?") },
+                text = {
+                    Text(
+                        app.xreader.data.extension.SourceRebuildability
+                            .repairLine(state.rebuildKind)
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        repairConfirm = false
+                        viewModel.repair()
+                    }) { Text("Repair") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { repairConfirm = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+        if (showDexConsent) {
+            AlertDialog(
+                onDismissRequest = { showDexConsent = false },
+                title = { Text("Allow app code?") },
+                text = {
+                    Text(
+                        "This source will run real program code " +
+                            "inside Xreader — the same trust as " +
+                            "installing another app. Its network is " +
+                            "still limited to the sites above, and " +
+                            "its fingerprint is checked every time " +
+                            "it starts. Only do this for a source " +
+                            "you completely trust."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDexConsent = false
+                        viewModel.setDexOptIn(true)
+                    }) { Text("I understand — allow it") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDexConsent = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+        if (showUninstallConfirm) {
+            AlertDialog(
+                onDismissRequest = { showUninstallConfirm = false },
+                title = {
+                    Text(
+                        "Uninstall “${ext?.displayName ?: "this source"}”?"
+                    )
+                },
+                text = {
+                    Text(
+                        "Books already in your library stay, but " +
+                            "chapters that haven't downloaded yet " +
+                            "won't be able to load."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showUninstallConfirm = false
+                        viewModel.uninstall()
+                    }) { Text("Uninstall") }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showUninstallConfirm = false }
+                    ) { Text("Cancel") }
+                }
+            )
+        }
+        return
+    }
+
     Column(
         Modifier
             .fillMaxSize()

@@ -39,6 +39,11 @@ import app.xreader.data.extension.player.SourcePrefRow
 import app.xreader.ui.common.EmptyState
 import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.common.SectionHeader
+// Code 121 (W4): the scratch-M3 (R21) row language.
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.Switch
 
 /**
  * K5: a player source's own settings, in the app's
@@ -59,6 +64,11 @@ fun SourcePreferencesScreen(
     onBack: () -> Unit
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Code 121 (W4, scratch R21): under Material 3 the rows
+    // below render in the native settings-list language (M3
+    // switches, labelLarge section headers, list items with
+    // chevrons); under Nocturne every row is byte-identical.
+    val m3 = isM3Design()
     var choiceRow by remember { mutableStateOf<SourcePrefRow?>(null) }
     var textRow by remember { mutableStateOf<SourcePrefRow?>(null) }
     var multiRow by remember { mutableStateOf<SourcePrefRow?>(null) }
@@ -92,7 +102,11 @@ fun SourcePreferencesScreen(
         Spacer(Modifier.height(12.dp))
         when {
             state.loading -> {
-                LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (m3) {
+                    LinearWavyProgressIndicator(Modifier.fillMaxWidth())
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
             }
             state.unavailableMessage != null -> {
                 EmptyState(
@@ -129,6 +143,7 @@ fun SourcePreferencesScreen(
                     state.rows.forEach { row ->
                         SourcePrefRowView(
                             row = row,
+                            m3 = m3,
                             onCheckedChange = { value ->
                                 viewModel.setChecked(row, value)
                             },
@@ -284,12 +299,23 @@ private fun SourcePrefRowView(
     onOpenChoice: () -> Unit,
     onOpenText: () -> Unit,
     onOpenMulti: () -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    /** Code 121 (W4, R21): render in the M3 settings-list
+     * language. False (Nocturne) renders exactly as shipped. */
+    m3: Boolean = false
 ) {
     when (row.kind) {
         SourcePrefKind.SECTION -> {
             Spacer(Modifier.height(10.dp))
-            SectionHeader(title = row.title)
+            if (m3) {
+                Text(
+                    row.title,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                SectionHeader(title = row.title)
+            }
             row.summary?.takeIf { it.isNotBlank() }?.let { summary ->
                 Text(
                     summary,
@@ -309,11 +335,19 @@ private fun SourcePrefRowView(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 PrefTitleSummary(row, Modifier.weight(1f))
-                NocturneSwitch(
-                    checked = row.checked,
-                    onCheckedChange = onCheckedChange,
-                    enabled = row.enabled
-                )
+                if (m3) {
+                    Switch(
+                        checked = row.checked,
+                        onCheckedChange = onCheckedChange,
+                        enabled = row.enabled
+                    )
+                } else {
+                    NocturneSwitch(
+                        checked = row.checked,
+                        onCheckedChange = onCheckedChange,
+                        enabled = row.enabled
+                    )
+                }
             }
         }
         SourcePrefKind.CHECKBOX -> {
@@ -339,14 +373,16 @@ private fun SourcePrefRowView(
                 row = row,
                 currentValue = row.options
                     .getOrNull(row.selectedIndex),
-                onOpen = onOpenChoice
+                onOpen = onOpenChoice,
+                m3 = m3
             )
         }
         SourcePrefKind.TEXT -> {
             EditorRow(
                 row = row,
                 currentValue = row.text.takeIf { it.isNotBlank() },
-                onOpen = onOpenText
+                onOpen = onOpenText,
+                m3 = m3
             )
         }
         SourcePrefKind.MULTI_CHOICE -> {
@@ -361,7 +397,8 @@ private fun SourcePrefRowView(
                     ) ?: "1 chosen"
                     else -> "${row.selectedValues.size} chosen"
                 },
-                onOpen = onOpenMulti
+                onOpen = onOpenMulti,
+                m3 = m3
             )
         }
         SourcePrefKind.ACTION -> {
@@ -385,8 +422,38 @@ private fun SourcePrefRowView(
 private fun EditorRow(
     row: SourcePrefRow,
     currentValue: String?,
-    onOpen: () -> Unit
+    onOpen: () -> Unit,
+    /** Code 121 (W4, R21): the M3 list-item form. */
+    m3: Boolean = false
 ) {
+    if (m3) {
+        ListItem(
+            headlineContent = {
+                Text(
+                    row.title,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            },
+            supportingContent = {
+                val summary = row.summary?.takeIf { it.isNotBlank() }
+                when {
+                    summary != null -> Text(summary)
+                    currentValue != null -> Text(currentValue)
+                }
+            },
+            trailingContent = {
+                Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            modifier = Modifier.clickable(
+                enabled = row.enabled, onClick = onOpen
+            )
+        )
+        return
+    }
     Row(
         Modifier
             .fillMaxWidth()

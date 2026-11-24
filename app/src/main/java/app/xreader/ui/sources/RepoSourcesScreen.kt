@@ -45,6 +45,22 @@ import app.xreader.ui.common.KitEmptyState
 import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SearchCapsule
+// Code 121 (W4): the scratch-M3 (R18/R19) branch's components.
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.MediumTopAppBar
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.OutlinedTextField
 import app.xreader.ui.theme.primaryTextColor
 import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.bottomContentPadding
@@ -289,6 +305,361 @@ fun RepoSourcesScreen(
         }
     }
     val visible = visibleEntries.map { it.row }
+
+    // ── Code 121 (W4, scratch R18/R19): one repo's sources in ──
+    // Material 3 — the R17 store grid scoped to this repository:
+    // a header (name, URL line, Refresh — R19's built-in form
+    // has no Refresh), a search field filtering the grid, and
+    // outlined cards with Install/Installed toggles. Under
+    // Nocturne the shipped screen below renders byte-identically.
+    if (isM3Repo) {
+        Column(Modifier.fillMaxSize()) {
+            MediumTopAppBar(
+                title = {
+                    Text(
+                        if (builtIn) {
+                            "Built-in sources"
+                        } else {
+                            repo?.name ?: ""
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                },
+                actions = {
+                    if (!builtIn && repo != null) {
+                        IconButton(
+                            onClick = { viewModel.refreshRepo(repo) },
+                            enabled = !state.busy
+                        ) {
+                            Icon(
+                                Icons.Filled.Refresh,
+                                contentDescription = "Refresh"
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = { viewModel.toggleAdultVisibility() }
+                    ) {
+                        Icon(
+                            Icons.Filled.Visibility,
+                            contentDescription = "Adult content: " +
+                                state.contentVisibility.label
+                        )
+                    }
+                }
+            )
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp)
+            ) {
+                if (!builtIn && repo != null) {
+                    Text(
+                        repo.indexUrl,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    when {
+                        builtIn ->
+                            "${entries.size} sources · built into " +
+                                "Xreader, always up to date"
+                        visible.size == entries.size ->
+                            "${entries.size} sources"
+                        else ->
+                            "${entries.size} sources · showing " +
+                                "${visible.size}"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (state.busy) {
+                    LinearWavyProgressIndicator(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                    )
+                }
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("Search this repository") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                )
+                val m3Langs = RepoSourceFilter.languages(allRows)
+                if (m3Langs.size > 1 || showNovelToggle) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (showNovelToggle) {
+                            FilterChip(
+                                selected = novelsOnly,
+                                onClick = { novelsOnly = !novelsOnly },
+                                label = { Text("Novels only") }
+                            )
+                        }
+                        if (m3Langs.size > 1) {
+                            FilterChip(
+                                selected = language == null,
+                                onClick = { language = null },
+                                label = { Text("All languages") }
+                            )
+                            m3Langs.forEach { lang ->
+                                FilterChip(
+                                    selected = language == lang,
+                                    onClick = { language = lang },
+                                    label = { Text(lang.uppercase()) }
+                                )
+                            }
+                        }
+                    }
+                }
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
+                    if (entries.isEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Column(
+                                verticalArrangement =
+                                    Arrangement.spacedBy(12.dp)
+                            ) {
+                                Text(
+                                    if (repo != null && foreign == null) {
+                                        "No source list is loaded for " +
+                                            "this repository yet — " +
+                                            "check for updates and its " +
+                                            "sources will appear here."
+                                    } else {
+                                        "Nothing here yet."
+                                    },
+                                    style = MaterialTheme
+                                        .typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                                if (repo != null && foreign == null) {
+                                    Button(
+                                        onClick = {
+                                            viewModel.refreshRepo(repo)
+                                        }
+                                    ) { Text("Check for updates") }
+                                }
+                            }
+                        }
+                    }
+                    items(
+                        visibleEntries,
+                        key = { "m3-repo-row-${it.id}" }
+                    ) { entry ->
+                        OutlinedCard(
+                            onClick = {
+                                entry.extensionId?.let {
+                                    onOpenExtension(it)
+                                }
+                            },
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                M3InitialAvatar(entry.row.name)
+                                Text(
+                                    entry.row.name,
+                                    style = MaterialTheme
+                                        .typography.titleSmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(top = 8.dp)
+                                )
+                                Text(
+                                    listOfNotNull(
+                                        entry.row.lang
+                                            .takeIf { it.isNotBlank() }
+                                            ?.uppercase(),
+                                        entry.row.domain
+                                            .takeIf { it.isNotBlank() },
+                                        entry.badge
+                                    ).joinToString(" · "),
+                                    style = MaterialTheme
+                                        .typography.bodySmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                when {
+                                    entry.added && entry.pkg != null -> {
+                                        FilledTonalButton(
+                                            onClick = {
+                                                entry.pkg?.let { pkg ->
+                                                    installedByPkg[
+                                                        pkg.pkg
+                                                    ]?.let {
+                                                        viewModel
+                                                            .uninstallExtension(
+                                                                it
+                                                            )
+                                                    }
+                                                }
+                                            },
+                                            enabled = !state.busy,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier
+                                                    .size(18.dp)
+                                            )
+                                            Text(
+                                                "Installed",
+                                                modifier = Modifier
+                                                    .padding(start = 6.dp)
+                                            )
+                                        }
+                                    }
+                                    entry.added -> {
+                                        FilledTonalButton(
+                                            onClick = {},
+                                            enabled = false,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier
+                                                    .size(18.dp)
+                                            )
+                                            Text(
+                                                "Installed",
+                                                modifier = Modifier
+                                                    .padding(start = 6.dp)
+                                            )
+                                        }
+                                    }
+                                    entry.pkg != null -> {
+                                        Button(
+                                            onClick = {
+                                                pendingInstall = entry.pkg
+                                            },
+                                            enabled = !state.busy,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) { Text("Install") }
+                                    }
+                                    entry.site != null -> {
+                                        Button(
+                                            onClick = {
+                                                entry.site?.let { site ->
+                                                    if (app.xreader.data
+                                                            .extension
+                                                            .FamilyTemplates
+                                                            .hasTemplate(
+                                                                site.family
+                                                            )
+                                                    ) {
+                                                        viewModel
+                                                            .installFamilySource(
+                                                                site
+                                                            )
+                                                    } else {
+                                                        viewModel
+                                                            .createSourceFromSite(
+                                                                site
+                                                            )
+                                                    }
+                                                }
+                                            },
+                                            enabled = !state.busy,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) { Text("Install") }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (entries.isNotEmpty() &&
+                        visibleEntries.isEmpty()
+                    ) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                "Nothing in this repository matches " +
+                                    "that search.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (repo != null) {
+            pendingInstall?.let { pkg ->
+                val permissions = pkg.installPermissions()
+                AlertDialog(
+                    onDismissRequest = { pendingInstall = null },
+                    title = { Text("Add “${pkg.name}”?") },
+                    text = {
+                        Column(
+                            verticalArrangement =
+                                Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                permissions.consentSummary(
+                                    pkg.kindEnum?.label ?: "source"
+                                )
+                            )
+                            Text(
+                                "Version ${pkg.versionName}",
+                                style = MaterialTheme
+                                    .typography.bodySmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            pendingInstall = null
+                            viewModel.install(repo, pkg)
+                        }) { Text("Install") }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { pendingInstall = null }
+                        ) { Text("Cancel") }
+                    }
+                )
+            }
+        }
+        return
+    }
 
     Column(
         Modifier

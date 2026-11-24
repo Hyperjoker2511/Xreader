@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -147,6 +148,91 @@ class ProviderPackViewModel(
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
                     ProviderPackViewModel(container) as T
             }
+    }
+}
+
+/**
+ * Code 121 (W4, scratch R17): the provider pack as a full-width
+ * FILLED card in the Material 3 source store — the same state
+ * and the same two actions as [ProviderPackCard], in the
+ * store's M3 dress.
+ */
+@Composable
+fun ProviderPackCardM3(viewModel: ProviderPackViewModel) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val info = state.info
+    androidx.compose.material3.Card(
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        androidx.compose.foundation.layout.Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(
+                "Provider pack",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                when {
+                    info == null ->
+                        "New sources arrive between app updates — " +
+                            "nothing has been delivered by pack yet."
+                    info.sourceIds.isEmpty() ->
+                        "Pack v${info.version} · ${info.date} — " +
+                            "no pack sources yet."
+                    else ->
+                        "${info.sourceIds.size} sources · " +
+                            "Updated by pack · ${info.date}"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            state.message?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                androidx.compose.material3.Button(
+                    onClick = { viewModel.checkNow() },
+                    enabled = !state.busy,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        if (state.busy) {
+                            "Checking…"
+                        } else {
+                            "Check for pack updates"
+                        }
+                    )
+                }
+                if (info?.canRollback == true) {
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { viewModel.rollback() },
+                        enabled = !state.busy,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Roll back") }
+                }
+            }
+            if (info?.canRollback == true) {
+                Text(
+                    "Roll back returns every pack source to pack " +
+                        "v${info.previousVersion}, exactly as it was.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 

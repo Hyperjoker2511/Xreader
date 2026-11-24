@@ -44,6 +44,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -154,6 +164,10 @@ fun ReaderScreen(
     onOpenBookTerms: () -> Unit = {},
     /** v1.0.6.2 (F9b): Ask AI is a full page, not a sheet. */
     onOpenAiPage: () -> Unit = {},
+    /** Code 121 W8 (D-121-W5-3 retired): the M3 chrome
+     * overflow's "Book page" door — the host navigates to this
+     * book's page. Null = the door is not rendered. */
+    onOpenBookPage: (() -> Unit)? = null,
     /** v1.3.2 (A2): the one-time check / sign-in hand-off for
      * this book's source, when a chapter fetch hits the gate.
      * v1.3.4 (U3): the second value is the sanctioned screen's
@@ -350,6 +364,10 @@ fun ReaderScreen(
     }
 
     var activeSheet by remember { mutableStateOf<ActiveSheet?>(null) }
+    // Code 121 (S10): the PDF page grid sheet, opened from the
+    // M3 chrome's page chip. M3-only door; Nocturne's numeric
+    // go-to lives in its own Contents sheet as shipped.
+    var pdfPageGridOpen by remember { mutableStateOf(false) }
     // The settings sheet always opens on its index now (v1.2.0:
     // the old Theme tile that deep-linked to the "page" sub-page
     // folded into the sheet — see ReaderChrome's bottom bar).
@@ -1445,10 +1463,15 @@ fun ReaderScreen(
             // ReaderCounters — the source-given name is shown
             // only when it does not contradict that position.
             chapterTitle = if (pdfReady != null) {
-                // OE-1: a PDF's header second line is the
-                // outline section the page sits in (or
-                // nothing) — never a chapter line.
-                pdfReady.anchorTitle ?: ""
+                // Code 121 (S11): in Reflow the M3 top bar's
+                // subtitle is the persistent "Page N · Reflow"
+                // line; in Pages it is the outline section the
+                // page sits in (OE-1) — never a chapter line.
+                if (pdfReady.mode == PdfReadMode.REFLOW) {
+                    "Page ${pdfReady.page + 1} · Reflow"
+                } else {
+                    pdfReady.anchorTitle ?: ""
+                }
             } else {
                 ReaderCounters.headerLine(
                     chapterTitle = state.chapter?.title ?: "",
@@ -1579,7 +1602,30 @@ fun ReaderScreen(
                 activeSheet = ActiveSheet.SETTINGS
             },
             onOpenAi = { onOpenAiPage() },
-            pdfPageLabel = pdfPageLabel,
+            // Code 121 (S10): the M3 page chip reads
+            // "112 / 640" (the spec's form of the settled pill).
+            pdfPageLabel = pdfReady?.let { "${it.page + 1} / ${it.pageCount}" },
+            onOpenPageGrid = { pdfPageGridOpen = true },
+            // W8 (D-121-W5-3 retired): the overflow's Book page
+            // door (host-supplied) + Share (the book page's own
+            // share form: title as plain text via the chooser).
+            onOpenBookPage = onOpenBookPage,
+            onShare = {
+                val shareIntent = android.content.Intent(
+                    android.content.Intent.ACTION_SEND
+                ).apply {
+                    type = "text/plain"
+                    putExtra(
+                        android.content.Intent.EXTRA_TEXT,
+                        state.bookTitle
+                    )
+                }
+                context.startActivity(
+                    android.content.Intent.createChooser(
+                        shareIntent, "Share book"
+                    )
+                )
+            },
             // OE-1 (R13, OQ4): the mode switch on the bar —
             // the label names the mode a tap enters; a book
             // with no text layer carries the honest line
@@ -1588,7 +1634,9 @@ fun ReaderScreen(
                 pdfReady == null -> null
                 pdfReady.textAvailable == false -> "No text layer"
                 pdfReady.mode == PdfReadMode.PAGES -> "Text reflow"
-                else -> "Pages"
+                // Code 121 (S11): the Reflow toggle's return
+                // door is named as the spec names it.
+                else -> "View as printed"
             },
             onTogglePdfMode = {
                 val ready = pdfReady
@@ -1917,7 +1965,15 @@ fun ReaderScreen(
             },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            // Code 121 (§3.7): M3 sheets take the extraLarge
+            // top; Nocturne keeps its settled 24dp sheet top.
+            shape = if (designState.design ==
+                app.xreader.data.prefs.AppDesign.MATERIAL3
+            ) {
+                RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+            } else {
+                RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            }
         ) {
             when (sheet) {
                 ActiveSheet.SETTINGS -> ReaderSettingsSheet(
@@ -2158,6 +2214,28 @@ fun ReaderScreen(
         }
     }
 
+    // Code 121 (S10): the PDF page grid sheet — thumbnail grid
+    // + the settled numeric go-to door, opened from the M3
+    // chrome's page chip.
+    if (pdfPageGridOpen && pdfReady != null) {
+        ModalBottomSheet(
+            onDismissRequest = { pdfPageGridOpen = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+        ) {
+            PdfPageGridSheet(
+                session = pdfReady.session,
+                currentPage = pdfReady.page,
+                pageCount = pdfReady.pageCount,
+                onJump = { page ->
+                    pdfPageGridOpen = false
+                    viewModel.pdfGoToPage(page)
+                }
+            )
+        }
+    }
+
     // -- Note editor ------------------------------------------------------------
     val noteTarget = editingNoteFor
     val pendingRange = pendingNoteHighlight
@@ -2172,12 +2250,28 @@ fun ReaderScreen(
             },
             title = { Text(if (noteTarget != null) "Highlight note" else "Note for this passage") },
             text = {
+                Column {
+                // Code 121 (S24): under M3 the note editor
+                // carries the quoted passage above the field.
+                if (noteTarget != null &&
+                    designState.design ==
+                    app.xreader.data.prefs.AppDesign.MATERIAL3
+                ) {
+                    Text(
+                        noteTarget.quotedText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
                 TextField(
                     value = noteText,
                     onValueChange = { noteText = it },
                     placeholder = { Text("Write a note…") },
                     modifier = Modifier.fillMaxWidth()
                 )
+                }
             },
             confirmButton = {
                 TextButton(
@@ -3206,7 +3300,16 @@ private fun PdfSearchSheet(
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Text(
-            "Search",
+            // Code 121 (S21): the M3 sheet head carries the
+            // result count, as S20's does.
+            if (hits != null &&
+                app.xreader.ui.theme.LocalDesignState.current.design ==
+                app.xreader.data.prefs.AppDesign.MATERIAL3
+            ) {
+                "Search · ${hits.size} results"
+            } else {
+                "Search"
+            },
             style = MaterialTheme.typography.titleMedium
         )
         Spacer(Modifier.height(8.dp))
@@ -3271,6 +3374,132 @@ private fun PdfSearchSheet(
                             hit.snippet,
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 2
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+/**
+ * Code 121 (S10): the PDF page grid sheet — a thumbnail grid
+ * of every page (rendered lazily through the session's own
+ * page renderer, the same call the Pages surface uses) plus
+ * the settled numeric go-to-page field. The current page sits
+ * in `secondaryContainer`. Tapping a page or a valid number
+ * jumps and closes; nothing else about the PDF's behaviour
+ * changes.
+ */
+@Composable
+private fun PdfPageGridSheet(
+    session: app.xreader.data.engine.PdfSession,
+    currentPage: Int,
+    pageCount: Int,
+    onJump: (Int) -> Unit
+) {
+    var pageText by remember { mutableStateOf("") }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text("Go to page", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = pageText,
+                onValueChange = { value ->
+                    pageText = value.filter { it.isDigit() }
+                },
+                label = { Text("Page (1–$pageCount)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Go
+                ),
+                keyboardActions = KeyboardActions(
+                    onGo = {
+                        pageText.toIntOrNull()?.let { number ->
+                            if (number in 1..pageCount) onJump(number - 1)
+                        }
+                    }
+                ),
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                onClick = {
+                    pageText.toIntOrNull()?.let { number ->
+                        if (number in 1..pageCount) onJump(number - 1)
+                    }
+                },
+                enabled = pageText.toIntOrNull() in 1..pageCount
+            ) { Text("Go") }
+        }
+        Spacer(Modifier.height(12.dp))
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 84.dp),
+            modifier = Modifier.heightIn(max = 480.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(pageCount, key = { it }) { page ->
+                val bitmap by produceState<android.graphics.Bitmap?>(
+                    initialValue = null, session, page
+                ) {
+                    value = session.renderPage(page, 168)
+                }
+                Surface(
+                    onClick = { onJump(page) },
+                    shape = MaterialTheme.shapes.medium,
+                    color = if (page == currentPage) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    }
+                ) {
+                    Column(
+                        Modifier.padding(6.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        if (bitmap != null) {
+                            Image(
+                                bitmap = bitmap!!.asImageBitmap(),
+                                contentDescription = "Page ${page + 1}",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(0.72f),
+                                contentScale = ContentScale.Fit
+                            )
+                        } else {
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(0.72f),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "${page + 1}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme
+                                        .colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Text(
+                            "${page + 1}",
+                            style = TextStyle(
+                                fontSize = MaterialTheme
+                                    .typography.labelMedium.fontSize,
+                                fontFeatureSettings = "tnum"
+                            ),
+                            color = if (page == currentPage) {
+                                MaterialTheme.colorScheme
+                                    .onSecondaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         )
                     }
                 }

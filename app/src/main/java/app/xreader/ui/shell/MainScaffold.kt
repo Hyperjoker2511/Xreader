@@ -720,10 +720,12 @@ fun MainScaffold(
         val isWideLayout = maxWidth >= 840.dp
         Box(Modifier.fillMaxSize()) {
         if (designState.design == app.xreader.data.prefs.AppDesign.MATERIAL3) {
-            // Code 120: the Material 3 shell (design §2.1 + A1).
-            // The Bar/Rail knob can pin a form; Auto follows the
-            // same 840dp split as the Nocturne shells.
-            if (m3UseRail(designState, isWideLayout)) {
+            // Code 120, corrected in code 121 (scratch §2.6):
+            // the Material 3 shell (S1). The Bar/Rail knob can
+            // pin a form; Auto follows the M3 width classes —
+            // rail from Medium (600dp), NOT the Nocturne shells'
+            // 840dp split (their isWideLayout is untouched).
+            if (m3UseRail(designState, maxWidth >= 600.dp)) {
                 M3RailShell(
                     navController, snackbar, appearance, container, onPhaseNote,
                     libraryViewModel, downloadsViewModel, opdsViewModel,
@@ -2509,6 +2511,9 @@ internal fun XreaderNavHost(
                 onOpenCustomise = { navController.navigate("customise") },
                 onOpenBookTerms = {
                     navController.navigate("bookTerms/$bookId")
+                },
+                onOpenBookPage = {
+                    navController.navigate("book/$bookId")
                 },
                 onOpenAiPage = {
                     navController.navigate("ai/$bookId/$chapterIndex")

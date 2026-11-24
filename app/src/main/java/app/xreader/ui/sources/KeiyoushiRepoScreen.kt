@@ -47,6 +47,22 @@ import app.xreader.ui.common.KitEmptyState
 import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.SearchCapsule
+// Code 121 (W4): the scratch-M3 (R27) branch's components.
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.MediumTopAppBar
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.OutlinedTextField
 import app.xreader.ui.theme.primaryTextColor
 import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.bottomContentPadding
@@ -143,6 +159,282 @@ fun KeiyoushiRepoScreen(
     }
     val allLangs = remember(rows) {
         rows.flatMap { it.langs }.distinct().sorted()
+    }
+
+    // ── Code 121 (W4, scratch R27): the Keiyoushi shelf in ──
+    // Material 3 — the R17 store grid scoped to this repository:
+    // repo header with Refresh, a search field filtering the
+    // shelf, language filter chips, the shelf's own sections
+    // (Updates pending · Installed · Available by language) as
+    // outlined cards with Install/Installed toggles. The install
+    // consent dialog is the shipped one, unchanged. Under
+    // Nocturne the shipped shelf below renders byte-identically.
+    if (isM3Shelf) {
+        Column(Modifier.fillMaxSize()) {
+            MediumTopAppBar(
+                title = {
+                    Text(
+                        repo.name,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { viewModel.refreshRepo(repo) },
+                        enabled = !state.busy
+                    ) {
+                        Icon(
+                            Icons.Filled.Refresh,
+                            contentDescription = "Refresh"
+                        )
+                    }
+                    IconButton(
+                        onClick = { viewModel.toggleAdultVisibility() }
+                    ) {
+                        Icon(
+                            Icons.Filled.Visibility,
+                            contentDescription = "Adult content: " +
+                                state.contentVisibility.label
+                        )
+                    }
+                }
+            )
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp)
+            ) {
+                Text(
+                    if (rows.isEmpty()) {
+                        "The manga catalogue"
+                    } else {
+                        "${rows.size} manga sources · $readyCount ready"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (state.busy) {
+                    LinearWavyProgressIndicator(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                    )
+                }
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("Search this catalogue") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                )
+                if (allLangs.size > 1) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = language == null,
+                            onClick = { language = null },
+                            label = { Text("All languages") }
+                        )
+                        allLangs.forEach { lang ->
+                            FilterChip(
+                                selected = language == lang,
+                                onClick = { language = lang },
+                                label = {
+                                    Text(
+                                        if (lang == "all") {
+                                            "All languages (multi)"
+                                        } else {
+                                            lang.uppercase()
+                                        }
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
+                    if (rows.isEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Column(
+                                verticalArrangement =
+                                    Arrangement.spacedBy(12.dp)
+                            ) {
+                                Text(
+                                    "No source list is loaded for " +
+                                        "this repository yet — check " +
+                                        "for updates and its sources " +
+                                        "will appear here.",
+                                    style = MaterialTheme
+                                        .typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                                Button(
+                                    onClick = {
+                                        viewModel.refreshRepo(repo)
+                                    }
+                                ) { Text("Check for updates") }
+                            }
+                        }
+                    } else if (searching) {
+                        if (searchResults.isEmpty()) {
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                Text(
+                                    "Nothing in this catalogue matches " +
+                                        "that search.",
+                                    style = MaterialTheme
+                                        .typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            items(
+                                searchResults,
+                                key = { "m3-keiyoushi-${it.packageName}" }
+                            ) { row ->
+                                M3KeiyoushiCard(row, viewModel, state)
+                            }
+                        }
+                    } else {
+                        if (updates.isNotEmpty()) {
+                            item(
+                                key = "m3-shelf-updates-head",
+                                span = { GridItemSpan(maxLineSpan) }
+                            ) {
+                                Row(
+                                    verticalAlignment =
+                                        Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    M3GroupHeader(
+                                        "Updates pending",
+                                        Modifier.weight(1f)
+                                    )
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.updateAllKeiyoushi()
+                                        }
+                                    ) { Text("Update all") }
+                                }
+                            }
+                            items(
+                                updates,
+                                key = { "m3-keiyoushi-${it.packageName}" }
+                            ) { row ->
+                                M3KeiyoushiCard(row, viewModel, state)
+                            }
+                        }
+                        if (installed.isNotEmpty()) {
+                            item(
+                                key = "m3-shelf-installed-head",
+                                span = { GridItemSpan(maxLineSpan) }
+                            ) {
+                                M3GroupHeader("Installed")
+                            }
+                            items(
+                                installed,
+                                key = { "m3-keiyoushi-${it.packageName}" }
+                            ) { row ->
+                                M3KeiyoushiCard(row, viewModel, state)
+                            }
+                        }
+                        availableByLang.forEach { (lang, langRows) ->
+                            item(
+                                key = "m3-shelf-lang-$lang",
+                                span = { GridItemSpan(maxLineSpan) }
+                            ) {
+                                M3GroupHeader(
+                                    if (lang == "all") {
+                                        "All languages (multi)"
+                                    } else {
+                                        lang.uppercase()
+                                    }
+                                )
+                            }
+                            items(
+                                langRows,
+                                key = { "m3-keiyoushi-${it.packageName}" }
+                            ) { row ->
+                                M3KeiyoushiCard(row, viewModel, state)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // The K3 install consent sheet — the same dialog the
+        // shipped shelf shows (see below); nothing is loaded
+        // until it is confirmed.
+        state.keiyoushiConsent?.let { prompt ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { viewModel.dismissKeiyoushiConsent() },
+                title = { Text("Install “${prompt.displayName}”?") },
+                text = {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(prompt.summary)
+                        Text(
+                            "Version ${prompt.versionName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                        Text(
+                            "Signed by the Keiyoushi key " +
+                                (prompt.signerSha256?.take(16) ?: "") +
+                                "…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                        Text(
+                            "File fingerprint: " +
+                                prompt.fingerprint.take(16) + "…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = { viewModel.confirmKeiyoushiConsent() }
+                    ) { Text("Install") }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { viewModel.dismissKeiyoushiConsent() }
+                    ) { Text("Cancel") }
+                }
+            )
+        }
+        return
     }
 
     Column(
@@ -994,6 +1286,167 @@ private fun KeiyoushiShelfRow(
                             ) { Text("Remove") }
                         KeiyoushiIndex.RowAction.NONE -> Unit
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Code 121 (W4, scratch R27): one Keiyoushi package as an
+ * outlined store card — the shelf row's facts (initial avatar,
+ * name, language · domain · count line, the failure's reason,
+ * the update signer line) with the state's label and its own
+ * action: the Install/Installed toggle family of R17. Busy
+ * still means this row's spinner + Cancel only.
+ */
+@Composable
+private fun M3KeiyoushiCard(
+    row: KeiyoushiIndex.PackageRow,
+    viewModel: SourcesViewModel,
+    state: SourcesUiState
+) {
+    val busy = row.packageName in state.keiyoushiBusyPackages
+    OutlinedCard(
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            M3InitialAvatar(row.name)
+            Text(
+                row.name,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Text(
+                listOfNotNull(
+                    row.langs
+                        .joinToString(", ") { it.uppercase() }
+                        .takeIf { it.isNotBlank() },
+                    row.domains.firstOrNull(),
+                    if (row.sourceCount > 1) {
+                        "${row.sourceCount} sources"
+                    } else {
+                        null
+                    },
+                    row.badge
+                ).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (row.detail != null) {
+                Text(
+                    row.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (row.state == KeiyoushiIndex.State.UPDATE_AVAILABLE) {
+                val signer = state.keiyoushiInstalledSigners[row.packageName]
+                Text(
+                    if (signer != null) {
+                        "Signed by the Keiyoushi key " +
+                            signer.take(16) + "…"
+                    } else {
+                        "Signed by the Keiyoushi key"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            if (busy) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                    TextButton(
+                        onClick = {
+                            viewModel.cancelKeiyoushiInstall(row.packageName)
+                        }
+                    ) { Text("Cancel") }
+                }
+            } else {
+                val showLabel =
+                    row.action == KeiyoushiIndex.RowAction.NONE ||
+                        row.state == KeiyoushiIndex.State.READY ||
+                        row.state == KeiyoushiIndex.State.UPDATE_AVAILABLE
+                if (showLabel) {
+                    Text(
+                        row.state.label,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (
+                            row.state == KeiyoushiIndex.State.READY
+                        ) {
+                            MaterialTheme.colorScheme.secondary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 2
+                    )
+                }
+                when (row.action) {
+                    KeiyoushiIndex.RowAction.INSTALL ->
+                        Button(
+                            onClick = {
+                                viewModel.installKeiyoushi(row.packageName)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Install") }
+                    KeiyoushiIndex.RowAction.REVIEW ->
+                        Button(
+                            onClick = {
+                                viewModel.reviewKeiyoushiConsent(
+                                    row.packageName
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Review") }
+                    KeiyoushiIndex.RowAction.UPDATE ->
+                        Button(
+                            onClick = {
+                                viewModel.installKeiyoushi(row.packageName)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Update") }
+                    KeiyoushiIndex.RowAction.REMOVE -> {
+                        FilledTonalButton(
+                            onClick = {},
+                            enabled = false,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                "Installed",
+                                modifier = Modifier.padding(start = 6.dp)
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                viewModel.uninstallKeiyoushi(
+                                    row.packageName
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Remove") }
+                    }
+                    KeiyoushiIndex.RowAction.NONE -> Unit
                 }
             }
         }

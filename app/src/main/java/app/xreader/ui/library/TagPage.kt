@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -19,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -119,6 +121,21 @@ fun TagPageScreen(
     onOpenBook: (Long) -> Unit
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Code 121 (R9): the Material 3 tag page — a shelf, not a
+    // new screen type: medium flexible bar (tag + book count)
+    // over the R1 shelf card list filtered to the tag. The
+    // Nocturne composition below is unchanged.
+    if (app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        M3TagContent(
+            viewModel = viewModel,
+            coverFile = coverFile,
+            onBack = onBack,
+            onOpenBook = onOpenBook
+        )
+        return
+    }
     Column(
         Modifier
             .fillMaxSize()
@@ -194,6 +211,111 @@ fun TagPageScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ── Code 121 (R9): the Material 3 tag page ─────────────────
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+private fun M3TagContent(
+    viewModel: TagPageViewModel,
+    coverFile: (String?) -> File?,
+    onBack: () -> Unit,
+    onOpenBook: (Long) -> Unit
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val scrollBehavior = androidx.compose.material3.TopAppBarDefaults
+        .exitUntilCollapsedScrollBehavior()
+    androidx.compose.material3.Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            androidx.compose.material3.MediumFlexibleTopAppBar(
+                title = {
+                    Text(
+                        state.displayName,
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                },
+                subtitle = {
+                    Text(
+                        if (state.books.size == 1) {
+                            "1 book"
+                        } else {
+                            "${state.books.size} books"
+                        }
+                    )
+                },
+                navigationIcon = {
+                    androidx.compose.material3.IconButton(onClick = onBack) {
+                        androidx.compose.material3.Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                },
+                actions = {
+                    androidx.compose.material3.ToggleButton(
+                        checked = state.followed,
+                        onCheckedChange = { viewModel.setFollowed(it) }
+                    ) {
+                        Text(if (state.followed) "Following" else "Follow tag")
+                    }
+                },
+                scrollBehavior = scrollBehavior
+            )
+        }
+    ) { innerPadding ->
+        if (!state.loading && state.books.isEmpty()) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "No books with this tag yet",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                Text(
+                    "When a book carries this tag — from its source, " +
+                        "the synopsis, or your own edit — it will be " +
+                        "listed here.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            return@Scaffold
+        }
+        LazyColumn(
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 16.dp, end = 16.dp, top = 12.dp, bottom = 88.dp
+            )
+        ) {
+            items(state.books, key = { "m3-tagbook-${it.id}" }) { book ->
+                app.xreader.ui.common.M3BookCard(
+                    title = book.title,
+                    author = book.author.takeIf { it.isNotBlank() },
+                    coverModel = coverFile(book.coverPath)
+                        ?.takeIf { it.exists() }
+                        ?: book.coverUrl?.takeIf { it.isNotBlank() },
+                    supportingLine = if (book.totalChapters > 0) {
+                        "${book.totalChapters} chapters"
+                    } else {
+                        null
+                    },
+                    onClick = { onOpenBook(book.id) }
+                )
             }
         }
     }

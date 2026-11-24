@@ -3,6 +3,7 @@ import app.xreader.ui.theme.errorTextColor
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -18,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -70,6 +72,21 @@ fun MigrationScreen(
                 runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
             }
         }
+    }
+
+    // Code 121 (R35): under Material 3, Migration is door rows
+    // + wavy progress in the M3 list language. The Nocturne
+    // form below is untouched.
+    if (app.xreader.ui.theme.isMaterial3Design()) {
+        MigrationScreenM3(
+            state = state,
+            onBack = onBack,
+            onAddFromLink = onAddFromLink,
+            onChooseFile = { picker.launch(arrayOf("*/*")) },
+            onConfirmImport = { viewModel.confirmImport() },
+            onReset = { viewModel.reset() }
+        )
+        return
     }
 
     Column(
@@ -309,6 +326,243 @@ fun MigrationScreen(
                     effectiveBottomPadding(88.dp, LocalDockClearance.current)
                 )
             )
+        }
+    }
+}
+
+/** R35 under Material 3: the migration doors as list rows,
+ * the working states as wavy progress, results as a document
+ * of lines. Same state machine, same view model. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun MigrationScreenM3(
+    state: MigrationUiState,
+    onBack: () -> Unit,
+    onAddFromLink: () -> Unit,
+    onChooseFile: () -> Unit,
+    onConfirmImport: () -> Unit,
+    onReset: () -> Unit
+) {
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        androidx.compose.material3.TopAppBar(
+            title = { Text("Migration") },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back"
+                    )
+                }
+            }
+        )
+        Column(
+            Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                "Bring your library from another reader app. Xreader " +
+                    "reads Mihon / Tachiyomi backups (.tachibk and the " +
+                    "older JSON), and library lists exported as JSON " +
+                    "or CSV. Books, chapter lists and read marks come " +
+                    "across; chapter text downloads from the source " +
+                    "afterwards, like any new book.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "Komga, Kavita and Calibre-Web are servers, not " +
+                    "backups — add them under Explore → OPDS servers " +
+                    "instead.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            when (val current = state) {
+                MigrationUiState.Idle -> {
+                    androidx.compose.material3.ListItem(
+                        headlineContent = {
+                            Text("Import from another reader")
+                        },
+                        supportingContent = {
+                            Text("Choose a backup file to read")
+                        },
+                        trailingContent = {
+                            Icon(
+                                Icons.Filled.ChevronRight,
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onChooseFile)
+                    )
+                    androidx.compose.material3.ListItem(
+                        headlineContent = { Text("Import a backup") },
+                        supportingContent = {
+                            Text("An Xreader backup file restores " +
+                                "through Sync & backup")
+                        },
+                        trailingContent = {
+                            Icon(
+                                Icons.Filled.ChevronRight,
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onChooseFile)
+                    )
+                    androidx.compose.material3.ListItem(
+                        headlineContent = { Text("Source migration") },
+                        supportingContent = {
+                            Text("Add a source from a link instead")
+                        },
+                        trailingContent = {
+                            Icon(
+                                Icons.Filled.ChevronRight,
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onAddFromLink)
+                    )
+                }
+                MigrationUiState.Reading -> {
+                    androidx.compose.material3
+                        .LinearWavyProgressIndicator(
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    Text(
+                        "Reading the backup…",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                is MigrationUiState.Preview -> {
+                    val preview = current.preview
+                    androidx.compose.material3.Card(
+                        shape = MaterialTheme.shapes.medium,
+                        colors = androidx.compose.material3
+                            .CardDefaults.cardColors(
+                                containerColor =
+                                    MaterialTheme.colorScheme
+                                        .surfaceContainer
+                            ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            Modifier.padding(16.dp),
+                            verticalArrangement =
+                                Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                current.library.formatName,
+                                style = MaterialTheme.typography
+                                    .titleMediumEmphasized
+                            )
+                            Text(
+                                "${preview.totalBooks} book(s) · " +
+                                    "${preview.totalChapters} " +
+                                    "chapter(s) · ${preview.readChapters} " +
+                                    "already read",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "${preview.matchedBooks} matched" +
+                                    if (preview.unmatchedTitles
+                                            .isNotEmpty()
+                                    ) {
+                                        " · ${preview.unmatchedTitles.size} " +
+                                            "unmatched"
+                                    } else {
+                                        ""
+                                    },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                            if (preview.alreadyPresent > 0) {
+                                Text(
+                                    "${preview.alreadyPresent} are " +
+                                        "already in your library — " +
+                                        "their read marks will be merged.",
+                                    style = MaterialTheme.typography
+                                        .bodyMedium,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            }
+                            preview.unmatchedTitles.take(10)
+                                .forEach { title ->
+                                    Text(
+                                        title,
+                                        style = MaterialTheme.typography
+                                            .bodyMedium
+                                    )
+                                }
+                        }
+                    }
+                    Row(
+                        horizontalArrangement =
+                            Arrangement.spacedBy(8.dp)
+                    ) {
+                        androidx.compose.material3.Button(
+                            onClick = onConfirmImport,
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Import") }
+                        androidx.compose.material3.FilledTonalButton(
+                            onClick = onReset
+                        ) { Text("Start over") }
+                    }
+                }
+                MigrationUiState.Importing -> {
+                    androidx.compose.material3
+                        .LinearWavyProgressIndicator(
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    Text(
+                        "Importing…",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                is MigrationUiState.Done -> {
+                    Text(
+                        "Done",
+                        style = MaterialTheme.typography
+                            .titleMediumEmphasized
+                    )
+                    current.lines.forEach { line ->
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    if (current.unmatchedTitles.isNotEmpty()) {
+                        androidx.compose.material3.Button(
+                            onClick = onAddFromLink,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Add a source from a link") }
+                    }
+                    androidx.compose.material3.FilledTonalButton(
+                        onClick = onReset,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Import another backup") }
+                }
+                is MigrationUiState.Failed -> {
+                    Text(
+                        current.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    androidx.compose.material3.Button(
+                        onClick = onReset,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Try another file") }
+                }
+            }
+            Spacer(Modifier.height(32.dp))
         }
     }
 }

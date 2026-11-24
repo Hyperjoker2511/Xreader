@@ -57,6 +57,20 @@ fun UpdatesScreen(
     onOpenBook: (Long) -> Unit
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Code 121 (R6): the Material 3 form — small top app bar,
+    // segmented list items grouped by book, "New" badges. The
+    // Nocturne composition below is unchanged.
+    if (app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        M3UpdatesContent(
+            viewModel = viewModel,
+            coverFile = coverFile,
+            onBack = onBack,
+            onOpenBook = onOpenBook
+        )
+        return
+    }
     val zone = remember { ZoneId.systemDefault() }
     val today = remember { LocalDate.now(zone) }
 
@@ -261,5 +275,202 @@ private fun UpdateRow(
                 )
             }
         }
+    }
+}
+
+// ── Code 121 (R6): the Material 3 Chapter updates ──────────
+// Segmented list items grouped by book. The app holds a new-
+// chapter COUNT per book (BookMeta.newChapterCount), not the
+// individual new chapters' titles, so each book's item carries
+// its real count line and a "New" badge — no chapter rows are
+// invented. Tapping a book marks it seen and opens it (the
+// settled behaviour).
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun M3UpdatesContent(
+    viewModel: LibraryViewModel,
+    coverFile: (String?) -> File?,
+    onBack: () -> Unit,
+    onOpenBook: (Long) -> Unit
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val zone = remember { ZoneId.systemDefault() }
+    val today = remember { LocalDate.now(zone) }
+    val sideBooks = remember(state.books, state.bookKinds, state.librarySide) {
+        app.xreader.data.library.LibrarySplit.onSide(
+            state.books, state.librarySide
+        ) { shelf ->
+            app.xreader.data.library.LibrarySplit
+                .kindOf(shelf.book.id, state.bookKinds)
+        }
+    }
+    val withNew = remember(sideBooks, state.metas) {
+        sideBooks
+            .filter { (state.metas[it.book.id]?.newChapterCount ?: 0) > 0 }
+            .sortedByDescending { state.metas[it.book.id]?.newChapterCount ?: 0 }
+    }
+    val recentByDay = remember(sideBooks, state.metas) {
+        val newIds = withNew.map { it.book.id }.toSet()
+        sideBooks
+            .filter { it.book.id !in newIds }
+            .mapNotNull { shelf ->
+                val day = Instant.ofEpochMilli(shelf.book.updatedAt)
+                    .atZone(zone).toLocalDate()
+                if (day.isBefore(today.minusDays(7))) null else day to shelf
+            }
+            .groupBy({ it.first }, { it.second })
+            .toSortedMap(compareByDescending { it })
+    }
+    androidx.compose.material3.Scaffold(
+        topBar = {
+            androidx.compose.material3.TopAppBar(
+                title = { Text("New chapters") },
+                navigationIcon = {
+                    androidx.compose.material3.IconButton(onClick = onBack) {
+                        androidx.compose.material3.Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                },
+                actions = {
+                    androidx.compose.material3.TextButton(
+                        onClick = { viewModel.checkForUpdates() },
+                        enabled = !state.checkingUpdates
+                    ) {
+                        Text(if (state.checkingUpdates) "Checking…" else "Check now")
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        if (withNew.isEmpty() && recentByDay.isEmpty()) {
+            // S40 empty state (R6's copy).
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "No new chapters",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                Text(
+                    "Your books are up to date.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                androidx.compose.material3.Button(
+                    onClick = { viewModel.checkForUpdates() },
+                    enabled = !state.checkingUpdates
+                ) { Text("Check now") }
+            }
+            return@Scaffold
+        }
+        LazyColumn(
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp, top = 12.dp, bottom = 88.dp
+            )
+        ) {
+            if (withNew.isNotEmpty()) {
+                item(key = "m3-new-group") {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        withNew.forEachIndexed { index, shelf ->
+                            val newCount =
+                                state.metas[shelf.book.id]?.newChapterCount ?: 0
+                            M3UpdateItem(
+                                shelf = shelf,
+                                coverFile = coverFile,
+                                index = index,
+                                count = withNew.size,
+                                supporting = listOfNotNull(
+                                    "$newCount new chapter(s)",
+                                    "${shelf.book.totalChapters} chapters"
+                                ).joinToString(" · "),
+                                badge = "New",
+                                onOpen = {
+                                    viewModel.markSeen(shelf.book.id)
+                                    onOpenBook(shelf.book.id)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            recentByDay.forEach { (day, shelves) ->
+                item(key = "m3-day-$day") {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            dayLabel(day, today),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                        shelves.forEachIndexed { index, shelf ->
+                            M3UpdateItem(
+                                shelf = shelf,
+                                coverFile = coverFile,
+                                index = index,
+                                count = shelves.size,
+                                supporting = "${shelf.book.totalChapters} chapters",
+                                badge = null,
+                                onOpen = { onOpenBook(shelf.book.id) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun M3UpdateItem(
+    shelf: ShelfBook,
+    coverFile: (String?) -> File?,
+    index: Int,
+    count: Int,
+    supporting: String,
+    badge: String?,
+    onOpen: () -> Unit
+) {
+    androidx.compose.material3.SegmentedListItem(
+        onClick = onOpen,
+        shapes = androidx.compose.material3.ListItemDefaults
+            .segmentedShapes(index = index, count = count),
+        leadingContent = {
+            app.xreader.ui.common.M3CoverThumbnail(
+                title = shelf.book.title,
+                author = shelf.book.author.takeIf { it.isNotBlank() },
+                coverModel = coverFile(shelf.book.coverPath)
+                    ?.takeIf { it.exists() }
+                    ?: shelf.book.coverUrl?.takeIf { it.isNotBlank() },
+                modifier = Modifier.size(width = 36.dp, height = 52.dp)
+            )
+        },
+        trailingContent = if (badge != null) {
+            {
+                androidx.compose.material3.Badge {
+                    Text(badge)
+                }
+            }
+        } else {
+            null
+        },
+        supportingContent = { Text(supporting) }
+    ) {
+        Text(
+            shelf.book.title,
+            style = MaterialTheme.typography.titleSmallEmphasized,
+            maxLines = 1
+        )
     }
 }

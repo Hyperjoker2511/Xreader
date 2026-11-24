@@ -40,6 +40,9 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.CircularWavyProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +50,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -1574,6 +1579,11 @@ fun ListenSheet(
     onVoicePick: (String?) -> Unit = {},
     onVoiceReset: () -> Unit = {}
 ) {
+    // Code 121 (S17): under M3 the transport's play/pause is a
+    // FAB; Nocturne keeps its shipped icon-button transport.
+    val listenDesignState = app.xreader.ui.theme.LocalDesignState.current
+    val listenIsM3 = listenDesignState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
     Column(
         Modifier
             .fillMaxWidth()
@@ -1666,13 +1676,25 @@ fun ListenSheet(
                     IconButton(onClick = onTtsSkipPrevious) {
                         Icon(Icons.Filled.SkipPrevious, "Previous sentence")
                     }
-                    IconButton(onClick = onTtsPlayPause) {
-                        Icon(
-                            if (ttsState.playing) Icons.Filled.Pause
-                            else Icons.Filled.PlayArrow,
-                            if (ttsState.playing) "Pause" else "Read aloud",
-                            modifier = Modifier.size(36.dp)
-                        )
+                    if (listenIsM3) {
+                        FloatingActionButton(
+                            onClick = onTtsPlayPause
+                        ) {
+                            Icon(
+                                if (ttsState.playing) Icons.Filled.Pause
+                                else Icons.Filled.PlayArrow,
+                                if (ttsState.playing) "Pause" else "Read aloud"
+                            )
+                        }
+                    } else {
+                        IconButton(onClick = onTtsPlayPause) {
+                            Icon(
+                                if (ttsState.playing) Icons.Filled.Pause
+                                else Icons.Filled.PlayArrow,
+                                if (ttsState.playing) "Pause" else "Read aloud",
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
                     }
                     IconButton(onClick = onTtsSkipNext) {
                         Icon(Icons.Filled.SkipNext, "Next sentence")
@@ -2002,7 +2024,19 @@ fun TocSheet(
         )
         Spacer(Modifier.height(8.dp))
         TabRow(selectedTabIndex = tab) {
-            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Chapters") })
+            // Code 121 (S18): the M3 sheet's tabs are
+            // Contents · Bookmarks · Highlights; Nocturne's
+            // first tab keeps its shipped "Chapters" name.
+            Tab(
+                selected = tab == 0, onClick = { tab = 0 },
+                text = {
+                    Text(
+                        if (designState.design ==
+                            app.xreader.data.prefs.AppDesign.MATERIAL3
+                        ) "Contents" else "Chapters"
+                    )
+                }
+            )
             Tab(
                 selected = tab == 1, onClick = { tab = 1 },
                 text = { Text("Bookmarks (${bookmarks.size})") }
@@ -2043,6 +2077,21 @@ fun TocSheet(
                                         entry.charOffset
                                     )
                                 }
+                                // Code 121 (S18): the current
+                                // chapter sits in
+                                // secondaryContainer under M3.
+                                .background(
+                                    if (designState.design ==
+                                        app.xreader.data.prefs
+                                            .AppDesign.MATERIAL3 &&
+                                        index == currentTocEntryIndex
+                                    ) {
+                                        MaterialTheme.colorScheme
+                                            .secondaryContainer
+                                    } else {
+                                        Color.Transparent
+                                    }
+                                )
                                 .padding(
                                     horizontal = 8.dp, vertical = 12.dp
                                 ),
@@ -2103,6 +2152,18 @@ fun TocSheet(
                         Modifier
                             .fillMaxWidth()
                             .clickable { onJumpChapter(index) }
+                            .background(
+                                if (designState.design ==
+                                    app.xreader.data.prefs
+                                        .AppDesign.MATERIAL3 &&
+                                    index == currentChapterIndex
+                                ) {
+                                    MaterialTheme.colorScheme
+                                        .secondaryContainer
+                                } else {
+                                    Color.Transparent
+                                }
+                            )
                             .padding(horizontal = 8.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -2231,6 +2292,19 @@ fun TocSheet(
                             .padding(horizontal = 8.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Code 121 (S18): a highlight shows its
+                        // stored colour as a dot — the colour is
+                        // data, rendered as picked in both
+                        // designs (trace T6).
+                        Box(
+                            Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    Color(highlightTintForToken(highlight.color))
+                                )
+                        )
+                        Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
                                 highlight.quotedText,
@@ -2267,7 +2341,10 @@ fun TocSheet(
 // Focus timer (PLAN §2.4 #28)
 // ---------------------------------------------------------------------------
 
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+    ExperimentalMaterial3Api::class
+)
 @Composable
 fun FocusSheet(
     focus: FocusUiState,
@@ -2278,6 +2355,17 @@ fun FocusSheet(
 ) {
     var customMinutes by remember { mutableStateOf(25f) }
     var soundscape by remember { mutableStateOf(Soundscape.NONE) }
+    // Code 121 (S22): under M3 the sheet's form is the
+    // expressive time picker + the wavy progress ring; the
+    // Nocturne form below is untouched.
+    val focusIsM3 = app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    val focusTimePickerState =
+        rememberTimePickerState(
+            initialHour = 0, initialMinute = 25, is24Hour = true
+        )
+    val focusPickerMinutes =
+        focusTimePickerState.hour * 60 + focusTimePickerState.minute
     Column(
         Modifier
             .fillMaxWidth()
@@ -2298,25 +2386,32 @@ fun FocusSheet(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (preset in listOf(25, 50)) {
-                        NocturneChip(
-                            label = "$preset min",
-                            selected = customMinutes.roundToInt() == preset,
-                            onClick = { customMinutes = preset.toFloat() },
-                            modifier = Modifier,
-                            dotColor = null,
-                        
-                        )
+                if (focusIsM3) {
+                    TimePicker(
+                        state = focusTimePickerState,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    )
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for (preset in listOf(25, 50)) {
+                            NocturneChip(
+                                label = "$preset min",
+                                selected = customMinutes.roundToInt() == preset,
+                                onClick = { customMinutes = preset.toFloat() },
+                                modifier = Modifier,
+                                dotColor = null,
+
+                            )
+                        }
                     }
+                    SheetSlider(
+                        label = "Session length",
+                        valueText = "${customMinutes.roundToInt()} min",
+                        value = customMinutes,
+                        range = 5f..120f,
+                        onChange = { customMinutes = it }
+                    )
                 }
-                SheetSlider(
-                    label = "Session length",
-                    valueText = "${customMinutes.roundToInt()} min",
-                    value = customMinutes,
-                    range = 5f..120f,
-                    onChange = { customMinutes = it }
-                )
                 SheetSection("Soundscape") {
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2341,19 +2436,57 @@ fun FocusSheet(
                 }
                 PrimaryPill(
                     text = "Start focusing",
-                    onClick = { onStart(customMinutes.roundToInt(), soundscape) },
+                    onClick = {
+                        onStart(
+                            if (focusIsM3) {
+                                focusPickerMinutes.coerceIn(1, 120)
+                            } else {
+                                customMinutes.roundToInt()
+                            },
+                            soundscape
+                        )
+                    },
                     modifier = Modifier,
                     enabled = true,
-                
+
                 )
             }
             app.xreader.domain.reader.FocusState.RUNNING,
             app.xreader.domain.reader.FocusState.PAUSED -> {
-                Text(
-                    formatClock(focus.remainingMs / 1000.0),
-                    style = MaterialTheme.typography.displayMedium,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                )
+                if (focusIsM3) {
+                    // S22: the running state is the wavy ring
+                    // with the remaining time at its centre.
+                    Box(
+                        Modifier
+                            .size(160.dp)
+                            .align(Alignment.CenterHorizontally),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularWavyProgressIndicator(
+                            progress = {
+                                    val total =
+                                        focus.durationMinutes * 60_000f
+                                    if (total > 0f) {
+                                        (focus.remainingMs / total)
+                                            .coerceIn(0f, 1f)
+                                    } else {
+                                        0f
+                                    }
+                                },
+                                modifier = Modifier.size(160.dp)
+                            )
+                        Text(
+                            formatClock(focus.remainingMs / 1000.0),
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                    }
+                } else {
+                    Text(
+                        formatClock(focus.remainingMs / 1000.0),
+                        style = MaterialTheme.typography.displayMedium,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    )
+                }
                 Text(
                     if (focus.state == app.xreader.domain.reader.FocusState.RUNNING) {
                         "Focusing — ${focus.soundscape.name.lowercase()} " +

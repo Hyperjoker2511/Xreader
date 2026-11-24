@@ -71,6 +71,24 @@ fun UpdateCard(
     modifier: Modifier = Modifier
 ) {
     val release = state.cardRelease ?: return
+    // Code 121 (S36): under Material 3 the update card is a
+    // FILLED card in the Library's content flow (W2 places it
+    // at the top of the shelf) — no floating overlay, no
+    // glass. The Nocturne centred-modal form below is
+    // untouched.
+    if (app.xreader.ui.theme.isMaterial3Design()) {
+        UpdateCardM3(
+            state = state,
+            onUpdateNow = onUpdateNow,
+            onDismiss = onDismiss,
+            onReadMore = onReadMore,
+            onInstall = onInstall,
+            onCancelDownload = onCancelDownload,
+            onOpenInstallSettings = onOpenInstallSettings,
+            modifier = modifier
+        )
+        return
+    }
     val scheme = MaterialTheme.colorScheme
     val downloading = state.download is UpdateDownloadPhase.Running
     GlassCard(
@@ -250,3 +268,125 @@ private fun PillProgress(fraction: Float?) {
 /** Shown when a release publishes no short summary of its
  * own — one calm line, never the raw release body. */
 const val GENERIC_SUMMARY = "A new version of Xreader is ready."
+
+/**
+ * S36 under Material 3: a filled card IN the content flow.
+ * "Xreader vX is ready" + the version line, a button group
+ * (the phase's primary action / Later), the download state
+ * as WAVY progress in the card, and the install state as a
+ * plain line. No scrim, no overlay, no glass — the host
+ * (Library) simply lists it above Continue.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun UpdateCardM3(
+    state: AppUpdateViewModel.UiState,
+    onUpdateNow: () -> Unit,
+    onDismiss: () -> Unit,
+    onReadMore: () -> Unit,
+    onInstall: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onOpenInstallSettings: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val release = state.cardRelease ?: return
+    val scheme = MaterialTheme.colorScheme
+    val downloading = state.download is UpdateDownloadPhase.Running
+    androidx.compose.material3.Card(
+        shape = MaterialTheme.shapes.medium,
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = scheme.surfaceContainer
+        ),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                "Xreader ${release.version} is ready",
+                style = MaterialTheme.typography.titleMediumEmphasized
+            )
+            val size = formatDownloadSize(release.apk.sizeBytes)
+            Text(
+                "You're on ${state.currentVersion}" +
+                    if (size.isNotEmpty()) " · $size" else "",
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (downloading) {
+                val running =
+                    state.download as UpdateDownloadPhase.Running
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (running.fraction != null) {
+                        androidx.compose.material3
+                            .LinearWavyProgressIndicator(
+                                progress = { running.fraction },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        Text(
+                            "${(running.fraction * 100).toInt()}% · " +
+                                "Downloading…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                    } else {
+                        androidx.compose.material3
+                            .LinearWavyProgressIndicator(
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        Text(
+                            "Downloading…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                UpdateProgressBlock(state.download)
+            }
+            androidx.compose.material3.ButtonGroup(
+                overflowIndicator = {},
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                customItem(
+                    buttonGroupContent = {
+                        UpdatePrimaryButton(
+                            phase = state.download,
+                            onUpdateNow = onUpdateNow,
+                            onInstall = onInstall,
+                            onOpenInstallSettings =
+                                onOpenInstallSettings,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    },
+                    menuContent = {}
+                )
+                customItem(
+                    buttonGroupContent = {
+                        androidx.compose.material3.FilledTonalButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (downloading) "Hide" else "Later")
+                        }
+                    },
+                    menuContent = {}
+                )
+                if (downloading) {
+                    customItem(
+                        buttonGroupContent = {
+                            TextButton(onClick = onCancelDownload) {
+                                Text("Cancel")
+                            }
+                        },
+                        menuContent = {}
+                    )
+                }
+            }
+            TextButton(onClick = onReadMore) { Text("Read more") }
+        }
+    }
+}

@@ -42,8 +42,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -245,6 +248,288 @@ private fun PageActionItems(
                 onClick = item.onInvoke,
                 modifier = Modifier.fillMaxWidth()
             ) { Text(item.label) }
+        }
+    }
+}
+
+// ------------------------------------------------------------ S33/S34 (M3, code 121 W6)
+
+/**
+ * Code 121 (W6, §3.8 S33): the manga chapter list in the
+ * Material 3 design — S18's list composition in a sheet:
+ * chapters as list items (number + title, read state, the
+ * current chapter in `secondaryContainer`), tap jumps (the
+ * same [onSelect] the shipped dialog's rows call). The shipped
+ * behaviours ride along unchanged: auto-scroll to the current
+ * chapter, the download-state icons, and bookmark by swipe or
+ * the bookmark button. Presentation only.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun M3ReaderChapterListSheet(
+    chapters: List<Chapter>,
+    currentIndex: Int,
+    bookmarkedChapterIds: Set<Long>,
+    onSelect: (Int) -> Unit,
+    onToggleBookmark: (Chapter) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(chapters.size) {
+        if (currentIndex in chapters.indices) {
+            listState.scrollToItem(currentIndex)
+        }
+    }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = androidx.compose.material3.rememberModalBottomSheetState(
+            skipPartiallyExpanded = true
+        ),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Text(
+                "${chapters.size} chapters",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            LazyColumn(state = listState) {
+                itemsIndexed(chapters, key = { _, chapter -> chapter.id }) { index, chapter ->
+                    val dismissState = rememberSwipeToDismissBoxState(
+                        confirmValueChange = { value ->
+                            if (value != SwipeToDismissBoxValue.Settled) {
+                                onToggleBookmark(chapter)
+                            }
+                            false
+                        }
+                    )
+                    SwipeToDismissBox(
+                        state = dismissState,
+                        backgroundContent = {},
+                        content = {
+                            M3ChapterRow(
+                                chapter = chapter,
+                                isCurrent = index == currentIndex,
+                                bookmarked = chapter.id in bookmarkedChapterIds,
+                                onClick = { onSelect(index) },
+                                onToggleBookmark = { onToggleBookmark(chapter) }
+                            )
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun M3ChapterRow(
+    chapter: Chapter,
+    isCurrent: Boolean,
+    bookmarked: Boolean,
+    onClick: () -> Unit,
+    onToggleBookmark: () -> Unit
+) {
+    androidx.compose.material3.ListItem(
+        headlineContent = {
+            Text(
+                chapter.title,
+                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                color = if (chapter.read) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                maxLines = 1
+            )
+        },
+        supportingContent = {
+            val meta = app.xreader.komikku.ScanlatorLine.format(
+                chapter.dateText, chapter.scanlator
+            )
+            if (meta != null) {
+                Text(
+                    meta,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                when (chapter.downloadState) {
+                    DownloadState.READY -> Icon(
+                        Icons.Filled.CheckCircle, "Downloaded",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    DownloadState.DOWNLOADING, DownloadState.QUEUED -> Icon(
+                        Icons.Filled.Download, "Downloading",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    DownloadState.FAILED -> Icon(
+                        Icons.Filled.Error, "Download failed",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    else -> {}
+                }
+                IconButton(onClick = onToggleBookmark) {
+                    Icon(
+                        if (bookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+                        if (bookmarked) "Remove bookmark" else "Bookmark chapter"
+                    )
+                }
+            }
+        },
+        colors = androidx.compose.material3.ListItemDefaults.colors(
+            containerColor = if (isCurrent) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            }
+        ),
+        modifier = Modifier.clickable(onClick = onClick)
+    )
+}
+
+/**
+ * Code 121 (W6, §3.8 S34): the page actions in the Material 3
+ * design — a modal sheet from the page long-press, the four
+ * actions as list rows in the spec's order (Save page · Share
+ * page · Set as cover · Copy), each wired to the exact handler
+ * the shipped dialog invokes. Presentation only.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun M3ReaderPageActionsSheet(
+    pageLabel: String,
+    onSetAsCover: () -> Unit,
+    onCopy: () -> Unit,
+    onShare: () -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Column(
+            Modifier
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            Text(
+                pageLabel,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+            PageActionRow(
+                icon = { Icon(Icons.Filled.Download, null) },
+                label = "Save page",
+                onClick = onSave
+            )
+            PageActionRow(
+                icon = { Icon(Icons.Filled.Share, null) },
+                label = "Share page",
+                onClick = onShare
+            )
+            PageActionRow(
+                icon = { Icon(Icons.Filled.Image, null) },
+                label = "Set as cover",
+                onClick = onSetAsCover
+            )
+            PageActionRow(
+                icon = { Icon(Icons.Filled.ContentCopy, null) },
+                label = "Copy",
+                onClick = onCopy
+            )
+        }
+    }
+}
+
+@Composable
+private fun PageActionRow(
+    icon: @Composable () -> Unit,
+    label: String,
+    onClick: () -> Unit
+) {
+    androidx.compose.material3.ListItem(
+        headlineContent = { Text(label) },
+        leadingContent = icon,
+        colors = androidx.compose.material3.ListItemDefaults.colors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        modifier = Modifier.clickable(onClick = onClick)
+    )
+}
+
+/**
+ * Code 121 (W6, §3.8 S34, mode-door form): the reading-mode
+ * pick as segmented buttons at a modal sheet's head — the
+ * sheet the manga toolbar's reading-mode door opens in the
+ * Material 3 design. The engine's five modes (Default excluded,
+ * as in the shipped mode dialog), labels verbatim; two
+ * segmented rows (3 + 2) so every label fits at full size.
+ * Selecting a mode calls the same ViewModel entry the shipped
+ * dialog calls, then the sheet dismisses.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun M3ReadingModeSheet(
+    options: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Column(
+            Modifier
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            Text(
+                "Reading mode",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+            val firstRow = options.take(3)
+            val secondRow = options.drop(3)
+            androidx.compose.material3.SingleChoiceSegmentedButtonRow(
+                Modifier.fillMaxWidth()
+            ) {
+                firstRow.forEachIndexed { index, option ->
+                    androidx.compose.material3.SegmentedButton(
+                        selected = selectedIndex == index,
+                        onClick = { onSelect(index) },
+                        shape = androidx.compose.material3.SegmentedButtonDefaults
+                            .itemShape(index, firstRow.size),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(option, maxLines = 1)
+                    }
+                }
+            }
+            if (secondRow.isNotEmpty()) {
+                androidx.compose.material3.SingleChoiceSegmentedButtonRow(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                ) {
+                    secondRow.forEachIndexed { rowIndex, option ->
+                        val index = firstRow.size + rowIndex
+                        androidx.compose.material3.SegmentedButton(
+                            selected = selectedIndex == index,
+                            onClick = { onSelect(index) },
+                            shape = androidx.compose.material3.SegmentedButtonDefaults
+                                .itemShape(rowIndex, secondRow.size),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(option, maxLines = 1)
+                        }
+                    }
+                }
+            }
         }
     }
 }

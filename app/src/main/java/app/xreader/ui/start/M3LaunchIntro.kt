@@ -19,13 +19,15 @@ import androidx.compose.ui.Modifier
 import kotlinx.coroutines.delay
 
 /**
- * Code 120 (design §2.9 S2): the Material 3 design's launch
- * intro — a plain surface in the scheme's surface colour with
- * the app wordmark in displaySmall, dismissed by an
- * effect-default fade the moment the Library reports ready
+ * Code 120 (scratch design §3.1 S2): the Material 3 design's
+ * launch intro — a plain surface in the scheme's surface
+ * colour with the app wordmark in displaySmall, dismissed by
+ * an effect-default fade the moment the Library reports ready
  * (hard-capped so it can never linger). No spring choreography:
  * that language is Nocturne's, and the spatial/effect discipline
- * (§1.4) gives a launch surface the effect specs only.
+ * (§2.4) gives a launch surface the effect specs only. The
+ * wordmark wears the M3 type scale — the platform typeface
+ * (§2.2/T19), never the Nocturne brand pairing.
  *
  * Like Nocturne's LaunchIntro it is a pure overlay composed
  * above the shell — first content is never gated on it.

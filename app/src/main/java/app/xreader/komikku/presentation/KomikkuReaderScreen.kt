@@ -43,6 +43,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
@@ -78,6 +79,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import app.xreader.komikku.KomikkuReaderViewModel
 import app.xreader.komikku.model.ReaderPage
 import app.xreader.komikku.presentation.settings.ReaderSettingsDialog
+import app.xreader.komikku.presentation.settings.ReaderSettingsSheet
 import app.xreader.komikku.setting.ReaderOrientation
 import app.xreader.komikku.setting.ReaderPreferences
 import app.xreader.komikku.setting.ReadingMode
@@ -187,6 +189,13 @@ fun KomikkuReaderScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val prefs = viewModel.scopedPreferences
+    // Code 121 (W6, §3.8): the Material 3 design branch — the
+    // manga surfaces below wear the M3 chrome family, sheets
+    // and settings form when the M3 design is active, and the
+    // shipped Komikku chrome when Nocturne is. The branch is
+    // presentation only: every handler, preference and engine
+    // call is shared between the two forms.
+    val m3 = app.xreader.ui.theme.isMaterial3Design()
     val context = LocalContext.current
     val view = LocalView.current
     val configuration = LocalConfiguration.current
@@ -449,7 +458,10 @@ fun KomikkuReaderScreen(
         // Page indicator (R-14): centred, stroked, primary.
         val showPageNumber by prefs.showPageNumber().changes()
             .collectAsState(initial = true)
-        if (showPageNumber && state.pageCount > 0) {
+        // Under M3 the page position lives in the toolbar's
+        // page chip (S13, with its own Show/Hide knob), so the
+        // centred Nocturne indicator does not also render.
+        if (!m3 && showPageNumber && state.pageCount > 0) {
             ReaderPageIndicator(
                 currentPage = state.currentPage,
                 totalPages = state.pageCount,
@@ -478,16 +490,29 @@ fun KomikkuReaderScreen(
         ) {
             val currentChapterId = state.chapters
                 .getOrNull(state.chapterIndex)?.id
-            ReaderTopBar(
-                bookTitle = state.bookTitle,
-                chapterTitle = state.currentChapter?.title ?: "",
-                chapterBookmarked = currentChapterId != null &&
-                    currentChapterId in state.bookmarkedChapterIds,
-                onBack = onBack,
-                onToggleBookmark = {
-                    currentChapterId?.let { viewModel.toggleChapterBookmark(it) }
-                }
-            )
+            if (m3) {
+                M3MangaTopBar(
+                    bookTitle = state.bookTitle,
+                    chapterTitle = state.currentChapter?.title ?: "",
+                    chapterBookmarked = currentChapterId != null &&
+                        currentChapterId in state.bookmarkedChapterIds,
+                    onBack = onBack,
+                    onToggleBookmark = {
+                        currentChapterId?.let { viewModel.toggleChapterBookmark(it) }
+                    }
+                )
+            } else {
+                ReaderTopBar(
+                    bookTitle = state.bookTitle,
+                    chapterTitle = state.currentChapter?.title ?: "",
+                    chapterBookmarked = currentChapterId != null &&
+                        currentChapterId in state.bookmarkedChapterIds,
+                    onBack = onBack,
+                    onToggleBookmark = {
+                        currentChapterId?.let { viewModel.toggleChapterBookmark(it) }
+                    }
+                )
+            }
         }
 
         // Chrome: the vertical page scrubber (R-09) replaces the
@@ -501,7 +526,10 @@ fun KomikkuReaderScreen(
             .collectAsState(initial = false)
         val isLandscape = configuration.orientation ==
             android.content.res.Configuration.ORIENTATION_LANDSCAPE
-        val useVerticalScrubber = chromeVisible && isVerticalViewer &&
+        // Under M3 the floating toolbar's slider serves every
+        // viewer (S13: pager and webtoon wear identical chrome),
+        // so the vertical scrubber is a Nocturne-form surface.
+        val useVerticalScrubber = !m3 && chromeVisible && isVerticalViewer &&
             !forceHorizontal && (!isLandscape || landscapeVertical)
         if (useVerticalScrubber) {
             ChapterNavigatorVert(
@@ -531,6 +559,46 @@ fun KomikkuReaderScreen(
             // gesture-nav phones the bar sat in the nav
             // area the owner's standing rule reserves.
             Column(Modifier.navigationBarsPadding()) {
+              if (m3) {
+                // S13: the floating toolbar is the whole bottom
+                // chrome in this design (the tools strip rides
+                // above it when open, scheme-toned).
+                if (exhVisible) {
+                    M3ExhUtilsStrip(
+                        autoScrollOn = autoScrollOn,
+                        intervalSeconds = autoScrollInterval,
+                        onToggleAutoScroll = { autoScrollOn = !autoScrollOn },
+                        onRetryAll = {
+                            val count = viewModel.retryAllErrored()
+                            Toast.makeText(
+                                context,
+                                if (count > 0) {
+                                    "Retrying $count pages"
+                                } else {
+                                    "No pages to retry"
+                                },
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onBoostPage = { viewModel.boostCurrentPage() },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                M3MangaToolbar(
+                    currentPage = state.currentPage,
+                    totalPages = state.pageCount,
+                    hasPreviousChapter = state.hasPreviousChapter,
+                    hasNextChapter = state.hasNextChapter,
+                    onSeekPage = { hostRef?.seekToPage(it) },
+                    onPreviousChapter = viewModel::previousChapter,
+                    onNextChapter = viewModel::nextChapter,
+                    onViewChapters = { chaptersVisible = true },
+                    onReadingMode = { modeSelectVisible = true },
+                    onToggleExhUtils = { exhVisible = !exhVisible },
+                    onSettings = { settingsVisible = true },
+                    modifier = Modifier.fillMaxWidth()
+                )
+              } else {
                 if (exhVisible) {
                     ExhUtilsStrip(
                         autoScrollOn = autoScrollOn,
@@ -613,6 +681,7 @@ fun KomikkuReaderScreen(
                     onToggleExhUtils = { exhVisible = !exhVisible },
                     onSettings = { settingsVisible = true }
                 )
+              }
             }
         }
         if (chromeVisible && showReadingMode) {
@@ -622,7 +691,9 @@ fun KomikkuReaderScreen(
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(start = 12.dp, bottom = 4.dp)
+                    // Under M3 the label clears the floating
+                    // toolbar instead of sitting under it.
+                    .padding(start = 12.dp, bottom = if (m3) 84.dp else 4.dp)
             )
         }
     }
@@ -642,49 +713,90 @@ fun KomikkuReaderScreen(
     }
 
     if (settingsVisible) {
-        ReaderSettingsDialog(
-            viewModel = viewModel,
-            onDismiss = { settingsVisible = false },
-            // v1.5.8 (I4): entering the filter tab hides the
-            // chrome for the live preview; leaving RESTORES
-            // the chrome visibility the reader had before.
-            onCustomFilterTabVisible = { visible ->
-                if (visible) {
-                    chromeBeforeFilterPreview = chromeVisible
-                    chromeVisible = false
-                } else {
-                    chromeVisible = chromeBeforeFilterPreview
-                }
+        // v1.5.8 (I4): entering the filter tab hides the
+        // chrome for the live preview; leaving RESTORES
+        // the chrome visibility the reader had before. The
+        // M3 sheet drives the same callback from its filter
+        // state (see ReaderSettingsSheet's header).
+        val onFilterPreview: (Boolean) -> Unit = { visible ->
+            if (visible) {
+                chromeBeforeFilterPreview = chromeVisible
+                chromeVisible = false
+            } else {
+                chromeVisible = chromeBeforeFilterPreview
             }
-        )
+        }
+        if (m3) {
+            ReaderSettingsSheet(
+                viewModel = viewModel,
+                onDismiss = { settingsVisible = false },
+                onCustomFilterTabVisible = onFilterPreview
+            )
+        } else {
+            ReaderSettingsDialog(
+                viewModel = viewModel,
+                onDismiss = { settingsVisible = false },
+                onCustomFilterTabVisible = onFilterPreview
+            )
+        }
     }
     if (chaptersVisible) {
-        ReaderChapterListDialog(
-            chapters = state.chapters,
-            currentIndex = state.chapterIndex,
-            bookmarkedChapterIds = state.bookmarkedChapterIds,
-            onSelect = { index ->
-                chaptersVisible = false
-                viewModel.jumpToChapter(index)
-            },
-            onToggleBookmark = { chapter ->
-                viewModel.toggleChapterBookmark(chapter.id)
-            },
-            onDismiss = { chaptersVisible = false }
-        )
+        if (m3) {
+            M3ReaderChapterListSheet(
+                chapters = state.chapters,
+                currentIndex = state.chapterIndex,
+                bookmarkedChapterIds = state.bookmarkedChapterIds,
+                onSelect = { index ->
+                    chaptersVisible = false
+                    viewModel.jumpToChapter(index)
+                },
+                onToggleBookmark = { chapter ->
+                    viewModel.toggleChapterBookmark(chapter.id)
+                },
+                onDismiss = { chaptersVisible = false }
+            )
+        } else {
+            ReaderChapterListDialog(
+                chapters = state.chapters,
+                currentIndex = state.chapterIndex,
+                bookmarkedChapterIds = state.bookmarkedChapterIds,
+                onSelect = { index ->
+                    chaptersVisible = false
+                    viewModel.jumpToChapter(index)
+                },
+                onToggleBookmark = { chapter ->
+                    viewModel.toggleChapterBookmark(chapter.id)
+                },
+                onDismiss = { chaptersVisible = false }
+            )
+        }
     }
     if (modeSelectVisible) {
         val modes = ReadingMode.entries.filter { it != ReadingMode.DEFAULT }
-        ModeSelectionDialog(
-            title = "Reading mode",
-            options = modes.map { it.label },
-            selectedIndex = modes.indexOf(state.readingMode).coerceAtLeast(0),
-            onSelect = { index ->
-                modes.getOrNull(index)?.let { viewModel.onChangeReadingMode(it) }
-                modeSelectVisible = false
-            },
-            onDismiss = { modeSelectVisible = false }
-        )
+        if (m3) {
+            // S34's mode-door form: segmented buttons at a
+            // modal sheet's head.
+            M3ReadingModeSheet(
+                options = modes.map { it.label },
+                selectedIndex = modes.indexOf(state.readingMode).coerceAtLeast(0),
+                onSelect = { index ->
+                    modes.getOrNull(index)?.let { viewModel.onChangeReadingMode(it) }
+                    modeSelectVisible = false
+                },
+                onDismiss = { modeSelectVisible = false }
+            )
+        } else {
+            ModeSelectionDialog(
+                title = "Reading mode",
+                options = modes.map { it.label },
+                selectedIndex = modes.indexOf(state.readingMode).coerceAtLeast(0),
+                onSelect = { index ->
+                    modes.getOrNull(index)?.let { viewModel.onChangeReadingMode(it) }
+                    modeSelectVisible = false
+                },
+                onDismiss = { modeSelectVisible = false }
+            )
+        }
     }
     if (orientationSelectVisible) {
         val orientations = ReaderOrientation.entries
@@ -700,14 +812,15 @@ fun KomikkuReaderScreen(
         )
     }
     pageActionsPage?.let { page ->
-        ReaderPageActionsDialog(
-            pageLabel = "Page ${page.index + 1}",
-            secondPageLabel = null,
-            onSetAsCover = {
+        // The four page-action handlers are hoisted so the
+        // shipped dialog (Nocturne) and the S34 sheet (M3) call
+        // the EXACT same bodies — presentation branches, the
+        // actions never do.
+        val onSetAsCover: () -> Unit = {
                 pageActionsPage = null
                 coverConfirmPage = page
-            },
-            onCopy = {
+            }
+        val onCopy: () -> Unit = {
                 pageActionsPage = null
                 val file = viewModel.pageImageFile(page)
                 if (file != null) {
@@ -722,8 +835,8 @@ fun KomikkuReaderScreen(
                         context, "Page is still loading", Toast.LENGTH_SHORT
                     ).show()
                 }
-            },
-            onShare = {
+            }
+        val onShare: () -> Unit = {
                 pageActionsPage = null
                 val file = viewModel.pageImageFile(page)
                 if (file != null) {
@@ -765,8 +878,8 @@ fun KomikkuReaderScreen(
                         context, "Page is still loading", Toast.LENGTH_SHORT
                     ).show()
                 }
-            },
-            onSave = {
+            }
+        val onSave: () -> Unit = {
                 pageActionsPage = null
                 val file = viewModel.pageImageFile(page)
                 if (file != null) {
@@ -785,9 +898,27 @@ fun KomikkuReaderScreen(
                         context, "Page is still loading", Toast.LENGTH_SHORT
                     ).show()
                 }
-            },
-            onDismiss = { pageActionsPage = null }
-        )
+            }
+        if (m3) {
+            M3ReaderPageActionsSheet(
+                pageLabel = "Page ${page.index + 1}",
+                onSetAsCover = onSetAsCover,
+                onCopy = onCopy,
+                onShare = onShare,
+                onSave = onSave,
+                onDismiss = { pageActionsPage = null }
+            )
+        } else {
+            ReaderPageActionsDialog(
+                pageLabel = "Page ${page.index + 1}",
+                secondPageLabel = null,
+                onSetAsCover = { onSetAsCover() },
+                onCopy = { onCopy() },
+                onShare = { onShare() },
+                onSave = { onSave() },
+                onDismiss = { pageActionsPage = null }
+            )
+        }
     }
     coverConfirmPage?.let { page ->
         AlertDialog(

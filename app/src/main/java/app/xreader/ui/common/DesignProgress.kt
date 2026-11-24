@@ -8,15 +8,16 @@ import app.xreader.data.prefs.AppDesign
 import app.xreader.ui.theme.LocalDesignState
 
 /**
- * Code 120 (design §1.6 + addendum A3): progress wears the
- * active design's indicator. Under Nocturne these are the
- * stock linear indicator exactly as before; under Material 3,
- * long jobs (downloads, probes, installs, the update download)
- * take the wavy progress indicator — the spec's long-job
- * indicator — while short waits keep the plain line / the
- * loading indicator (Q11's ruling). Call sites opt in per
- * surface, as A3 names them; other progress lines are
- * deliberately untouched.
+ * Code 120, references updated in code 121 (scratch §3.10
+ * S40 + §8 Q11): progress wears the active design's
+ * indicator. Under Nocturne these are the stock linear
+ * indicator exactly as before; under Material 3, long jobs
+ * (downloads, probes, installs, the update download) take
+ * the wavy progress indicator — the spec's long-job
+ * indicator — while short waits take the loading indicators
+ * (StateKit). Call sites opt in per surface; other progress
+ * lines are deliberately untouched. The circular wavy form
+ * lives in StateKit as DesignCircularWavyProgress.
  */
 @Composable
 fun DesignLinearProgress(

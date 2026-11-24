@@ -438,6 +438,23 @@ internal fun BookInfoSheetContent(
     onOpenBookPage: (() -> Unit)?,
     onShare: (() -> Unit)?
 ) {
+    // Code 121 (S31): under M3 the book info sheet is stat
+    // ListItem pairs + a five toggle-star rating row, in the
+    // one sheet language. Same model, same callbacks; the
+    // Nocturne form below is untouched.
+    if (app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        BookInfoSheetContentM3(
+            model = model,
+            isFavourite = isFavourite,
+            onToggleFavourite = onToggleFavourite,
+            onStarRatingChanged = onStarRatingChanged,
+            onOpenBookPage = onOpenBookPage,
+            onShare = onShare
+        )
+        return
+    }
     Column(
         Modifier.fillMaxWidth()
             .padding(horizontal = 16.dp)
@@ -631,5 +648,155 @@ private fun BookInfoRow(label: String, value: String) {
             fontWeight = FontWeight.Medium,
             modifier = Modifier.weight(0.58f)
         )
+    }
+}
+
+/** Code 121 (S31): the M3 book info sheet — stat rows as
+ * ListItem label/value pairs and the rating as five
+ * toggle-star buttons. Every value comes from the same
+ * [BookInfoModel] the shipped sheet renders. */
+@Composable
+private fun BookInfoSheetContentM3(
+    model: BookInfoModel,
+    isFavourite: Boolean,
+    onToggleFavourite: () -> Unit,
+    onStarRatingChanged: (Int) -> Unit,
+    onOpenBookPage: (() -> Unit)?,
+    onShare: (() -> Unit)?
+) {
+    Column(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Text(
+            model.title,
+            style = MaterialTheme.typography.titleMedium
+        )
+        if (model.contributors.isNotEmpty()) {
+            Text(
+                model.contributors.joinToString(", "),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        @Composable
+        fun stat(label: String, value: String) {
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text(label) },
+                trailingContent = { Text(value) }
+            )
+        }
+        model.fileName?.let { stat("Filename", it) }
+        model.location?.let { stat("Location", it) }
+        model.fileSizeBytes?.let {
+            stat("File size", formatBookFileSize(it))
+        }
+        if (model.format == ReaderFormat.PDF) {
+            model.totalPages?.let { stat("Total pages", "$it") }
+            model.currentPageOneBased?.let { current ->
+                stat(
+                    "Current page",
+                    if (model.totalPages != null) {
+                        "$current / ${model.totalPages}"
+                    } else {
+                        "$current"
+                    }
+                )
+            }
+        } else {
+            model.totalChapters?.let { stat("Total chapters", "$it") }
+            model.estimatedTotalPages?.let {
+                stat("Total pages (estimated)", "$it")
+            }
+            if (model.currentChapterOneBased != null) {
+                val chapterText = buildString {
+                    append("${model.currentChapterOneBased}")
+                    model.totalChapters?.let { append(" / $it") }
+                    model.currentChapterTitle
+                        ?.takeIf { t -> t.isNotBlank() }
+                        ?.let { append(" — $it") }
+                }
+                stat("Current chapter", chapterText)
+            }
+        }
+        if (model.charsInBook == null || model.wordsInBook == null) {
+            stat("Chars / words", "Counting…")
+        } else {
+            val suffix = if (model.countsComplete) "" else " (counting…)"
+            stat("Chars in book", "${model.charsInBook}$suffix")
+            stat("Words in book", "${model.wordsInBook}$suffix")
+        }
+        stat(
+            "Reading time",
+            if (model.totalReadingMillis <= 0L) {
+                "Counted from this update"
+            } else {
+                formatReadingDuration(model.totalReadingMillis)
+            }
+        )
+        stat(
+            "Reading speed",
+            model.measuredWpm?.let { "$it words/min" }
+                ?: "Not enough reading yet"
+        )
+        stat(
+            "Time left in chapter",
+            formatTimeLeft(model.timeLeftChapterMinutes)
+        )
+        stat(
+            "Time left in book",
+            formatTimeLeft(model.timeLeftBookMinutes)
+        )
+        androidx.compose.material3.ListItem(
+            headlineContent = { Text("Star rating") },
+            trailingContent = {
+                Row {
+                    for (star in 1..5) {
+                        androidx.compose.material3.IconToggleButton(
+                            checked = star <= model.starRating,
+                            onCheckedChange = { checked ->
+                                if (checked) onStarRatingChanged(star)
+                            }
+                        ) {
+                            Icon(
+                                if (star <= model.starRating) {
+                                    Icons.Filled.Star
+                                } else {
+                                    Icons.Filled.StarBorder
+                                },
+                                contentDescription = "Rate $star stars",
+                                tint = if (star <= model.starRating) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        )
+        androidx.compose.material3.ListItem(
+            headlineContent = { Text("Favourite") },
+            supportingContent = {
+                Text("Shown on the Library's Favourites shelf.")
+            },
+            trailingContent = {
+                Switch(
+                    checked = isFavourite,
+                    onCheckedChange = { onToggleFavourite() }
+                )
+            }
+        )
+        if (onOpenBookPage != null) {
+            TextButton(onClick = onOpenBookPage) { Text("Book page") }
+        }
+        if (onShare != null) {
+            TextButton(onClick = onShare) { Text("Share book") }
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }

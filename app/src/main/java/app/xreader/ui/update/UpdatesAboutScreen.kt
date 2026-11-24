@@ -3,6 +3,7 @@ package app.xreader.ui.update
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -73,6 +74,25 @@ fun UpdatesAboutScreen(
     onInstall: () -> Unit,
     onOpenInstallSettings: () -> Unit
 ) {
+    // Code 121 (R38): under Material 3 this page is a list of
+    // M3 rows — Check for updates (with the last-checked line),
+    // the Auto-check switch, the update state (S36's card lives
+    // here too when present), and doors to What's New and
+    // About. The Nocturne form below is untouched.
+    if (app.xreader.ui.theme.isMaterial3Design()) {
+        UpdatesAboutScreenM3(
+            state = state,
+            onBack = onBack,
+            onCheckNow = onCheckNow,
+            onAutoCheckChange = onAutoCheckChange,
+            onOpenWhatsNew = onOpenWhatsNew,
+            onOpenAbout = onOpenAbout,
+            onUpdateNow = onUpdateNow,
+            onInstall = onInstall,
+            onOpenInstallSettings = onOpenInstallSettings
+        )
+        return
+    }
     val context = LocalContext.current
     fun openUrl(url: String) {
         runCatching {
@@ -271,6 +291,198 @@ private fun UpdateRow(
                 )
             }
             trailing()
+        }
+    }
+}
+
+/** R38 under Material 3: settings-list rows on the tonal
+ * ladder — no glass cards. The update state, when a release
+ * is ready, is S36's filled card in this page's flow too. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun UpdatesAboutScreenM3(
+    state: AppUpdateViewModel.UiState,
+    onBack: () -> Unit,
+    onCheckNow: () -> Unit,
+    onAutoCheckChange: (Boolean) -> Unit,
+    onOpenWhatsNew: () -> Unit,
+    onOpenAbout: () -> Unit,
+    onUpdateNow: () -> Unit,
+    onInstall: () -> Unit,
+    onOpenInstallSettings: () -> Unit
+) {
+    val context = LocalContext.current
+    fun openUrl(url: String) {
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        }
+    }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+    ) {
+        androidx.compose.material3.TopAppBar(
+            title = { Text("Updates & about") },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back"
+                    )
+                }
+            }
+        )
+        Column(
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("Check for updates") },
+                supportingContent = {
+                    Text(
+                        if (state.checking) {
+                            "Checking…"
+                        } else {
+                            "${state.statusLine} You're on " +
+                                "${state.currentVersion}."
+                        }
+                    )
+                },
+                leadingContent = {
+                    Icon(Icons.Filled.Refresh, contentDescription = null)
+                },
+                trailingContent = {
+                    if (state.checking) {
+                        CircularProgressIndicator(
+                            Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Chevron()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (state.checking) {
+                            Modifier
+                        } else {
+                            Modifier.clickable(onClick = onCheckNow)
+                        }
+                    )
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("Check automatically") },
+                supportingContent = {
+                    Text("Once a day, when you open the app")
+                },
+                leadingContent = {
+                    Icon(
+                        Icons.Filled.SystemUpdate,
+                        contentDescription = null
+                    )
+                },
+                trailingContent = {
+                    Switch(
+                        checked = state.autoCheckEnabled,
+                        onCheckedChange = onAutoCheckChange
+                    )
+                }
+            )
+            if (state.cardRelease != null || state.release != null) {
+                UpdateProgressBlock(state.download)
+                UpdatePrimaryButton(
+                    phase = state.download,
+                    onUpdateNow = onUpdateNow,
+                    onInstall = onInstall,
+                    onOpenInstallSettings = onOpenInstallSettings,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            androidx.compose.material3.HorizontalDivider(
+                Modifier.padding(vertical = 8.dp)
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("What's new") },
+                supportingContent = {
+                    Text(
+                        state.release?.let {
+                            "What's new in ${it.version}"
+                        } ?: "Release notes for this version"
+                    )
+                },
+                leadingContent = {
+                    Icon(
+                        Icons.Filled.NewReleases,
+                        contentDescription = null
+                    )
+                },
+                trailingContent = { Chevron() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenWhatsNew)
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("About") },
+                supportingContent = {
+                    Text(
+                        "Version ${state.currentVersion} " +
+                            "(${state.currentVersionCode}) · MIT Licence"
+                    )
+                },
+                leadingContent = {
+                    Icon(Icons.Filled.Info, contentDescription = null)
+                },
+                trailingContent = { Chevron() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenAbout)
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("GitHub page") },
+                supportingContent = {
+                    Text("Xreader's home — source and releases")
+                },
+                leadingContent = {
+                    Icon(Icons.Filled.Code, contentDescription = null)
+                },
+                trailingContent = { Chevron() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        openUrl(
+                            app.xreader.data.update.AppUpdateRepository
+                                .REPO_URL
+                        )
+                    }
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("Privacy") },
+                supportingContent = {
+                    Text(
+                        "What Xreader keeps on your device, " +
+                            "in plain words"
+                    )
+                },
+                leadingContent = {
+                    Icon(
+                        Icons.Filled.PrivacyTip,
+                        contentDescription = null
+                    )
+                },
+                trailingContent = { Chevron() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        openUrl(
+                            app.xreader.data.update.AppUpdateRepository
+                                .PRIVACY_URL
+                        )
+                    }
+            )
+            Spacer(Modifier.height(32.dp))
         }
     }
 }

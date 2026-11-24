@@ -146,6 +146,60 @@ fun ProfileScreen(
         }
     }
 
+    // Code 121 (R31): under Material 3 the Profile page is the
+    // spec's uncarded, type-led document (M3ProfilePage at the
+    // end of this file) fed by the same real state. Nocturne
+    // renders the shipped showpiece page below, untouched.
+    if (isM3Profile) {
+        val m3Profile = state.profile
+        if (state.loading || m3Profile == null) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .padding(24.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                    Text(
+                        "Profile",
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                }
+                LoadingState(
+                    whatIsHappening = "Loading your progress — " +
+                        "your books, streak and reading time…",
+                    modifier = Modifier.padding(top = 16.dp)
+                )
+            }
+            return
+        }
+        M3ProfilePage(
+            state = state,
+            profile = m3Profile,
+            avatarFile = m3Profile.avatarPath?.let {
+                File(container.bookStorage.resolve(it).absolutePath)
+            },
+            avatarColour = avatarColourNamed(state.avatarColour)
+                ?: MaterialTheme.colorScheme.primary,
+            onAvatarClick = {
+                avatarLauncher.launch(arrayOf("image/*"))
+            },
+            onSaveName = { viewModel.setDisplayName(it) },
+            onBack = onBack,
+            onOpenHistory = onOpenHistory,
+            onOpenSync = onOpenSync,
+            onOpenCustomise = onOpenCustomise,
+            onOpenVocab = onOpenVocab
+        )
+        return
+    }
+
     Box(Modifier.fillMaxSize()) {
         // v1.0.4 (D12): the breathing glow — a Me-scoped overlay
         // layer behind this screen's content (never a haze source,
@@ -1016,5 +1070,523 @@ private fun M3ProfileIdentity(
         }
     } else {
         content()
+    }
+}
+
+/**
+ * Code 121 (R31): the Profile page in the Material 3 design —
+ * an uncarded, type-led document fed by the same real state
+ * as the Nocturne page: centred shape-cropped avatar,
+ * emphasized headlineMedium name, title, member-since; the
+ * level row with a linear progress and the EXP line; three
+ * filled tonal stat cards; the trophies grid (earned markers
+ * shape-cropped; locked ones hidden — only the next-up
+ * trophies show, each with a CircularWavyProgressIndicator
+ * ring and its progress line); the displayed-badge row with
+ * its Pick-a-badge sheet of earned badges; doors as a divider
+ * list. Real data only — every number below is the VM's.
+ *
+ * Displayed badge: no persisted displayed-badge store exists
+ * in the app yet (the VM is not this build's file), so the
+ * displayed badge defaults to the most recently earned trophy
+ * and a pick in the sheet is held in saveable screen state —
+ * see the build log's W3 dependency note.
+ */
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+private fun M3ProfilePage(
+    state: ProfileUiState,
+    profile: app.xreader.data.db.Profile,
+    avatarFile: File?,
+    avatarColour: androidx.compose.ui.graphics.Color,
+    onAvatarClick: () -> Unit,
+    onSaveName: (String) -> Unit,
+    onBack: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenSync: () -> Unit,
+    onOpenCustomise: () -> Unit,
+    onOpenVocab: () -> Unit
+) {
+    val avatarShape = androidx.compose.material3.MaterialShapes
+        .Cookie9Sided.toShape()
+    var editingName by remember { mutableStateOf(false) }
+    var nameDraft by remember { mutableStateOf("") }
+    var badgeSheetOpen by remember { mutableStateOf(false) }
+    val earned = state.achievements.filter { it.unlocked }
+    var pickedBadgeId by remember { mutableStateOf<String?>(null) }
+    val displayedBadge = earned.firstOrNull {
+        it.def.id == pickedBadgeId
+    } ?: earned.maxByOrNull { it.unlockedAt ?: 0L }
+    val nextUp = state.achievements
+        .filter { !it.unlocked }
+        .sortedByDescending {
+            if (it.def.target > 0) {
+                it.progress.toFloat() / it.def.target
+            } else {
+                0f
+            }
+        }
+        .take(3)
+    Column(Modifier.fillMaxSize()) {
+        androidx.compose.material3.TopAppBar(
+            title = { Text("Profile") },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back"
+                    )
+                }
+            }
+        )
+        Column(
+            Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Identity block — centred, uncarded.
+            Box(
+                Modifier
+                    .size(96.dp)
+                    .clip(avatarShape)
+                    .background(
+                        MaterialTheme.colorScheme.primaryContainer
+                    )
+                    .clickable(onClick = onAvatarClick),
+                contentAlignment = Alignment.Center
+            ) {
+                if (avatarFile != null && avatarFile.exists()) {
+                    AsyncImage(
+                        model = avatarFile,
+                        contentDescription = "Your avatar",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(avatarShape)
+                    )
+                } else {
+                    Text(
+                        profile.displayName.trim().firstOrNull()
+                            ?.uppercase() ?: "M",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = avatarColour
+                    )
+                }
+            }
+            Text(
+                profile.displayName.ifBlank { "Me" },
+                style = MaterialTheme.typography.headlineMediumEmphasized,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style
+                    .TextOverflow.Ellipsis
+            )
+            Text(
+                state.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "Member since " + DateFormat.getDateInstance()
+                    .format(Date(profile.createdAt)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            TextButton(onClick = {
+                nameDraft = profile.displayName
+                editingName = true
+            }) { Text("Edit name") }
+
+            // Level row + linear progress + EXP line.
+            Column(
+                Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Level ${state.progress.level}",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        if (state.progress.atMax) {
+                            "Top level"
+                        } else {
+                            "${state.expToNext} EXP to level " +
+                                "${state.progress.level + 1}"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { state.progress.fraction },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "${state.progress.intoLevel} of " +
+                        "${state.progress.spanToNext} EXP in this level",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Three filled tonal stat cards.
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                M3StatCard(
+                    value = "${state.stats.currentStreak}",
+                    label = "Day streak",
+                    modifier = Modifier.weight(1f)
+                )
+                M3StatCard(
+                    value = "%,d".format(state.stats.booksFinished),
+                    label = "Books finished",
+                    modifier = Modifier.weight(1f)
+                )
+                M3StatCard(
+                    value = "${state.stats.totalActiveMinutes / 60} h",
+                    label = "Reading time",
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // Trophies.
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Trophies",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    "${state.unlockedCount} of ${Achievements.ALL.size}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (earned.isEmpty() && nextUp.isEmpty()) {
+                Text(
+                    "Trophies arrive as you read — finish a book " +
+                        "to earn the first one.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            earned.chunked(3).forEach { rowItems ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    rowItems.forEach { achievement ->
+                        M3TrophyMarker(
+                            achievement = achievement,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    repeat(3 - rowItems.size) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+            nextUp.forEach { achievement ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        androidx.compose.material3
+                            .CircularWavyProgressIndicator(
+                                progress = {
+                                    if (achievement.def.target > 0) {
+                                        (achievement.progress.toFloat() /
+                                            achievement.def.target)
+                                            .coerceIn(0f, 1f)
+                                    } else {
+                                        0f
+                                    }
+                                },
+                                modifier = Modifier.size(48.dp)
+                            )
+                        Icon(
+                            achievementIcon(achievement.def.id),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            achievement.def.title,
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            "${achievement.progress} of " +
+                                "${achievement.def.target} — next up",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Displayed badge row.
+            if (displayedBadge != null) {
+                androidx.compose.material3.ListItem(
+                    headlineContent = {
+                        Text(displayedBadge.def.title)
+                    },
+                    supportingContent = {
+                        Text("Your displayed badge")
+                    },
+                    leadingContent = {
+                        Icon(
+                            achievementIcon(displayedBadge.def.id),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    trailingContent = {
+                        TextButton(onClick = { badgeSheetOpen = true }) {
+                            Text("Pick a badge")
+                        }
+                    },
+                    colors = androidx.compose.material3.ListItemDefaults
+                        .colors(
+                            containerColor = androidx.compose.ui
+                                .graphics.Color.Transparent
+                        ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Doors as a divider list.
+            Column(Modifier.fillMaxWidth()) {
+                androidx.compose.material3.HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
+                val doors = listOf(
+                    Triple(
+                        Icons.Filled.History, "History",
+                        onOpenHistory
+                    ),
+                    Triple(Icons.Filled.Sync, "Sync & backup", onOpenSync),
+                    Triple(
+                        Icons.AutoMirrored.Filled.MenuBook, "Vocabulary",
+                        onOpenVocab
+                    ),
+                    Triple(
+                        Icons.Filled.Palette, "Customise",
+                        onOpenCustomise
+                    )
+                )
+                doors.forEachIndexed { index, (icon, label, action) ->
+                    androidx.compose.material3.ListItem(
+                        headlineContent = { Text(label) },
+                        leadingContent = {
+                            Icon(
+                                icon,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        colors = androidx.compose.material3
+                            .ListItemDefaults.colors(
+                                containerColor = androidx.compose.ui
+                                    .graphics.Color.Transparent
+                            ),
+                        modifier = Modifier.clickable(onClick = action)
+                    )
+                    if (index < doors.lastIndex) {
+                        androidx.compose.material3.HorizontalDivider(
+                            color = MaterialTheme.colorScheme
+                                .outlineVariant,
+                            modifier = Modifier.padding(start = 56.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+    if (editingName) {
+        AlertDialog(
+            onDismissRequest = { editingName = false },
+            title = { Text("Your reader name") },
+            text = {
+                OutlinedTextField(
+                    value = nameDraft,
+                    onValueChange = { nameDraft = it },
+                    label = { Text("Name") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    editingName = false
+                    onSaveName(nameDraft)
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingName = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+    if (badgeSheetOpen) {
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { badgeSheetOpen = false }
+        ) {
+            Column(
+                Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "Pick a badge",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    "Only badges you have earned can be displayed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                earned.forEach { achievement ->
+                    androidx.compose.material3.ListItem(
+                        headlineContent = {
+                            Text(achievement.def.title)
+                        },
+                        supportingContent = {
+                            Text(achievement.def.description)
+                        },
+                        leadingContent = {
+                            Icon(
+                                achievementIcon(achievement.def.id),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        trailingContent = {
+                            if (achievement.def.id ==
+                                displayedBadge?.def?.id
+                            ) {
+                                Icon(
+                                    Icons.Filled.CheckCircle,
+                                    contentDescription = "Displayed",
+                                    tint = MaterialTheme.colorScheme
+                                        .primary
+                                )
+                            }
+                        },
+                        colors = androidx.compose.material3
+                            .ListItemDefaults.colors(
+                                containerColor = androidx.compose.ui
+                                    .graphics.Color.Transparent
+                            ),
+                        modifier = Modifier.clickable {
+                            pickedBadgeId = achievement.def.id
+                            badgeSheetOpen = false
+                        }
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun M3StatCard(
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor =
+                MaterialTheme.colorScheme.secondaryContainer
+        ),
+        modifier = modifier
+    ) {
+        Column(
+            Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                value,
+                style = MaterialTheme.typography.headlineSmallEmphasized,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1
+            )
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        }
+    }
+}
+
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+private fun M3TrophyMarker(
+    achievement: AchievementUi,
+    modifier: Modifier = Modifier
+) {
+    val shapes = listOf(
+        androidx.compose.material3.MaterialShapes.Cookie7Sided,
+        androidx.compose.material3.MaterialShapes.Gem,
+        androidx.compose.material3.MaterialShapes.Cookie9Sided,
+        androidx.compose.material3.MaterialShapes.Sunny,
+        androidx.compose.material3.MaterialShapes.Clover4Leaf,
+        androidx.compose.material3.MaterialShapes.Pentagon
+    )
+    val shape = shapes[
+        (achievement.def.id.hashCode() and Int.MAX_VALUE) %
+            shapes.size
+    ].toShape()
+    Column(
+        modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Box(
+            Modifier
+                .size(56.dp)
+                .clip(shape)
+                .background(
+                    MaterialTheme.colorScheme.primaryContainer
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                achievementIcon(achievement.def.id),
+                contentDescription = achievement.def.title,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+        Text(
+            achievement.def.title,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 2,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
     }
 }

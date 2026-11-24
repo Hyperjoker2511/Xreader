@@ -10,6 +10,11 @@ import app.xreader.ui.theme.bottomContentPadding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -211,6 +216,10 @@ fun BookDetailScreen(
     // choices (all / next 10 / latest unread) live there, beside
     // Start reading, never only in a long-press sheet.
     var downloadSheetOpen by remember { mutableStateOf(false) }
+    /** Code 121 (R8): the "See all chapters" tall sheet's open
+     * state (M3 only — the inline list is capped; see
+     * the DesignState.bookChaptersCap knob below). */
+    var allChaptersSheetOpen by remember { mutableStateOf(false) }
     /** v1.7 Patch 1 (item 1): the remove-from-library
      * confirm, hoisted to the screen so the visible
      * action-area door opens the SAME dialog the buried
@@ -338,6 +347,23 @@ fun BookDetailScreen(
         chapterStateFilter !=
         app.xreader.domain.reader.ChapterListFilter.State.ALL ||
         chapterPartFilter != null
+    // Code 121 (R8): under Material 3 the inline chapter list
+    // is capped by the spec's knob (W8: DesignState.bookChaptersCap
+    // — FIFTY → 50, ALL → unbounded; D-121-W3-1 retired). The cap applies
+    // to the plain list only: a search/filter result is already
+    // the reader's own shortlist and keeps the windowed form.
+    // The full list lives behind "See all chapters" (the tall
+    // sheet in S18's composition, hosted by this page).
+    val m3InlineCap = when (designState.bookChaptersCap) {
+        app.xreader.data.prefs.M3BookChaptersCap.FIFTY -> 50
+        app.xreader.data.prefs.M3BookChaptersCap.ALL -> Int.MAX_VALUE
+    }
+    val m3CapActive = isM3Book && !chapterFilterActive
+    val m3InlineChapters = if (m3CapActive) {
+        displayChapters.take(m3InlineCap)
+    } else {
+        displayedChapters
+    }
     val context = androidx.compose.ui.platform.LocalContext.current
     val clipboard = LocalClipboardManager.current
     // Phase 6: highlights → Markdown, saved where the user picks.
@@ -370,18 +396,51 @@ fun BookDetailScreen(
         // form, or the small bar when the header knob picks the
         // compact bar. Nocturne keeps the shipped row.
         if (isM3Book) {
+            // Code 121 (R8): the small top app bar on the
+            // content-colour band — favourite toggle, share,
+            // overflow (Refresh / Export doors, the same real
+            // actions the page's More rows carry). The 120
+            // header knob (flexible large / compact forms) is
+            // retired by the from-scratch spec: R8 has ONE bar.
             M3BookChrome(
                 title = book?.title,
-                author = book?.author,
-                compact = designState.bookHeader ==
-                    app.xreader.data.prefs.M3BookHeader.COMPACT_BAR,
                 favourite = state.favourite,
-                showFavourite = book != null,
+                showActions = book != null,
+                isSourceBook = book?.sourceType ==
+                    app.xreader.data.db.SourceType.EXTENSION,
                 onBack = onBack,
                 onToggleFavourite = {
                     viewModel.setFavourite(!state.favourite)
                 },
-                scrollBehavior = m3BarScrollBehavior
+                onShare = {
+                    val shareBook = book
+                    if (shareBook != null) {
+                        val intent = android.content.Intent(
+                            android.content.Intent.ACTION_SEND
+                        ).apply {
+                            type = "text/plain"
+                            putExtra(
+                                android.content.Intent.EXTRA_TEXT,
+                                listOfNotNull(
+                                    shareBook.title,
+                                    shareBook.author.takeIf {
+                                        it.isNotBlank()
+                                    }
+                                ).joinToString(" — ")
+                            )
+                        }
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent.createChooser(
+                                    intent, "Share book"
+                                )
+                            )
+                        }
+                    }
+                },
+                onRefresh = { viewModel.refreshChapters() },
+                onExportEpub = onExportEpub,
+                onExportCbz = onExportCbz
             )
         } else {
         Row(
@@ -630,10 +689,7 @@ fun BookDetailScreen(
                     M3BookHero(
                         book = book,
                         state = state,
-                        designState = designState,
-                        statusLabel = statusLabel,
-                        coverFile = coverFile,
-                        onOpenTag = onOpenTag
+                        coverFile = coverFile
                     )
                 } else {
                 // Reference hero: violet radial halos over the
@@ -926,9 +982,13 @@ fun BookDetailScreen(
                             book = book,
                             designState = designState,
                             readLabel = if (state.progress == null) {
-                                "Start Reading"
+                                "Read"
                             } else {
-                                "Continue"
+                                // R8: Continue carries its place
+                                // in the label itself.
+                                "Continue · Chapter " +
+                                    "${state.continueChapterIndex + 1}" +
+                                    " · $bookPercent%"
                             },
                             readSubLine = if (state.progress == null) {
                                 continueChapter?.let {
@@ -973,6 +1033,11 @@ fun BookDetailScreen(
                             },
                             onDownloadChoice = {
                                 viewModel.downloadChoice(it)
+                            },
+                            onDownloadThisChapter = {
+                                continueChapter?.let { ch ->
+                                    viewModel.downloadChapter(ch)
+                                }
                             },
                             onCatchUp = { viewModel.storySoFar() },
                             onOpenLore = onOpenLore,
@@ -1359,6 +1424,25 @@ fun BookDetailScreen(
                         style = MaterialTheme.typography.titleMedium
                     )
                     Spacer(Modifier.height(8.dp))
+                    // Code 121 (R8): under Material 3 the status
+                    // picker is the spec's segmented buttons
+                    // (five statuses; tap-again clears to NONE,
+                    // the shipped behaviour). Nocturne keeps the
+                    // FilterChip row in the else branch.
+                    if (isM3Book) {
+                        M3StatusSegmented(
+                            current = state.bookMeta.status,
+                            onPick = { picked ->
+                                viewModel.setReadingStatus(
+                                    if (state.bookMeta.status == picked) {
+                                        ReadingStatus.NONE
+                                    } else {
+                                        picked
+                                    }
+                                )
+                            }
+                        )
+                    } else {
                     androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1428,6 +1512,7 @@ fun BookDetailScreen(
                                     )
                             )
                         }
+                    }
                     }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -2445,7 +2530,9 @@ fun BookDetailScreen(
                 }
             }
             if (section.kind == ChaptersSectionKind.LIST) {
-                items(displayedChapters, key = { "chapter-${it.id}" }) { chapter ->
+                androidx.compose.foundation.lazy.itemsIndexed(
+                    m3InlineChapters, key = { _, ch -> "chapter-${ch.id}" }
+                ) { rowIndex, chapter ->
                     // v1.5.37 (S6): no per-row effect and no
                     // animateItem here any more. The growth
                     // trigger is hoisted to one snapshotFlow
@@ -2467,6 +2554,8 @@ fun BookDetailScreen(
                     if (isM3Book) {
                         M3ChapterRow(
                             chapter = chapter,
+                            groupIndex = rowIndex,
+                            groupCount = m3InlineChapters.size,
                             isCurrent = chapter.index ==
                                 state.continueChapterIndex &&
                                 state.progress != null,
@@ -2544,7 +2633,7 @@ fun BookDetailScreen(
                     )
                     }
                 }
-                if (chapterWindow < displayChapters.size) {
+                if (!m3CapActive && chapterWindow < displayChapters.size) {
                     // v1.5.37 (combined build, S6): the window's
                     // end is a SENTINEL, not a button — the
                     // owner's ask: chapters load as he scrolls.
@@ -2570,6 +2659,41 @@ fun BookDetailScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme
                                 .onSurfaceVariant
+                        )
+                    }
+                }
+                if (m3CapActive &&
+                    displayChapters.size > m3InlineCap
+                ) {
+                    item(key = "chapters-see-all") {
+                        androidx.compose.material3.ListItem(
+                            headlineContent = {
+                                Text("See all chapters")
+                            },
+                            supportingContent = {
+                                Text(
+                                    "${displayChapters.size} chapters"
+                                )
+                            },
+                            trailingContent = {
+                                Icon(
+                                    Icons.Filled.ChevronRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            },
+                            colors = androidx.compose.material3
+                                .ListItemDefaults.colors(
+                                    containerColor =
+                                        MaterialTheme.colorScheme
+                                            .surfaceContainer
+                                ),
+                            modifier = Modifier
+                                .clip(MaterialTheme.shapes.medium)
+                                .clickable {
+                                    allChaptersSheetOpen = true
+                                }
                         )
                     }
                 }
@@ -2653,39 +2777,6 @@ fun BookDetailScreen(
                     onRemoved = onBack,
                     confirmRemove = confirmRemove,
                     onConfirmRemoveChange = { confirmRemove = it }
-                )
-            }
-        }
-        // Code 120 completion (R8 knob): the Read-as-FAB form
-        // — an extended FAB in primaryContainer, shown only
-        // when the read is actually available (the blocked
-        // states keep their honest pill in the action area;
-        // a FAB has no disabled form, so it never renders
-        // over a blocked read).
-        if (isM3Book &&
-            designState.bookAction ==
-                app.xreader.data.prefs.M3BookAction.READ_FAB &&
-            state.readCtaState == ReadCtaState.READY &&
-            state.readBlockedReason == null
-        ) {
-            ExtendedFloatingActionButton(
-                onClick = { onReadChapter(state.continueChapterIndex) },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(20.dp),
-                containerColor =
-                    MaterialTheme.colorScheme.primaryContainer,
-                contentColor =
-                    MaterialTheme.colorScheme.onPrimaryContainer
-            ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                Text(
-                    if (state.progress == null) {
-                        "Start Reading"
-                    } else {
-                        "Continue"
-                    },
-                    modifier = Modifier.padding(start = 8.dp)
                 )
             }
         }
@@ -2936,6 +3027,79 @@ fun BookDetailScreen(
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+            }
+        }
+    }
+
+    // Code 121 (R8): the full chapter list as a TALL modal
+    // sheet in S18's Contents composition — the same segmented
+    // list items, the same per-chapter state, hosted by the
+    // book page (a jump list in the Contents form, not the
+    // reader's own sheet and not a new page).
+    if (allChaptersSheetOpen && isM3Book) {
+        val sheetMaxChapterIndex = state.chapters
+            .maxOfOrNull { it.index } ?: -1
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { allChaptersSheetOpen = false },
+            sheetState = androidx.compose.material3
+                .rememberModalBottomSheetState(
+                    skipPartiallyExpanded = true
+                )
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Text(
+                    "Chapters",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+                androidx.compose.foundation.lazy.LazyColumn(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 560.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    androidx.compose.foundation.lazy.itemsIndexed(
+                        displayChapters,
+                        key = { _, ch -> "all-chapter-${ch.id}" }
+                    ) { rowIndex, chapter ->
+                        M3ChapterRow(
+                            chapter = chapter,
+                            groupIndex = rowIndex,
+                            groupCount = displayChapters.size,
+                            isCurrent = chapter.index ==
+                                state.continueChapterIndex &&
+                                state.progress != null,
+                            isNew = chapter.index ==
+                                sheetMaxChapterIndex &&
+                                !chapter.read &&
+                                state.chapters.size > 1,
+                            currentPercent = if (
+                                chapter.index ==
+                                state.continueChapterIndex
+                            ) {
+                                (state.progress?.fraction?.times(100))
+                                    ?.toInt()
+                            } else {
+                                null
+                            },
+                            isStubBody = chapter.id in
+                                state.stubChapterIds,
+                            minutesLeft = null,
+                            hasStartedReading = hasStartedReading(
+                                state.progress?.fraction,
+                                state.chapters.any { it.read }
+                            ),
+                            onClick = {
+                                allChaptersSheetOpen = false
+                                onReadChapter(chapter.index)
+                            },
+                            onDownload = {
+                                viewModel.downloadChapter(chapter)
+                            }
+                        )
                     }
                 }
                 Spacer(Modifier.height(24.dp))
@@ -3500,8 +3664,10 @@ private fun ChapterRow(
     val provenWordCount = if (isStubBody) 0 else chapter.wordCount
     val rowMark = app.xreader.data.download.ChapterTruth152.rowMark(chapter)
     val container = when {
+        // R8: the current chapter is highlighted with
+        // secondaryContainer.
         isCurrent || isJumpTarget ->
-            MaterialTheme.colorScheme.surfaceContainerHigh
+            MaterialTheme.colorScheme.secondaryContainer
         chapter.read -> MaterialTheme.colorScheme.surfaceContainerLow
         else -> MaterialTheme.colorScheme.surfaceContainer
     }
@@ -3754,6 +3920,8 @@ private fun ChapterRow(
 @Composable
 private fun M3ChapterRow(
     chapter: Chapter,
+    groupIndex: Int = 0,
+    groupCount: Int = 1,
     isCurrent: Boolean,
     isNew: Boolean,
     currentPercent: Int?,
@@ -3809,8 +3977,13 @@ private fun M3ChapterRow(
         dateLine,
         chapter.scanlator?.takeIf { it.isNotBlank() }
     ).joinToString(" · ")
-    ListItem(
+    androidx.compose.material3.SegmentedListItem(
         onClick = onClick,
+        shapes = androidx.compose.material3.ListItemDefaults
+            .segmentedShapes(
+                index = groupIndex,
+                count = groupCount
+            ),
         supportingContent = if (subtitle.isNotEmpty()) {
             {
                 Text(
@@ -3911,7 +4084,8 @@ private fun M3ChapterRow(
                 }
             }
         },
-        colors = ListItemDefaults.colors(containerColor = container),
+        colors = androidx.compose.material3.ListItemDefaults
+            .segmentedColors(containerColor = container),
         modifier = modifier.fillMaxWidth()
     ) {
         // The headline: the title with its read tick and
@@ -4488,11 +4662,49 @@ private fun formatMb(bytes: Long): String =
 // are the screen's own — only the forms are the design's.
 // ────────────────────────────────────────────────────────────────
 
-/** R8 chrome: the flexible large top app bar (book title +
- * author subtitle, collapsing with the chapter list through
- * the shared scroll behavior), or the small top app bar when
- * the header knob picks the compact bar. The favourite toggle
- * is the shipped one, in the bar's action slot. */
+/** R8: the five statuses as segmented buttons (spec form of
+ * the shipped status picker; tap-again-clear is the caller's
+ * behaviour, preserved from the chip row). */
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+private fun M3StatusSegmented(
+    current: ReadingStatus,
+    onPick: (ReadingStatus) -> Unit
+) {
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        androidx.compose.material3.SingleChoiceSegmentedButtonRow {
+            listOf(
+                ReadingStatus.READING to "Reading",
+                ReadingStatus.ON_HOLD to "On hold",
+                ReadingStatus.PLAN_TO_READ to "Plan",
+                ReadingStatus.COMPLETED to "Completed",
+                ReadingStatus.DROPPED to "Dropped"
+            ).forEachIndexed { index, (status, label) ->
+                androidx.compose.material3.SegmentedButton(
+                    selected = current == status,
+                    onClick = { onPick(status) },
+                    shape = androidx.compose.material3
+                        .SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = 5
+                        ),
+                    label = { Text(label) }
+                )
+            }
+        }
+    }
+}
+
+/** R8 chrome (code 121): the SMALL top app bar on the
+ * content-colour band — its container is the cover Content
+ * scheme's `surfaceContainer` (BookDetailTheme provides that
+ * scheme to this subtree when the cover-colour knob is on;
+ * otherwise the app scheme's own tone). Trailing: the
+ * favourite toggle, share, and the overflow menu carrying the
+ * page's source/export doors. */
 @OptIn(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
@@ -4500,25 +4712,35 @@ private fun formatMb(bytes: Long): String =
 @Composable
 private fun M3BookChrome(
     title: String?,
-    author: String?,
-    compact: Boolean,
     favourite: Boolean,
-    showFavourite: Boolean,
+    showActions: Boolean,
+    isSourceBook: Boolean,
     onBack: () -> Unit,
     onToggleFavourite: () -> Unit,
-    scrollBehavior: TopAppBarScrollBehavior
+    onShare: () -> Unit,
+    onRefresh: () -> Unit,
+    onExportEpub: () -> Unit,
+    onExportCbz: () -> Unit
 ) {
-    val backIcon: @Composable () -> Unit = {
-        IconButton(onClick = onBack) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back"
+    var menuOpen by remember { mutableStateOf(false) }
+    TopAppBar(
+        title = {
+            Text(
+                title ?: "Book Details",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-        }
-    }
-    val actions: @Composable androidx.compose.foundation.layout
-        .RowScope.() -> Unit = {
-            if (showFavourite) {
+        },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back"
+                )
+            }
+        },
+        actions = {
+            if (showActions) {
                 IconButton(onClick = onToggleFavourite) {
                     Icon(
                         if (favourite) {
@@ -4538,46 +4760,57 @@ private fun M3BookChrome(
                         }
                     )
                 }
-            }
-        }
-    if (compact) {
-        TopAppBar(
-            title = {
-                Text(
-                    title ?: "Book Details",
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            navigationIcon = backIcon,
-            actions = actions,
-            scrollBehavior = scrollBehavior
-        )
-    } else {
-        LargeFlexibleTopAppBar(
-            title = {
-                Text(
-                    title ?: "Book Details",
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            subtitle = if (!author.isNullOrBlank()) {
-                {
-                    Text(
-                        author,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                IconButton(onClick = onShare) {
+                    Icon(
+                        Icons.Filled.Share,
+                        contentDescription = "Share book"
                     )
                 }
-            } else {
-                null
-            },
-            navigationIcon = backIcon,
-            actions = actions,
-            scrollBehavior = scrollBehavior
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(
+                            Icons.Filled.MoreVert,
+                            contentDescription = "More"
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false }
+                    ) {
+                        if (isSourceBook) {
+                            DropdownMenuItem(
+                                text = { Text("Refresh chapters") },
+                                onClick = {
+                                    menuOpen = false
+                                    onRefresh()
+                                }
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("Export as EPUB") },
+                            onClick = {
+                                menuOpen = false
+                                onExportEpub()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Export as CBZ") },
+                            onClick = {
+                                menuOpen = false
+                                onExportCbz()
+                            }
+                        )
+                    }
+                }
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor =
+                MaterialTheme.colorScheme.surfaceContainer,
+            scrolledContainerColor =
+                MaterialTheme.colorScheme.surfaceContainer
         )
-    }
+    )
 }
 
 /** The hero cover in either M3 header form: the book's local
@@ -4646,163 +4879,83 @@ private fun M3BookCover(
     }
 }
 
-/** R8 header: the cover at largeIncreased crop beside the
- * title (headlineSmall emphasized), author and status, in a
- * card whose edge is the extraLargeIncreased shape token —
- * or, for the Compact bar knob, a compact row (small cover,
- * title, author/status line). Metric badges and genre tags
- * ride as chips, as R8 names them. */
+/** R8 hero (code 121): NOT a card. The hero zone sits on the
+ * content-colour band (the same `surfaceContainer` tone as
+ * the app bar above it, flowing into the page): cover
+ * ~96x136 in the extraLarge shape at leading, the title in
+ * emphasized headlineSmall, the author, and the assist chips
+ * (format · chapters · source). Tags live in their own
+ * section below, not here. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun M3BookHero(
     book: app.xreader.data.db.Book,
     state: BookDetailUiState,
-    designState: app.xreader.data.prefs.DesignState,
-    statusLabel: String?,
-    coverFile: (String?) -> File?,
-    onOpenTag: (String) -> Unit
+    coverFile: (String?) -> File?
 ) {
-    if (designState.bookHeader ==
-        app.xreader.data.prefs.M3BookHeader.COMPACT_BAR
-    ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            M3BookCover(
-                book = book,
-                coverFile = coverFile,
-                modifier = Modifier
-                    .size(width = 56.dp, height = 80.dp)
-                    .clip(MaterialTheme.shapes.medium)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                MaterialTheme.colorScheme.surfaceContainer,
+                RoundedCornerShape(28.dp)
             )
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        M3BookCover(
+            book = book,
+            coverFile = coverFile,
+            modifier = Modifier
+                .size(width = 96.dp, height = 136.dp)
+                .clip(MaterialTheme.shapes.extraLarge)
+        )
+        Column(
+            Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                book.title,
+                style = MaterialTheme.typography
+                    .headlineSmallEmphasized,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (book.author.isNotBlank()) {
                 Text(
-                    book.title,
-                    style = MaterialTheme.typography
-                        .titleLargeEmphasized,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    listOfNotNull(
-                        book.author.takeIf { it.isNotBlank() },
-                        statusLabel ?: book.localFormat.name
-                    ).joinToString(" · "),
+                    book.author,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme
+                        .onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-        }
-        return
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Card(
-            shape = MaterialTheme.shapes.extraLargeIncreased,
-            colors = CardDefaults.cardColors(
-                containerColor =
-                    MaterialTheme.colorScheme.surfaceContainer
-            ),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(Modifier.fillMaxWidth()) {
-                M3BookCover(
-                    book = book,
-                    coverFile = coverFile,
-                    modifier = Modifier
-                        .size(width = 128.dp, height = 176.dp)
-                )
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        book.title,
-                        style = MaterialTheme.typography
-                            .headlineSmallEmphasized,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (book.author.isNotBlank()) {
-                        Text(
-                            "By ${book.author}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme
-                                .onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Text(
-                        statusLabel ?: book.localFormat.name,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    androidx.compose.foundation.layout.FlowRow(
-                        horizontalArrangement =
-                            Arrangement.spacedBy(8.dp),
-                        verticalArrangement =
-                            Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(top = 4.dp)
-                    ) {
-                        if (state.providerName.isNotBlank() &&
-                            book.sourceType ==
-                            app.xreader.data.db.SourceType.EXTENSION
-                        ) {
-                            AssistChip(
-                                onClick = {},
-                                label = { Text(state.providerName) }
-                            )
-                        }
-                        AssistChip(
-                            onClick = {},
-                            label = { Text(book.localFormat.name) }
-                        )
-                        book.userRating?.let { rating ->
-                            AssistChip(
-                                onClick = {},
-                                label = { Text("★ $rating") }
-                            )
-                        }
-                        AssistChip(
-                            onClick = {},
-                            label = {
-                                Text(
-                                    "${maxOf(book.totalChapters, state.chapters.size)} chapters"
-                                )
-                            }
-                        )
-                        AssistChip(
-                            onClick = {},
-                            label = {
-                                Text(
-                                    "${state.downloadedCount}/${state.chapters.size} downloaded"
-                                )
-                            }
-                        )
-                    }
-                }
-            }
-        }
-        if (state.tags.isNotEmpty()) {
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 4.dp)
             ) {
-                state.tags.take(6).forEach { tag ->
+                AssistChip(
+                    onClick = {},
+                    label = { Text(book.localFormat.name) }
+                )
+                AssistChip(
+                    onClick = {},
+                    label = {
+                        Text(
+                            "${maxOf(book.totalChapters, state.chapters.size)} chapters"
+                        )
+                    }
+                )
+                if (state.providerName.isNotBlank() &&
+                    book.sourceType ==
+                    app.xreader.data.db.SourceType.EXTENSION
+                ) {
                     AssistChip(
-                        onClick = { onOpenTag(tag.slug) },
-                        label = {
-                            Text(
-                                app.xreader.data.library.TagRegistry
-                                    .displayFor(tag.slug)
-                            )
-                        }
+                        onClick = {},
+                        label = { Text(state.providerName) }
                     )
                 }
             }
@@ -4823,6 +4976,7 @@ private fun M3DownloadSplit(
     state: BookDetailUiState,
     onOpenDownloadSheet: () -> Unit,
     onDownloadChoice: (BookDownloadChoice) -> Unit,
+    onDownloadThisChapter: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (!state.hasUndownloadedChapters) {
@@ -4865,7 +5019,10 @@ private fun M3DownloadSplit(
         SplitButtonLayout(
             leadingButton = {
                 SplitButtonDefaults.TonalLeadingButton(
-                    onClick = onOpenDownloadSheet,
+                    // R8: the main segment downloads ALL.
+                    onClick = {
+                        onDownloadChoice(BookDownloadChoice.ALL)
+                    },
                     shapes = SplitButtonDefaults
                         .leadingButtonShapesFor(
                             SplitButtonDefaults.MediumContainerHeight
@@ -4930,6 +5087,22 @@ private fun M3DownloadSplit(
                 onClick = {
                     menuOpen = false
                     onDownloadChoice(BookDownloadChoice.ALL)
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("This chapter") },
+                enabled = state.continueChapterIndex >= 0 &&
+                    state.chapters.isNotEmpty(),
+                onClick = {
+                    menuOpen = false
+                    onDownloadThisChapter()
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Range…") },
+                onClick = {
+                    menuOpen = false
+                    onOpenDownloadSheet()
                 }
             )
             DropdownMenuItem(
@@ -5017,6 +5190,7 @@ private fun M3BookActions(
     onToggleFavourite: () -> Unit,
     onOpenDownloadSheet: () -> Unit,
     onDownloadChoice: (BookDownloadChoice) -> Unit,
+    onDownloadThisChapter: () -> Unit,
     onCatchUp: () -> Unit,
     onOpenLore: () -> Unit,
     onRefresh: () -> Unit,
@@ -5064,9 +5238,10 @@ private fun M3BookActions(
                 )
             }
             else -> {
-                if (designState.bookAction ==
-                    app.xreader.data.prefs.M3BookAction.BUTTON_GROUP
-                ) {
+                // Code 121 (R8): the button group is the ONE
+                // action form — the 120 action knob (group /
+                // Read FAB) is retired by the from-scratch spec.
+                run {
                     ButtonGroup(
                         overflowIndicator = {
                             ButtonGroupDefaults.OverflowIndicator(it)
@@ -5145,7 +5320,9 @@ private fun M3BookActions(
                                     state = state,
                                     onOpenDownloadSheet =
                                         onOpenDownloadSheet,
-                                    onDownloadChoice = onDownloadChoice
+                                    onDownloadChoice = onDownloadChoice,
+                                    onDownloadThisChapter =
+                                        onDownloadThisChapter
                                 )
                             },
                             menuContent = { menuState ->
@@ -5184,25 +5361,8 @@ private fun M3BookActions(
                             }
                         )
                     }
-                } else {
-                    Row(
-                        horizontalArrangement =
-                            Arrangement.spacedBy(8.dp),
-                        verticalAlignment =
-                            Alignment.CenterVertically
-                    ) {
-                        M3DownloadSplit(
-                            state = state,
-                            onOpenDownloadSheet = onOpenDownloadSheet,
-                            onDownloadChoice = onDownloadChoice,
-                            modifier = Modifier.weight(1f)
-                        )
-                        M3FavouriteToggle(
-                            favourite = state.favourite,
-                            onToggleFavourite = onToggleFavourite
-                        )
-                    }
                 }
+
                 Text(
                     readSubLine,
                     style = MaterialTheme.typography.bodySmall,
@@ -5289,11 +5449,14 @@ private fun M3BookActions(
             }
         }
         if (book.inLibrary) {
-            OutlinedButton(
+            // R8: Remove is an error-role TEXT button; it opens
+            // the S5 delete dialog (the shared confirmRemove
+            // dialog BookCleanupActions hosts).
+            TextButton(
                 onClick = onRequestRemove,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = errorTextColor()
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
                 )
             ) {
                 Icon(

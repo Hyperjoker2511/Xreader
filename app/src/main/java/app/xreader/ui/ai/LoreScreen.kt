@@ -1,12 +1,16 @@
 package app.xreader.ui.ai
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -96,6 +100,30 @@ fun LoreScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val engineLabel by viewModel.engineLabel.collectAsStateWithLifecycle()
+    // Code 121 W8 (R11, D-121-W7-03 retired): the Material 3
+    // form of this page — a single column per the scratch
+    // spec. Nocturne keeps the tabbed form below, untouched.
+    if (app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        M3LoreContent(
+            state = state,
+            engineLabel = engineLabel,
+            artFile = artFile,
+            onBack = onBack,
+            onBuild = { viewModel.buildLore() },
+            onSaveEntity = { entity, name, description ->
+                viewModel.saveEntity(entity, name, description)
+            },
+            onAddEntity = { name, type, description ->
+                viewModel.addEntity(name, type, description)
+            },
+            onDeleteEntity = { viewModel.deleteEntity(it) },
+            onArt = { viewModel.generateArt(it) },
+            onDeleteArt = { viewModel.deleteArt(it) }
+        )
+        return
+    }
     var tab by remember { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf<LoreEntity?>(null) }
     var addingEntity by remember { mutableStateOf(false) }
@@ -1058,5 +1086,436 @@ private fun LoreListTab(
                 )
             }
         }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────
+// Code 121 W8 (R11): the Material 3 Lore page — medium top app
+// bar (book title) over ONE column: the generated-art strip
+// (poster cards), characters as list items with shape-cropped
+// avatar markers, lore entries as filled cards carrying their
+// provenance assist chip (AI · provider · AUTO/manual — the
+// engine label is the live hub label; AUTO/manual is the
+// entry's own userLocked flag). All actions are the shipped
+// LoreViewModel's. The "Ask about this book" extended FAB is
+// NOT drawn: R12's page needs a live reader back-stack entry
+// and no route from Lore exists — see D-121-W8-01 in the
+// build log. Nocturne never reaches this composable.
+// ────────────────────────────────────────────────────────────────
+
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+private fun M3LoreContent(
+    state: LoreUiState,
+    engineLabel: String,
+    artFile: (String) -> File,
+    onBack: () -> Unit,
+    onBuild: () -> Unit,
+    onSaveEntity: (LoreEntity, String, String) -> Unit,
+    onAddEntity: (String, LoreType, String) -> Unit,
+    onDeleteEntity: (LoreEntity) -> Unit,
+    onArt: (LoreEntity) -> Unit,
+    onDeleteArt: (LoreArt) -> Unit
+) {
+    var editing by remember { mutableStateOf<LoreEntity?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    var selectedArt by remember { mutableStateOf<LoreArt?>(null) }
+    val characters = state.entities.filter { it.type == LoreType.CHARACTER }
+    val entries = state.entities.filter { it.type != LoreType.CHARACTER }
+    androidx.compose.material3.Scaffold(
+        topBar = {
+            androidx.compose.material3.MediumTopAppBar(
+                title = {
+                    Text(
+                        state.book?.title ?: "Lore",
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style
+                            .TextOverflow.Ellipsis
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        LazyColumn(
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item(key = "m3-lore-actions") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        androidx.compose.material3.AssistChip(
+                            onClick = {},
+                            label = { Text(engineLabel) }
+                        )
+                        if (state.building) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                state.buildProgress.ifBlank {
+                                    "Building lore…"
+                                },
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        } else {
+                            androidx.compose.material3.Button(
+                                onClick = onBuild
+                            ) { Text("Build lore") }
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = { adding = true }
+                            ) { Text("Add to lore") }
+                        }
+                    }
+                    state.message?.let { message ->
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (state.messageIsError) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
+                    if (!state.hasKey) {
+                        Text(
+                            "Set up an AI provider in Providers & keys " +
+                                "to build this book's lore.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            if (state.art.isNotEmpty()) {
+                item(key = "m3-lore-art-head") {
+                    Text(
+                        "Art",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                item(key = "m3-lore-art-strip") {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(state.art, key = { "m3-art-${it.id}" }) { art ->
+                            val entityName = art.entityId?.let { id ->
+                                state.entities.firstOrNull { it.id == id }
+                                    ?.name
+                            }
+                            // The strip's poster card (R11): a
+                            // filled card, 2:3 art over its title —
+                            // M3PosterCard's grid form fills its
+                            // cell, so the strip builds the same
+                            // shape at a fixed width.
+                            androidx.compose.material3.Card(
+                                onClick = { selectedArt = art },
+                                colors = androidx.compose.material3
+                                    .CardDefaults.cardColors(
+                                        containerColor =
+                                            MaterialTheme.colorScheme
+                                                .surfaceContainerLow
+                                    ),
+                                modifier = Modifier.width(140.dp)
+                            ) {
+                                Column(Modifier.fillMaxWidth()) {
+                                    AsyncImage(
+                                        model = artFile(art.imagePath),
+                                        contentDescription =
+                                            art.passageQuote,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(2f / 3f)
+                                    )
+                                    Text(
+                                        entityName ?: "Passage art",
+                                        style = MaterialTheme.typography
+                                            .titleSmall,
+                                        maxLines = 2,
+                                        modifier = Modifier.padding(
+                                            horizontal = 10.dp,
+                                            vertical = 8.dp
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (characters.isNotEmpty()) {
+                item(key = "m3-lore-characters-head") {
+                    Text(
+                        "Characters",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                items(characters, key = { "m3-char-${it.id}" }) { entity ->
+                    androidx.compose.material3.ListItem(
+                        headlineContent = { Text(entity.name) },
+                        supportingContent = {
+                            Text(
+                                entity.description
+                                    .lineSequence().firstOrNull()
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: entity.type.label(),
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style
+                                    .TextOverflow.Ellipsis
+                            )
+                        },
+                        leadingContent = {
+                            Box(
+                                Modifier
+                                    .size(40.dp)
+                                    .clip(
+                                        androidx.compose.material3
+                                            .MaterialShapes.Cookie9Sided
+                                            .toShape()
+                                    )
+                                    .background(
+                                        MaterialTheme.colorScheme
+                                            .secondaryContainer
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    entity.name.trim()
+                                        .firstOrNull()?.uppercase() ?: "?",
+                                    style = MaterialTheme.typography
+                                        .titleMedium,
+                                    color = MaterialTheme.colorScheme
+                                        .onSecondaryContainer
+                                )
+                            }
+                        },
+                        modifier = Modifier.clickable {
+                            editing = entity
+                        }
+                    )
+                }
+            }
+            if (entries.isNotEmpty()) {
+                item(key = "m3-lore-entries-head") {
+                    Text(
+                        "Lore",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                items(entries, key = { "m3-entry-${it.id}" }) { entity ->
+                    androidx.compose.material3.Card(
+                        colors = androidx.compose.material3.CardDefaults
+                            .cardColors(
+                                containerColor = MaterialTheme.colorScheme
+                                    .surfaceContainer
+                            ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                entity.name,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                entity.type.label(),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                            if (entity.description.isNotBlank()) {
+                                Text(
+                                    entity.description,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                            androidx.compose.material3.AssistChip(
+                                onClick = {},
+                                label = {
+                                    Text(
+                                        "$engineLabel · " +
+                                            if (entity.userLocked) {
+                                                "Manual"
+                                            } else {
+                                                "Auto"
+                                            }
+                                    )
+                                }
+                            )
+                            Row(
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(4.dp)
+                            ) {
+                                TextButton(onClick = { editing = entity }) {
+                                    Text("Edit")
+                                }
+                                TextButton(
+                                    onClick = { onArt(entity) },
+                                    enabled = state.artBusyFor == null
+                                ) {
+                                    Text(
+                                        if (state.artBusyFor == entity.id) {
+                                            "Painting…"
+                                        } else {
+                                            "Illustrate"
+                                        }
+                                    )
+                                }
+                                TextButton(
+                                    onClick = { onDeleteEntity(entity) }
+                                ) {
+                                    Text(
+                                        "Delete",
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (state.entities.isEmpty() && state.art.isEmpty()) {
+                item(key = "m3-lore-empty") {
+                    app.xreader.ui.common.M3EmptyState(
+                        headline = "No lore yet",
+                        body = "Build the lore and this page fills with " +
+                            "the book's characters, places and art — " +
+                            "painted from what the book itself says.",
+                        actionLabel = "Build lore",
+                        onAction = onBuild
+                    )
+                }
+            }
+        }
+    }
+    editing?.let { entity ->
+        EntityEditor(
+            entity = entity,
+            onDismiss = { editing = null },
+            onSave = { name, description ->
+                onSaveEntity(entity, name, description)
+                editing = null
+            }
+        )
+    }
+    if (adding) {
+        var name by remember { mutableStateOf("") }
+        var description by remember { mutableStateOf("") }
+        var type by remember { mutableStateOf(LoreType.CHARACTER) }
+        AlertDialog(
+            onDismissRequest = { adding = false },
+            title = { Text("Add to the lore") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Name") },
+                        singleLine = true
+                    )
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        LoreType.entries.forEach { candidate ->
+                            androidx.compose.material3.FilterChip(
+                                selected = type == candidate,
+                                onClick = { type = candidate },
+                                label = { Text(candidate.label()) }
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text("What the book says") },
+                        minLines = 2
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onAddEntity(name, type, description)
+                        adding = false
+                    },
+                    enabled = name.isNotBlank()
+                ) { Text("Add") }
+            },
+            dismissButton = {
+                TextButton(onClick = { adding = false }) { Text("Cancel") }
+            }
+        )
+    }
+    selectedArt?.let { art ->
+        AlertDialog(
+            onDismissRequest = { selectedArt = null },
+            title = { Text("Art") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AsyncImage(
+                        model = artFile(art.imagePath),
+                        contentDescription = art.passageQuote,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(16.dp))
+                    )
+                    if (art.passageQuote.isNotBlank()) {
+                        Text(
+                            "“${art.passageQuote}”",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteArt(art)
+                        selectedArt = null
+                    }
+                ) {
+                    Text(
+                        "Delete",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedArt = null }) {
+                    Text("Close")
+                }
+            }
+        )
     }
 }

@@ -13,22 +13,26 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material3.BottomAppBar
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,45 +51,53 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import app.xreader.data.prefs.M3ReaderChrome
 import app.xreader.domain.reader.WpmEstimator
 
 /**
- * Code 120 (design §2.6 R28 + addendum A2): the reader chrome in
- * the Material 3 design. The same doors, counters and gating as
- * the Nocturne chrome (ReaderChrome in ReaderScreen.kt) — this
- * composable is called with the identical arguments and honours
- * the identical conditions (CBZ page world hides the text doors,
- * a PDF's mode switch rides the bar, time estimates only when
- * the chapter has timed words) — but the form is the spec's:
+ * Code 121 (design §3.6 R28 / S14, §8 Q3): the ONE reader
+ * chrome family in the Material 3 design, for every format
+ * (text S9, PDF Pages S10, PDF Reflow S11, CBZ S12).
  *
- *  - Default: the FLOATING TOOLBAR (HorizontalFloatingToolbar,
- *    standard colours = surfaceContainerHigh) carrying the
- *    action doors as icon buttons, with the seek slider and the
- *    chapter/page counter in a tonal chip (full shape,
- *    surfaceContainerHigh) directly above it. The PDF page pill
- *    is part of that chip's counter line.
- *  - Alternative (the reader-chrome knob): TOP-AND-BOTTOM BARS —
- *    a small top app bar and a docked bottom bar. On material3
- *    1.5.0 there is no DockedToolbar composable (verified in the
- *    1.5.0 sources: only its tokens exist, used internally by
- *    BottomAppBar), so the docked form is BottomAppBar — the
- *    library's own docked-toolbar realization.
- *  - The top bar in both forms is the small top app bar:
- *    back, the book/chapter context, bookmark, Listen, Settings.
- *  - Chrome motion is effect-spec only (§1.4's discipline):
- *    fade + a short slide on the theme's effects specs, never
- *    the spatial specs.
- *  - Colours are the scheme's (§1.5's reader row). The page
- *    itself keeps the reader's own palette — only the chrome
- *    wears the scheme.
+ *  - A small top app bar on the scheme's `surface` ABOVE the
+ *    page (never translucent over it): back, the book title
+ *    (titleMedium), the chapter line beneath it (bodySmall),
+ *    a bookmark toggle, and an overflow menu (Go to chapter ·
+ *    Book page · Share — the last two render only when the
+ *    host supplies the door; ReaderScreen supplies neither
+ *    today, see the build log deviation D-121-W5-3).
+ *  - At the bottom, the HorizontalFloatingToolbar
+ *    (standard colours = surfaceContainerHigh, the component's
+ *    own extraLarge container shape): Contents · Search ·
+ *    Listen · Settings, the PDF page chip (S10) and the Reflow
+ *    toggle (S10/S11) where a PDF is open. The seek slider
+ *    rides as the chrome's second row when the toolbar is
+ *    expanded, with the position line above it in labelMedium
+ *    tabular figures ("Chapter 1 of 13 · 18% · ≈52 min in
+ *    chapter · ≈6 h in book"); previous/next chapter are the
+ *    toolbar's leading/trailing end buttons in that same
+ *    expanded state. Tapping the expand toggle collapses the
+ *    toolbar to its action row and hides the seek row.
+ *  - Q3: there is NO docked-form alternative. The
+ *    [chromeStyle] argument is retained only so existing call
+ *    sites compile; the M3 path IGNORES it — the floating
+ *    toolbar is the one chrome form in every format.
+ *  - Chrome appears/vanishes with the page tap (the host owns
+ *    [visible]) and moves on effect specs only — chrome never
+ *    bounces over a page (§2.4). Colours are the scheme's;
+ *    the page keeps the reader-local palette (§2.1.3).
+ *  - Behaviour is unchanged from the shipped chrome: the same
+ *    doors, counters and gating (CBZ page world hides the text
+ *    doors, time estimates only when the chapter has timed
+ *    words, the slider previews on drag and jumps on release).
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun M3ReaderChromeBar(
     visible: Boolean,
-    chromeStyle: M3ReaderChrome,
+    @Suppress("UNUSED_PARAMETER") chromeStyle: M3ReaderChrome,
     bookTitle: String,
     chapterTitle: String,
     chapterIndex: Int,
@@ -113,19 +125,45 @@ fun M3ReaderChromeBar(
     pdfModeLabel: String? = null,
     onTogglePdfMode: () -> Unit = {},
     cbzPageLabel: String? = null,
+    /** S10: tapping the PDF page chip opens the page grid
+     * sheet. Null hides the chip's action (the chip still
+     * shows the position). */
+    onOpenPageGrid: (() -> Unit)? = null,
+    /** Overflow doors the host may supply (S14). Null = the
+     * door does not exist for this host and is not rendered —
+     * no dead menu items. */
+    onOpenBookPage: (() -> Unit)? = null,
+    onShare: (() -> Unit)? = null,
+    /** S22's door, kept on the toolbar beside Settings: the
+     * focus timer is reader chrome, not a settings row. */
+    showFocusDoor: Boolean = true,
     onTopBarHeight: (Int) -> Unit = {},
     onBottomBarHeight: (Int) -> Unit = {}
 ) {
     val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-    val effectsOffset = MaterialTheme.motionScheme.defaultEffectsSpec<androidx.compose.ui.unit.IntOffset>()
-    val counterLine = when {
-        pdfPageLabel != null ->
-            "$pdfPageLabel · ${(bookFraction * 100).toInt()}%"
-        cbzPageLabel != null ->
-            "$cbzPageLabel · ${(bookFraction * 100).toInt()}%"
-        else -> ReaderCounters.footerLine(
-            chapterIndex, chapterCount, chapterOwnNumber
-        ) + " · ${(bookFraction * 100).toInt()}%"
+    val effectsOffset =
+        MaterialTheme.motionScheme.defaultEffectsSpec<androidx.compose.ui.unit.IntOffset>()
+    var overflowOpen by remember { mutableStateOf(false) }
+    // The toolbar's expanded state: expanded shows the
+    // prev/next end buttons and the seek second row.
+    var seekExpanded by remember { mutableStateOf(true) }
+    val positionLine = buildString {
+        when {
+            pdfPageLabel != null -> append(pdfPageLabel)
+            cbzPageLabel != null -> append(cbzPageLabel)
+            else -> append(
+                ReaderCounters.footerLine(
+                    chapterIndex, chapterCount, chapterOwnNumber
+                )
+            )
+        }
+        append(" · ${(bookFraction * 100).toInt()}%")
+        if (showTimeEstimates) {
+            append(
+                " · ≈${WpmEstimator.formatMinutes(minutesLeftInChapter)} in chapter" +
+                    " · ≈${WpmEstimator.formatMinutes(minutesLeftInBook)} in book"
+            )
+        }
     }
     Column(Modifier.fillMaxSize()) {
         AnimatedVisibility(
@@ -166,16 +204,45 @@ fun M3ReaderChromeBar(
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
-                        IconButton(onClick = onOpenListen) {
-                            Icon(Icons.Filled.Headphones, "Listen")
-                        }
                     }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, "Reading settings")
+                    IconButton(onClick = { overflowOpen = true }) {
+                        Icon(Icons.Filled.MoreVert, "More")
+                    }
+                    DropdownMenu(
+                        expanded = overflowOpen,
+                        onDismissRequest = { overflowOpen = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Go to chapter") },
+                            onClick = {
+                                overflowOpen = false
+                                onOpenToc()
+                            }
+                        )
+                        if (onOpenBookPage != null) {
+                            DropdownMenuItem(
+                                text = { Text("Book page") },
+                                onClick = {
+                                    overflowOpen = false
+                                    onOpenBookPage()
+                                }
+                            )
+                        }
+                        if (onShare != null) {
+                            DropdownMenuItem(
+                                text = { Text("Share") },
+                                onClick = {
+                                    overflowOpen = false
+                                    onShare()
+                                }
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    scrolledContainerColor =
+                        MaterialTheme.colorScheme.surfaceContainer
                 ),
                 modifier = Modifier.onSizeChanged { onTopBarHeight(it.height) }
             )
@@ -190,140 +257,85 @@ fun M3ReaderChromeBar(
                 Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .onSizeChanged { onBottomBarHeight(it.height) }
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .onSizeChanged { onBottomBarHeight(it.height) },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (chromeStyle == M3ReaderChrome.FLOATING_TOOLBAR) {
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        M3SeekChip(
-                            counterLine = counterLine,
-                            minutesLeftInChapter = minutesLeftInChapter,
-                            minutesLeftInBook = minutesLeftInBook,
-                            showTimeEstimates = showTimeEstimates,
-                            bookFraction = bookFraction,
-                            hasPrevious = hasPrevious,
-                            hasNext = hasNext,
-                            onPreviousChapter = onPreviousChapter,
-                            onNextChapter = onNextChapter,
-                            onSeekFraction = onSeekFraction
-                        )
-                        HorizontalFloatingToolbar(
-                            expanded = true,
-                            content = {
-                                M3ChromeActions(
-                                    cbzPageLabel = cbzPageLabel,
-                                    pdfModeLabel = pdfModeLabel,
-                                    onOpenToc = onOpenToc,
-                                    onOpenSearch = onOpenSearch,
-                                    onOpenListen = onOpenListen,
-                                    onOpenAi = onOpenAi,
-                                    onTogglePdfMode = onTogglePdfMode,
-                                    onOpenFocus = onOpenFocus,
-                                    onOpenSettings = onOpenSettings
-                                )
-                            }
-                        )
-                    }
-                } else {
-                    // The docked form (A2): the seek row docks
-                    // directly on the BottomAppBar, both in the
-                    // bar's own container colour.
+                if (seekExpanded) {
+                    // The toolbar's second row: the position
+                    // line over the seek slider, in the same
+                    // tonal family as the toolbar itself.
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainer
+                        shape = MaterialTheme.shapes.extraLarge,
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     ) {
                         M3SeekRow(
-                            counterLine = counterLine,
-                            minutesLeftInChapter = minutesLeftInChapter,
-                            minutesLeftInBook = minutesLeftInBook,
-                            showTimeEstimates = showTimeEstimates,
+                            positionLine = positionLine,
                             bookFraction = bookFraction,
-                            hasPrevious = hasPrevious,
-                            hasNext = hasNext,
-                            onPreviousChapter = onPreviousChapter,
-                            onNextChapter = onNextChapter,
                             onSeekFraction = onSeekFraction,
-                            modifier = Modifier.padding(horizontal = 8.dp)
+                            modifier = Modifier.padding(
+                                horizontal = 16.dp, vertical = 8.dp
+                            )
                         )
                     }
-                    BottomAppBar(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        content = {
-                            M3ChromeActions(
-                                cbzPageLabel = cbzPageLabel,
-                                pdfModeLabel = pdfModeLabel,
-                                onOpenToc = onOpenToc,
-                                onOpenSearch = onOpenSearch,
-                                onOpenListen = onOpenListen,
-                                onOpenAi = onOpenAi,
-                                onTogglePdfMode = onTogglePdfMode,
-                                onOpenFocus = onOpenFocus,
-                                onOpenSettings = onOpenSettings
+                }
+                HorizontalFloatingToolbar(
+                    expanded = seekExpanded,
+                    colors = FloatingToolbarDefaults.standardFloatingToolbarColors(
+                        toolbarContainerColor =
+                            MaterialTheme.colorScheme.surfaceContainerHigh
+                    ),
+                    leadingContent = {
+                        IconButton(
+                            onClick = onPreviousChapter,
+                            enabled = hasPrevious
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                "Previous chapter"
                             )
                         }
-                    )
-                }
+                    },
+                    trailingContent = {
+                        IconButton(onClick = onNextChapter, enabled = hasNext) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowForward,
+                                "Next chapter"
+                            )
+                        }
+                    },
+                    content = {
+                        M3ChromeActions(
+                            cbzPageLabel = cbzPageLabel,
+                            pdfPageLabel = pdfPageLabel,
+                            pdfModeLabel = pdfModeLabel,
+                            seekExpanded = seekExpanded,
+                            showFocusDoor = showFocusDoor,
+                            onOpenToc = onOpenToc,
+                            onOpenSearch = onOpenSearch,
+                            onOpenListen = onOpenListen,
+                            onOpenFocus = onOpenFocus,
+                            onTogglePdfMode = onTogglePdfMode,
+                            onOpenPageGrid = onOpenPageGrid,
+                            onToggleSeekExpanded = { seekExpanded = !seekExpanded },
+                            onOpenSettings = onOpenSettings
+                        )
+                    }
+                )
             }
         }
     }
 }
 
-/** The seek chip of the floating form: full shape,
- * surfaceContainerHigh (§1.5), carrying the counter line, the
- * stock slider and the chapter-turn buttons. */
-@Composable
-private fun M3SeekChip(
-    counterLine: String,
-    minutesLeftInChapter: Int,
-    minutesLeftInBook: Int,
-    showTimeEstimates: Boolean,
-    bookFraction: Float,
-    hasPrevious: Boolean,
-    hasNext: Boolean,
-    onPreviousChapter: () -> Unit,
-    onNextChapter: () -> Unit,
-    onSeekFraction: (Float) -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        contentColor = MaterialTheme.colorScheme.onSurface
-    ) {
-        M3SeekRow(
-            counterLine = counterLine,
-            minutesLeftInChapter = minutesLeftInChapter,
-            minutesLeftInBook = minutesLeftInBook,
-            showTimeEstimates = showTimeEstimates,
-            bookFraction = bookFraction,
-            hasPrevious = hasPrevious,
-            hasNext = hasNext,
-            onPreviousChapter = onPreviousChapter,
-            onNextChapter = onNextChapter,
-            onSeekFraction = onSeekFraction,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-        )
-    }
-}
-
-/** The seek row shared by both chrome forms: previous, the
- * counter over the stock slider (the updated slider component —
- * drag previews, the jump lands on release, the Nocturne
- * contract), next. */
+/** The seek second row: the position line (labelMedium,
+ * tabular figures) over the stock slider — drag previews,
+ * the jump lands on release (the shipped contract). */
 @Composable
 private fun M3SeekRow(
-    counterLine: String,
-    minutesLeftInChapter: Int,
-    minutesLeftInBook: Int,
-    showTimeEstimates: Boolean,
+    positionLine: String,
     bookFraction: Float,
-    hasPrevious: Boolean,
-    hasNext: Boolean,
-    onPreviousChapter: () -> Unit,
-    onNextChapter: () -> Unit,
     onSeekFraction: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -332,69 +344,54 @@ private fun M3SeekRow(
     LaunchedEffect(bookFraction) {
         if (!sliderDragging) sliderFraction = bookFraction
     }
-    Row(
-        modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        IconButton(onClick = onPreviousChapter, enabled = hasPrevious) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Previous chapter")
-        }
-        Column(Modifier.weight(1f)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    counterLine,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-                if (showTimeEstimates) {
-                    Text(
-                        "${WpmEstimator.formatMinutes(minutesLeftInChapter)} in chapter · " +
-                            "${WpmEstimator.formatMinutes(minutesLeftInBook)} in book",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1
-                    )
-                }
-            }
-            Slider(
-                value = sliderFraction,
-                onValueChange = {
-                    sliderDragging = true
-                    sliderFraction = it
-                },
-                onValueChangeFinished = {
-                    sliderDragging = false
-                    onSeekFraction(sliderFraction)
-                },
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        IconButton(onClick = onNextChapter, enabled = hasNext) {
-            Icon(Icons.AutoMirrored.Filled.ArrowForward, "Next chapter")
-        }
+    Column(modifier.fillMaxWidth()) {
+        Text(
+            positionLine,
+            style = TextStyle(
+                fontSize = MaterialTheme.typography.labelMedium.fontSize,
+                lineHeight = MaterialTheme.typography.labelMedium.lineHeight,
+                letterSpacing = MaterialTheme.typography.labelMedium.letterSpacing,
+                fontFeatureSettings = "tnum"
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
+        Slider(
+            value = sliderFraction,
+            onValueChange = {
+                sliderDragging = true
+                sliderFraction = it
+            },
+            onValueChangeFinished = {
+                sliderDragging = false
+                onSeekFraction(sliderFraction)
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
-/** The action doors, one set for both chrome forms — the same
- * doors and gating as the Nocturne capsule: Contents · Search ·
- * Listen in the text world, the PDF mode switch in a PDF's Ask
- * AI seat, then Focus · Settings. */
+/** The toolbar's action row — the same doors and gating as
+ * the shipped chrome: Contents · Search · Listen in the text
+ * world, the PDF page chip + Reflow toggle in a PDF's world,
+ * then Focus · seek expand · Settings. Ask AI is NOT a chrome
+ * door in this design (R28's element list carries no AI door;
+ * it stays reachable from the book page and the selection
+ * menu, exactly as before). */
 @Composable
 private fun M3ChromeActions(
     cbzPageLabel: String?,
+    pdfPageLabel: String?,
     pdfModeLabel: String?,
+    seekExpanded: Boolean,
+    showFocusDoor: Boolean,
     onOpenToc: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenListen: () -> Unit,
-    onOpenAi: () -> Unit,
-    onTogglePdfMode: () -> Unit,
     onOpenFocus: () -> Unit,
+    onTogglePdfMode: () -> Unit,
+    onOpenPageGrid: (() -> Unit)?,
+    onToggleSeekExpanded: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     if (cbzPageLabel == null) {
@@ -408,22 +405,28 @@ private fun M3ChromeActions(
             Icon(Icons.Filled.Headphones, "Listen")
         }
     }
+    if (pdfPageLabel != null) {
+        AssistChip(
+            onClick = { onOpenPageGrid?.invoke() },
+            label = { Text(pdfPageLabel) }
+        )
+    }
     if (pdfModeLabel != null) {
         IconButton(onClick = onTogglePdfMode) {
             Icon(Icons.Filled.Description, pdfModeLabel)
         }
-    } else if (cbzPageLabel == null) {
-        IconButton(onClick = onOpenAi) {
-            Icon(
-                Icons.Filled.AutoAwesome, "Ask AI",
-                tint = MaterialTheme.colorScheme.tertiary
-            )
+    }
+    if (showFocusDoor && cbzPageLabel == null) {
+        IconButton(onClick = onOpenFocus) {
+            Icon(Icons.Filled.Timer, "Focus timer")
         }
     }
-    IconButton(onClick = onOpenFocus) {
-        Icon(Icons.Filled.Timer, "Focus")
+    IconButton(onClick = onToggleSeekExpanded) {
+        Icon(
+            if (seekExpanded) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess,
+            if (seekExpanded) "Hide position" else "Show position"
+        )
     }
-    Spacer(Modifier.width(2.dp))
     IconButton(onClick = onOpenSettings) {
         Icon(Icons.Filled.Settings, "Settings")
     }

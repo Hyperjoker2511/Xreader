@@ -23,6 +23,8 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.WideNavigationRail
 import androidx.compose.material3.WideNavigationRailItem
+import androidx.compose.material3.WideNavigationRailValue
+import androidx.compose.material3.rememberWideNavigationRailState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -45,8 +47,9 @@ import app.xreader.ui.sources.SourcesViewModel
 import app.xreader.ui.theme.LocalDockClearance
 
 /**
- * Code 120 (design §2.1 + addendum A1): the Material 3 design's
- * shell. Where Nocturne's shell overlays a floating dock over a
+ * Code 120, breakpoint-corrected in code 121 (scratch design
+ * §3.1 S1 + §2.6): the Material 3 design's shell. Where
+ * Nocturne's shell overlays a floating dock over a
  * mesh backdrop, this shell is the spec's own arrangement:
  *
  *  - The window background is the scheme's `surface`; there is
@@ -57,8 +60,11 @@ import app.xreader.ui.theme.LocalDockClearance
  *    under the bar, so [LocalDockClearance] is zero here.
  *  - The snackbar — the design's one transient — rests directly
  *    above the bar.
- *  - Medium width: the stock medium navigation rail; Expanded:
- *    the wide rail. The Bar/Rail knob can pin either form.
+ *  - Width classes (scratch §2.6): Compact <600dp the bar;
+ *    Medium 600–839dp the navigation rail; Expanded 840dp+ the
+ *    wide rail. The Bar/Rail knob can pin bar or rail form;
+ *    Auto follows the classes (code 121 corrected the split:
+ *    code 120 only railed at 840dp and wide-railed at 1200dp).
  *  - Immersive routes (the reader owns its screen) hide the
  *    bar/rail exactly as the Nocturne shell hides its dock —
  *    the same shellImmersive/dockShown gates decide.
@@ -134,32 +140,38 @@ internal fun M3RailShell(
     packViewModel: app.xreader.ui.sources.ProviderPackViewModel
 ) {
     val dockVisible = !shellImmersive(navController) && dockShown(navController)
-    Row(
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.surface)
     ) {
-        if (dockVisible) {
-            M3TabRail(
-                navController = navController,
-                sourcesViewModel = sourcesViewModel,
-                appUpdateViewModel = appUpdateViewModel,
-                labelsAlways = designState.tabLabels == M3TabLabels.ALWAYS
-            )
-        }
-        Box(Modifier.weight(1f)) {
-            M3NavHostContent(
-                navController, container, appearance, onPhaseNote,
-                libraryViewModel, downloadsViewModel, opdsViewModel,
-                sourcesViewModel, linkAddViewModel, onAddBook, onExport,
-                appUpdateViewModel, packViewModel
-            )
-            SnackbarHost(
-                snackbar,
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 8.dp)
-            )
+        // §2.6: the wide rail starts at Expanded (840dp), not at
+        // the Large class — code 120 waited until 1200dp.
+        val wideRail = maxWidth >= 840.dp
+        Row(Modifier.fillMaxSize()) {
+            if (dockVisible) {
+                M3TabRail(
+                    navController = navController,
+                    sourcesViewModel = sourcesViewModel,
+                    appUpdateViewModel = appUpdateViewModel,
+                    labelsAlways = designState.tabLabels == M3TabLabels.ALWAYS,
+                    wideRail = wideRail
+                )
+            }
+            Box(Modifier.weight(1f)) {
+                M3NavHostContent(
+                    navController, container, appearance, onPhaseNote,
+                    libraryViewModel, downloadsViewModel, opdsViewModel,
+                    sourcesViewModel, linkAddViewModel, onAddBook, onExport,
+                    appUpdateViewModel, packViewModel
+                )
+                SnackbarHost(
+                    snackbar,
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 8.dp)
+                )
+            }
         }
     }
 }
@@ -259,49 +271,56 @@ private fun M3TabBar(
     }
 }
 
-/** The rail form: the stock medium rail below the Expanded
- * width class, the wide rail at Expanded and above (its items
- * follow the same labels knob). */
+/** The rail form (§2.6): the stock navigation rail at Medium
+ * (600–839dp), the wide rail at Expanded (840dp) and above —
+ * the caller measures the window and passes [wideRail]. Items
+ * follow the same labels knob in both forms: with Selected
+ * only, an unselected wide-rail item passes no label, exactly
+ * as the bar does. */
 @Composable
 private fun M3TabRail(
     navController: NavHostController,
     sourcesViewModel: SourcesViewModel,
     appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel,
-    labelsAlways: Boolean
+    labelsAlways: Boolean,
+    wideRail: Boolean
 ) {
     val selected = selectedTab(navController)
-    BoxWithConstraints {
-        if (maxWidth >= 1200.dp) {
-            val railState = androidx.compose.material3.rememberWideNavigationRailState(
-                initialValue = androidx.compose.material3.WideNavigationRailValue.Expanded
-            )
-            WideNavigationRail(state = railState) {
-                Tab.entries.forEach { tab ->
-                    WideNavigationRailItem(
-                        selected = tab == selected,
-                        onClick = { navigateToTab(navController, tab) },
-                        icon = {
-                            M3TabIcon(tab, sourcesViewModel, appUpdateViewModel)
-                        },
-                        label = { Text(tab.label) },
-                        railExpanded = railState.targetValue ==
-                            androidx.compose.material3.WideNavigationRailValue.Expanded
-                    )
-                }
+    if (wideRail) {
+        val railState = rememberWideNavigationRailState(
+            initialValue = WideNavigationRailValue.Expanded
+        )
+        WideNavigationRail(state = railState) {
+            Tab.entries.forEach { tab ->
+                val isSelected = tab == selected
+                WideNavigationRailItem(
+                    selected = isSelected,
+                    onClick = { navigateToTab(navController, tab) },
+                    icon = {
+                        M3TabIcon(tab, sourcesViewModel, appUpdateViewModel)
+                    },
+                    label = if (labelsAlways || isSelected) {
+                        { Text(tab.label) }
+                    } else {
+                        null
+                    },
+                    railExpanded = railState.targetValue ==
+                        WideNavigationRailValue.Expanded
+                )
             }
-        } else {
-            NavigationRail {
-                Tab.entries.forEach { tab ->
-                    NavigationRailItem(
-                        selected = tab == selected,
-                        onClick = { navigateToTab(navController, tab) },
-                        icon = {
-                            M3TabIcon(tab, sourcesViewModel, appUpdateViewModel)
-                        },
-                        label = { Text(tab.label) },
-                        alwaysShowLabel = labelsAlways
-                    )
-                }
+        }
+    } else {
+        NavigationRail {
+            Tab.entries.forEach { tab ->
+                NavigationRailItem(
+                    selected = tab == selected,
+                    onClick = { navigateToTab(navController, tab) },
+                    icon = {
+                        M3TabIcon(tab, sourcesViewModel, appUpdateViewModel)
+                    },
+                    label = { Text(tab.label) },
+                    alwaysShowLabel = labelsAlways
+                )
             }
         }
     }

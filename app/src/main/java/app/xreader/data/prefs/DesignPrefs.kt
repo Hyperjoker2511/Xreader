@@ -90,6 +90,33 @@ enum class M3ListView { CARD_GRID, LIST }
 enum class M3RepoSort { A_Z, RECENTLY_ADDED }
 enum class M3GalleryColumns { AUTO, TWO, THREE }
 
+/** Code 121 (scratch design R1): the Library shelf's default
+ * tab — the five manual statuses plus All. */
+enum class M3LibraryTab { ALL, READING, PLAN_TO_READ, COMPLETED, ON_HOLD, DROPPED }
+
+/** Code 121 (scratch design R8): how many chapters the book
+ * page shows inline before the "See all chapters" row. */
+enum class M3BookChaptersCap { FIFTY, ALL }
+
+/** Code 121 (scratch design R20): the catalogue grid's column
+ * count — 2 is the design's default, 3 the knob's other stop. */
+enum class M3CatalogueColumns { TWO, THREE }
+
+/** Code 121 (scratch design R20): whether catalogue cards
+ * carry their metadata (title + latest-chapter line) inside
+ * the card, or show cover only. */
+enum class M3CatalogueMetadata { SHOW, COVER_ONLY }
+
+/** Code 121 (scratch design R4): the downloads storage card
+ * appears only once downloaded books pass this threshold.
+ * Stored as raw bytes so the value survives enum renames. */
+enum class M3StorageThreshold(val bytes: Long) {
+    GB_1(1_000_000_000L),
+    GB_2(2_000_000_000L),
+    GB_5(5_000_000_000L),
+    GB_10(10_000_000_000L)
+}
+
 /**
  * The Material 3 design's full state. The defaults here are the
  * design's defaults (§2.11); [DesignPrefs] only ever overrides
@@ -115,26 +142,67 @@ data class DesignState(
     val libraryContinueRail: Boolean = true,
     val libraryProgressOnCovers: Boolean = true,
     val libraryFilterRow: Boolean = true,
+    // Code 121 (scratch R1 knobs): shelf density + default tab.
+    // libraryContinueRail above IS the scratch "Continue
+    // carousel Show/Hide" knob (same door, renamed in prose).
+    val libraryShelfDensity: M3DensityChoice = M3DensityChoice.COMFORTABLE,
+    val libraryDefaultTab: M3LibraryTab = M3LibraryTab.ALL,
+    // STRUCK in the scratch design (kept stored, no longer read
+    // by any M3 surface): R8's header is the one small bar over
+    // the content-colour band and its actions the one button
+    // group — there is no header/action form knob (§3.3 R8).
     val bookHeader: M3BookHeader = M3BookHeader.COLLAPSING_COVER,
     val bookAction: M3BookAction = M3BookAction.BUTTON_GROUP,
     // History / Downloads (§2.11 + M1).
     val historyGrouping: M3HistoryGrouping = M3HistoryGrouping.NONE,
     val historyDensity: M3DensityChoice = M3DensityChoice.COMFORTABLE,
+    // Code 121 (scratch R3 knob): day-group headers Show/Hide —
+    // the scratch design's grouping door (Show = the day-grouped
+    // list, Hide = flat). historyGrouping above is the code-120
+    // form of the same door, kept stored.
+    val historyShowGroups: Boolean = true,
     val downloadsSort: M3DownloadsSort = M3DownloadsSort.RECENT,
     val downloadsChapterSize: Boolean = true,
+    // Code 121 (scratch R4 knob): storage card threshold.
+    val downloadsStorageThreshold: M3StorageThreshold = M3StorageThreshold.GB_2,
     // Reader (§2.11).
+    // STRUCK in the scratch design (kept stored, no longer read
+    // by any M3 surface): §8 Q3 — the floating toolbar is the
+    // ONE reader chrome form; there is no toolbar-form knob.
     val readerChrome: M3ReaderChrome = M3ReaderChrome.FLOATING_TOOLBAR,
     val selectionColourRow: Boolean = true,
     val contentsTab: M3ContentsTab = M3ContentsTab.CHAPTERS,
+    /** S13 knob (§3.8): the manga toolbar's page chip ("1 / 24")
+     * — Show (default) / Hide. Manga-chrome only; the text
+     * reader's counter chip is not governed by it. */
+    val mangaPageChip: Boolean = true,
+    // Code 121 (scratch R28 knob): the toolbar's position line.
+    val readerPositionLine: Boolean = true,
+    // Code 121 (scratch R8 knob): chapters shown inline cap.
+    val bookChaptersCap: M3BookChaptersCap = M3BookChaptersCap.FIFTY,
     // Explore (§2.11 + M1).
-    val exploreSide: M3ExploreSide = M3ExploreSide.LAST_USED,
+    // Code 121: scratch R2 knob — the default side is Novels
+    // (code 120 defaulted to LAST_USED; LAST_USED stays a
+    // selectable value, it is no longer the design default).
+    val exploreSide: M3ExploreSide = M3ExploreSide.NOVELS,
     val exploreGrouping: Boolean = true,
     val exploreDensity: M3DensityChoice = M3DensityChoice.COMFORTABLE,
     val exploreStoreView: M3ListView = M3ListView.LIST,
     val exploreRepoSort: M3RepoSort = M3RepoSort.A_Z,
+    // Code 121 (scratch R2 knob): the two foot doors (Source
+    // store / Add a link) Show/Hide — hidden, they live in the
+    // app-bar overflow.
+    val exploreStoreDoors: Boolean = true,
+    // Code 121 (scratch R20 knobs): catalogue grid columns +
+    // in-card metadata.
+    val catalogueColumns: M3CatalogueColumns = M3CatalogueColumns.TWO,
+    val catalogueMetadata: M3CatalogueMetadata = M3CatalogueMetadata.SHOW,
     // Profile (§2.11 + M1).
     val profileHeaderCard: Boolean = true,
     val profileDoorsList: Boolean = true,
+    // Code 121 (scratch R31 knobs): stat cards + trophy density.
+    val profileStatCards: Boolean = true,
+    val profileTrophyDensity: M3DensityChoice = M3DensityChoice.COMFORTABLE,
     val vocabSort: M3VocabSort = M3VocabSort.RECENT,
     val loreView: M3ListView = M3ListView.CARD_GRID,
     val galleryColumns: M3GalleryColumns = M3GalleryColumns.AUTO,
@@ -156,6 +224,13 @@ object DesignValidation {
     /** A stored seed is honoured only as a real opaque colour. */
     fun seedOrNull(raw: Long?): Long? =
         raw?.takeIf { it in 0L..0xFFFFFFFFL && (it ushr 24) == 0xFFL }
+
+    /** A stored storage threshold is honoured only as one of
+     * the enum's byte values; anything else degrades to the
+     * design default (2 GB). */
+    fun thresholdOr(raw: Long?): M3StorageThreshold =
+        M3StorageThreshold.values().firstOrNull { it.bytes == raw }
+            ?: M3StorageThreshold.GB_2
 
     fun seedsOrEmpty(raw: String?): List<Long> =
         raw?.split(',')
@@ -200,6 +275,12 @@ class DesignPrefs(
         libraryContinueRail = this[KEY_LIB_CONTINUE] ?: true,
         libraryProgressOnCovers = this[KEY_LIB_PROGRESS] ?: true,
         libraryFilterRow = this[KEY_LIB_FILTERS] ?: true,
+        libraryShelfDensity = DesignValidation.enumOr(
+            this[KEY_LIB_SHELF_DENSITY], M3DensityChoice.values(), M3DensityChoice.COMFORTABLE
+        ),
+        libraryDefaultTab = DesignValidation.enumOr(
+            this[KEY_LIB_DEFAULT_TAB], M3LibraryTab.values(), M3LibraryTab.ALL
+        ),
         bookHeader = DesignValidation.enumOr(
             this[KEY_BOOK_HEADER], M3BookHeader.values(), M3BookHeader.COLLAPSING_COVER
         ),
@@ -216,6 +297,8 @@ class DesignPrefs(
             this[KEY_DOWNLOADS_SORT], M3DownloadsSort.values(), M3DownloadsSort.RECENT
         ),
         downloadsChapterSize = this[KEY_DOWNLOADS_SIZE] ?: true,
+        historyShowGroups = this[KEY_HISTORY_GROUPS] ?: true,
+        downloadsStorageThreshold = DesignValidation.thresholdOr(this[KEY_DOWNLOADS_THRESHOLD]),
         readerChrome = DesignValidation.enumOr(
             this[KEY_READER_CHROME], M3ReaderChrome.values(), M3ReaderChrome.FLOATING_TOOLBAR
         ),
@@ -223,8 +306,13 @@ class DesignPrefs(
         contentsTab = DesignValidation.enumOr(
             this[KEY_CONTENTS_TAB], M3ContentsTab.values(), M3ContentsTab.CHAPTERS
         ),
+        mangaPageChip = this[KEY_MANGA_PAGE_CHIP] ?: true,
+        readerPositionLine = this[KEY_READER_POSITION] ?: true,
+        bookChaptersCap = DesignValidation.enumOr(
+            this[KEY_BOOK_CHAPTERS_CAP], M3BookChaptersCap.values(), M3BookChaptersCap.FIFTY
+        ),
         exploreSide = DesignValidation.enumOr(
-            this[KEY_EXPLORE_SIDE], M3ExploreSide.values(), M3ExploreSide.LAST_USED
+            this[KEY_EXPLORE_SIDE], M3ExploreSide.values(), M3ExploreSide.NOVELS
         ),
         exploreGrouping = this[KEY_EXPLORE_GROUPING] ?: true,
         exploreDensity = DesignValidation.enumOr(
@@ -236,8 +324,19 @@ class DesignPrefs(
         exploreRepoSort = DesignValidation.enumOr(
             this[KEY_EXPLORE_REPO_SORT], M3RepoSort.values(), M3RepoSort.A_Z
         ),
+        exploreStoreDoors = this[KEY_EXPLORE_STORE_DOORS] ?: true,
+        catalogueColumns = DesignValidation.enumOr(
+            this[KEY_CATALOGUE_COLUMNS], M3CatalogueColumns.values(), M3CatalogueColumns.TWO
+        ),
+        catalogueMetadata = DesignValidation.enumOr(
+            this[KEY_CATALOGUE_METADATA], M3CatalogueMetadata.values(), M3CatalogueMetadata.SHOW
+        ),
         profileHeaderCard = this[KEY_PROFILE_HEADER] ?: true,
         profileDoorsList = this[KEY_PROFILE_DOORS] ?: true,
+        profileStatCards = this[KEY_PROFILE_STAT_CARDS] ?: true,
+        profileTrophyDensity = DesignValidation.enumOr(
+            this[KEY_PROFILE_TROPHY_DENSITY], M3DensityChoice.values(), M3DensityChoice.COMFORTABLE
+        ),
         vocabSort = DesignValidation.enumOr(
             this[KEY_VOCAB_SORT], M3VocabSort.values(), M3VocabSort.RECENT
         ),
@@ -297,6 +396,17 @@ class DesignPrefs(
         }
     }
 
+    /** Code 121 W8 (D-121-W7-05): clear the picked seed AND
+     * the saved-seeds history. Used by Recovery's M3 Safe
+     * appearance, which resets the colour source to Dynamic —
+     * without this the stored seed survived inert and could
+     * resurface on the next PICKED write's history. */
+    suspend fun clearSeed() =
+        store.edit { prefs ->
+            prefs.remove(KEY_SEED)
+            prefs.remove(KEY_SAVED_SEEDS)
+        }
+
     suspend fun setColourStyle(value: M3ColourStyle) =
         store.edit { it[KEY_COLOUR_STYLE] = value.name }
 
@@ -348,6 +458,9 @@ class DesignPrefs(
     suspend fun setContentsTab(value: M3ContentsTab) =
         store.edit { it[KEY_CONTENTS_TAB] = value.name }
 
+    suspend fun setMangaPageChip(value: Boolean) =
+        store.edit { it[KEY_MANGA_PAGE_CHIP] = value }
+
     suspend fun setExploreSide(value: M3ExploreSide) =
         store.edit { it[KEY_EXPLORE_SIDE] = value.name }
 
@@ -384,6 +497,40 @@ class DesignPrefs(
     suspend fun setLaunchIntro(value: Boolean) =
         store.edit { it[KEY_LAUNCH_INTRO] = value }
 
+    // Code 121 setters (scratch-design knobs).
+    suspend fun setLibraryShelfDensity(value: M3DensityChoice) =
+        store.edit { it[KEY_LIB_SHELF_DENSITY] = value.name }
+
+    suspend fun setLibraryDefaultTab(value: M3LibraryTab) =
+        store.edit { it[KEY_LIB_DEFAULT_TAB] = value.name }
+
+    suspend fun setHistoryShowGroups(value: Boolean) =
+        store.edit { it[KEY_HISTORY_GROUPS] = value }
+
+    suspend fun setDownloadsStorageThreshold(value: M3StorageThreshold) =
+        store.edit { it[KEY_DOWNLOADS_THRESHOLD] = value.bytes }
+
+    suspend fun setReaderPositionLine(value: Boolean) =
+        store.edit { it[KEY_READER_POSITION] = value }
+
+    suspend fun setBookChaptersCap(value: M3BookChaptersCap) =
+        store.edit { it[KEY_BOOK_CHAPTERS_CAP] = value.name }
+
+    suspend fun setExploreStoreDoors(value: Boolean) =
+        store.edit { it[KEY_EXPLORE_STORE_DOORS] = value }
+
+    suspend fun setCatalogueColumns(value: M3CatalogueColumns) =
+        store.edit { it[KEY_CATALOGUE_COLUMNS] = value.name }
+
+    suspend fun setCatalogueMetadata(value: M3CatalogueMetadata) =
+        store.edit { it[KEY_CATALOGUE_METADATA] = value.name }
+
+    suspend fun setProfileStatCards(value: Boolean) =
+        store.edit { it[KEY_PROFILE_STAT_CARDS] = value }
+
+    suspend fun setProfileTrophyDensity(value: M3DensityChoice) =
+        store.edit { it[KEY_PROFILE_TROPHY_DENSITY] = value.name }
+
     private companion object {
         val KEY_PRIMED = booleanPreferencesKey("design.primed.v1")
         val KEY_DESIGN = stringPreferencesKey("design.active")
@@ -407,6 +554,7 @@ class DesignPrefs(
         val KEY_READER_CHROME = stringPreferencesKey("design.m3.readerChrome")
         val KEY_SELECTION_ROW = booleanPreferencesKey("design.m3.selectionColourRow")
         val KEY_CONTENTS_TAB = stringPreferencesKey("design.m3.contentsTab")
+        val KEY_MANGA_PAGE_CHIP = booleanPreferencesKey("design.m3.mangaPageChip")
         val KEY_EXPLORE_SIDE = stringPreferencesKey("design.m3.exploreSide")
         val KEY_EXPLORE_GROUPING = booleanPreferencesKey("design.m3.exploreGrouping")
         val KEY_EXPLORE_DENSITY = stringPreferencesKey("design.m3.exploreDensity")
@@ -419,5 +567,16 @@ class DesignPrefs(
         val KEY_GALLERY_COLUMNS = stringPreferencesKey("design.m3.galleryColumns")
         val KEY_MOTION = stringPreferencesKey("design.m3.motionChoice")
         val KEY_LAUNCH_INTRO = booleanPreferencesKey("design.launchIntro")
+        val KEY_LIB_SHELF_DENSITY = stringPreferencesKey("design.m3.libraryShelfDensity")
+        val KEY_LIB_DEFAULT_TAB = stringPreferencesKey("design.m3.libraryDefaultTab")
+        val KEY_HISTORY_GROUPS = booleanPreferencesKey("design.m3.historyShowGroups")
+        val KEY_DOWNLOADS_THRESHOLD = longPreferencesKey("design.m3.downloadsStorageThresholdBytes")
+        val KEY_READER_POSITION = booleanPreferencesKey("design.m3.readerPositionLine")
+        val KEY_BOOK_CHAPTERS_CAP = stringPreferencesKey("design.m3.bookChaptersCap")
+        val KEY_EXPLORE_STORE_DOORS = booleanPreferencesKey("design.m3.exploreStoreDoors")
+        val KEY_CATALOGUE_COLUMNS = stringPreferencesKey("design.m3.catalogueColumns")
+        val KEY_CATALOGUE_METADATA = stringPreferencesKey("design.m3.catalogueMetadata")
+        val KEY_PROFILE_STAT_CARDS = booleanPreferencesKey("design.m3.profileStatCards")
+        val KEY_PROFILE_TROPHY_DENSITY = stringPreferencesKey("design.m3.profileTrophyDensity")
     }
 }

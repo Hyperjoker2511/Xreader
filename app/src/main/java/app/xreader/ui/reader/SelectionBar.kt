@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.xreader.core.motion.SpringMotionEngine
 import app.xreader.core.motion.toSpec
+import app.xreader.ui.common.ColourBar
+import app.xreader.ui.common.ColourBarSelection
 import app.xreader.ui.localreader.HIGHLIGHT_TINT_ARGB
 
 /**
@@ -262,7 +264,15 @@ fun SelectionBar(
     }
     Surface(
         modifier = modifier.widthIn(max = 344.dp),
-        shape = RoundedCornerShape(16.dp),
+        // Code 121 (S23): under Material 3 the bar is a filled
+        // card in scheme colours — surfaceContainerHigh, the
+        // MEDIUM shape, a 1dp outlineVariant border. Nocturne
+        // keeps its shipped 16dp form exactly.
+        shape = if (isM3Bar) {
+            MaterialTheme.shapes.medium
+        } else {
+            RoundedCornerShape(16.dp)
+        },
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         border = BorderStroke(
             1.dp, MaterialTheme.colorScheme.outlineVariant
@@ -308,27 +318,72 @@ fun SelectionBar(
             }
             Column {
                 if (state.colourRowOpen && state.colourRowEnabled) {
-                    Row(
-                        modifier = Modifier
-                            .height(56.dp)
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement =
-                            Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        barTints.forEach { tint ->
-                            SelectionTintCircle(
-                                tintArgb = tint,
-                                active = tint == state.activeTintArgb,
-                                onClick = {
-                                    onStateChange(
-                                        state.copy(activeTintArgb = tint)
-                                    )
-                                    callbacks.onApplyHighlight(
-                                        tint, HighlightStyle.HIGHLIGHT
-                                    )
+                    if (isM3Bar) {
+                        // Code 121 (S23 + §2.1.1): under M3 the
+                        // colour row IS the one colour bar —
+                        // W3's shared component in its Selection
+                        // form (first swatch = scheme primary,
+                        // "Theme colour"; then seed swatches;
+                        // then Pick any colour → S37). Picking a
+                        // swatch applies the highlight in that
+                        // colour, exactly as the shipped row did.
+                        ColourBar(
+                            selection = if (
+                                state.activeTintArgb == m3DefaultTintArgb
+                            ) {
+                                ColourBarSelection.ThemeColour
+                            } else {
+                                ColourBarSelection.Seed(
+                                    state.activeTintArgb.toLong() and
+                                        0xFFFFFFFFL
+                                )
+                            },
+                            onSelect = { picked ->
+                                val argb = when (picked) {
+                                    ColourBarSelection.ThemeColour ->
+                                        m3DefaultTintArgb
+                                    is ColourBarSelection.Seed ->
+                                        picked.argb.toInt()
+                                    ColourBarSelection.Dynamic ->
+                                        m3DefaultTintArgb
                                 }
+                                onStateChange(
+                                    state.copy(activeTintArgb = argb)
+                                )
+                                callbacks.onApplyHighlight(
+                                    argb, HighlightStyle.HIGHLIGHT
+                                )
+                            },
+                            showDynamic = false,
+                            themeColour = MaterialTheme.colorScheme.primary,
+                            pickerTitle = "Highlight colour",
+                            modifier = Modifier.padding(
+                                horizontal = 16.dp, vertical = 12.dp
                             )
+                        )
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .height(56.dp)
+                                .padding(horizontal = 16.dp),
+                            horizontalArrangement =
+                                Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            barTints.forEach { tint ->
+                                SelectionTintCircle(
+                                    tintArgb = tint,
+                                    active = tint == state.activeTintArgb,
+                                    onClick = {
+                                        onStateChange(
+                                            state.copy(activeTintArgb = tint)
+                                        )
+                                        callbacks.onApplyHighlight(
+                                            tint, HighlightStyle.HIGHLIGHT
+                                        )
+                                    }
+                                )
+                            }
                         }
                     }
                     HorizontalDivider(

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -240,6 +241,258 @@ fun BookPosterCard(
  * positive width is known; the null-model placeholder path is
  * untouched.
  */
+// ── Code 121 (S6): the Material 3 design's shared book atoms ──
+// These composables render ONLY under the Material 3 design
+// (callers branch on LocalDesignState before reaching them);
+// the Nocturne card above is untouched. S6's three atoms: the
+// cover thumbnail (with the title-cover fallback), the wide
+// book card (R1's shelf card) and the poster card (R20/R33
+// only). No glow, no cover-shadow, no glass in any atom — a
+// cover takes the shape of the component that carries it.
+
+/**
+ * S6 cover thumbnail: the cover image in the carrying
+ * component's shape (medium by default), or — when there is no
+ * cover, or the cover fails to load — the title-cover fallback:
+ * a filled `surfaceContainerHigh` block bearing the title in
+ * titleSmall and the author in bodySmall.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun M3CoverThumbnail(
+    title: String,
+    author: String?,
+    coverModel: Any?,
+    modifier: Modifier = Modifier,
+    shape: androidx.compose.ui.graphics.Shape = androidx.compose.material3.MaterialTheme.shapes.medium
+) {
+    Box(modifier.clip(shape)) {
+        if (coverModel != null) {
+            coil.compose.SubcomposeAsyncImage(
+                model = coverModel,
+                contentDescription = title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                loading = {
+                    M3TitleCoverFallback(
+                        title = title, author = author,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                },
+                error = {
+                    M3TitleCoverFallback(
+                        title = title, author = author,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            )
+        } else {
+            M3TitleCoverFallback(
+                title = title, author = author,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+/** S6's title-cover fallback block (see [M3CoverThumbnail]). */
+@Composable
+fun M3TitleCoverFallback(
+    title: String,
+    author: String?,
+    modifier: Modifier = Modifier
+) {
+    androidx.compose.material3.Surface(
+        color = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
+        modifier = modifier
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(8.dp),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                title,
+                style = androidx.compose.material3.MaterialTheme.typography.titleSmall,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (!author.isNullOrBlank()) {
+                Text(
+                    author,
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/**
+ * S6 book card — R1's wide filled card: cover thumbnail at
+ * leading, emphasized title, author, and the caller's status /
+ * progress line, with an optional trailing slot (the shelf's
+ * overflow menu lives there). Long-press is the shelf's
+ * multi-select door.
+ */
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class
+)
+@Composable
+fun M3BookCard(
+    title: String,
+    author: String?,
+    coverModel: Any?,
+    supportingLine: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+    progressFraction: Float? = null,
+    selected: Boolean = false,
+    trailingContent: (@Composable () -> Unit)? = null
+) {
+    androidx.compose.material3.Card(
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = if (selected) {
+                androidx.compose.material3.MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerLow
+            }
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+    ) {
+        androidx.compose.foundation.layout.Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
+        ) {
+            M3CoverThumbnail(
+                title = title,
+                author = author,
+                coverModel = coverModel,
+                modifier = Modifier
+                    .width(52.dp)
+                    .height(76.dp)
+            )
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    title,
+                    style = androidx.compose.material3.MaterialTheme.typography.titleSmallEmphasized,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (!author.isNullOrBlank()) {
+                    Text(
+                        author,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (supportingLine != null) {
+                    Text(
+                        supportingLine,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (progressFraction != null && progressFraction > 0f) {
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { progressFraction.coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
+                    )
+                }
+            }
+            if (trailingContent != null) {
+                trailingContent()
+            }
+        }
+    }
+}
+
+/**
+ * S6 poster card — cover-over-title, used ONLY by R20's
+ * catalogue grid and R33's generated-art strip: a filled card
+ * whose media is the cover (2:3) with title + metadata inside
+ * the card under it.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun M3PosterCard(
+    title: String,
+    author: String?,
+    coverModel: Any?,
+    metaLine: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    progressFraction: Float? = null
+) {
+    androidx.compose.material3.Card(
+        onClick = onClick,
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            M3CoverThumbnail(
+                title = title,
+                author = author,
+                coverModel = coverModel,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(2f / 3f),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(0.dp)
+            )
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    title,
+                    style = androidx.compose.material3.MaterialTheme.typography.titleSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (metaLine != null) {
+                    Text(
+                        metaLine,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (progressFraction != null && progressFraction > 0f) {
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { progressFraction.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun rememberSizedPosterCover(model: Any?, widthDp: Float): ImageRequest? {
     val context = LocalContext.current

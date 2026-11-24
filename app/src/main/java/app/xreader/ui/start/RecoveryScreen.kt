@@ -60,6 +60,22 @@ fun RecoveryScreen(
     onContinue: () -> Unit,
     onSafeAppearance: (() -> Unit)? = null
 ) {
+    // Code 121 (S39/T17): under Material 3, recovery is an M3
+    // document page — headline, the crash note in a SCROLLING
+    // filled card, and a PINNED button group (Continue filled /
+    // Safe appearance tonal). The note can never push the doors
+    // off-screen. Safe appearance here is design-scoped: the
+    // shell's handler resets only M3's own settings and never
+    // writes Nocturne's Tinted glass. The Nocturne form below
+    // is untouched.
+    if (app.xreader.ui.theme.isMaterial3Design()) {
+        RecoveryScreenM3(
+            note = note,
+            onContinue = onContinue,
+            onSafeAppearance = onSafeAppearance
+        )
+        return
+    }
     Surface(
         color = MaterialTheme.colorScheme.background,
         contentColor = MaterialTheme.colorScheme.onBackground,
@@ -130,6 +146,132 @@ fun RecoveryScreen(
                         "frosted glass), safe appearance switches to plain " +
                         "tinted surfaces before opening, so it can't happen " +
                         "again on the way in.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/** S39 under Material 3: a document page. The crash note sits
+ * in a filled card that takes the flexible space and scrolls
+ * INSIDE itself; the button group is pinned beneath it, so a
+ * long note can never push the doors off-screen (the settled
+ * trap, designed out). No glass machinery is composed here
+ * either — a broken appearance state cannot re-crash it. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun RecoveryScreenM3(
+    note: String?,
+    onContinue: () -> Unit,
+    onSafeAppearance: (() -> Unit)?
+) {
+    androidx.compose.material3.Surface(
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                "Something went wrong",
+                style = MaterialTheme.typography.headlineMediumEmphasized
+            )
+            Text(
+                "Xreader closed unexpectedly last time. Your books, " +
+                    "progress and settings are safe — they're stored " +
+                    "separately from the part that failed.",
+                style = MaterialTheme.typography.bodyLarge
+            )
+            if (!note.isNullOrBlank()) {
+                androidx.compose.material3.Card(
+                    shape = MaterialTheme.shapes.medium,
+                    colors = androidx.compose.material3.CardDefaults
+                        .cardColors(
+                            containerColor =
+                                MaterialTheme.colorScheme
+                                    .surfaceContainer
+                        ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            "Crash note",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            note.trim(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant,
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(rememberScrollState())
+                        )
+                        Text(
+                            "Only the time and the kind of error — " +
+                                "never your books or keys. You can " +
+                                "share this note if you report the " +
+                                "problem.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            // The pinned button group: Continue (filled) /
+            // Safe appearance (tonal) — always on screen.
+            androidx.compose.material3.ButtonGroup(
+                overflowIndicator = {},
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                customItem(
+                    buttonGroupContent = {
+                        androidx.compose.material3.Button(
+                            onClick = onContinue,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Continue to your library")
+                        }
+                    },
+                    menuContent = {}
+                )
+                if (onSafeAppearance != null) {
+                    customItem(
+                        buttonGroupContent = {
+                            androidx.compose.material3.FilledTonalButton(
+                                onClick = onSafeAppearance,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Safe appearance")
+                            }
+                        },
+                        menuContent = {}
+                    )
+                }
+            }
+            if (onSafeAppearance != null) {
+                Text(
+                    "Safe appearance resets this design's appearance " +
+                        "settings to their defaults before opening, so " +
+                        "a broken appearance can't happen again on the " +
+                        "way in. It changes nothing in the other design.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

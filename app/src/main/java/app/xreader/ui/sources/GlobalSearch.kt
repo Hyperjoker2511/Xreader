@@ -469,3 +469,185 @@ class GlobalSearchViewModel(private val container: AppContainer) : ViewModel() {
             }
     }
 }
+
+/**
+ * Code 121 (W4, scratch S8): the Material 3 global-search
+ * results — the search view under Explore's search bar. Results
+ * are grouped by source (header: avatar + name + count), hits
+ * are R1-style wide cards with the in-library badge, the library
+ * and downloaded-content matches stand as their own groups
+ * first, and the streaming states are honest: while the fan-out
+ * runs, a wavy line + the progress words; a source that failed
+ * gets a plain failure line and the Retry door re-runs the
+ * search. (The view model tracks failures by source NAME, so
+ * the failed lines name the sources and Retry is the one
+ * search-level door — no per-source retry exists to wire.)
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+internal fun M3SearchResults(
+    state: GlobalSearchUiState,
+    coverFile: (String?) -> java.io.File?,
+    onOpenLibraryBook: (Long) -> Unit,
+    onOpenGroupBook: (GlobalSearchGroup, app.xreader.extensionapi.SourceBook) -> Unit,
+    onOpenSource: (extensionId: Long, sourceId: String) -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    androidx.compose.foundation.lazy.LazyColumn(
+        modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = androidx.compose.foundation.layout
+            .PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        if (state.searching) {
+            item(key = "m3gs-progress") {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    androidx.compose.material3.LinearWavyProgressIndicator(
+                        Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        SearchProgressLine.text(
+                            done = state.progressDone,
+                            total = state.progressTotal,
+                            searchingLibrary = state.searchingLibrary
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        if (state.libraryBooks.isNotEmpty()) {
+            item(key = "m3gs-lib-head") {
+                M3GroupHeader("In your library")
+            }
+            items(state.libraryBooks, key = { "m3gs-lib-${it.id}" }) { book ->
+                M3WideBookCard(
+                    title = book.title,
+                    author = book.author.takeIf { it.isNotBlank() },
+                    coverModel = coverFile(book.coverPath)
+                        ?.takeIf { it.exists() },
+                    inLibrary = true,
+                    onClick = { onOpenLibraryBook(book.id) }
+                )
+            }
+        }
+        if (state.contentHits.isNotEmpty()) {
+            item(key = "m3gs-hits-head") {
+                M3GroupHeader("Inside your downloads")
+            }
+            items(
+                state.contentHits,
+                key = { "m3gs-hit-${it.bookId}-${it.chapterIndex}" }
+            ) { hit ->
+                M3WideBookCard(
+                    title = hit.bookTitle,
+                    author = hit.chapterTitle,
+                    coverModel = null,
+                    inLibrary = true,
+                    onClick = { onOpenLibraryBook(hit.bookId) }
+                )
+            }
+        }
+        for (group in state.groups) {
+            item(key = "m3gs-head-${group.extensionId}-${group.sourceId}") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
+                ) {
+                    M3InitialAvatar(group.sourceName, size = 32)
+                    Text(
+                        group.sourceName,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 10.dp),
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style
+                            .TextOverflow.Ellipsis
+                    )
+                    Text(
+                        "${group.books.size}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            items(
+                group.books,
+                key = { "m3gs-book-${group.sourceId}-${it.id}" }
+            ) { book ->
+                val workKey = app.xreader.data.extension.WorkMatcher
+                    .normaliseTitle(book.title)
+                M3WideBookCard(
+                    title = book.title,
+                    author = book.author?.takeIf { it.isNotBlank() },
+                    coverModel = book.coverUrl
+                        ?.takeIf { it.isNotBlank() },
+                    inLibrary = workKey in state.libraryKeys,
+                    onClick = { onOpenGroupBook(group, book) }
+                )
+            }
+            item(key = "m3gs-more-${group.extensionId}-${group.sourceId}") {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        onOpenSource(group.extensionId, group.sourceId)
+                    }
+                ) { Text("More from ${group.sourceName}") }
+            }
+        }
+        if (state.failedSources.isNotEmpty()) {
+            item(key = "m3gs-failed-head") {
+                M3GroupHeader("Couldn't be searched")
+            }
+            items(state.failedSources, key = { "m3gs-failed-$it" }) { name ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "$name didn't answer.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f)
+                    )
+                    androidx.compose.material3.TextButton(
+                        onClick = onRetry
+                    ) { Text("Retry") }
+                }
+            }
+        }
+        if (state.didntAnswerSources.isNotEmpty() && !state.searching) {
+            item(key = "m3gs-slow") {
+                Text(
+                    "Some sources didn't answer in time: " +
+                        state.didntAnswerSources.joinToString(", ") + ".",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        if (state.notReachedSources.isNotEmpty() && !state.searching) {
+            item(key = "m3gs-notreached") {
+                Text(
+                    "Not reached in this search: " +
+                        state.notReachedSources.joinToString(", ") + ".",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        if (!state.searching && state.searched &&
+            state.groups.isEmpty() && state.libraryBooks.isEmpty() &&
+            state.contentHits.isEmpty()
+        ) {
+            item(key = "m3gs-empty") {
+                Text(
+                    "Nothing found for “${state.query}”. " +
+                        "Try a different word, or check the spelling.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 16.dp)
+                )
+            }
+        }
+    }
+}

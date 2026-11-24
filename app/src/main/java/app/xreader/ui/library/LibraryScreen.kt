@@ -55,8 +55,11 @@ import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlaylistRemove
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -72,6 +75,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -284,6 +288,27 @@ fun LibraryScreen(
         } else {
             quickActionsFor = shelfBook
         }
+    }
+
+    // Code 121 (R1/S4): the Material 3 design's Library is a
+    // separate composition (M3LibraryContent, below) — medium
+    // flexible bar, Continue carousel, status PrimaryTabRow,
+    // wide filled shelf cards, the S4 sheet. The Nocturne
+    // composition below is byte-identical to before this build.
+    if (m3Design) {
+        M3LibraryContent(
+            state = state,
+            candidates = candidates,
+            viewModel = viewModel,
+            coverFile = coverFile,
+            designState = designState,
+            onAddBook = onAddBook,
+            onOpenBook = onOpenBook,
+            onContinueReading = onContinueReading,
+            onOpenAddList = onOpenAddList,
+            onOpenUpdates = onOpenUpdates
+        )
+        return
     }
 
     Column(
@@ -2379,4 +2404,896 @@ private fun ManageShelvesDialog(
             }
         )
     }
+}
+
+// ── Code 121 (R1 + S4): the Material 3 Library ─────────────
+// A separate composition from the Nocturne Library above: the
+// Nocturne path never reaches this code, and this code reads
+// only Material 3 components + the shared atoms (S6).
+
+/** R1's status tabs: All + the five true statuses ONLY.
+ * Favourites and Downloaded are flags — they live only in
+ * S4's Show checkboxes, never here. The string keys are the
+ * LibraryListLogic filter keys; PLAN_TO_READ is filtered
+ * locally below (the shared logic has no key for it). */
+private val m3StatusTabs: List<Pair<String, String>> = listOf(
+    "ALL" to "All",
+    "READING" to "Reading",
+    "PLAN_TO_READ" to "Plan to read",
+    "COMPLETED" to "Completed",
+    "ON_HOLD" to "On hold",
+    "DROPPED" to "Dropped"
+)
+
+/** S4's sort list (spec order). AUTHOR and PROGRESS have no
+ * LibrarySort key, so the M3 shelf orders locally for those. */
+private enum class M3LibSort(val label: String) {
+    RECENTLY_READ("Recently read"),
+    TITLE("Title A–Z"),
+    AUTHOR("Author A–Z"),
+    RECENTLY_ADDED("Recently added"),
+    PROGRESS("Progress")
+}
+
+private fun m3StatusLabel(
+    status: app.xreader.data.library.ReadingStatus
+): String = when (status) {
+    app.xreader.data.library.ReadingStatus.READING -> "Reading"
+    app.xreader.data.library.ReadingStatus.PLAN_TO_READ -> "Plan to read"
+    app.xreader.data.library.ReadingStatus.COMPLETED -> "Completed"
+    app.xreader.data.library.ReadingStatus.ON_HOLD -> "On hold"
+    app.xreader.data.library.ReadingStatus.DROPPED -> "Dropped"
+    app.xreader.data.library.ReadingStatus.NONE -> ""
+}
+
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+private fun M3LibraryContent(
+    state: LibraryUiState,
+    candidates: List<CandidateState>,
+    viewModel: LibraryViewModel,
+    coverFile: (String?) -> File?,
+    designState: app.xreader.data.prefs.DesignState,
+    onAddBook: () -> Unit,
+    onOpenBook: (Long) -> Unit,
+    onContinueReading: (bookId: Long, chapterIndex: Int) -> Unit,
+    onOpenAddList: () -> Unit,
+    onOpenUpdates: () -> Unit
+) {
+    var tabKey by remember { mutableStateOf("ALL") }
+    var m3Sort by remember { mutableStateOf(M3LibSort.RECENTLY_READ) }
+    var downloadedOnly by remember { mutableStateOf(false) }
+    var favouritesOnly by remember { mutableStateOf(false) }
+    var sheetOpen by remember { mutableStateOf(false) }
+    var searchOpen by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var addMenuOpen by remember { mutableStateOf(false) }
+    var menuFor by remember { mutableStateOf<ShelfBook?>(null) }
+    var selection by remember { mutableStateOf<Set<Long>?>(null) }
+    var removeTarget by remember { mutableStateOf<ShelfBook?>(null) }
+    var bulkRemoveOpen by remember { mutableStateOf(false) }
+    var bulkRemoveSize by remember { mutableStateOf<String?>(null) }
+
+    val nowMillis = remember { System.currentTimeMillis() }
+    val sideBooks = remember(state.books, state.bookKinds, state.librarySide) {
+        app.xreader.data.library.LibrarySplit.onSide(
+            state.books, state.librarySide
+        ) { shelf ->
+            app.xreader.data.library.LibrarySplit
+                .kindOf(shelf.book.id, state.bookKinds)
+        }
+    }
+    // Continue Reading: every in-progress book on this side,
+    // most recently opened first. The hero (state.continueReading)
+    // is the only book whose chapter index the state carries —
+    // its card shows the real chapter line and resumes in place;
+    // other cards show their real progress and open the book.
+    val continueBooks = remember(sideBooks, state.continueReading) {
+        val inProgress = sideBooks
+            .filter { it.fraction > 0f && it.fraction < 1f }
+            .sortedByDescending { it.book.lastOpenedAt ?: 0L }
+        val hero = state.continueReading
+        if (hero != null && inProgress.any { it.book.id == hero.book.id }) {
+            listOf(hero) + inProgress.filter { it.book.id != hero.book.id }
+        } else {
+            inProgress
+        }
+    }
+    val visibleBooks = remember(
+        sideBooks, state.metas, state.favourites, state.downloadCounts,
+        tabKey, m3Sort, downloadedOnly, favouritesOnly, query
+    ) {
+        val filtered = sideBooks.filter { shelf ->
+            val status = state.metas[shelf.book.id]?.status
+                ?: app.xreader.data.library.ReadingStatus.NONE
+            val matchesTab = when (tabKey) {
+                "READING" -> status ==
+                    app.xreader.data.library.ReadingStatus.READING ||
+                    (status == app.xreader.data.library.ReadingStatus.NONE &&
+                        shelf.fraction > 0f && !shelf.book.finished)
+                "PLAN_TO_READ" -> status ==
+                    app.xreader.data.library.ReadingStatus.PLAN_TO_READ
+                "COMPLETED" -> status ==
+                    app.xreader.data.library.ReadingStatus.COMPLETED ||
+                    shelf.book.finished
+                "ON_HOLD" -> status ==
+                    app.xreader.data.library.ReadingStatus.ON_HOLD
+                "DROPPED" -> status ==
+                    app.xreader.data.library.ReadingStatus.DROPPED
+                else -> true
+            }
+            val matchesFlags =
+                (!downloadedOnly ||
+                    (state.downloadCounts[shelf.book.id]?.downloaded ?: 0) > 0) &&
+                    (!favouritesOnly || shelf.book.id in state.favourites)
+            val matchesQuery = query.isBlank() ||
+                shelf.book.title.lowercase().contains(query.trim().lowercase()) ||
+                shelf.book.author.lowercase().contains(query.trim().lowercase())
+            matchesTab && matchesFlags && matchesQuery
+        }
+        when (m3Sort) {
+            M3LibSort.RECENTLY_READ ->
+                filtered.sortedByDescending { it.book.lastOpenedAt ?: 0L }
+            M3LibSort.TITLE ->
+                filtered.sortedBy { it.book.title.lowercase() }
+            M3LibSort.AUTHOR ->
+                filtered.sortedBy { it.book.author.lowercase() }
+            M3LibSort.RECENTLY_ADDED ->
+                filtered.sortedByDescending { it.book.addedAt }
+            M3LibSort.PROGRESS ->
+                filtered.sortedByDescending { it.fraction }
+        }
+    }
+
+    val scrollBehavior = androidx.compose.material3.TopAppBarDefaults
+        .exitUntilCollapsedScrollBehavior()
+    val libraryEmpty = !state.loading && state.books.isEmpty() &&
+        candidates.isEmpty()
+    androidx.compose.material3.Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            androidx.compose.material3.MediumFlexibleTopAppBar(
+                title = {
+                    Text(
+                        "Library",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                },
+                scrollBehavior = scrollBehavior,
+                actions = {
+                    androidx.compose.material3.IconButton(
+                        onClick = { searchOpen = !searchOpen }
+                    ) {
+                        androidx.compose.material3.Icon(
+                            Icons.Filled.Search,
+                            contentDescription = "Search your library"
+                        )
+                    }
+                    Box {
+                        androidx.compose.material3.IconButton(
+                            onClick = { addMenuOpen = true }
+                        ) {
+                            androidx.compose.material3.Icon(
+                                Icons.Filled.Add,
+                                contentDescription = "Add a book"
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = addMenuOpen,
+                            onDismissRequest = { addMenuOpen = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Import a file") },
+                                onClick = {
+                                    addMenuOpen = false
+                                    onAddBook()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Add a list") },
+                                onClick = {
+                                    addMenuOpen = false
+                                    onOpenAddList()
+                                }
+                            )
+                        }
+                    }
+                }
+            )
+        },
+        floatingActionButton = {
+            if (libraryEmpty) {
+                androidx.compose.material3.ExtendedFloatingActionButton(
+                    onClick = onAddBook,
+                    icon = {
+                        androidx.compose.material3.Icon(
+                            Icons.Filled.Add,
+                            contentDescription = null
+                        )
+                    },
+                    text = { Text("Add a book") }
+                )
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            // The Novels | Manga side switch — one segmented
+            // control, the same split the Nocturne page makes.
+            androidx.compose.material3.SingleChoiceSegmentedButtonRow(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                androidx.compose.material3.SegmentedButton(
+                    selected = state.librarySide ==
+                        app.xreader.data.extension.MediaKind.TEXT,
+                    onClick = {
+                        viewModel.setLibrarySide(
+                            app.xreader.data.extension.MediaKind.TEXT
+                        )
+                    },
+                    shape = androidx.compose.material3.SegmentedButtonDefaults
+                        .itemShape(index = 0, count = 2)
+                ) { Text("Novels") }
+                androidx.compose.material3.SegmentedButton(
+                    selected = state.librarySide ==
+                        app.xreader.data.extension.MediaKind.MANGA,
+                    onClick = {
+                        viewModel.setLibrarySide(
+                            app.xreader.data.extension.MediaKind.MANGA
+                        )
+                    },
+                    shape = androidx.compose.material3.SegmentedButtonDefaults
+                        .itemShape(index = 1, count = 2)
+                ) { Text("Manga") }
+            }
+            if (searchOpen) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search your library — title or author") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+            }
+            // Selection bar (long-press multi-select): count +
+            // the batch actions, per the lists guidance.
+            selection?.let { picked ->
+                androidx.compose.material3.Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        Modifier
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            "${picked.size} selected",
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                        TextButton(onClick = {
+                            viewModel.bulkSetFavourite(picked, true)
+                        }) { Text("Favourite") }
+                        TextButton(onClick = {
+                            viewModel.bulkDownload(picked)
+                        }) { Text("Download") }
+                        TextButton(onClick = {
+                            viewModel.bulkSetStatus(
+                                picked,
+                                app.xreader.data.library.ReadingStatus.COMPLETED
+                            )
+                        }) { Text("Mark read") }
+                        TextButton(onClick = {
+                            bulkRemoveSize = null
+                            bulkRemoveOpen = true
+                        }) { Text("Remove…") }
+                        TextButton(onClick = { selection = null }) {
+                            Text("Done")
+                        }
+                    }
+                }
+            }
+            if (state.loading && state.books.isEmpty() && candidates.isEmpty()) {
+                LoadingState(
+                    whatIsHappening = "Loading your library…",
+                    modifier = Modifier.weight(1f)
+                )
+                return@Column
+            }
+            if (libraryEmpty) {
+                // S40 empty state: what would fill it, one body
+                // line, the door (the extended FAB above).
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        "No books yet",
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                    Text(
+                        "Add your first book (EPUB, PDF, TXT and more) " +
+                            "and it will live here, ready to read.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                return@Column
+            }
+            // The status tab row + its trailing sort door (S4).
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val selectedIndex = m3StatusTabs.indexOfFirst {
+                    it.first == tabKey
+                }.coerceAtLeast(0)
+                androidx.compose.material3.PrimaryScrollableTabRow(
+                    selectedTabIndex = selectedIndex,
+                    modifier = Modifier.weight(1f),
+                    edgePadding = 16.dp
+                ) {
+                    m3StatusTabs.forEachIndexed { index, (key, label) ->
+                        androidx.compose.material3.Tab(
+                            selected = index == selectedIndex,
+                            onClick = { tabKey = key },
+                            text = { Text(label) }
+                        )
+                    }
+                }
+                androidx.compose.material3.IconButton(
+                    onClick = { sheetOpen = true }
+                ) {
+                    androidx.compose.material3.Icon(
+                        Icons.Filled.Sort,
+                        contentDescription = "Filter and sort"
+                    )
+                }
+            }
+            androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+                isRefreshing = state.pullRefreshing,
+                onRefresh = { viewModel.pullRefresh() },
+                modifier = Modifier.weight(1f)
+            ) {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(
+                        start = 16.dp, end = 16.dp,
+                        top = 12.dp, bottom = 88.dp
+                    )
+                ) {
+                    if (designState.libraryContinueRail &&
+                        continueBooks.isNotEmpty() && tabKey == "ALL" &&
+                        !downloadedOnly && !favouritesOnly && query.isBlank()
+                    ) {
+                        item(key = "m3-continue-header") {
+                            Text(
+                                "Continue reading",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.padding(bottom = 2.dp)
+                            )
+                        }
+                        item(key = "m3-continue-carousel") {
+                            val carouselState =
+                                androidx.compose.material3.carousel
+                                    .rememberCarouselState {
+                                        continueBooks.size
+                                    }
+                            androidx.compose.material3.carousel
+                                .HorizontalUncontainedCarousel(
+                                    state = carouselState,
+                                    itemWidth = 300.dp,
+                                    itemSpacing = 12.dp,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(124.dp)
+                                ) { index ->
+                                    val hero = continueBooks[index]
+                                    val isHero = state.continueReading?.book?.id ==
+                                        hero.book.id
+                                    androidx.compose.material3.Card(
+                                        onClick = {
+                                            if (selection != null) {
+                                                // Selection mode: cards toggle.
+                                                val current = selection
+                                                if (current != null) {
+                                                    selection =
+                                                        if (hero.book.id in current) {
+                                                            (current - hero.book.id)
+                                                                .ifEmpty { null }
+                                                        } else {
+                                                            current + hero.book.id
+                                                        }
+                                                }
+                                            } else if (isHero) {
+                                                onContinueReading(
+                                                    hero.book.id,
+                                                    state.continueChapterIndex
+                                                )
+                                            } else {
+                                                viewModel.markSeen(hero.book.id)
+                                                onOpenBook(hero.book.id)
+                                            }
+                                        },
+                                        colors = androidx.compose.material3
+                                            .CardDefaults.cardColors(
+                                                containerColor = MaterialTheme
+                                                    .colorScheme.surfaceContainerLow
+                                            ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(124.dp)
+                                    ) {
+                                        Row(
+                                            Modifier
+                                                .fillMaxSize()
+                                                .padding(12.dp),
+                                            horizontalArrangement =
+                                                Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            app.xreader.ui.common.M3CoverThumbnail(
+                                                title = hero.book.title,
+                                                author = hero.book.author
+                                                    .takeIf { it.isNotBlank() },
+                                                coverModel = coverFile(
+                                                    hero.book.coverPath
+                                                )?.takeIf { it.exists() }
+                                                    ?: hero.book.coverUrl
+                                                        ?.takeIf { it.isNotBlank() },
+                                                modifier = Modifier
+                                                    .width(68.dp)
+                                                    .height(100.dp)
+                                            )
+                                            Column(
+                                                Modifier.weight(1f),
+                                                verticalArrangement =
+                                                    Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Text(
+                                                    hero.book.title,
+                                                    style = MaterialTheme.typography
+                                                        .titleMediumEmphasized,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    listOfNotNull(
+                                                        if (isHero) {
+                                                            if (hero.book.localFormat ==
+                                                                app.xreader.data.db
+                                                                    .BookFormat.PDF
+                                                            ) {
+                                                                "Page ${state.continueChapterIndex + 1}"
+                                                            } else {
+                                                                "Chapter ${state.continueChapterIndex + 1}"
+                                                            }
+                                                        } else {
+                                                            null
+                                                        },
+                                                        "${(hero.fraction * 100).toInt()}%",
+                                                        if (hero.book.totalChapters > 0) {
+                                                            "${hero.book.totalChapters} chapters"
+                                                        } else {
+                                                            null
+                                                        },
+                                                        timeLeftSuffix(hero, state.wpm)
+                                                            .removePrefix(" • ")
+                                                            .takeIf { it.isNotBlank() }
+                                                    ).joinToString(" · "),
+                                                    style = MaterialTheme.typography
+                                                        .bodySmall,
+                                                    color = MaterialTheme.colorScheme
+                                                        .onSurfaceVariant
+                                                )
+                                                androidx.compose.material3
+                                                    .LinearProgressIndicator(
+                                                        progress = {
+                                                            hero.fraction.coerceIn(0f, 1f)
+                                                        },
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    )
+                                            }
+                                        }
+                                    }
+                                }
+                        }
+                    }
+                    if (candidates.isNotEmpty()) {
+                        item(key = "m3-import-header") {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    "Adding books",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                TextButton(onClick = {
+                                    viewModel.clearFinishedCandidates()
+                                }) { Text("Clear finished") }
+                            }
+                        }
+                        items(candidates, key = { "m3-cand-${it.token()}" }) { candidateState ->
+                            ImportCandidateCard(
+                                state = candidateState,
+                                onImport = { viewModel.importCandidate(it) },
+                                onDismiss = { viewModel.dismissCandidate(it) },
+                                onPassword = { cand, pw ->
+                                    viewModel.importCandidate(cand, pw)
+                                }
+                            )
+                        }
+                    }
+                    if (visibleBooks.isEmpty() && candidates.isEmpty()) {
+                        item(key = "m3-shelf-empty") {
+                            Text(
+                                if (sideBooks.isEmpty()) {
+                                    if (state.librarySide ==
+                                        app.xreader.data.extension.MediaKind.MANGA
+                                    ) {
+                                        "No manga here yet. Manga lives in " +
+                                            "Explore — open the Keiyoushi " +
+                                            "catalogue, add a series, and it " +
+                                            "will live on this side."
+                                    } else {
+                                        "No novels on this side — your books " +
+                                            "are waiting under Manga."
+                                    }
+                                } else {
+                                    "Nothing matches these filters. " +
+                                        "Change the tab or the Show filters " +
+                                        "to see more of your library."
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                        }
+                    }
+                    items(visibleBooks, key = { "m3-book-${it.book.id}" }) { shelfBook ->
+                        val status = state.metas[shelfBook.book.id]?.status
+                            ?: app.xreader.data.library.ReadingStatus.NONE
+                        val downloaded = state.downloadCounts[shelfBook.book.id]
+                            ?.downloaded ?: 0
+                        val supporting = listOfNotNull(
+                            m3StatusLabel(status).takeIf { it.isNotBlank() },
+                            if (shelfBook.fraction > 0f) {
+                                "${(shelfBook.fraction * 100).toInt()}%"
+                            } else {
+                                null
+                            },
+                            if (downloaded > 0) "$downloaded downloaded" else null,
+                            if (shelfBook.book.id in state.favourites) {
+                                "Favourite"
+                            } else {
+                                null
+                            }
+                        ).joinToString(" · ")
+                        app.xreader.ui.common.M3BookCard(
+                            title = shelfBook.book.title,
+                            author = shelfBook.book.author
+                                .takeIf { it.isNotBlank() },
+                            coverModel = coverFile(shelfBook.book.coverPath)
+                                ?.takeIf { it.exists() }
+                                ?: shelfBook.book.coverUrl
+                                    ?.takeIf { it.isNotBlank() },
+                            supportingLine = supporting.ifBlank { null },
+                            progressFraction = if (
+                                designState.libraryProgressOnCovers &&
+                                shelfBook.fraction > 0f
+                            ) {
+                                shelfBook.fraction
+                            } else {
+                                null
+                            },
+                            selected = selection?.contains(shelfBook.book.id) == true,
+                            onClick = {
+                                val current = selection
+                                if (current != null) {
+                                    selection = if (shelfBook.book.id in current) {
+                                        (current - shelfBook.book.id).ifEmpty { null }
+                                    } else {
+                                        current + shelfBook.book.id
+                                    }
+                                } else {
+                                    viewModel.markSeen(shelfBook.book.id)
+                                    onOpenBook(shelfBook.book.id)
+                                }
+                            },
+                            onLongClick = {
+                                val current = selection
+                                selection = if (current == null) {
+                                    setOf(shelfBook.book.id)
+                                } else if (shelfBook.book.id in current) {
+                                    (current - shelfBook.book.id).ifEmpty { null }
+                                } else {
+                                    current + shelfBook.book.id
+                                }
+                            },
+                            trailingContent = {
+                                Box {
+                                    androidx.compose.material3.IconButton(
+                                        onClick = { menuFor = shelfBook }
+                                    ) {
+                                        androidx.compose.material3.Icon(
+                                            Icons.Filled.MoreVert,
+                                            contentDescription =
+                                                "Actions for ${shelfBook.book.title}"
+                                        )
+                                    }
+                                    DropdownMenu(
+                                        expanded = menuFor?.book?.id ==
+                                            shelfBook.book.id,
+                                        onDismissRequest = { menuFor = null }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("Open book page") },
+                                            onClick = {
+                                                menuFor = null
+                                                viewModel.markSeen(shelfBook.book.id)
+                                                onOpenBook(shelfBook.book.id)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Download") },
+                                            onClick = {
+                                                menuFor = null
+                                                viewModel.bulkDownload(
+                                                    listOf(shelfBook.book.id)
+                                                )
+                                            }
+                                        )
+                                        androidx.compose.material3
+                                            .HorizontalDivider()
+                                        // Change status: the five
+                                        // statuses, current checked.
+                                        listOf(
+                                            app.xreader.data.library
+                                                .ReadingStatus.READING,
+                                            app.xreader.data.library
+                                                .ReadingStatus.PLAN_TO_READ,
+                                            app.xreader.data.library
+                                                .ReadingStatus.COMPLETED,
+                                            app.xreader.data.library
+                                                .ReadingStatus.ON_HOLD,
+                                            app.xreader.data.library
+                                                .ReadingStatus.DROPPED
+                                        ).forEach { target ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        (if (status == target) {
+                                                            "✓ "
+                                                        } else {
+                                                            ""
+                                                        }) + m3StatusLabel(target)
+                                                    )
+                                                },
+                                                onClick = {
+                                                    menuFor = null
+                                                    viewModel.bulkSetStatus(
+                                                        listOf(shelfBook.book.id),
+                                                        target
+                                                    )
+                                                }
+                                            )
+                                        }
+                                        androidx.compose.material3
+                                            .HorizontalDivider()
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    "Remove from library…",
+                                                    color = MaterialTheme.colorScheme
+                                                        .error
+                                                )
+                                            },
+                                            onClick = {
+                                                menuFor = null
+                                                removeTarget = shelfBook
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // S4 — the filter/sort sheet: Sort radio list, Show
+    // checkboxes (the flags' only home), "New chapters" door.
+    if (sheetOpen) {
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { sheetOpen = false },
+            sheetState = androidx.compose.material3
+                .rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 8.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    "Sort",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                M3LibSort.entries.forEach { option ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { m3Sort = option }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        androidx.compose.material3.RadioButton(
+                            selected = m3Sort == option,
+                            onClick = { m3Sort = option }
+                        )
+                        Text(
+                            option.label,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+                Text(
+                    "Show",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { downloadedOnly = !downloadedOnly }
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    androidx.compose.material3.Checkbox(
+                        checked = downloadedOnly,
+                        onCheckedChange = { downloadedOnly = it }
+                    )
+                    Text(
+                        "Downloaded only",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { favouritesOnly = !favouritesOnly }
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    androidx.compose.material3.Checkbox(
+                        checked = favouritesOnly,
+                        onCheckedChange = { favouritesOnly = it }
+                    )
+                    Text(
+                        "Favourites only",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+                androidx.compose.material3.HorizontalDivider(
+                    Modifier.padding(vertical = 12.dp)
+                )
+                val newChapterCounts = state.metas.values
+                    .mapNotNull { it.newChapterCount.takeIf { n -> n > 0 } }
+                androidx.compose.material3.ListItem(
+                    headlineContent = { Text("New chapters") },
+                    supportingContent = {
+                        Text(
+                            if (newChapterCounts.isNotEmpty()) {
+                                "${newChapterCounts.sum()} new across " +
+                                    "${newChapterCounts.size} book(s)"
+                            } else {
+                                "Nothing new right now"
+                            }
+                        )
+                    },
+                    leadingContent = {
+                        androidx.compose.material3.Icon(
+                            Icons.Filled.NewReleases,
+                            contentDescription = null
+                        )
+                    },
+                    modifier = Modifier.clickable {
+                        sheetOpen = false
+                        onOpenUpdates()
+                    }
+                )
+            }
+        }
+    }
+
+    // Bulk remove (selection bar's Remove door): the confirm
+    // states the exact count + downloaded size, as shipped.
+    if (bulkRemoveOpen) {
+        val picked = selection ?: emptySet()
+        val pickedBooks = state.books.filter { it.book.id in picked }
+        LaunchedEffect(picked) {
+            val bytes = viewModel.bulkDownloadedSizeBytes(picked)
+            bulkRemoveSize =
+                app.xreader.data.files.StorageMeter.formatBytes(bytes)
+        }
+        AlertDialog(
+            onDismissRequest = { bulkRemoveOpen = false },
+            title = { Text("Remove ${picked.size} book(s)?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Removing also removes reading progress and bookmarks. " +
+                            "Downloaded chapters take " +
+                            (bulkRemoveSize ?: "…") + "."
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    DialogDangerOption(
+                        label = "Remove books only",
+                        onClick = {
+                            bulkRemoveOpen = false
+                            selection = null
+                            viewModel.bulkRemoveBooks(
+                                pickedBooks.map { it.book }, deleteFiles = false
+                            )
+                        }
+                    )
+                    DialogDangerOption(
+                        label = "Remove books and downloads",
+                        onClick = {
+                            bulkRemoveOpen = false
+                            selection = null
+                            viewModel.bulkRemoveBooks(
+                                pickedBooks.map { it.book }, deleteFiles = true
+                            )
+                        }
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { bulkRemoveOpen = false }) {
+                    Text("Keep them")
+                }
+            }
+        )
+    }
+
+    // S5's one delete dialog, shared with the Nocturne path.
+    app.xreader.ui.common.BookDeleteDialogs(
+        book = removeTarget?.book,
+        downloadedSizeBytes = { viewModel.downloadedSizeBytes(it) },
+        onDismiss = { removeTarget = null },
+        onRemoveBook = { book, deleteFiles ->
+            viewModel.removeBook(book, deleteFiles)
+        },
+        onRemoveLocalBook = { book, mode, context ->
+            viewModel.removeLocalBook(book, mode, context)
+        }
+    )
 }

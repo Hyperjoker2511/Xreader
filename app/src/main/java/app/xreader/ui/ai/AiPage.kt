@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,11 +50,49 @@ fun AiPage(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val engineLabel by viewModel.engineLabel.collectAsStateWithLifecycle()
+    // Code 121 (R12): under Material 3 the Ask AI page wears
+    // the M3 frame — a top app bar (book + chapter identity
+    // rides the existing header line), the answer as a
+    // document (AiSheetContent's settled five-bullet shape,
+    // shared with the sheet), and the question field + send
+    // in a pinned bottom bar. Errors stay inline with Retry
+    // inside the shared content. The Nocturne frame below is
+    // untouched.
+    val isM3 = app.xreader.ui.theme.isMaterial3Design()
     Column(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
     ) {
+        if (isM3) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back"
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Ask AI",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Text(
+                        "Only the story up to where you're " +
+                            "reading — no spoilers.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme
+                            .onSurfaceVariant
+                    )
+                }
+                EngineChip(label = engineLabel)
+            }
+        } else {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -76,6 +115,7 @@ fun AiPage(
             }
             EngineChip(label = engineLabel)
         }
+        }
         AiSheetContent(
             viewModel = viewModel,
             showingTranslation = showingTranslation,
@@ -86,6 +126,49 @@ fun AiPage(
         )
         if (state.hasKey && AiFeature.LORE_CHAT in state.featuresOn) {
             var question by remember { mutableStateOf("") }
+            if (isM3) {
+                // R12: question field + send in a pinned
+                // bottom bar (surfaceContainer), spec field
+                // shape, filled send icon button.
+                androidx.compose.material3.Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainer
+                ) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(
+                                start = 16.dp,
+                                end = 16.dp,
+                                top = 8.dp,
+                                bottom = 8.dp
+                            ),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = question,
+                            onValueChange = { question = it },
+                            label = { Text("Ask about the story…") },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        androidx.compose.material3.FilledIconButton(
+                            onClick = {
+                                viewModel.sendChat(question)
+                                question = ""
+                            },
+                            enabled = question.isNotBlank() &&
+                                !state.chatBusy
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send"
+                            )
+                        }
+                    }
+                }
+            } else {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -119,6 +202,7 @@ fun AiPage(
                     },
                     enabled = question.isNotBlank() && !state.chatBusy
                 ) { Text("Ask") }
+            }
             }
         }
     }

@@ -76,6 +76,34 @@ class XreaderWidget : GlanceAppWidget() {
         }.getOrDefault(WidgetState())
     }
 
+    // Code 121 (S41/Q4/T18): the widget wears the MATERIAL 3
+    // face PERMANENTLY — it does NOT follow the design switch.
+    // Glance cannot host MaterialTheme, so the M3 roles are
+    // pinned here as Glance colours (Google's baseline dark
+    // scheme — the default design's tokens): surfaceContainer
+    // background, onSurface text, onSurfaceVariant secondary
+    // text, primary progress/accents, at type-scale sizes.
+    private val widgetSurface =
+        androidx.glance.color.ColorProvider(
+            day = androidx.compose.ui.graphics.Color(0xFF211F26),
+            night = androidx.compose.ui.graphics.Color(0xFF211F26)
+        )
+    private val widgetOnSurface =
+        androidx.glance.color.ColorProvider(
+            day = androidx.compose.ui.graphics.Color(0xFFE6E0E9),
+            night = androidx.compose.ui.graphics.Color(0xFFE6E0E9)
+        )
+    private val widgetOnSurfaceVariant =
+        androidx.glance.color.ColorProvider(
+            day = androidx.compose.ui.graphics.Color(0xFFCAC4D0),
+            night = androidx.compose.ui.graphics.Color(0xFFCAC4D0)
+        )
+    private val widgetPrimary =
+        androidx.glance.color.ColorProvider(
+            day = androidx.compose.ui.graphics.Color(0xFFD0BCFF),
+            night = androidx.compose.ui.graphics.Color(0xFFD0BCFF)
+        )
+
     @Composable
     private fun WidgetContent(state: WidgetState, context: Context) {
         // Glance delivers action parameters as intent extras under
@@ -89,7 +117,7 @@ class XreaderWidget : GlanceAppWidget() {
         Column(
             modifier = GlanceModifier
                 .fillMaxSize()
-                .background(GlanceTheme.colors.surface)
+                .background(widgetSurface)
                 .padding(16.dp)
                 .clickable(openAction),
             verticalAlignment = Alignment.Top
@@ -97,7 +125,7 @@ class XreaderWidget : GlanceAppWidget() {
             Text(
                 text = "XREADER — CONTINUE READING",
                 style = TextStyle(
-                    color = GlanceTheme.colors.primary,
+                    color = widgetPrimary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -106,7 +134,7 @@ class XreaderWidget : GlanceAppWidget() {
             Text(
                 text = state.bookTitle.ifBlank { "No book in progress" },
                 style = TextStyle(
-                    color = GlanceTheme.colors.onSurface,
+                    color = widgetOnSurface,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 ),
@@ -116,13 +144,15 @@ class XreaderWidget : GlanceAppWidget() {
             if (state.bookId > 0) {
                 LinearProgressIndicator(
                     progress = state.fraction.coerceIn(0f, 1f),
-                    modifier = GlanceModifier.height(6.dp)
+                    modifier = GlanceModifier.height(6.dp),
+                    color = widgetPrimary,
+                    backgroundColor = widgetOnSurfaceVariant
                 )
                 Spacer(GlanceModifier.height(6.dp))
                 Text(
                     text = "${(state.fraction * 100).toInt()}% read",
                     style = TextStyle(
-                        color = GlanceTheme.colors.onSurfaceVariant,
+                        color = widgetOnSurfaceVariant,
                         fontSize = 12.sp
                     )
                 )
@@ -131,7 +161,7 @@ class XreaderWidget : GlanceAppWidget() {
             Text(
                 text = "Level ${state.level} · 🔥 ${state.streak} day streak",
                 style = TextStyle(
-                    color = GlanceTheme.colors.onSurfaceVariant,
+                    color = widgetOnSurfaceVariant,
                     fontSize = 13.sp
                 )
             )

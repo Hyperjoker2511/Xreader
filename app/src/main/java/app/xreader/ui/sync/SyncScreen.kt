@@ -4,6 +4,7 @@ import app.xreader.ui.theme.aiAccentColor
 import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -120,6 +121,45 @@ fun SyncScreen(
     }
     androidx.compose.runtime.LaunchedEffect(settings.backupFolderUri) {
         viewModel.refreshPhoneBackups(context)
+    }
+
+    // Code 121 W8 (R34, D-121-W7-03 retired): the Material 3
+    // Sync & backup page — list rows over the same view model
+    // and launchers. Nocturne keeps the card page below.
+    if (app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        M3SyncContent(
+            state = state,
+            viewModel = viewModel,
+            onBack = onBack,
+            onBackUpNow = { viewModel.backupNow(context) },
+            onChooseBackupFolder = { backupFolderLauncher.launch(null) },
+            onForgetBackupFolder = {
+                viewModel.forgetBackupFolder(context)
+            },
+            onRestorePhoneBackup = { entry ->
+                viewModel.restorePhoneBackup(context, entry)
+            },
+            onDeletePhoneBackup = { entry ->
+                viewModel.deletePhoneBackup(context, entry)
+            },
+            onSetAutoBackupWeekly = {
+                viewModel.setAutoBackupWeekly(context, it)
+            },
+            onDriveSignIn = {
+                signInLauncher.launch(
+                    container.googleDriveAuth.signInClient().signInIntent
+                )
+            },
+            onExportBackupFile = {
+                exportLauncher.launch("xreader-backup.zip")
+            },
+            onRestoreBackupFile = {
+                importLauncher.launch(arrayOf("*/*"))
+            }
+        )
+        return
     }
 
     Column(
@@ -573,4 +613,551 @@ private fun BackendRow(label: String, selected: Boolean, onClick: () -> Unit) {
         )
     }
 
+}
+
+// ────────────────────────────────────────────────────────────────
+// Code 121 W8 (R34): the Material 3 Sync & backup page — list
+// rows: Back up now (with the last-backup line) · Restore ·
+// Drive switch + account line · WebDAV row → form dialog.
+// The settled exclusion line is stated ONCE, at the foot.
+// Every door is the shipped SyncViewModel's; the file flows
+// ride the screen's own launchers, passed in as callbacks.
+// ────────────────────────────────────────────────────────────────
+
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+private fun M3SyncContent(
+    state: SyncUiState,
+    viewModel: SyncViewModel,
+    onBack: () -> Unit,
+    onBackUpNow: () -> Unit,
+    onChooseBackupFolder: () -> Unit,
+    onForgetBackupFolder: () -> Unit,
+    onRestorePhoneBackup: (
+        app.xreader.data.sync.BackupLogic.BackupEntry
+    ) -> Unit,
+    onDeletePhoneBackup: (
+        app.xreader.data.sync.BackupLogic.BackupEntry
+    ) -> Unit,
+    onSetAutoBackupWeekly: (Boolean) -> Unit,
+    onDriveSignIn: () -> Unit,
+    onExportBackupFile: () -> Unit,
+    onRestoreBackupFile: () -> Unit
+) {
+    val settings = state.settings
+    var webdavOpen by remember { mutableStateOf(false) }
+    var pendingRestore by remember {
+        mutableStateOf<app.xreader.data.sync.BackupLogic.BackupEntry?>(null)
+    }
+    var pendingDelete by remember {
+        mutableStateOf<app.xreader.data.sync.BackupLogic.BackupEntry?>(null)
+    }
+    val lastBackupLine = "Last backup: " +
+        app.xreader.data.sync.BackupLogic.describeLastBackup(
+            settings.lastBackupAt, settings.lastBackupSizeBytes,
+            java.time.ZoneId.systemDefault()
+        )
+    androidx.compose.material3.Scaffold(
+        topBar = {
+            androidx.compose.material3.TopAppBar(
+                title = { Text("Sync & backup") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 32.dp)
+        ) {
+            if (state.busy) {
+                androidx.compose.material3.LinearWavyProgressIndicator(
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    state.busyLabel,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(
+                        horizontal = 16.dp, vertical = 8.dp
+                    )
+                )
+            }
+            state.message?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (state.messageIsError) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(
+                        horizontal = 16.dp, vertical = 8.dp
+                    )
+                )
+            }
+            Text(
+                "On this phone",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(
+                    start = 16.dp, top = 12.dp, bottom = 4.dp
+                )
+            )
+            if (settings.backupFolderUri.isBlank()) {
+                androidx.compose.material3.ListItem(
+                    headlineContent = { Text("Choose a backup folder") },
+                    supportingContent = {
+                        Text(
+                            "Pick a folder once — Xreader remembers " +
+                                "it and keeps your backups there. " +
+                                "Nothing is uploaded."
+                        )
+                    },
+                    modifier = Modifier.clickable {
+                        onChooseBackupFolder()
+                    }
+                )
+            } else {
+                androidx.compose.material3.ListItem(
+                    headlineContent = { Text("Back up now") },
+                    supportingContent = { Text(lastBackupLine) },
+                    modifier = Modifier.clickable(enabled = !state.busy) {
+                        onBackUpNow()
+                    }
+                )
+                androidx.compose.material3.ListItem(
+                    headlineContent = {
+                        Text("Back up every week on its own")
+                    },
+                    supportingContent = {
+                        Text(
+                            "A fresh backup lands in the same folder " +
+                                "each week."
+                        )
+                    },
+                    trailingContent = {
+                        androidx.compose.material3.Switch(
+                            checked = settings.autoBackupWeekly,
+                            onCheckedChange = onSetAutoBackupWeekly
+                        )
+                    }
+                )
+                TextButton(
+                    onClick = onForgetBackupFolder,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                ) { Text("Forget this folder") }
+            }
+            Text(
+                "Restore",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(
+                    start = 16.dp, top = 16.dp, bottom = 4.dp
+                )
+            )
+            state.phoneBackups.forEach { entry ->
+                androidx.compose.material3.ListItem(
+                    headlineContent = {
+                        Text(
+                            app.xreader.data.sync.BackupLogic
+                                .describeLastBackup(
+                                    entry.modifiedAtMillis,
+                                    entry.sizeBytes,
+                                    java.time.ZoneId.systemDefault()
+                                )
+                        )
+                    },
+                    supportingContent = { Text(entry.name) },
+                    trailingContent = {
+                        Row {
+                            TextButton(
+                                onClick = { pendingRestore = entry }
+                            ) { Text("Restore") }
+                            IconButton(
+                                onClick = { pendingDelete = entry }
+                            ) {
+                                Icon(
+                                    androidx.compose.material.icons.Icons
+                                        .Filled.Delete,
+                                    contentDescription = "Delete backup"
+                                )
+                            }
+                        }
+                    }
+                )
+            }
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("Restore from a backup file") },
+                supportingContent = {
+                    Text("A backup file saved on any device")
+                },
+                modifier = Modifier.clickable(enabled = !state.busy) {
+                    onRestoreBackupFile()
+                }
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("Save a backup file") },
+                supportingContent = {
+                    Text("One file, no account needed")
+                },
+                modifier = Modifier.clickable(enabled = !state.busy) {
+                    onExportBackupFile()
+                }
+            )
+            Text(
+                "Sync",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(
+                    start = 16.dp, top = 16.dp, bottom = 4.dp
+                )
+            )
+            Text(
+                if (settings.lastSyncAt > 0) {
+                    "Last synced " +
+                        DateFormat.getDateTimeInstance()
+                            .format(Date(settings.lastSyncAt)) +
+                        " — " + settings.lastSyncSummary
+                } else {
+                    "Not synced yet. Sync carries progress, bookmarks, " +
+                        "highlights, lore, glossary, profile and " +
+                        "settings between your devices."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("Google Drive") },
+                supportingContent = {
+                    Text(
+                        if (settings.driveEmail.isBlank()) {
+                            "Not signed in"
+                        } else {
+                            "Signed in as ${settings.driveEmail}"
+                        }
+                    )
+                },
+                trailingContent = {
+                    androidx.compose.material3.Switch(
+                        checked = settings.backend ==
+                            SyncBackendKind.DRIVE,
+                        onCheckedChange = { on ->
+                            viewModel.selectBackend(
+                                if (on) {
+                                    SyncBackendKind.DRIVE
+                                } else {
+                                    SyncBackendKind.NONE
+                                }
+                            )
+                        }
+                    )
+                }
+            )
+            if (settings.backend == SyncBackendKind.DRIVE) {
+                if (settings.driveEmail.isBlank()) {
+                    Text(
+                        "Xreader only ever sees its own hidden app " +
+                            "folder — never your other files.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+                    androidx.compose.material3.Button(
+                        onClick = onDriveSignIn,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) { Text("Sign in with Google") }
+                } else {
+                    TextButton(
+                        onClick = { viewModel.driveSignOut() },
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    ) { Text("Sign out") }
+                }
+            }
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("WebDAV") },
+                supportingContent = {
+                    Text(
+                        settings.webdavUrl.ifBlank {
+                            "Your own server"
+                        }
+                    )
+                },
+                trailingContent = {
+                    Icon(
+                        androidx.compose.material.icons.Icons
+                            .Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                modifier = Modifier.clickable { webdavOpen = true }
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = {
+                    Text("Sync automatically when the app opens")
+                },
+                trailingContent = {
+                    androidx.compose.material3.Switch(
+                        checked = settings.autoSync,
+                        onCheckedChange = { viewModel.setAutoSync(it) }
+                    )
+                }
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("Also sync book files") },
+                supportingContent = {
+                    Text(
+                        "Sends each book's file, cover and downloaded " +
+                            "chapters with the sync — a whole library " +
+                            "can be gigabytes."
+                    )
+                },
+                trailingContent = {
+                    androidx.compose.material3.Switch(
+                        checked = settings.syncBookFiles,
+                        onCheckedChange = {
+                            viewModel.setSyncBookFiles(it)
+                        }
+                    )
+                }
+            )
+            androidx.compose.material3.Button(
+                onClick = { viewModel.syncNow() },
+                enabled = !state.busy &&
+                    settings.backend != SyncBackendKind.NONE,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Text(if (state.busy) state.busyLabel else "Sync now")
+            }
+            if (state.log.isNotEmpty()) {
+                Text(
+                    "Sync history",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(
+                        start = 16.dp, top = 16.dp, bottom = 4.dp
+                    )
+                )
+                state.log.forEach { entry ->
+                    androidx.compose.material3.ListItem(
+                        headlineContent = {
+                            Text(
+                                "${entry.backend} — " +
+                                    DateFormat.getDateTimeInstance()
+                                        .format(Date(entry.at))
+                            )
+                        },
+                        supportingContent = {
+                            Column {
+                                Text(entry.summary)
+                                entry.conflicts.forEach { conflict ->
+                                    Text(conflict)
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+            Text(
+                "Backups never include keys, cookies or passwords.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(
+                    horizontal = 16.dp, vertical = 16.dp
+                )
+            )
+        }
+    }
+    if (webdavOpen) {
+        M3WebdavForm(
+            state = state,
+            viewModel = viewModel,
+            onClose = { webdavOpen = false }
+        )
+    }
+    pendingRestore?.let { entry ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingRestore = null },
+            title = { Text("Restore this backup?") },
+            text = {
+                Text(
+                    "Your library, progress, bookmarks and settings " +
+                        "will be replaced by the ones in this backup. " +
+                        "Books added since then may need to be added " +
+                        "again."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingRestore = null
+                    onRestorePhoneBackup(entry)
+                }) { Text("Restore") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRestore = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+    pendingDelete?.let { entry ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete this backup?") },
+            text = {
+                Text(
+                    "The backup file “${entry.name}” will be deleted " +
+                        "from your folder. Your library itself is not " +
+                        "touched."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDelete = null
+                    onDeletePhoneBackup(entry)
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+/** R34: the WebDAV row's form dialog — the shipped fields and
+ * doors, in the M3 dialog frame, plus the route switch (the
+ * dialog is where WebDAV sync is turned on). The password is
+ * a password field; a saved password is never rendered. */
+@Composable
+private fun M3WebdavForm(
+    state: SyncUiState,
+    viewModel: SyncViewModel,
+    onClose: () -> Unit
+) {
+    val settings = state.settings
+    var url by remember(settings.webdavUrl) {
+        mutableStateOf(settings.webdavUrl)
+    }
+    var username by remember(settings.webdavUsername) {
+        mutableStateOf(settings.webdavUsername)
+    }
+    var password by remember { mutableStateOf("") }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("WebDAV server") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Use WebDAV for sync",
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f)
+                    )
+                    androidx.compose.material3.Switch(
+                        checked = settings.backend ==
+                            SyncBackendKind.WEBDAV,
+                        onCheckedChange = { on ->
+                            viewModel.selectBackend(
+                                if (on) {
+                                    SyncBackendKind.WEBDAV
+                                } else {
+                                    SyncBackendKind.NONE
+                                }
+                            )
+                        }
+                    )
+                }
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Folder address") },
+                    placeholder = {
+                        Text(
+                            "https://cloud.example.com/remote.php/dav/files/you/Xreader"
+                        )
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("Username") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = {
+                        Text(
+                            if (state.webdavPasswordSaved) {
+                                "Password (saved — leave blank to keep)"
+                            } else {
+                                "Password"
+                            }
+                        )
+                    },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "The password is stored in the encrypted vault on " +
+                        "this phone only.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (settings.webdavUrl.isNotBlank() ||
+                    state.webdavPasswordSaved
+                ) {
+                    TextButton(onClick = { viewModel.removeWebdav() }) {
+                        Text("Remove this WebDAV connection")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    viewModel.saveWebdav(url, username, password)
+                    onClose()
+                }
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(
+                    onClick = { viewModel.testWebdav() },
+                    enabled = !state.busy
+                ) {
+                    Text(if (state.busy) "Testing…" else "Test connection")
+                }
+                TextButton(onClick = onClose) { Text("Cancel") }
+            }
+        }
+    )
 }

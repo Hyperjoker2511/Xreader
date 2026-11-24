@@ -32,6 +32,16 @@ import app.xreader.data.extension.CookieParsing
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.PrimaryPill
 import java.net.URI
+// Code 121 (W4): the scratch-M3 (R23) branch's components.
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Button
+import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Alignment
+import kotlinx.coroutines.delay
 
 /**
  * v1.3.4 (U2): the sanctioned screen's invariants, as pure
@@ -180,6 +190,143 @@ fun LoginScreen(
     }
     DisposableEffect(webView) {
         onDispose { webView.destroy() }
+    }
+
+    // ── Code 121 (W4, scratch R23): the sanctioned web-view ──
+    // screen in Material 3 — a small top app bar (site name;
+    // Close action), a wavy progress line while the page loads,
+    // the web content full-bleed below. The WebView above, its
+    // settings and the cookie harvest are the shipped ones,
+    // shared with the Nocturne form below (session cookies
+    // only, never the password). Under Nocturne the shipped
+    // screen renders byte-identically.
+    if (isM3Design()) {
+        var pageLoading by remember(webView) { mutableStateOf(true) }
+        LaunchedEffect(webView) {
+            while (true) {
+                pageLoading = webView.progress < 100
+                delay(300)
+            }
+        }
+        // The one save path, in this branch's dress: flush,
+        // harvest per origin, hand to the view model — the same
+        // steps the shipped confirm bar takes below.
+        val saveSession: () -> Unit = {
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.flush()
+            val currentUrl = webView.url ?: effectiveUrl
+            val fallbackHost = CookieParsing.hostOf(currentUrl)
+                ?: CookieParsing.hostOf(request.url) ?: ""
+            val cookiesByHost = loginCookiesByOrigin(
+                currentUrl = currentUrl,
+                originalUrl = effectiveUrl,
+                cookieHeaderFor = { candidate ->
+                    cookieManager.getCookie(candidate)
+                },
+                configuredHosts = configuredHostsNow
+            )
+            viewModel.saveLoginSession(
+                sessionKey = request.sessionKey,
+                cookiesByHost = cookiesByHost,
+                fallbackHost = fallbackHost,
+                userAgent = webView.settings.userAgentString
+            )
+            onDone()
+        }
+        Column(Modifier.fillMaxSize()) {
+            TopAppBar(
+                title = {
+                    Text(
+                        if (request.mode == LoginMode.SITE_CHECK) {
+                            "One quick check — ${request.title}"
+                        } else {
+                            "Sign in to ${request.title}"
+                        },
+                        maxLines = 1
+                    )
+                },
+                actions = {
+                    IconButton(onClick = onCancel) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Close"
+                        )
+                    }
+                }
+            )
+            if (pageLoading) {
+                LinearWavyProgressIndicator(Modifier.fillMaxWidth())
+            }
+            AndroidView(
+                factory = { webView },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(
+                        bottom = SanctionedScreenSpec
+                            .WEB_AREA_BOTTOM_INSET_DP.dp
+                    )
+            )
+            Column(
+                Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    if (request.mode == LoginMode.SITE_CHECK) {
+                        "This site wants a quick human check before " +
+                            "it shows its pages. Do the check here; " +
+                            "after that Xreader reads the site " +
+                            "quietly in the background — you'll never " +
+                            "see a browser while you read."
+                    } else {
+                        "Sign in as you normally would — including " +
+                            "any “I'm not a robot” checks. Then tap " +
+                            "the button below: Xreader saves this " +
+                            "site's session cookies (encrypted, only " +
+                            "for this source) and never sees your " +
+                            "password."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    if (request.mode == LoginMode.SITE_CHECK) {
+                        "Saving keeps this session — it doesn't mean " +
+                            "the check is finished. If the site is " +
+                            "still checking when you open a book, " +
+                            "Xreader will say so and ask you to solve " +
+                            "it once more here."
+                    } else {
+                        "Saving keeps only this session. If the site " +
+                            "asks for another check later, Xreader " +
+                            "will say so plainly when you open a book."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = saveSession,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        if (request.mode == LoginMode.SITE_CHECK) {
+                            "Done — continue"
+                        } else {
+                            "I'm signed in — save my session"
+                        }
+                    )
+                }
+                TextButton(
+                    onClick = onCancel,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Cancel") }
+                // The same bottom lift as the shipped form: the
+                // action cluster sits clear of the screen's
+                // bottom edge (SanctionedScreenSpec).
+                Spacer(Modifier.height(76.dp))
+            }
+        }
+        return
     }
 
     Column(

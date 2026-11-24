@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -114,6 +115,36 @@ fun MoreScreen(
     val designState = app.xreader.ui.theme.LocalDesignState.current
     val isM3Me = designState.design ==
         app.xreader.data.prefs.AppDesign.MATERIAL3
+    // Code 121 (R5): under Material 3 the Me hub is the spec's
+    // page — medium top app bar, identity header, doors as a
+    // divider list, the heal note as a filled tonal card, and
+    // the What's-New row only while an unseen note exists.
+    // The note's seen-state is its OWN (the shell's
+    // whatsNewSeen store): this screen only receives the
+    // visibility boolean and the open/dismiss doors — it
+    // neither reads nor writes the update reveal's record.
+    // Nocturne renders the shipped hub below, untouched.
+    if (isM3Me) {
+        M3MeHub(
+            meName = meName,
+            meLevel = meLevel,
+            meTitle = meTitle,
+            meStreak = meStreak,
+            whatsNewVisible = whatsNewVisible,
+            onOpenWhatsNew = onOpenWhatsNew,
+            healNote = healNote,
+            onDismissHealNote = onDismissHealNote,
+            artCount = artCount,
+            onProfile = onProfile,
+            onCustomise = onCustomise,
+            onSync = onSync,
+            onProviders = onProviders,
+            onGeneratedArt = onGeneratedArt,
+            onVocab = onVocab,
+            onAbout = onAbout
+        )
+        return
+    }
     Column(
         Modifier
             .fillMaxSize()
@@ -502,6 +533,246 @@ private fun MeDoorListRow(door: MeDoorData, modifier: Modifier = Modifier) {
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+/**
+ * Code 121 (R5): the Me hub in the Material 3 design — a
+ * medium top app bar ("Profile"), the heal note as a filled
+ * tonal card at the top (its own dismiss, its own state), the
+ * identity header (shape-cropped avatar, emphasized name,
+ * title/level line), the What's-New row ONLY while an unseen
+ * note exists, and the doors as a divider list. No door grid,
+ * no showpiece card.
+ */
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+private fun M3MeHub(
+    meName: String,
+    meLevel: Int,
+    meTitle: String,
+    meStreak: Int,
+    whatsNewVisible: Boolean,
+    onOpenWhatsNew: () -> Unit,
+    healNote: String?,
+    onDismissHealNote: () -> Unit,
+    artCount: Int,
+    onProfile: () -> Unit,
+    onCustomise: () -> Unit,
+    onSync: () -> Unit,
+    onProviders: () -> Unit,
+    onGeneratedArt: () -> Unit,
+    onVocab: () -> Unit,
+    onAbout: () -> Unit
+) {
+    val avatarShape = androidx.compose.material3.MaterialShapes
+        .Cookie9Sided.toShape()
+    Column(Modifier.fillMaxSize()) {
+        androidx.compose.material3.MediumTopAppBar(
+            title = { Text("Profile") }
+        )
+        Column(
+            Modifier
+                .verticalScroll(
+                    androidx.compose.foundation.rememberScrollState()
+                )
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            if (healNote != null) {
+                androidx.compose.material3.Card(
+                    colors = androidx.compose.material3.CardDefaults
+                        .cardColors(
+                            containerColor = MaterialTheme
+                                .colorScheme.secondaryContainer
+                        ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            "Fixed what it could: $healNote",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme
+                                .onSecondaryContainer
+                        )
+                        androidx.compose.material3.TextButton(
+                            onClick = onDismissHealNote
+                        ) { Text("Dismiss") }
+                    }
+                }
+            }
+            // Identity header.
+            androidx.compose.material3.ListItem(
+                headlineContent = {
+                    Text(
+                        if (meName.isBlank()) "Me" else meName,
+                        style = MaterialTheme.typography
+                            .headlineSmallEmphasized,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                supportingContent = {
+                    Text(
+                        "Level $meLevel · $meTitle" +
+                            if (meStreak > 0) {
+                                " · $meStreak-day streak"
+                            } else {
+                                ""
+                            }
+                    )
+                },
+                leadingContent = {
+                    Box(
+                        Modifier
+                            .size(56.dp)
+                            .clip(avatarShape)
+                            .background(
+                                MaterialTheme.colorScheme
+                                    .primaryContainer
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            meName.trim().firstOrNull()
+                                ?.uppercase() ?: "M",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme
+                                .onPrimaryContainer
+                        )
+                    }
+                },
+                trailingContent = {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                colors = androidx.compose.material3.ListItemDefaults
+                    .colors(
+                        containerColor = androidx.compose.ui.graphics
+                            .Color.Transparent
+                    ),
+                modifier = Modifier.clickable(onClick = onProfile)
+            )
+            if (whatsNewVisible) {
+                androidx.compose.material3.ListItem(
+                    headlineContent = {
+                        Text("What's new in this version")
+                    },
+                    supportingContent = {
+                        Text("See what this update brought")
+                    },
+                    leadingContent = {
+                        Icon(
+                            Icons.Filled.SystemUpdate,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    trailingContent = {
+                        androidx.compose.material3.Badge {
+                            Text("New")
+                        }
+                    },
+                    colors = androidx.compose.material3.ListItemDefaults
+                        .colors(
+                            containerColor = androidx.compose.ui
+                                .graphics.Color.Transparent
+                        ),
+                    modifier = Modifier.clickable(
+                        onClick = onOpenWhatsNew
+                    )
+                )
+            }
+            androidx.compose.material3.HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant
+            )
+            val doors = listOf(
+                MeDoorData(
+                    icon = Icons.Filled.Palette,
+                    title = "Customise",
+                    subtitle = "Design, colours, reader and the rest",
+                    onClick = onCustomise
+                ),
+                MeDoorData(
+                    icon = Icons.Filled.Sync,
+                    title = "Sync & backup",
+                    subtitle = "Google Drive, WebDAV, or a backup file",
+                    onClick = onSync
+                ),
+                MeDoorData(
+                    icon = Icons.Filled.VpnKey,
+                    title = "AI providers",
+                    subtitle = "Gemini key, model choice, AI features",
+                    onClick = onProviders
+                ),
+                MeDoorData(
+                    icon = Icons.Filled.Image,
+                    title = "Generated art",
+                    subtitle = if (artCount == 1) {
+                        "1 image"
+                    } else {
+                        "$artCount images"
+                    },
+                    onClick = onGeneratedArt
+                ),
+                MeDoorData(
+                    icon = Icons.AutoMirrored.Filled.MenuBook,
+                    title = "Vocabulary",
+                    subtitle = "Words you saved while reading",
+                    onClick = onVocab
+                ),
+                MeDoorData(
+                    icon = Icons.Filled.Info,
+                    title = "About",
+                    subtitle = "Version and open-source licences",
+                    onClick = onAbout
+                )
+            )
+            doors.forEachIndexed { index, door ->
+                androidx.compose.material3.ListItem(
+                    headlineContent = { Text(door.title) },
+                    supportingContent = { Text(door.subtitle) },
+                    leadingContent = {
+                        Icon(
+                            door.icon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    trailingContent = {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme
+                                .onSurfaceVariant
+                        )
+                    },
+                    colors = androidx.compose.material3.ListItemDefaults
+                        .colors(
+                            containerColor = androidx.compose.ui
+                                .graphics.Color.Transparent
+                        ),
+                    modifier = Modifier.clickable(
+                        onClick = door.onClick
+                    )
+                )
+                if (index < doors.lastIndex) {
+                    androidx.compose.material3.HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        modifier = Modifier.padding(start = 56.dp)
+                    )
+                }
+            }
         }
     }
 }

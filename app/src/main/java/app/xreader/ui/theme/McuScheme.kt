@@ -17,7 +17,7 @@ import scheme.SchemeVibrant
 import score.Score
 
 /**
- * Code 120 (Material 3 design, §1.1 + §3 U8): the app's bridge to
+ * Code 120 (Material 3 design, scratch §2.1): the app's bridge to
  * Google's Material Color Utilities — the same library that
  * generates Android's dynamic colour — vendored as source under
  * the official packages (`hct`, `scheme`, `dynamiccolor`, …;
@@ -70,6 +70,9 @@ object McuScheme {
         }.getOrNull()
     }
 
+    /** Code 121 re-verified against the staged material3 1.5.0
+     * sources: [ColorScheme] carries exactly 48 colour roles
+     * and NO `shadow`; both branches below assign all 48. */
     private fun DynamicScheme.toComposeColorScheme(dark: Boolean): ColorScheme {
         fun c(color: dynamiccolor.DynamicColor): Color =
             Color(color.getArgb(this))

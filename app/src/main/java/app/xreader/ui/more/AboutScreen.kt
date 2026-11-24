@@ -1,5 +1,6 @@
 package app.xreader.ui.more
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,6 +42,15 @@ fun AboutScreen(
      * "Copy app details"; null in previews/tests. */
     container: app.xreader.di.AppContainer? = null
 ) {
+    // Code 121 W8 (R37, D-121-W7-04 retired): the Material 3
+    // About page — a document page. Nocturne keeps the card
+    // page below, untouched.
+    if (app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
+    ) {
+        M3AboutContent(onBack = onBack, container = container)
+        return
+    }
     Column(
         Modifier
             .fillMaxSize()
@@ -461,4 +471,159 @@ private fun CopyAppDetailsButton(container: app.xreader.di.AppContainer) {
             copied = true
         }
     )
+}
+
+// ────────────────────────────────────────────────────────────────
+// Code 121 W8 (R37): the Material 3 About page — a document
+// page: the app name in headlineSmall, the version lines, the
+// links as list rows (the same AppUpdateRepository URLs the
+// Updates & about page opens), the credits in bodyMedium at
+// reading measure, and the app's own MIT licence row. The
+// long changelog is NOT repeated here — it is the What's New
+// page's document (R39), one door away in Updates & about.
+// ────────────────────────────────────────────────────────────────
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun M3AboutContent(
+    onBack: () -> Unit,
+    container: app.xreader.di.AppContainer?
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    fun openUrl(url: String) {
+        runCatching {
+            context.startActivity(
+                android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse(url)
+                )
+            )
+        }
+    }
+    androidx.compose.material3.Scaffold(
+        topBar = {
+            androidx.compose.material3.TopAppBar(
+                title = { Text("About & licences") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                "Xreader",
+                style = MaterialTheme.typography.headlineSmall
+            )
+            Text(
+                "Version ${BuildConfig.VERSION_NAME} " +
+                    "(${BuildConfig.VERSION_CODE})",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "A novel & e-book reader: your files, your sources, " +
+                    "your library — on your devices only.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            if (container != null) {
+                CopyAppDetailsButton(container)
+            }
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("GitHub") },
+                supportingContent = {
+                    Text("The source code and the project")
+                },
+                trailingContent = {
+                    Icon(
+                        androidx.compose.material.icons.Icons
+                            .Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                modifier = Modifier.clickable {
+                    openUrl(
+                        app.xreader.data.update.AppUpdateRepository
+                            .REPO_URL
+                    )
+                }
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("Releases") },
+                supportingContent = {
+                    Text("Every published version, with its notes")
+                },
+                trailingContent = {
+                    Icon(
+                        androidx.compose.material.icons.Icons
+                            .Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                modifier = Modifier.clickable {
+                    openUrl(
+                        app.xreader.data.update.AppUpdateRepository
+                            .RELEASES_URL
+                    )
+                }
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("Privacy") },
+                supportingContent = {
+                    Text("What Xreader does and does not collect")
+                },
+                trailingContent = {
+                    Icon(
+                        androidx.compose.material.icons.Icons
+                            .Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                modifier = Modifier.clickable {
+                    openUrl(
+                        app.xreader.data.update.AppUpdateRepository
+                            .PRIVACY_URL
+                    )
+                }
+            )
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text("Xreader") },
+                supportingContent = { Text("MIT Licence") }
+            )
+            Text(
+                "Open-source licences",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            LICENCES.forEach { (name, licence) ->
+                Column {
+                    Text(
+                        name,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        licence,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Spacer(Modifier.height(32.dp))
+        }
+    }
 }

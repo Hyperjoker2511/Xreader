@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -41,10 +43,10 @@ import app.xreader.data.prefs.M3DownloadsSort
 import app.xreader.data.prefs.M3ExploreSide
 import app.xreader.data.prefs.M3GalleryColumns
 import app.xreader.data.prefs.M3HistoryGrouping
+import app.xreader.data.prefs.M3LibraryTab
 import app.xreader.data.prefs.M3ListView
 import app.xreader.data.prefs.M3MotionChoice
 import app.xreader.data.prefs.M3NavForm
-import app.xreader.data.prefs.M3ReaderChrome
 import app.xreader.data.prefs.M3RepoSort
 import app.xreader.data.prefs.M3TabLabels
 import app.xreader.data.prefs.M3ThemeMode
@@ -53,6 +55,31 @@ import app.xreader.ui.common.ColourWheelPickerDialog
 import app.xreader.ui.common.NocturneSwitch
 import app.xreader.ui.theme.m3DarkTheme
 import app.xreader.ui.theme.resolveM3ColorScheme
+// Code 121 (R30): the Material 3 Customise page's imports.
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.collectAsState
+import app.xreader.data.prefs.AppearanceValidation
+import app.xreader.ui.common.ColourBar
+import app.xreader.ui.common.ColourBarSelection
 
 /**
  * Code 120 (design §2.11 + addendum M1): the Design page of
@@ -360,15 +387,8 @@ fun DesignPageContent(
     )
     // ── Reader (§2.11) ──────────────────────────────────────
     DesignSectionLabel("Reader")
-    DesignChoice(
-        label = "Reader chrome",
-        options = listOf(
-            M3ReaderChrome.FLOATING_TOOLBAR to "Floating toolbar",
-            M3ReaderChrome.TOP_AND_BOTTOM_BARS to "Top-and-bottom bars"
-        ),
-        selected = state.readerChrome,
-        onPick = viewModel::setM3ReaderChrome
-    )
+    // W8: the Reader chrome choice is RETIRED (§8 Q3 — the
+    // floating toolbar is the one M3 form; no knob is offered).
     DesignSwitch(
         label = "Selection colour row",
         description = "The colour row on the selection bar.",
@@ -583,4 +603,764 @@ private fun DesignSwitch(
             enabled = true
         )
     }
+}
+
+// ────────────────────────────────────────────────────────────────
+// Code 121 (R30): Customise under Material 3 — design-scoped
+// groups as settings-list sections, IN THE SPEC'S ORDER:
+// Design · Library · Reader · Manga reader · Downloads ·
+// Explore · Performance · Accessibility & motion · Storage ·
+// Sources & repairs · Advanced. NO Nocturne doors exist here
+// (no Glass & surfaces, no dock styles, no Nocturne schemes —
+// trace T3). Every control writes the same prefs the shipped
+// Customise pages write; only the forms and the grouping are
+// this design's. CustomiseScreen branches here when the
+// active design is Material 3; the Nocturne hub never calls
+// this composable.
+// ────────────────────────────────────────────────────────────────
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun M3CustomisePage(
+    state: CustomiseViewModel.UiState,
+    viewModel: CustomiseViewModel,
+    onBack: () -> Unit
+) {
+    val design = state.design
+    val appearance = state.appearance
+    val library = state.library
+    val reader = state.reader
+    val storage by viewModel.storage.collectAsState()
+    val voiceBytes by viewModel.voiceCacheBytes.collectAsState()
+    val clearNote by viewModel.cacheClearNote.collectAsState()
+    var confirmReset by remember { mutableStateOf(false) }
+    var confirmClear by remember { mutableStateOf(false) }
+    var confirmVoiceClear by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        TopAppBar(
+            title = { Text("Customise") },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back"
+                    )
+                }
+            }
+        )
+        Column(
+            Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            // ── Design ──────────────────────────────────────
+            M3SettingsGroup("Design")
+            // Two selectable cards (radio behaviour). The
+            // Nocturne card is TEXT ONLY — outlined, scheme
+            // colours, no violet drawn, no miniature (T2).
+            Card(
+                onClick = { viewModel.setDesign(AppDesign.MATERIAL3) },
+                colors = CardDefaults.cardColors(
+                    containerColor =
+                        MaterialTheme.colorScheme.surfaceContainer
+                ),
+                border = if (design.design == AppDesign.MATERIAL3) {
+                    androidx.compose.foundation.BorderStroke(
+                        2.dp, MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    null
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "Material 3",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        "Google's design language. Colours from " +
+                            "your phone, or any colour you pick.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (design.design == AppDesign.MATERIAL3) {
+                        Text(
+                            "In use",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+            OutlinedCard(
+                onClick = { viewModel.setDesign(AppDesign.NOCTURNE) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "Nocturne",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        "A dark glass design with a violet " +
+                            "accent, built around your library's covers.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (design.design == AppDesign.NOCTURNE) {
+                        Text(
+                            "In use",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+            Text(
+                "Colour",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            ColourBar(
+                selection = when (design.colourSource) {
+                    M3ColourSource.DYNAMIC -> ColourBarSelection.Dynamic
+                    M3ColourSource.PICKED -> design.seedArgb?.let {
+                        ColourBarSelection.Seed(it)
+                    }
+                },
+                onSelect = { picked ->
+                    when (picked) {
+                        ColourBarSelection.Dynamic ->
+                            viewModel.setM3ColourSource(
+                                M3ColourSource.DYNAMIC
+                            )
+                        is ColourBarSelection.Seed -> {
+                            viewModel.setM3ColourSource(
+                                M3ColourSource.PICKED
+                            )
+                            viewModel.setM3Seed(picked.argb)
+                        }
+                        ColourBarSelection.ThemeColour -> Unit
+                    }
+                },
+                recentColours = design.savedSeeds,
+                modifier = Modifier.fillMaxWidth()
+            )
+            M3SegmentedRow(
+                label = "Motion",
+                options = listOf(
+                    M3MotionChoice.EXPRESSIVE to "Expressive",
+                    M3MotionChoice.STANDARD to "Standard"
+                ),
+                selected = design.motionChoice,
+                onPick = viewModel::setM3MotionChoice
+            )
+            M3SegmentedRow(
+                label = "Navigation labels",
+                options = listOf(
+                    M3TabLabels.ALWAYS to "Always",
+                    M3TabLabels.SELECTED_ONLY to "Selected only"
+                ),
+                selected = design.tabLabels,
+                onPick = viewModel::setM3TabLabels
+            )
+
+            // ── Library ─────────────────────────────────────
+            M3SettingsGroup("Library")
+            M3SwitchRow(
+                label = "Continue carousel",
+                description = "The Continue Reading carousel at the top of the Library.",
+                checked = design.libraryContinueRail,
+                onChange = viewModel::setM3LibraryContinueRail
+            )
+            M3SwitchRow(
+                label = "Progress on covers",
+                description = "The reading-progress line on book covers.",
+                checked = design.libraryProgressOnCovers,
+                onChange = viewModel::setM3LibraryProgressOnCovers
+            )
+            M3SwitchRow(
+                label = "Filter row",
+                description = "The status filter row in the Library.",
+                checked = design.libraryFilterRow,
+                onChange = viewModel::setM3LibraryFilterRow
+            )
+            M3SegmentedRow(
+                label = "Shelf density",
+                options = listOf(
+                    M3DensityChoice.COMFORTABLE to "Comfortable",
+                    M3DensityChoice.COMPACT to "Compact"
+                ),
+                selected = design.libraryShelfDensity,
+                onPick = viewModel::setM3LibraryShelfDensity
+            )
+            M3SegmentedRow(
+                label = "Opens on",
+                options = listOf(
+                    M3LibraryTab.ALL to "All",
+                    M3LibraryTab.READING to "Reading",
+                    M3LibraryTab.PLAN_TO_READ to "Plan to read",
+                    M3LibraryTab.COMPLETED to "Completed",
+                    M3LibraryTab.ON_HOLD to "On hold",
+                    M3LibraryTab.DROPPED to "Dropped"
+                ),
+                selected = design.libraryDefaultTab,
+                onPick = viewModel::setM3LibraryDefaultTab
+            )
+
+            // ── Reader ──────────────────────────────────────
+            M3SettingsGroup("Reader")
+            M3SwitchRow(
+                label = "Book-page cover colour",
+                description = "A book's page takes its colours from its cover while you are on it.",
+                checked = design.bookPageCoverColour,
+                onChange = viewModel::setM3BookPageCoverColour
+            )
+            M3SegmentedRow(
+                label = "Contents opens on",
+                options = listOf(
+                    M3ContentsTab.CHAPTERS to "Chapters",
+                    M3ContentsTab.BOOKMARKS to "Bookmarks",
+                    M3ContentsTab.HIGHLIGHTS to "Highlights"
+                ),
+                selected = design.contentsTab,
+                onPick = viewModel::setM3ContentsTab
+            )
+            M3SwitchRow(
+                label = "Selection colour row",
+                description = "The colour row on the selection bar.",
+                checked = design.selectionColourRow,
+                onChange = viewModel::setM3SelectionColourRow
+            )
+            M3SwitchRow(
+                label = "Position line",
+                description = "The chapter, progress and time-left line under the reader's seek bar.",
+                checked = design.readerPositionLine,
+                onChange = viewModel::setM3ReaderPositionLine
+            )
+
+            // ── Manga reader (S32's three-group language) ───
+            M3SettingsGroup("Manga reader")
+            Text(
+                "Reading mode",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            M3SegmentedRow(
+                label = "Image mode",
+                options = app.xreader.domain.reader.ImageReaderMode
+                    .entries.map { it to it.label },
+                selected = reader.imageMode,
+                onPick = { mode ->
+                    viewModel.updateReader { it.copy(imageMode = mode) }
+                }
+            )
+            M3SegmentedRow(
+                label = "CBZ opens in",
+                options = listOf(
+                    true to "Komikku reader",
+                    false to "Book reader"
+                ),
+                selected = state.cbzOpensInKomikku,
+                onPick = viewModel::setCbzOpensInKomikku
+            )
+            Text(
+                "For CBZ and CBR files on this device. If a comic " +
+                    "can't open in the manga reader, it opens in " +
+                    "the book reader instead.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "General",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            M3SwitchRow(
+                label = "Smaller tap zones",
+                description = "The turn areas shrink to the outer quarters of the screen.",
+                checked = reader.mangaSmallerTapZones,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(mangaSmallerTapZones = value)
+                    }
+                }
+            )
+            M3SwitchRow(
+                label = "Crop borders — paged",
+                description = "Trim the plain white/black margins off page-by-page pages.",
+                checked = reader.cropBordersPaged,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(cropBordersPaged = value)
+                    }
+                }
+            )
+            M3SwitchRow(
+                label = "Crop borders — webtoon",
+                description = "Trim the plain white/black margins off scrolling strips.",
+                checked = reader.cropBordersWebtoon,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(cropBordersWebtoon = value)
+                    }
+                }
+            )
+            M3SegmentedRow(
+                label = "Page chip",
+                options = listOf(
+                    true to "Show",
+                    false to "Hide"
+                ),
+                selected = design.mangaPageChip,
+                onPick = viewModel::setM3MangaPageChip
+            )
+            Text(
+                "Colour filter",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            M3SwitchRow(
+                label = "Greyscale pages",
+                description = "Read every manga page in black and white.",
+                checked = reader.mangaGrayscale,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(mangaGrayscale = value)
+                    }
+                }
+            )
+            M3SwitchRow(
+                label = "Invert page colours",
+                description = "Black becomes white and white becomes black.",
+                checked = reader.mangaInvertColors,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(mangaInvertColors = value)
+                    }
+                }
+            )
+            M3SwitchRow(
+                label = "Colour tint over pages",
+                description = "A soft colour wash over every page (sepia by default).",
+                checked = reader.mangaColorFilter,
+                onChange = { value ->
+                    viewModel.updateReader {
+                        it.copy(mangaColorFilter = value)
+                    }
+                }
+            )
+
+            // ── Downloads ───────────────────────────────────
+            M3SettingsGroup("Downloads")
+            M3SegmentedRow(
+                label = "Finished list sort",
+                options = listOf(
+                    M3DownloadsSort.RECENT to "Recent",
+                    M3DownloadsSort.TITLE to "Title",
+                    M3DownloadsSort.SIZE to "Size"
+                ),
+                selected = design.downloadsSort,
+                onPick = viewModel::setM3DownloadsSort
+            )
+            M3SwitchRow(
+                label = "Chapter-size line",
+                description = "Show the downloaded size on finished books in Downloads.",
+                checked = design.downloadsChapterSize,
+                onChange = viewModel::setM3DownloadsChapterSize
+            )
+            M3SwitchRow(
+                label = "Auto-download tracked books",
+                description = "New chapters of tracked books download by themselves.",
+                checked = library.autoDownloadTracked,
+                onChange = viewModel::setAutoDownloadTracked
+            )
+            M3SwitchRow(
+                label = "Wi-Fi only for prefetch",
+                description = "Chapters fetched ahead wait for Wi-Fi; a download you tap is never blocked.",
+                checked = state.downloads.wifiOnlyPrefetch,
+                onChange = viewModel::setWifiOnlyPrefetch
+            )
+
+            // ── Explore ─────────────────────────────────────
+            M3SettingsGroup("Explore")
+            M3SegmentedRow(
+                label = "Explore opens on",
+                options = listOf(
+                    M3ExploreSide.LAST_USED to "Last used",
+                    M3ExploreSide.NOVELS to "Novels",
+                    M3ExploreSide.MANGA to "Manga"
+                ),
+                selected = design.exploreSide,
+                onPick = viewModel::setM3ExploreSide
+            )
+            M3SwitchRow(
+                label = "Group sources",
+                description = "Built-in, repository and link-added sources in their own groups.",
+                checked = design.exploreGrouping,
+                onChange = viewModel::setM3ExploreGrouping
+            )
+            M3SegmentedRow(
+                label = "Source list density",
+                options = listOf(
+                    M3DensityChoice.COMFORTABLE to "Comfortable",
+                    M3DensityChoice.COMPACT to "Compact"
+                ),
+                selected = design.exploreDensity,
+                onPick = viewModel::setM3ExploreDensity
+            )
+
+            // ── Performance ─────────────────────────────────
+            M3SettingsGroup("Performance")
+            M3SegmentedRow(
+                label = "Performance tier",
+                options = listOf(
+                    app.xreader.data.prefs.PerformanceMode.AUTOMATIC to "Automatic",
+                    app.xreader.data.prefs.PerformanceMode.SMOOTH to "Smooth",
+                    app.xreader.data.prefs.PerformanceMode.BEST_LOOKING to "Best looking"
+                ),
+                selected = appearance.performanceMode,
+                onPick = viewModel::setPerformanceMode
+            )
+            Text(
+                "Automatic lets the phone decide; Smooth takes the " +
+                    "cheap rendering paths; Best looking enables " +
+                    "every effect the phone can run.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // ── Accessibility & motion ──────────────────────
+            M3SettingsGroup("Accessibility & motion")
+            Text(
+                "App size — ${AppearanceValidation.formatAppSize(appearance.appSize)}",
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Text(
+                "How big everything is on this phone — the whole " +
+                    "screen, not just the words. This is the only " +
+                    "size control in the app.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Slider(
+                value = appearance.appSize,
+                onValueChange = { viewModel.setAppSize(it) },
+                valueRange = AppearanceValidation.APP_SIZE_RANGE,
+                steps = 11
+            )
+            M3SwitchRow(
+                label = "Reduce motion",
+                description = "Calms the app's animations down to simple fades; also selects the Standard motion scheme.",
+                checked = appearance.reduceMotion,
+                onChange = viewModel::setReduceMotion
+            )
+            M3SegmentedRow(
+                label = "Theme mode",
+                options = listOf(
+                    M3ThemeMode.DARK to "Dark",
+                    M3ThemeMode.LIGHT to "Light",
+                    M3ThemeMode.FOLLOW_SYSTEM to "System"
+                ),
+                selected = design.themeMode,
+                onPick = viewModel::setM3ThemeMode
+            )
+
+            // ── Storage ─────────────────────────────────────
+            M3SettingsGroup("Storage")
+            val sizes = storage
+            if (sizes == null) {
+                Text(
+                    "Working out sizes…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                M3StorageRow(
+                    "Downloaded chapters",
+                    app.xreader.data.files.StorageMeter
+                        .formatBytes(sizes.downloadedTextBytes)
+                )
+                M3StorageRow(
+                    "Reading cache",
+                    app.xreader.data.files.StorageMeter
+                        .formatBytes(sizes.cacheBodyBytes)
+                )
+                M3StorageRow(
+                    "Book files",
+                    app.xreader.data.files.StorageMeter
+                        .formatBytes(sizes.bookFilesBytes)
+                )
+                M3StorageRow(
+                    "Stored covers",
+                    app.xreader.data.files.StorageMeter
+                        .formatBytes(sizes.coverCacheBytes)
+                )
+                M3StorageRow(
+                    "Temporary files",
+                    app.xreader.data.files.StorageMeter
+                        .formatBytes(sizes.tempBytes)
+                )
+                M3StorageRow(
+                    "Listening cache",
+                    app.xreader.data.files.StorageMeter
+                        .formatBytes(voiceBytes ?: 0L)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { confirmClear = true }) {
+                        Text("Clear caches")
+                    }
+                    TextButton(onClick = { confirmVoiceClear = true }) {
+                        Text("Clear listening cache")
+                    }
+                }
+                Text(
+                    "Clearing caches removes the reading cache, the " +
+                        "image cache and temporary files. The " +
+                        "listening cache has its own Clear and is " +
+                        "never touched by Clear caches. Downloads " +
+                        "and your places stay.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (clearNote != null) {
+                    Text(
+                        clearNote!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            // ── Sources & repairs ───────────────────────────
+            M3SettingsGroup("Sources & repairs")
+            M3SegmentedRow(
+                label = "Content shown",
+                options = app.xreader.data.extension.ContentVisibility
+                    .entries.map { it to it.label },
+                selected = state.contentVisibility,
+                onPick = viewModel::setContentVisibility
+            )
+            M3SegmentedRow(
+                label = "Best source wins by",
+                options = listOf(
+                    app.xreader.data.extension.BestSourcePriority
+                        .DOWNLOADED_FIRST to "Downloaded first",
+                    app.xreader.data.extension.BestSourcePriority
+                        .MOST_CHAPTERS to "Most chapters",
+                    app.xreader.data.extension.BestSourcePriority
+                        .NEWEST_CHAPTER to "Newest chapter",
+                    app.xreader.data.extension.BestSourcePriority
+                        .FASTEST to "Fastest"
+                ),
+                selected = state.bestSourcePriority,
+                onPick = viewModel::setBestSourcePriority
+            )
+            M3SwitchRow(
+                label = "Browser view for site checks",
+                description = "Sources that ask for a site check or a sign-in can open the one-time browser screen.",
+                checked = state.browserViewEnabled,
+                onChange = viewModel::setBrowserViewEnabled
+            )
+            M3SwitchRow(
+                label = "Manga extension player",
+                description = "Off means no manga extension loads at all.",
+                checked = state.keiyoushiPlayerEnabled,
+                onChange = viewModel::setKeiyoushiPlayerEnabled
+            )
+            M3SwitchRow(
+                label = "DNS-over-HTTPS",
+                description = "Source lookups go through Cloudflare (1.1.1.1) instead of the device's resolver.",
+                checked = state.dohEnabled,
+                onChange = viewModel::setDohEnabled
+            )
+
+            // ── Advanced ────────────────────────────────────
+            M3SettingsGroup("Advanced")
+            M3SwitchRow(
+                label = "Launch intro",
+                description = "The short intro when the app opens.",
+                checked = design.launchIntro,
+                onChange = viewModel::setLaunchIntro
+            )
+            ListItem(
+                headlineContent = { Text("Reset customisation") },
+                supportingContent = {
+                    Text(
+                        "Colours, layout and reader defaults go " +
+                            "back to how they started. Books, " +
+                            "sources and progress are not touched."
+                    )
+                },
+                trailingContent = {
+                    TextButton(onClick = { confirmReset = true }) {
+                        Text(
+                            "Reset",
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                },
+                colors = ListItemDefaults.colors(
+                    containerColor = Color.Transparent
+                )
+            )
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text("Reset customisation?") },
+            text = {
+                Text(
+                    "Only how Xreader looks and feels. Nothing you " +
+                        "are reading, and nothing you organised, " +
+                        "is removed."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmReset = false
+                    viewModel.resetCustomisation()
+                }) { Text("Reset") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmReset = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Clear caches?") },
+            text = {
+                Text(
+                    "Reading cache, image cache and temporary " +
+                        "files will be removed and fetched again " +
+                        "when needed. Stored covers, downloads and " +
+                        "the listening cache stay."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = false
+                    viewModel.clearCaches()
+                }) { Text("Clear caches") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+    if (confirmVoiceClear) {
+        AlertDialog(
+            onDismissRequest = { confirmVoiceClear = false },
+            title = { Text("Clear listening cache?") },
+            text = {
+                Text(
+                    "Sentences the online voice fetched ahead " +
+                        "will be removed. Books, downloads and " +
+                        "your places stay."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmVoiceClear = false
+                    viewModel.clearVoiceCache()
+                }) { Text("Clear listening cache") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmVoiceClear = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun M3SettingsGroup(title: String) {
+    Column {
+        Spacer(Modifier.height(16.dp))
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 8.dp)
+        )
+        HorizontalDivider(
+            Modifier.padding(vertical = 8.dp),
+            color = MaterialTheme.colorScheme.outlineVariant
+        )
+    }
+}
+
+@Composable
+private fun M3SwitchRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(label) },
+        supportingContent = { Text(description) },
+        trailingContent = {
+            Switch(checked = checked, onCheckedChange = onChange)
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = Color.Transparent
+        ),
+        modifier = Modifier.clickable { onChange(!checked) }
+    )
+}
+
+@Composable
+private fun <T> M3SegmentedRow(
+    label: String,
+    options: List<Pair<T, String>>,
+    selected: T,
+    onPick: (T) -> Unit
+) {
+    Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Text(label, style = MaterialTheme.typography.bodyLarge)
+        Row(Modifier.horizontalScroll(rememberScrollState())) {
+            SingleChoiceSegmentedButtonRow {
+                options.forEachIndexed { index, (value, text) ->
+                    SegmentedButton(
+                        selected = value == selected,
+                        onClick = { onPick(value) },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = options.size
+                        ),
+                        label = { Text(text) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun M3StorageRow(label: String, value: String) {
+    ListItem(
+        headlineContent = { Text(label) },
+        trailingContent = {
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = Color.Transparent
+        )
+    )
 }

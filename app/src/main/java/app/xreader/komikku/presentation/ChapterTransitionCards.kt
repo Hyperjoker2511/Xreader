@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -54,13 +55,52 @@ fun ChapterTransitionCard(
     transition: ChapterTransition,
     onCross: () -> Unit
 ) {
+    // Code 121 (W6, §3.8 S13): in the Material 3 design the
+    // transition is a FILLED SCHEME CARD — the same content and
+    // the same cross door, seated in a surfaceContainerHigh
+    // card. The transition BEHAVIOUR (when the card appears,
+    // what crossing does) is the engine's and is untouched;
+    // under Nocturne the shipped bare-column form renders.
+    if (app.xreader.ui.theme.isMaterial3Design()) {
+        androidx.compose.foundation.layout.Box(
+            Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.material3.Card(
+                colors = androidx.compose.material3.CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                ),
+                shape = MaterialTheme.shapes.extraLarge,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                ChapterTransitionContent(
+                    transition = transition,
+                    onCross = onCross,
+                    modifier = Modifier.padding(24.dp)
+                )
+            }
+        }
+        return
+    }
+    ChapterTransitionContent(transition = transition, onCross = onCross)
+}
+
+@Composable
+private fun ChapterTransitionContent(
+    transition: ChapterTransition,
+    onCross: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     val isNext = transition is ChapterTransition.Next
     val from = transition.from
     val to = transition.to
+    val m3 = app.xreader.ui.theme.isMaterial3Design()
     Column(
-        Modifier
-            .fillMaxSize()
-            .padding(32.dp),
+        modifier
+            .then(if (m3) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
+            .then(if (m3) Modifier else Modifier.padding(32.dp)),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -94,7 +134,13 @@ fun ChapterTransitionCard(
                 )
                 ChapterLine(to)
                 Spacer(Modifier.height(24.dp))
-                TextButton(onClick = onCross) { Text("Read next chapter") }
+                if (m3) {
+                    androidx.compose.material3.Button(onClick = onCross) {
+                        Text("Read next chapter")
+                    }
+                } else {
+                    TextButton(onClick = onCross) { Text("Read next chapter") }
+                }
             } else {
                 Text(
                     "No next chapter",
@@ -111,7 +157,13 @@ fun ChapterTransitionCard(
                 )
                 ChapterLine(to)
                 Spacer(Modifier.height(24.dp))
-                TextButton(onClick = onCross) { Text("Read previous chapter") }
+                if (m3) {
+                    androidx.compose.material3.Button(onClick = onCross) {
+                        Text("Read previous chapter")
+                    }
+                } else {
+                    TextButton(onClick = onCross) { Text("Read previous chapter") }
+                }
             } else {
                 Text(
                     "No previous chapter",

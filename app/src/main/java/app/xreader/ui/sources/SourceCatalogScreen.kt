@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
@@ -28,6 +29,36 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+// Code 121 (W4): the scratch-M3 catalogue branch's components.
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.MediumFlexibleTopAppBar
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import app.xreader.data.prefs.M3CatalogueColumns
+import app.xreader.data.prefs.M3CatalogueMetadata
 import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.bottomContentPadding
 import app.xreader.core.motion.listPlacementSpec
@@ -74,6 +105,27 @@ fun SourceCatalogScreen(
 
     LaunchedEffect(viewModel) {
         viewModel.openedBook.collect { bookId -> onOpenBook(bookId) }
+    }
+
+    // ── Code 121 (W4, scratch R20): the Material 3 catalogue ──
+    // A medium flexible top app bar (source name; in-source
+    // search in the bar), a segmented Popular/Latest row with
+    // the Filters button at its trailing end (no FAB), and a
+    // 2-column grid of filled cards whose metadata lives INSIDE
+    // the card. Under Nocturne nothing below runs.
+    if (isM3Design()) {
+        M3SourceCatalogue(
+            state = state,
+            viewModel = viewModel,
+            onBack = onBack,
+            onSessionHandoff = onSessionHandoff,
+            onOpenSourceSettings = onOpenSourceSettings,
+            searchOpen = searchOpen,
+            onSearchOpenChange = { searchOpen = it },
+            pendingAdd = pendingAdd,
+            onPendingAddChange = { pendingAdd = it }
+        )
+        return
     }
 
     Column(
@@ -450,6 +502,479 @@ fun SourceCatalogScreen(
                 TextButton(onClick = { pendingAdd = null }) {
                     Text("Cancel")
                 }
+            }
+        )
+    }
+}
+
+/**
+ * Code 121 (W4, scratch R20): the Material 3 source catalogue.
+ * The card's metadata line carries the author — the one
+ * per-book datum [app.xreader.extensionapi.SourceBook] holds
+ * (there is no latest-chapter field in the catalogue model;
+ * see deviation D-121-W4-2 in the build log). The "In library"
+ * badge renders where the book's normalised title is in the
+ * library key set the catalogue does not currently expose —
+ * also D-121-W4-2.
+ */
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class
+)
+@Composable
+private fun M3SourceCatalogue(
+    state: CatalogUiState,
+    viewModel: SourceCatalogViewModel,
+    onBack: () -> Unit,
+    onSessionHandoff: (app.xreader.data.extension.SessionNeed.Kind) -> Unit,
+    onOpenSourceSettings: () -> Unit,
+    searchOpen: Boolean,
+    onSearchOpenChange: (Boolean) -> Unit,
+    pendingAdd: app.xreader.extensionapi.SourceBook?,
+    onPendingAddChange: (app.xreader.extensionapi.SourceBook?) -> Unit
+) {
+    val designState = app.xreader.ui.theme.LocalDesignState.current
+    val columns = when (designState.catalogueColumns) {
+        M3CatalogueColumns.TWO -> 2
+        M3CatalogueColumns.THREE -> 3
+    }
+    val showMetadata =
+        designState.catalogueMetadata == M3CatalogueMetadata.SHOW
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            Column {
+                MediumFlexibleTopAppBar(
+                    title = {
+                        Text(
+                            state.sourceName.ifBlank { "Source" },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    subtitle = state.ratingBadge?.let { badge ->
+                        { Text(badge) }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back"
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = {
+                                viewModel.setMode(CatalogMode.SEARCH)
+                                onSearchOpenChange(!searchOpen)
+                            }
+                        ) {
+                            Icon(
+                                Icons.Filled.Search,
+                                contentDescription = "Search this source"
+                            )
+                        }
+                        if (state.isPlayerSource) {
+                            IconButton(onClick = onOpenSourceSettings) {
+                                Icon(
+                                    Icons.Filled.Settings,
+                                    contentDescription = "Source settings"
+                                )
+                            }
+                        }
+                    },
+                    scrollBehavior = scrollBehavior
+                )
+                if (state.mode == CatalogMode.SEARCH && searchOpen) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = state.query,
+                            onValueChange = { viewModel.setQuery(it) },
+                            placeholder = { Text("Search this source") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = { viewModel.submitSearch() },
+                            enabled = state.query.isNotBlank()
+                        ) { Text("Search") }
+                    }
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SingleChoiceSegmentedButtonRow(
+                        Modifier.weight(1f)
+                    ) {
+                        SegmentedButton(
+                            selected = state.mode == CatalogMode.POPULAR,
+                            onClick = {
+                                viewModel.setMode(CatalogMode.POPULAR)
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = 0, count = 2
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Popular") }
+                        SegmentedButton(
+                            selected = state.mode == CatalogMode.LATEST,
+                            onClick = {
+                                viewModel.setMode(CatalogMode.LATEST)
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = 1, count = 2
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Latest") }
+                    }
+                    if (state.hasFilters) {
+                        FilledTonalButton(
+                            onClick = { viewModel.openFilterSheet() }
+                        ) {
+                            Icon(
+                                Icons.Filled.FilterList,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                if (state.activeFilterCount > 0) {
+                                    "Filters · ${state.activeFilterCount}"
+                                } else {
+                                    "Filters"
+                                },
+                                modifier = Modifier.padding(start = 6.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    ) { padding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp)
+        ) {
+            val errorMessage = state.errorMessage
+            when {
+                state.loading && state.books.isEmpty() -> {
+                    LoadingState(
+                        whatIsHappening = "Loading books from this " +
+                            "source… some sources answer slowly — " +
+                            "this is still loading, not a failure.",
+                        modifier = Modifier.padding(top = 16.dp)
+                    )
+                }
+                errorMessage != null && state.books.isEmpty() -> {
+                    val classification = state.fetchClassification
+                    val honestWords = CatalogueCopy.failureMessage(
+                        classification
+                    )
+                    val need = state.sessionNeed
+                    val sessionOffered = CatalogueCopy
+                        .offersSessionAction(classification, need)
+                    val primaryIsSession = !state.sourceOff &&
+                        honestWords == null && need != null
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            when {
+                                state.sourceOff ->
+                                    "This source is switched off, so " +
+                                        "it can't load its books."
+                                honestWords != null -> honestWords
+                                need == app.xreader.data.extension
+                                    .SessionNeed.Kind.SITE_CHECK ->
+                                    "This site is showing a human " +
+                                        "check. Solve it once and " +
+                                        "Xreader keeps the session — " +
+                                        "after that, reading works " +
+                                        "as normal."
+                                need == app.xreader.data.extension
+                                    .SessionNeed.Kind.SIGN_IN ->
+                                    "This site needs you to sign in " +
+                                        "before it will share its " +
+                                        "books. Sign in once on its " +
+                                        "own page; Xreader keeps only " +
+                                        "the session, never your " +
+                                        "password."
+                                else ->
+                                    "This source didn't answer. " +
+                                        errorMessage
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Button(
+                            onClick = {
+                                when {
+                                    state.sourceOff ->
+                                        viewModel.turnBackOnAndRetry()
+                                    primaryIsSession && need != null ->
+                                        onSessionHandoff(need)
+                                    else -> viewModel.retry()
+                                }
+                            }
+                        ) {
+                            Text(
+                                when {
+                                    state.sourceOff ->
+                                        "Turn back on and try again"
+                                    primaryIsSession ->
+                                        CatalogueCopy.sessionActionLabel(need)
+                                    else -> "Try again"
+                                }
+                            )
+                        }
+                        if (primaryIsSession) {
+                            TextButton(
+                                onClick = { viewModel.retry() }
+                            ) { Text("Try again without it") }
+                        } else if (sessionOffered && need != null) {
+                            TextButton(
+                                onClick = { onSessionHandoff(need) }
+                            ) {
+                                Text(
+                                    CatalogueCopy.sessionActionLabel(need)
+                                )
+                            }
+                        }
+                    }
+                }
+                !state.loading && state.books.isEmpty() -> {
+                    val emptyNeed = state.sessionNeed
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            CatalogueCopy.emptyMessage(
+                                need = emptyNeed,
+                                isSearch = state.mode == CatalogMode.SEARCH,
+                                hasSession = state.hasSession
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        when (emptyNeed) {
+                            app.xreader.data.extension.SessionNeed
+                                .Kind.SITE_CHECK -> Button(
+                                onClick = { onSessionHandoff(emptyNeed) }
+                            ) { Text("Solve the check") }
+                            app.xreader.data.extension.SessionNeed
+                                .Kind.SIGN_IN -> Button(
+                                onClick = { onSessionHandoff(emptyNeed) }
+                            ) { Text("Sign in") }
+                            else -> Unit
+                        }
+                    }
+                }
+                else -> {
+                    if (state.loading) {
+                        Text(
+                            "Updating…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 6.dp)
+                        )
+                    }
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(columns),
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = androidx.compose.foundation.layout
+                            .PaddingValues(bottom = 24.dp, top = 8.dp)
+                    ) {
+                        items(
+                            state.books, key = { "m3-book-${it.id}" }
+                        ) { book ->
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme
+                                        .colorScheme.surfaceContainerLow
+                                ),
+                                shape = MaterialTheme.shapes.medium,
+                                modifier = Modifier
+                                    .animateItem(
+                                        placementSpec = listPlacementSpec()
+                                    )
+                                    .combinedClickable(
+                                        onClick = {
+                                            viewModel.openBook(book)
+                                        },
+                                        onLongClick = {
+                                            onPendingAddChange(book)
+                                        }
+                                    )
+                            ) {
+                                if (book.coverUrl.isNullOrBlank()) {
+                                    Box(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(2f / 3f)
+                                            .background(
+                                                MaterialTheme.colorScheme
+                                                    .surfaceContainerHigh
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            book.title,
+                                            style = MaterialTheme
+                                                .typography.titleSmall,
+                                            color = MaterialTheme
+                                                .colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(12.dp),
+                                            maxLines = 4,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                } else {
+                                    AsyncImage(
+                                        model = book.coverUrl,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(2f / 3f)
+                                            .background(
+                                                MaterialTheme.colorScheme
+                                                    .surfaceContainerHigh
+                                            )
+                                    )
+                                }
+                                if (showMetadata) {
+                                    Column(Modifier.padding(12.dp)) {
+                                        Text(
+                                            book.title,
+                                            style = MaterialTheme
+                                                .typography.titleSmall,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        book.author
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?.let { author ->
+                                                Text(
+                                                    author,
+                                                    style = MaterialTheme
+                                                        .typography.bodySmall,
+                                                    color = MaterialTheme
+                                                        .colorScheme
+                                                        .onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow
+                                                        .Ellipsis
+                                                )
+                                            }
+                                        if (state.openingBookId == book.id) {
+                                            LinearWavyProgressIndicator(
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(top = 8.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (state.hasNext) {
+                            item(
+                                span = { GridItemSpan(maxLineSpan) }
+                            ) {
+                                if (state.loading) {
+                                    LinearWavyProgressIndicator(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 12.dp)
+                                    )
+                                } else {
+                                    FilledTonalButton(
+                                        onClick = { viewModel.loadMore() },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) { Text("Load more") }
+                                }
+                            }
+                        }
+                        if (!state.hasNext && state.page > 1 &&
+                            state.books.isNotEmpty() &&
+                            state.loadCompleted && !state.loading
+                        ) {
+                            item(
+                                span = { GridItemSpan(maxLineSpan) }
+                            ) {
+                                Text(
+                                    "That's everything here",
+                                    style = MaterialTheme
+                                        .typography.bodySmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant,
+                                    textAlign = androidx.compose.ui.text
+                                        .style.TextAlign.Center,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (state.filterSheetOpen) {
+        SourceFilterSheet(
+            viewModel = viewModel,
+            onDismiss = { viewModel.cancelFilterSheet() }
+        )
+    }
+
+    pendingAdd?.let { book ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { onPendingAddChange(null) },
+            title = { Text("Add to library") },
+            text = {
+                Text(
+                    "Add “${book.title}” to your library? " +
+                        "You can remove it any time from the Library."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onPendingAddChange(null)
+                        viewModel.addToLibrary(book)
+                    }
+                ) { Text("Add") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { onPendingAddChange(null) }
+                ) { Text("Cancel") }
             }
         )
     }

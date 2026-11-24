@@ -3,6 +3,7 @@ package app.xreader.ui.downloads
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import app.xreader.data.db.Book
 import app.xreader.data.db.DownloadKind
 import app.xreader.data.db.DownloadQueueItem
@@ -348,6 +349,60 @@ class DownloadsViewModel(private val container: AppContainer) : ViewModel() {
 
     fun resumeAll() {
         viewModelScope.launch { container.downloadController.resumeAll() }
+    }
+
+    /**
+     * Code 121 W8 (D-121-W2-05 retired): the R4 delete doors.
+     * The seam is the app's proven one — the same shape as
+     * BookDetailViewModel.deleteDownloadedChapters and
+     * LibraryViewModel.bulkDeleteDownloads: reset the READY
+     * chapter rows in ONE transaction, then delete the book's
+     * downloaded content tree on IO. The book, its place and
+     * its queue history are kept.
+     */
+    fun deleteDownloadedChapters(bookId: Long) {
+        viewModelScope.launch {
+            deleteChapterContent(bookId)
+            storageTick.value += 1
+        }
+    }
+
+    /** "Delete book's downloads": the chapter content PLUS
+     * the book's download-queue rows in every state (the
+     * FIX-9 full-deletion seam, DownloadQueueDao.deleteForBook),
+     * after cancelling anything still active. */
+    fun deleteBookDownloads(bookId: Long) {
+        viewModelScope.launch {
+            runCatching { container.downloadController.cancelAllForBook(bookId) }
+            deleteChapterContent(bookId)
+            queueDao.deleteForBook(bookId)
+            storageTick.value += 1
+        }
+    }
+
+    private suspend fun deleteChapterContent(bookId: Long) {
+        val ready = chapterDao.forBook(bookId).filter {
+            it.downloadState == app.xreader.data.db.DownloadState.READY
+        }
+        if (ready.isNotEmpty()) {
+            container.database.withTransaction {
+                ready.forEach { chapter ->
+                    chapterDao.update(
+                        chapter.copy(
+                            downloadState =
+                                app.xreader.data.db.DownloadState.NONE,
+                            contentPath = null
+                        )
+                    )
+                }
+            }
+        }
+        val book = bookDao.getById(bookId) ?: return
+        kotlinx.coroutines.withContext(container.ioDispatcher) {
+            runCatching {
+                container.bookStorage.deleteDownloadedContent(book)
+            }
+        }
     }
 
     fun setWifiOnlyPrefetch(value: Boolean) {

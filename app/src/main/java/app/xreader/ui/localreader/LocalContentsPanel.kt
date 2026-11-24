@@ -1,5 +1,6 @@
 package app.xreader.ui.localreader
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -173,6 +174,12 @@ internal fun TabbedContentsPanel(
     footerActions: @Composable () -> Unit
 ) {
     var tab by remember { mutableIntStateOf(initialTab) }
+    // Code 121 (S30): under M3 this panel is S18's composition
+    // with local data — the first tab is "Contents" and the
+    // current row sits in secondaryContainer. Nocturne's form
+    // is untouched.
+    val panelIsM3 = app.xreader.ui.theme.LocalDesignState.current.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         if (sortOrder != null && onSortOrderChange != null) {
             // F5: the toggle rides ABOVE the tabs (the return's
@@ -217,7 +224,7 @@ internal fun TabbedContentsPanel(
                 onClick = { tab = 0 },
                 selectedContentColor = readerChromeAccent(),
                 unselectedContentColor = ReaderMutedText,
-                text = { Text("Chapters") }
+                text = { Text(if (panelIsM3) "Contents" else "Chapters") }
             )
             Tab(
                 selected = tab == 1,
@@ -240,7 +247,17 @@ internal fun TabbedContentsPanel(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
-                                    Modifier.fillMaxWidth(),
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            if (panelIsM3 && row.isCurrent) {
+                                                MaterialTheme.colorScheme
+                                                    .secondaryContainer
+                                            } else {
+                                                androidx.compose.ui.graphics
+                                                    .Color.Transparent
+                                            }
+                                        ),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(

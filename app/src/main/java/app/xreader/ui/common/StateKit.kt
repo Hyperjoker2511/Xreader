@@ -5,7 +5,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.CircularWavyProgressIndicator
+import androidx.compose.material3.ContainedLoadingIndicator
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -13,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.xreader.data.prefs.AppDesign
+import app.xreader.ui.theme.LocalDesignState
 
 /**
  * v1.5.8 (J15): the ONE state kit for the whole app — loading /
@@ -33,19 +41,21 @@ import androidx.compose.ui.unit.dp
 fun LoadingState(
     whatIsHappening: String,
     modifier: Modifier = Modifier,
-    /** Code 120 (Q11 + A3): in the Material 3 design a long job
-     * (a probe, an install) shows the wavy line; a short wait
-     * shows the experimental LoadingIndicator (the §3 U7
-     * opt-in). Nocturne ignores this — its spinner is unchanged. */
-    longJob: Boolean = false
+    /** In the Material 3 design (scratch S40 + §8 Q1/Q11): a
+     * long job shows wavy progress; a short wait shows the
+     * experimental loading indicators — the bare form on a
+     * full-surface wait, the contained form inside a surface
+     * ([contained] = true). Nocturne ignores both flags — its
+     * spinner is unchanged. */
+    longJob: Boolean = false,
+    contained: Boolean = false
 ) {
-    if (app.xreader.ui.theme.LocalDesignState.current.design ==
-        app.xreader.data.prefs.AppDesign.MATERIAL3
-    ) {
+    if (LocalDesignState.current.design == AppDesign.MATERIAL3) {
         M3LoadingState(
             whatIsHappening = whatIsHappening,
             modifier = modifier,
-            longJob = longJob
+            longJob = longJob,
+            contained = contained
         )
         return
     }
@@ -76,54 +86,84 @@ fun LoadingState(
 }
 
 /**
- * The Material 3 design's loading state (design §2.10 S40):
- * a tonal card (surfaceContainer, medium shape), the label in
- * the type scale, and the wait indicator per Q11 — the
- * experimental LoadingIndicator for short waits (the build's
- * single experimental opt-in, §3 U7/E2), the wavy line for
- * long jobs.
+ * The Material 3 design's loading state (scratch §3.10 S40,
+ * settled §8 Q1): NO card — the state is a component of the
+ * surface it sits in, on the surface itself. A full-surface
+ * short wait is the plain (bare) [LoadingIndicator] centred
+ * with a bodyMedium line; a short wait inside a surface is
+ * the [ContainedLoadingIndicator]; a long job is wavy
+ * progress (linear here; [DesignCircularWavyProgress] is
+ * the circular form for ring-shaped homes like S22's timer).
+ * Both loading indicators are the experimental expressive
+ * forms — the owner's recorded opt-in (§8 Q1); there is no
+ * pre-1.5 circular fallback anywhere in this design.
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun M3LoadingState(
     whatIsHappening: String,
     modifier: Modifier = Modifier,
-    longJob: Boolean = false
+    longJob: Boolean = false,
+    contained: Boolean = false
 ) {
-    androidx.compose.material3.Surface(
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        modifier = modifier.fillMaxWidth()
+    Column(
+        modifier.fillMaxWidth().padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            if (longJob) {
-                androidx.compose.material3.LinearWavyProgressIndicator(
-                    modifier = Modifier.fillMaxWidth()
-                )
-            } else {
-                androidx.compose.material3.LoadingIndicator(
-                    modifier = Modifier.size(48.dp)
-                )
-            }
-            Text(
-                whatIsHappening,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
+        when {
+            longJob -> LinearWavyProgressIndicator(
+                modifier = Modifier.fillMaxWidth()
             )
-            Text(
-                "Still loading…",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-                textAlign = TextAlign.Center
+            contained -> ContainedLoadingIndicator(
+                modifier = Modifier.size(48.dp)
             )
+            else -> LoadingIndicator(
+                modifier = Modifier.size(48.dp)
+            )
+        }
+        Text(
+            whatIsHappening,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        Text(
+            "Still loading…",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+/** The circular wavy form for long jobs whose home is a ring
+ * (scratch S40's "wavy linear/circular progress"; S22's timer
+ * ring is the standing caller shape). Determinate when
+ * [progress] is given, indeterminate when it is null. Under
+ * Nocturne this is the stock circular indicator, unchanged. */
+@Composable
+fun DesignCircularWavyProgress(
+    progress: (() -> Float)?,
+    modifier: Modifier = Modifier
+) {
+    if (LocalDesignState.current.design == AppDesign.MATERIAL3) {
+        if (progress != null) {
+            CircularWavyProgressIndicator(
+                progress = progress,
+                modifier = modifier
+            )
+        } else {
+            CircularWavyProgressIndicator(modifier = modifier)
+        }
+    } else {
+        if (progress != null) {
+            CircularProgressIndicator(
+                progress = progress,
+                modifier = modifier
+            )
+        } else {
+            CircularProgressIndicator(modifier = modifier)
         }
     }
 }
@@ -136,6 +176,16 @@ fun ErrorState(
     onAction: (() -> Unit)? = null,
     detail: String? = null
 ) {
+    if (LocalDesignState.current.design == AppDesign.MATERIAL3) {
+        M3ErrorState(
+            reason = reason,
+            modifier = modifier,
+            actionLabel = actionLabel,
+            onAction = onAction,
+            detail = detail
+        )
+        return
+    }
     GlassCard(modifier = modifier.fillMaxWidth()) {
         Column(
             Modifier.fillMaxWidth(),
@@ -159,6 +209,85 @@ fun ErrorState(
             if (actionLabel != null && onAction != null) {
                 PrimaryPill(text = actionLabel, onClick = onAction)
             }
+        }
+    }
+}
+
+/**
+ * The Material 3 design's error state (scratch S40): no card —
+ * the plain reason in bodyMedium, the detail line where held,
+ * and the door as a FILLED button (Retry where the caller
+ * passes a retry; the caller's label is honoured verbatim).
+ */
+@Composable
+private fun M3ErrorState(
+    reason: String,
+    modifier: Modifier = Modifier,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    detail: String? = null
+) {
+    Column(
+        modifier.fillMaxWidth().padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            reason,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center
+        )
+        if (!detail.isNullOrBlank()) {
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
+        if (actionLabel != null && onAction != null) {
+            Button(onClick = onAction) { Text(actionLabel) }
+        }
+    }
+}
+
+/**
+ * The Material 3 design's empty state (scratch S40): a
+ * headline line naming what would fill the surface, one body
+ * line, and the door that fills it as a FILLED button — a
+ * component of the surface, never a card and never a
+ * full-screen takeover. New M3 surfaces call this; the shared
+ * [EmptyState]/KitEmptyState in their own files keep their
+ * Nocturne forms untouched.
+ */
+@Composable
+fun M3EmptyState(
+    headline: String,
+    body: String,
+    modifier: Modifier = Modifier,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null
+) {
+    Column(
+        modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            headline,
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center
+        )
+        Text(
+            body,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        if (actionLabel != null && onAction != null) {
+            Button(onClick = onAction) { Text(actionLabel) }
         }
     }
 }

@@ -101,6 +101,58 @@ class GeneratedArtViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    /** Code 121 W8 (R33): delete one picture from its card
+     * menu — the same shared delete path as [deleteSelected]. */
+    fun deleteArt(art: LoreArt) {
+        viewModelScope.launch {
+            container.loreArtStore.delete(art)
+            local.value = local.value.copy(
+                selectedId = if (local.value.selectedId == art.id) {
+                    null
+                } else {
+                    local.value.selectedId
+                },
+                message = "Picture deleted."
+            )
+        }
+    }
+
+    /** Code 121 W8 (R33): "Set as cover" — the Komikku
+     * set-page-as-cover pattern: copy the picture into the
+     * book's cover slot and point the book's coverPath at it.
+     * The art row and file stay (the cover is a copy). */
+    fun setAsCover(art: LoreArt) {
+        viewModelScope.launch {
+            val ok = kotlinx.coroutines.withContext(container.ioDispatcher) {
+                runCatching {
+                    val source = container.bookStorage.resolve(art.imagePath)
+                    if (!source.exists()) return@runCatching false
+                    val ext = source.extension
+                        .takeIf { it.isNotBlank() } ?: "webp"
+                    val relative = container.bookStorage
+                        .coverRelative(art.bookId, ext)
+                    val target = container.bookStorage.resolve(relative)
+                    target.parentFile?.mkdirs()
+                    source.copyTo(target, overwrite = true)
+                    val book = container.database.bookDao()
+                        .getById(art.bookId) ?: return@runCatching false
+                    container.database.bookDao()
+                        .update(book.copy(coverPath = relative))
+                    container.bookStorage
+                        .invalidateBookFilesSize(art.bookId)
+                    true
+                }.getOrDefault(false)
+            }
+            local.value = local.value.copy(
+                message = if (ok) {
+                    "Set as the book's cover."
+                } else {
+                    "Couldn't set that picture as the cover."
+                }
+            )
+        }
+    }
+
     fun onSaveResult(saved: Boolean) {
         local.value = local.value.copy(
             message = if (saved) {

@@ -55,7 +55,7 @@ fun m3DarkTheme(design: DesignState): Boolean = when (design.themeMode) {
 }
 
 /**
- * The M3 colour resolution (§1.1.1's three doors):
+ * The M3 colour resolution (scratch design §2.1's three doors):
  *  1. Dynamic colour (the default): the platform scheme as
  *     generated on API 31+ — never re-varianted, never
  *     sanitised (that treatment is Nocturne's own path).
@@ -85,48 +85,17 @@ fun resolveM3ColorScheme(context: Context, design: DesignState, dark: Boolean): 
 }
 
 /**
- * The official 15-style type scale (§1.2) with the brand-font
- * mapping (recheck note N9 — families are applied per group, the
- * tokens themselves are the library's spec defaults, weights and
- * metrics untouched): Jakarta for Display / Headline / Title,
- * Inter for Body / Label, emphasized variants (material3 1.5)
- * following their base style's family. The closed emphasized
- * list (addendum A5) is a usage rule for surfaces, not a token.
+ * Code 121 (scratch design §2.2, trace T19 — the owner's ruling
+ * in final form): the M3 design's type scale is the library's
+ * default [Typography] VERBATIM — the platform typeface (Roboto)
+ * across the whole scale, spec sizes/weights/line heights/
+ * tracking, emphasized variants as the library defines them.
+ * NO brand family is applied here: Plus Jakarta Sans + Inter
+ * are Nocturne's alone and are never carried into this design.
+ * (Code 120 mapped Jakarta/Inter onto this scale; that mapping
+ * was the T19 trace and is removed.)
  */
-private val SpecTypography = Typography()
-
-val M3Typography: Typography = Typography(
-    displayLarge = SpecTypography.displayLarge.copy(fontFamily = JakartaSans),
-    displayMedium = SpecTypography.displayMedium.copy(fontFamily = JakartaSans),
-    displaySmall = SpecTypography.displaySmall.copy(fontFamily = JakartaSans),
-    headlineLarge = SpecTypography.headlineLarge.copy(fontFamily = JakartaSans),
-    headlineMedium = SpecTypography.headlineMedium.copy(fontFamily = JakartaSans),
-    headlineSmall = SpecTypography.headlineSmall.copy(fontFamily = JakartaSans),
-    titleLarge = SpecTypography.titleLarge.copy(fontFamily = JakartaSans),
-    titleMedium = SpecTypography.titleMedium.copy(fontFamily = JakartaSans),
-    titleSmall = SpecTypography.titleSmall.copy(fontFamily = JakartaSans),
-    bodyLarge = SpecTypography.bodyLarge.copy(fontFamily = InterSans),
-    bodyMedium = SpecTypography.bodyMedium.copy(fontFamily = InterSans),
-    bodySmall = SpecTypography.bodySmall.copy(fontFamily = InterSans),
-    labelLarge = SpecTypography.labelLarge.copy(fontFamily = InterSans),
-    labelMedium = SpecTypography.labelMedium.copy(fontFamily = InterSans),
-    labelSmall = SpecTypography.labelSmall.copy(fontFamily = InterSans),
-    displayLargeEmphasized = SpecTypography.displayLargeEmphasized.copy(fontFamily = JakartaSans),
-    displayMediumEmphasized = SpecTypography.displayMediumEmphasized.copy(fontFamily = JakartaSans),
-    displaySmallEmphasized = SpecTypography.displaySmallEmphasized.copy(fontFamily = JakartaSans),
-    headlineLargeEmphasized = SpecTypography.headlineLargeEmphasized.copy(fontFamily = JakartaSans),
-    headlineMediumEmphasized = SpecTypography.headlineMediumEmphasized.copy(fontFamily = JakartaSans),
-    headlineSmallEmphasized = SpecTypography.headlineSmallEmphasized.copy(fontFamily = JakartaSans),
-    titleLargeEmphasized = SpecTypography.titleLargeEmphasized.copy(fontFamily = JakartaSans),
-    titleMediumEmphasized = SpecTypography.titleMediumEmphasized.copy(fontFamily = JakartaSans),
-    titleSmallEmphasized = SpecTypography.titleSmallEmphasized.copy(fontFamily = JakartaSans),
-    bodyLargeEmphasized = SpecTypography.bodyLargeEmphasized.copy(fontFamily = InterSans),
-    bodyMediumEmphasized = SpecTypography.bodyMediumEmphasized.copy(fontFamily = InterSans),
-    bodySmallEmphasized = SpecTypography.bodySmallEmphasized.copy(fontFamily = InterSans),
-    labelLargeEmphasized = SpecTypography.labelLargeEmphasized.copy(fontFamily = InterSans),
-    labelMediumEmphasized = SpecTypography.labelMediumEmphasized.copy(fontFamily = InterSans),
-    labelSmallEmphasized = SpecTypography.labelSmallEmphasized.copy(fontFamily = InterSans)
-)
+val M3Typography: Typography = Typography()
 
 /** The AppScheme the theme helpers (primaryTextColor() and
  * family) read under the M3 design: the design's own generated
@@ -151,10 +120,11 @@ private fun m3AppScheme(darkColors: ColorScheme, lightColors: ColorScheme): AppS
 /**
  * The Material 3 theme itself: [MaterialExpressiveTheme] with
  * the resolved scheme, the expressive motion scheme at theme
- * level (§1.4 — Standard when the user picks it or Reduce
- * motion is on), the spec shape tokens (the library's [Shapes]
- * defaults ARE the §1.3 library: 4/8/12/16/28 + the increased
- * set) and the official type scale above.
+ * level (§2.4 — Expressive by default; Standard when the user
+ * picks it under the motion knob or Reduce motion is on), the
+ * spec shape tokens (the library's [Shapes] defaults ARE the
+ * §2.3 corner scale: 0/4/8/12/16/20/28/32/48/full) and the
+ * official type scale above (§2.2).
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable

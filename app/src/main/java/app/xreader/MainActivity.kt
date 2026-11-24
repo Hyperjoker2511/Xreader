@@ -17,6 +17,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.xreader.data.prefs.AppearanceState
 import app.xreader.data.prefs.GlassStyle
 import app.xreader.data.prefs.ThemeMode
+import app.xreader.data.prefs.settingsDataStore
 import androidx.compose.ui.Modifier
 import app.xreader.core.motion.SpringMotionEngine
 import app.xreader.core.motion.rememberMotionEnabled
@@ -198,11 +199,52 @@ class MainActivity : FragmentActivity() {
                             showRecovery = false
                         },
                         onSafeAppearance = {
-                            // Persist Tinted BEFORE entering the app,
-                            // so the crashing appearance can't return.
-                            activityScope.launch {
-                                container.appearancePrefs
-                                    .setGlassStyle(GlassStyle.TINTED)
+                            // Code 121 (S39/T17): Safe appearance
+                            // is DESIGN-SCOPED. Under Material 3
+                            // it resets ONLY M3's own appearance
+                            // settings to their defaults and NEVER
+                            // writes a Nocturne setting; the
+                            // Tinted write below exists only when
+                            // Nocturne is the active design.
+                            if (designState.design ==
+                                app.xreader.data.prefs.AppDesign.MATERIAL3
+                            ) {
+                                activityScope.launch {
+                                    val prefs = container.designPrefs
+                                    prefs.setColourSource(
+                                        app.xreader.data.prefs
+                                            .M3ColourSource.DYNAMIC
+                                    )
+                                    // W8 (D-121-W7-05): the
+                                    // stored seed is cleared too,
+                                    // not merely made inert.
+                                    prefs.clearSeed()
+                                    prefs.setThemeMode(
+                                        app.xreader.data.prefs
+                                            .M3ThemeMode.DARK
+                                    )
+                                    prefs.setMotionChoice(
+                                        app.xreader.data.prefs
+                                            .M3MotionChoice.EXPRESSIVE
+                                    )
+                                    prefs.setBookPageCoverColour(true)
+                                    prefs.setTabLabels(
+                                        app.xreader.data.prefs
+                                            .M3TabLabels.ALWAYS
+                                    )
+                                    prefs.setNavForm(
+                                        app.xreader.data.prefs
+                                            .M3NavForm.AUTO
+                                    )
+                                }
+                            } else {
+                                // Persist Tinted BEFORE entering
+                                // the app, so the crashing
+                                // appearance can't return.
+                                activityScope.launch {
+                                    container.appearancePrefs
+                                        .setGlassStyle(GlassStyle.TINTED)
+                                }
                             }
                             container.acknowledgeCrash()
                             showRecovery = false
@@ -249,6 +291,76 @@ class MainActivity : FragmentActivity() {
                             activityScope.launch {
                                 container.appearancePrefs
                                     .setColourScheme(schemeName)
+                            }
+                        },
+                        // Code 121 (S38/§5.2 parity), W8
+                        // reconciliation: the ask's colour bar
+                        // serving Nocturne writes through the
+                        // SAME "Custom" entry as W3's §5.2 door
+                        // in Customise — the entry is identified
+                        // by its name ("Custom"): an existing one
+                        // is updated in place and selected; only
+                        // when none exists is a new one created
+                        // (with the door's own id form). There is
+                        // exactly ONE "Custom" scheme entry.
+                        onPickNocturneColour = { argb ->
+                            activityScope.launch {
+                                val existingCustom =
+                                    appearance.customSchemes
+                                        .firstOrNull {
+                                            it.name == "Custom"
+                                        }
+                                if (existingCustom != null) {
+                                    container.appearancePrefs
+                                        .setCustomSchemes(
+                                            appearance.customSchemes
+                                                .map {
+                                                    if (it.id ==
+                                                        existingCustom.id
+                                                    ) {
+                                                        it.copy(
+                                                            seedArgb = argb,
+                                                            endArgb = null
+                                                        )
+                                                    } else {
+                                                        it
+                                                    }
+                                                }
+                                        )
+                                    container.appearancePrefs
+                                        .setColourScheme(
+                                            app.xreader.data.prefs
+                                                .CUSTOM_SCHEME_PREFIX +
+                                                existingCustom.id
+                                        )
+                                } else {
+                                    val spec =
+                                        app.xreader.data.prefs
+                                            .CustomSchemeSpec(
+                                                id = "c" +
+                                                    System
+                                                        .currentTimeMillis(),
+                                                name = "Custom",
+                                                seedArgb = argb
+                                            )
+                                    val updated =
+                                        app.xreader.data.prefs
+                                            .AppearanceValidation
+                                            .addCustomScheme(
+                                                appearance.customSchemes,
+                                                spec
+                                            )
+                                    if (updated != null) {
+                                        container.appearancePrefs
+                                            .setCustomSchemes(updated)
+                                        container.appearancePrefs
+                                            .setColourScheme(
+                                                app.xreader.data.prefs
+                                                    .CUSTOM_SCHEME_PREFIX +
+                                                    spec.id
+                                            )
+                                    }
+                                }
                             }
                         }
                     )
@@ -304,24 +416,51 @@ class MainActivity : FragmentActivity() {
                                     designState.launchIntro
                             )
                         }
-                        // Code 120 completion (§2.9 + the owner's
-                        // standing What's-New rule): on an update,
-                        // EVERY user gets this update's showcase
-                        // once — a pager of feature cards, each
-                        // with its own animation, skippable from
-                        // the first card. It wears the ACTIVE
-                        // design (existing users see it in
-                        // Nocturne: it announces the new design,
-                        // it never switches anyone). Shown when
-                        // the stored last-seen code is behind the
-                        // installed one; a genuinely fresh install
-                        // (nothing seen AND no database file at
-                        // first run) never sees it for its first
-                        // version. Finishing or skipping records
-                        // the version seen, so it never re-shows
-                        // for this version. The initial
-                        // Int.MAX_VALUE read means it can never
-                        // flash before the stored value lands.
+                        // Code 121 (R39): TWO gates, two records,
+                        // never interacting.
+                        //
+                        // (A) THE REVEAL — for a design-carrying
+                        // update. Its record is RevealPrefs (sole
+                        // reader: this gate; sole writer: the
+                        // reveal's own terminal actions below).
+                        // Exact gate: the installed code has
+                        // crossed DESIGN_CARRYING_CODE (121),
+                        // the reveal has not been seen for it,
+                        // the install is ESTABLISHED (the Room
+                        // database file existed at container
+                        // construction — fresh installs take the
+                        // onboarding branch above and never reach
+                        // here), and the ACTIVE design is
+                        // Nocturne (an M3-active user does not
+                        // need an M3 reveal). It composes in this
+                        // shell branch only, so a Recovery detour
+                        // DELAYS it — Recovery replaces this
+                        // branch, and once Continue resolves it
+                        // the gate is re-evaluated and the reveal
+                        // fires; the detour cannot eat it. It is
+                        // a Dialog: truly modal, input beneath
+                        // blocked. Try switches the design via
+                        // DesignPrefs — the only door besides
+                        // Customise that may, and only on tap.
+                        //
+                        // (B) THE LEGACY SHOWCASE — for updates
+                        // carrying no new design. Unchanged from
+                        // code 120: wears the active design, gated
+                        // on the GamePrefs store it shares with
+                        // the Me note. It is suppressed while the
+                        // reveal is pending or showing, so the
+                        // two never stack; finishing it writes
+                        // only its own store.
+                        val revealPrefs = remember {
+                            app.xreader.ui.update.RevealPrefs(
+                                container.applicationContext
+                                    .settingsDataStore
+                            )
+                        }
+                        val revealSeen by revealPrefs.revealSeenCode
+                            .collectAsStateWithLifecycle(
+                                initialValue = Int.MAX_VALUE
+                            )
                         val whatsNewSeen by container.gamePrefs
                             .whatsNewSeenCode
                             .collectAsStateWithLifecycle(
@@ -337,10 +476,50 @@ class MainActivity : FragmentActivity() {
                                     ).versionCode
                             }.getOrDefault(0)
                         }
+                        var revealDismissed by remember {
+                            mutableStateOf(false)
+                        }
                         var showcaseDismissed by remember {
                             mutableStateOf(false)
                         }
-                        if (!showcaseDismissed &&
+                        val revealGate =
+                            !revealDismissed &&
+                                installedCode >=
+                                    app.xreader.ui.update.RevealPrefs
+                                        .DESIGN_CARRYING_CODE &&
+                                revealSeen <
+                                    app.xreader.ui.update.RevealPrefs
+                                        .DESIGN_CARRYING_CODE &&
+                                container.databaseFileExisted &&
+                                designState.design ==
+                                    app.xreader.data.prefs.AppDesign
+                                        .NOCTURNE
+                        if (revealGate) {
+                            app.xreader.ui.update.WhatsNewReveal(
+                                designState = designState,
+                                onTryDesign = {
+                                    revealDismissed = true
+                                    activityScope.launch {
+                                        container.designPrefs
+                                            .setDesign(
+                                                app.xreader.data.prefs
+                                                    .AppDesign.MATERIAL3
+                                            )
+                                        revealPrefs.setRevealSeen(
+                                            installedCode
+                                        )
+                                    }
+                                },
+                                onFinish = {
+                                    revealDismissed = true
+                                    activityScope.launch {
+                                        revealPrefs.setRevealSeen(
+                                            installedCode
+                                        )
+                                    }
+                                }
+                            )
+                        } else if (!showcaseDismissed &&
                             installedCode > 0 &&
                             whatsNewSeen < installedCode &&
                             (whatsNewSeen > 0 ||

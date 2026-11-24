@@ -1,6 +1,29 @@
 package app.xreader.ui.localreader
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Bookmark
@@ -1062,3 +1085,382 @@ fun pdfQuickActions(handlers: PdfChromeHandlers): List<QuickAction> = listOf(
     QuickAction("textView", "Text view", handlers.onTextView),
     QuickAction("display", "Page display", handlers.onDisplay)
 )
+
+// ── Code 121 (R29 / S28 / S29): the local reader in the
+// Material 3 design ─────────────────────────────────────────
+// A local book is a book: under M3 the local reader wears the
+// SAME chrome family as the core reader (S14) — small top app
+// bar on `surface` + HorizontalFloatingToolbar — and its two
+// own sheets take the M3 list forms. The Nocturne glass forms
+// above are untouched; hosts pick the form by the active
+// design, exactly as the core reader does. Behaviour (the
+// handlers, the bar store, the control state) is identical —
+// only the presentation differs.
+
+/** R29: the local reader's M3 chrome — the S14 family with
+ * the local reader's own doors. [actions] are the bar-store's
+ * active actions for this book, rendered as labelled toolbar
+ * buttons in bar order; the seek row is the toolbar's second
+ * row, as in the core chrome. */
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+)
+@Composable
+fun LocalReaderChromeM3(
+    visible: Boolean,
+    bookTitle: String,
+    chapterLine: String,
+    positionLine: String,
+    fraction: Float,
+    bookmarked: Boolean,
+    actions: List<ReaderBarActionId>,
+    onAction: (ReaderBarActionId) -> Unit,
+    onBack: () -> Unit,
+    onToggleBookmark: () -> Unit,
+    onSeekFraction: (Float) -> Unit,
+    onTopBarHeight: (Int) -> Unit = {},
+    onBottomBarHeight: (Int) -> Unit = {}
+) {
+    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    val effectsOffset =
+        MaterialTheme.motionScheme.defaultEffectsSpec<androidx.compose.ui.unit.IntOffset>()
+    var seekExpanded by remember { mutableStateOf(true) }
+    Column(Modifier.fillMaxSize()) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(effects) +
+                slideInVertically(effectsOffset) { -it / 2 },
+            exit = fadeOut(effects) +
+                slideOutVertically(effectsOffset) { -it / 2 }
+        ) {
+            androidx.compose.material3.TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            bookTitle,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1
+                        )
+                        if (chapterLine.isNotBlank()) {
+                            Text(
+                                chapterLine,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            androidx.compose.material.icons.Icons.AutoMirrored
+                                .Filled.ArrowBack,
+                            "Back"
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onToggleBookmark) {
+                        Icon(
+                            if (bookmarked) Icons.Filled.Bookmark
+                            else Icons.Filled.BookmarkBorder,
+                            if (bookmarked) "Remove bookmark"
+                            else "Bookmark here",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                },
+                colors = androidx.compose.material3.TopAppBarDefaults
+                    .topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        scrolledContainerColor =
+                            MaterialTheme.colorScheme.surfaceContainer
+                    ),
+                modifier = Modifier.onSizeChanged { onTopBarHeight(it.height) }
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(effects) +
+                slideInVertically(effectsOffset) { it / 2 },
+            exit = fadeOut(effects) +
+                slideOutVertically(effectsOffset) { it / 2 }
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .onSizeChanged { onBottomBarHeight(it.height) },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (seekExpanded) {
+                    Surface(
+                        shape = MaterialTheme.shapes.extraLarge,
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    ) {
+                        Column(
+                            Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                positionLine,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant,
+                                maxLines = 1
+                            )
+                            Slider(
+                                value = fraction,
+                                onValueChange = onSeekFraction,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+                androidx.compose.material3.HorizontalFloatingToolbar(
+                    expanded = true,
+                    colors = androidx.compose.material3
+                        .FloatingToolbarDefaults
+                        .standardFloatingToolbarColors(
+                            toolbarContainerColor =
+                                MaterialTheme.colorScheme.surfaceContainerHigh
+                        ),
+                    content = {
+                        actions.forEach { action ->
+                            TextButton(onClick = { onAction(action) }) {
+                                Text(
+                                    action.label,
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = { seekExpanded = !seekExpanded }
+                        ) {
+                            Icon(
+                                if (seekExpanded) Icons.Filled.ExpandMore
+                                else Icons.Filled.ExpandLess,
+                                if (seekExpanded) "Hide position"
+                                else "Show position"
+                            )
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+/** S28: the bar-customisation sheet in M3 form — the bar
+ * store's actions as checklist list items (icon-less label +
+ * availability line + checkbox), reordered by dragging the
+ * handle. Writes go through the SAME [ReaderBarConfig]
+ * toggled/moved operations the shipped sheet uses. */
+@Composable
+fun ReaderBarCustomisationSheetM3Content(
+    config: ReaderBarConfig,
+    onConfigChange: (ReaderBarConfig) -> Unit
+) {
+    val ordered = config.orderedKeys
+        .mapNotNull { ReaderBarActionId.fromKey(it) }
+    Column(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text("Reader bar", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "One bar for both readers. An action a reader can't " +
+                "do is hidden in that reader — never a dead button.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        androidx.compose.material3.ListItem(
+            headlineContent = { Text("Double-line layout") },
+            trailingContent = {
+                Switch(
+                    checked = config.doubleLineLayout,
+                    onCheckedChange = { on ->
+                        onConfigChange(
+                            config.copy(doubleLineLayout = on)
+                        )
+                    }
+                )
+            }
+        )
+        ordered.forEachIndexed { index, action ->
+            val latestConfig by rememberUpdatedState(config)
+            var dragIndex by remember(action.key) {
+                mutableIntStateOf(index)
+            }
+            var dragAccumulated by remember(action.key) {
+                mutableFloatStateOf(0f)
+            }
+            LaunchedEffect(index) { dragIndex = index }
+            androidx.compose.material3.ListItem(
+                headlineContent = { Text(action.label) },
+                supportingContent = action.availabilityNote?.let { note ->
+                    { Text(note) }
+                },
+                leadingContent = {
+                    Checkbox(
+                        checked = action.key in config.enabledKeys,
+                        onCheckedChange = { checked ->
+                            onConfigChange(config.toggled(action, checked))
+                        }
+                    )
+                },
+                trailingContent = {
+                    Icon(
+                        Icons.Filled.DragHandle,
+                        contentDescription = "Drag to reorder ${action.label}",
+                        modifier = Modifier.pointerInput(action.key) {
+                            val rowPx = 56.dp.toPx()
+                            detectDragGestures(
+                                onDragEnd = { dragAccumulated = 0f },
+                                onDragCancel = { dragAccumulated = 0f }
+                            ) { change, dragAmount ->
+                                change.consume()
+                                dragAccumulated += dragAmount.y
+                                while (dragAccumulated >= rowPx &&
+                                    dragIndex < ordered.lastIndex
+                                ) {
+                                    onConfigChange(
+                                        latestConfig.moved(
+                                            dragIndex, dragIndex + 1
+                                        )
+                                    )
+                                    dragIndex += 1
+                                    dragAccumulated -= rowPx
+                                }
+                                while (dragAccumulated <= -rowPx &&
+                                    dragIndex > 0
+                                ) {
+                                    onConfigChange(
+                                        latestConfig.moved(
+                                            dragIndex, dragIndex - 1
+                                        )
+                                    )
+                                    dragIndex -= 1
+                                    dragAccumulated += rowPx
+                                }
+                            }
+                        }
+                    )
+                }
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** S29: the control-options sheet in M3 form — the settled
+ * control set as switch list rows, the tap presets as a
+ * segmented button row, and the brightness slider row. Same
+ * state and callbacks as the shipped sheet. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun ControlOptionsSheetM3Content(
+    state: ControlOptionsState,
+    brightness: Float? = null,
+    onBrightnessChange: (Float) -> Unit = {},
+    onTapPreset: (TapLayoutPreset) -> Unit,
+    onTiltEnabled: (Boolean) -> Unit,
+    onSmartScrollLock: (Boolean) -> Unit,
+    onVolumeKeyTurn: (Boolean) -> Unit,
+    onKeepScreenOn: (Boolean) -> Unit
+) {
+    Column(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text("Control options", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
+        Text("Tap layout", style = MaterialTheme.typography.titleSmall)
+        if (state.tapTurnsInert) {
+            Text(
+                "You're reading in scrolling mode: taps only " +
+                    "show or hide the bars — the scroll moves " +
+                    "through the book. These layouts apply in " +
+                    "Page by page mode.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        androidx.compose.material3.SingleChoiceSegmentedButtonRow(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            TapLayoutPreset.entries.forEachIndexed { index, preset ->
+                androidx.compose.material3.SegmentedButton(
+                    selected = state.tapPreset == preset,
+                    onClick = { onTapPreset(preset) },
+                    shape = androidx.compose.material3.SegmentedButtonDefaults
+                        .itemShape(
+                            index = index,
+                            count = TapLayoutPreset.entries.size
+                        )
+                ) {
+                    Text(preset.label)
+                }
+            }
+        }
+        ControlSwitchRowM3(
+            label = "Tilt to turn page",
+            subtitle = "Tilting the phone past a point turns the page. Off by default.",
+            checked = state.tiltEnabled,
+            onCheckedChange = onTiltEnabled
+        )
+        if (state.smartScrollLock != null) {
+            ControlSwitchRowM3(
+                label = "Smart scroll lock",
+                subtitle = "In scroll-down reading, a mostly-up-and-down drag never drifts sideways.",
+                checked = state.smartScrollLock,
+                onCheckedChange = onSmartScrollLock
+            )
+        }
+        ControlSwitchRowM3(
+            label = "Volume-key page turns",
+            subtitle = "Volume down = next, volume up = back.",
+            checked = state.volumeKeyTurn,
+            onCheckedChange = onVolumeKeyTurn
+        )
+        ControlSwitchRowM3(
+            label = "Keep screen on",
+            subtitle = "The screen stays awake while you read.",
+            checked = state.keepScreenOn,
+            onCheckedChange = onKeepScreenOn
+        )
+        if (brightness != null) {
+            BrightnessSliderRow(
+                value = brightness,
+                onValueChange = onBrightnessChange
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun ControlSwitchRowM3(
+    label: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    androidx.compose.material3.ListItem(
+        headlineContent = { Text(label) },
+        supportingContent = { Text(subtitle) },
+        trailingContent = {
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
+    )
+}

@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -34,8 +33,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.xreader.core.motion.sharedAxisXEnter
 import app.xreader.core.motion.sharedAxisXExit
@@ -73,7 +70,12 @@ fun OnboardingScreen(
      * through AppearancePrefs.setColourScheme (the one
      * explicit scheme-choice write). */
     nocturneScheme: String = "Nocturne violet",
-    onPickNocturneScheme: (String) -> Unit = {}
+    onPickNocturneScheme: (String) -> Unit = {},
+    /** Code 121 (S38/§5.2 parity): the colour bar serving the
+     * Nocturne card — the picked colour feeds Nocturne's
+     * any-colour generation (the shell writes it as the
+     * "Custom" scheme entry). */
+    onPickNocturneColour: (Long) -> Unit = {}
 ) {
     var page by remember { mutableIntStateOf(0) }
     // The ask is page 1; the three text pages keep their order
@@ -113,7 +115,8 @@ fun OnboardingScreen(
                     onPickDynamicColour = onPickDynamicColour,
                     onPickSeedColour = onPickSeedColour,
                     nocturneScheme = nocturneScheme,
-                    onPickNocturneScheme = onPickNocturneScheme
+                    onPickNocturneScheme = onPickNocturneScheme,
+                    onPickNocturneColour = onPickNocturneColour
                 )
             } else {
             val textPage = if (current == 0) 0 else current - 1
@@ -199,15 +202,19 @@ fun OnboardingScreen(
 }
 
 /**
- * The first-start ask (S38): two design cards, each wearing its
- * own design's colours — Nocturne in Nocturne's scheme, Material
- * 3 in the scheme it resolves right now (dynamic first) — and,
- * when Material 3 is picked, its colour choice in the same
- * breath: the phone's dynamic colour, or any colour through the
- * S37 wheel dialog. Nothing here is a gate: Skip and Next are
- * always live in the pager chrome around this page.
+ * The first-start ask (S38, code 121 form): "Pick your
+ * design" — two M3 cards in scheme language. The Material 3
+ * card is pre-selected (priming seeds the default; this page
+ * only records the user's hand). The Nocturne card is TEXT
+ * ONLY — its name and a one-line description in scheme
+ * colours; its colours are never drawn and there is NO
+ * violet miniature (trace T1). Beneath the cards, ONE colour
+ * bar serves both designs: for Material 3 the pick seeds the
+ * M3 scheme; for Nocturne it feeds that design's any-colour
+ * generation (§5.2). Skip lives in the pager chrome around
+ * this page and is always visible; skipping lands on
+ * Material 3 + dynamic colour, opening on Library.
  */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun DesignAskPage(
     designState: app.xreader.data.prefs.DesignState,
@@ -215,168 +222,105 @@ private fun DesignAskPage(
     onPickDynamicColour: () -> Unit,
     onPickSeedColour: (Long) -> Unit,
     nocturneScheme: String,
-    onPickNocturneScheme: (String) -> Unit
+    onPickNocturneScheme: (String) -> Unit,
+    onPickNocturneColour: (Long) -> Unit
 ) {
-    val context = LocalContext.current
-    val m3Dark = app.xreader.ui.theme.m3DarkTheme(designState)
-    val m3Colors = remember(context, designState, m3Dark) {
-        app.xreader.ui.theme.resolveM3ColorScheme(context, designState, m3Dark)
-    }
-    val nocturneColors = remember {
-        app.xreader.ui.theme.appSchemeNamed("Nocturne violet").colors(true)
-    }
-    var showWheel by remember { mutableStateOf(false) }
+    // W8 (D-121-W7-01 retired): the ask's bar is W3's shared
+    // ColourBar. A Nocturne-destination pick is held locally
+    // for the bar's selected state; the write itself goes
+    // through onPickNocturneColour (the §5.2 "Custom" entry).
+    var nocturnePicked by remember { mutableStateOf<Long?>(null) }
+    val isM3 = designState.design ==
+        app.xreader.data.prefs.AppDesign.MATERIAL3
     Column(
         Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            "Make it yours",
+            "Pick your design",
             style = MaterialTheme.typography.headlineMediumEmphasized
         )
         Text(
-            "Xreader has two designs. Pick the one you like — " +
-                "you can switch any time in Customise.",
+            "You can switch any time in Customise → Design.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 12.dp)
         )
-        Row(
+        Column(
             Modifier
                 .fillMaxWidth()
                 .padding(top = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             DesignAskCard(
-                name = "Nocturne",
-                line = "Violet on black glass.",
-                colors = nocturneColors,
-                selected = designState.design ==
-                    app.xreader.data.prefs.AppDesign.NOCTURNE,
-                modifier = Modifier.weight(1f)
+                name = "Material 3",
+                line = "Google's design language. Colours from " +
+                    "your phone, or any colour you pick.",
+                selected = isM3,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                onPickDesign(app.xreader.data.prefs.AppDesign.NOCTURNE)
+                onPickDesign(
+                    app.xreader.data.prefs.AppDesign.MATERIAL3
+                )
             }
             DesignAskCard(
-                name = "Material 3",
-                line = "Google's design, your colours.",
-                colors = m3Colors,
-                selected = designState.design ==
-                    app.xreader.data.prefs.AppDesign.MATERIAL3,
-                modifier = Modifier.weight(1f)
+                name = "Nocturne",
+                line = "A dark glass design with a violet " +
+                    "accent, built around your library's covers.",
+                selected = !isM3,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                onPickDesign(app.xreader.data.prefs.AppDesign.MATERIAL3)
-            }
-        }
-        if (designState.design == app.xreader.data.prefs.AppDesign.NOCTURNE) {
-            // Code 120 completion (S38): Nocturne's own accent
-            // choice — its preset schemes, one tap each, the
-            // picked scheme's primary riding as the swatch.
-            Text(
-                "Accent",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(top = 24.dp)
-            )
-            val schemePrimaries = remember {
-                app.xreader.data.prefs.AppearanceValidation
-                    .COLOUR_SCHEMES.associateWith { schemeName ->
-                        app.xreader.ui.theme.appSchemeNamed(schemeName)
-                            .colors(true).primary
-                    }
-            }
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(top = 8.dp)
-            ) {
-                app.xreader.data.prefs.AppearanceValidation
-                    .COLOUR_SCHEMES.forEach { schemeName ->
-                        FilterChip(
-                            selected = nocturneScheme == schemeName,
-                            onClick = {
-                                onPickNocturneScheme(schemeName)
-                            },
-                            label = {
-                                Row(
-                                    horizontalArrangement =
-                                        Arrangement.spacedBy(6.dp),
-                                    verticalAlignment =
-                                        Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        Modifier
-                                            .size(12.dp)
-                                            .background(
-                                                schemePrimaries[
-                                                    schemeName
-                                                ]
-                                                    ?: Color.Unspecified,
-                                                CircleShape
-                                            )
-                                    )
-                                    Text(schemeName)
-                                }
-                            }
-                        )
-                    }
-            }
-        }
-        if (designState.design == app.xreader.data.prefs.AppDesign.MATERIAL3) {
-            Text(
-                "Colour",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(top = 24.dp)
-            )
-            Row(
-                Modifier.padding(top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FilterChip(
-                    selected = designState.colourSource ==
-                        app.xreader.data.prefs.M3ColourSource.DYNAMIC,
-                    onClick = onPickDynamicColour,
-                    label = {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            listOf(
-                                m3Colors.primary, m3Colors.secondary,
-                                m3Colors.tertiary
-                            ).forEach { swatch ->
-                                Box(
-                                    Modifier
-                                        .size(12.dp)
-                                        .background(swatch, CircleShape)
-                                )
-                            }
-                            Text("Dynamic colour")
-                        }
-                    }
-                )
-                FilterChip(
-                    selected = designState.colourSource ==
-                        app.xreader.data.prefs.M3ColourSource.PICKED,
-                    onClick = { showWheel = true },
-                    label = {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            designState.seedArgb?.let { seed ->
-                                Box(
-                                    Modifier
-                                        .size(12.dp)
-                                        .background(Color(seed), CircleShape)
-                                )
-                            }
-                            Text("Pick a colour")
-                        }
-                    }
+                onPickDesign(
+                    app.xreader.data.prefs.AppDesign.NOCTURNE
                 )
             }
         }
+        Text(
+            "Pick a colour — it applies to the design you chose.",
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.padding(top = 24.dp)
+        )
+        // The one colour bar (§2.1.1), serving both designs:
+        // W3's shared ColourBar in scheme mode. For Material 3
+        // a pick seeds the M3 scheme (Dynamic returns to the
+        // phone's colour); for Nocturne a seed/pick-any colour
+        // feeds §5.2's "Custom" generation. Dynamic has no
+        // Nocturne meaning and is inert there.
+        app.xreader.ui.common.ColourBar(
+            selection = if (isM3) {
+                when (designState.colourSource) {
+                    app.xreader.data.prefs.M3ColourSource.DYNAMIC ->
+                        app.xreader.ui.common.ColourBarSelection.Dynamic
+                    app.xreader.data.prefs.M3ColourSource.PICKED ->
+                        designState.seedArgb?.let {
+                            app.xreader.ui.common.ColourBarSelection
+                                .Seed(it)
+                        }
+                }
+            } else {
+                nocturnePicked?.let {
+                    app.xreader.ui.common.ColourBarSelection.Seed(it)
+                }
+            },
+            onSelect = { picked ->
+                when (picked) {
+                    app.xreader.ui.common.ColourBarSelection.Dynamic -> {
+                        if (isM3) onPickDynamicColour()
+                    }
+                    is app.xreader.ui.common.ColourBarSelection.Seed -> {
+                        if (isM3) {
+                            onPickSeedColour(picked.argb)
+                        } else {
+                            nocturnePicked = picked.argb
+                            onPickNocturneColour(picked.argb)
+                        }
+                    }
+                    app.xreader.ui.common.ColourBarSelection.ThemeColour ->
+                        Unit
+                }
+            },
+            modifier = Modifier.padding(top = 12.dp)
+        )
         Text(
             "You can change all of this later in Customise.",
             style = MaterialTheme.typography.bodySmall,
@@ -384,29 +328,15 @@ private fun DesignAskPage(
             modifier = Modifier.padding(top = 20.dp)
         )
     }
-    if (showWheel) {
-        app.xreader.ui.common.ColourWheelPickerDialog(
-            title = "Pick a colour",
-            initialArgb = designState.seedArgb
-                ?: (m3Colors.primary.toArgb().toLong() and 0xFFFFFFFFL),
-            onDismiss = { showWheel = false },
-            onPick = { argb ->
-                onPickSeedColour(argb)
-                showWheel = false
-            }
-        )
-    }
 }
 
-/** One design card on the ask page: a mini preview wearing the
- * design's own scheme (bar pill + shelf lines over its
- * background), its name and one line — geometry per S38 (card
- * largeIncreased, preview small). */
+/** One design card on the ask page (S38/T1): an M3 card in
+ * scheme language — name + one-line description, a radio-style
+ * selected ring. NO miniature of either design is drawn. */
 @Composable
 private fun DesignAskCard(
     name: String,
     line: String,
-    colors: androidx.compose.material3.ColorScheme,
     selected: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
@@ -414,59 +344,42 @@ private fun DesignAskCard(
     Column(
         modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(colors.surfaceContainer)
+            .background(
+                if (selected) {
+                    MaterialTheme.colorScheme.secondaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainer
+                }
+            )
             .border(
                 if (selected) 2.dp else 1.dp,
-                if (selected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.outline,
+                if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.outline
+                },
                 RoundedCornerShape(20.dp)
             )
             .clickable(onClick = onClick)
-            .padding(14.dp)
+            .padding(16.dp)
     ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(86.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(colors.background)
-        ) {
-            Box(
-                Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 10.dp)
-                    .fillMaxWidth(0.7f)
-                    .height(14.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(colors.surfaceContainerHigh)
-            )
-            Box(
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 10.dp)
-                    .fillMaxWidth(0.55f)
-                    .height(16.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(colors.primary)
-            )
-        }
         Text(
             name,
-            style = MaterialTheme.typography.titleSmall,
-            color = colors.onSurface,
-            modifier = Modifier.padding(top = 10.dp)
+            style = MaterialTheme.typography.titleMediumEmphasized,
+            color = MaterialTheme.colorScheme.onSurface
         )
         Text(
             line,
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.onSurfaceVariant
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp)
         )
         if (selected) {
             Text(
-                "In use",
+                "Selected",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 4.dp)
+                modifier = Modifier.padding(top = 6.dp)
             )
         }
     }

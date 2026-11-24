@@ -51,6 +51,32 @@ import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.ScreenHeader
 import app.xreader.ui.common.SectionHeader
 import coil.compose.AsyncImage
+// Code 121 (W4): the scratch-M3 (R25/R26) branches' components.
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import app.xreader.ui.sources.M3GroupHeader
+import app.xreader.ui.sources.M3InitialAvatar
+import app.xreader.ui.sources.isM3Design
 
 /**
  * Browse (PLAN §4): your OPDS library servers (Komga / Kavita /
@@ -65,6 +91,114 @@ fun BrowseScreen(
 ) {
     val servers by viewModel.servers.collectAsStateWithLifecycle()
     var showAddForm by remember { mutableStateOf(false) }
+
+    // ── Code 121 (W4, scratch R25): the OPDS server list in ──
+    // Material 3 — server list items (name, URL line), an Add
+    // server extended FAB opening a basic dialog form. Under
+    // Nocturne the shipped screen below renders byte-identically.
+    if (isM3Design()) {
+        Scaffold(
+            topBar = {
+                TopAppBar(title = { Text("OPDS servers") })
+            },
+            floatingActionButton = {
+                ExtendedFloatingActionButton(
+                    onClick = { showAddForm = true },
+                    icon = {
+                        Icon(Icons.Filled.Add, contentDescription = null)
+                    },
+                    text = { Text("Add server") }
+                )
+            }
+        ) { padding ->
+            if (servers.isEmpty()) {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        "No servers yet. Add a library server " +
+                            "(Komga, Kavita or Calibre-Web) to " +
+                            "browse and download your books.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(padding),
+                    contentPadding = PaddingValues(bottom = 96.dp)
+                ) {
+                    items(servers, key = { "m3-server-${it.id}" }) { server ->
+                        ListItem(
+                            headlineContent = {
+                                Text(
+                                    server.name,
+                                    style = MaterialTheme
+                                        .typography.titleMedium
+                                )
+                            },
+                            supportingContent = {
+                                Column {
+                                    Text(
+                                        server.baseUrl,
+                                        style = MaterialTheme
+                                            .typography.bodySmall,
+                                        color = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                    val serverUser = server.username
+                                    if (!serverUser.isNullOrBlank()) {
+                                        Text(
+                                            serverUser,
+                                            style = MaterialTheme
+                                                .typography.bodySmall,
+                                            color = MaterialTheme
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            },
+                            leadingContent = {
+                                M3InitialAvatar(server.name)
+                            },
+                            trailingContent = {
+                                IconButton(
+                                    onClick = {
+                                        viewModel.removeServer(server)
+                                    }
+                                ) {
+                                    Icon(
+                                        Icons.Filled.DeleteOutline,
+                                        contentDescription = "Remove server"
+                                    )
+                                }
+                            },
+                            modifier = Modifier.clickable {
+                                onOpenServer(server)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        if (showAddForm) {
+            M3AddServerDialog(
+                onAdd = { name, url, user, pass ->
+                    viewModel.addServer(name, url, user, pass)
+                    showAddForm = false
+                },
+                onCancel = { showAddForm = false }
+            )
+        }
+        return
+    }
 
     Column(
         Modifier
@@ -217,6 +351,79 @@ private fun AddServerForm(
     }
 }
 
+/** Code 121 (W4): the M3 catalogue's short-wait state — the
+ * experimental LoadingIndicator (scratch S40/Q1). */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun M3OpdsLoading() {
+    Box(
+        Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        LoadingIndicator(Modifier.size(48.dp))
+    }
+}
+
+/** Code 121 (W4, scratch R25): the Add-server basic dialog —
+ * the shipped form's fields and words, in the M3 dialog frame.
+ * The password goes to the same view-model call (KeyVault via
+ * the container), never to a log or a plain store. */
+@Composable
+private fun M3AddServerDialog(
+    onAdd: (name: String, url: String, user: String, pass: String) -> Unit,
+    onCancel: () -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+    var user by remember { mutableStateOf("") }
+    var pass by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Add a library server") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    label = { Text("Name (e.g. Home Komga)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = url, onValueChange = { url = it },
+                    label = { Text("Catalog address (…/opds)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = user, onValueChange = { user = it },
+                    label = { Text("Username (if it asks)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = pass, onValueChange = { pass = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Stored encrypted — the password is stored " +
+                        "encrypted on this device only.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onAdd(name, url, user, pass) },
+                enabled = url.isNotBlank()
+            ) { Text("Add server") }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text("Cancel") }
+        }
+    )
+}
+
 /** One server's catalog: categories drill in, books download. */
 @Composable
 fun OpdsCatalogScreen(
@@ -225,6 +432,207 @@ fun OpdsCatalogScreen(
     onBack: () -> Unit
 ) {
     val state by viewModel.browse.collectAsStateWithLifecycle()
+
+    // ── Code 121 (W4, scratch R26): the OPDS catalogue in ──
+    // Material 3 — R20's card grid scoped to one server:
+    // category entries as list rows, books as filled cards with
+    // the Acquire (Download) button. (The browse state carries
+    // no per-book in-library flag, so Acquire is the Download
+    // button the shipped row carries — see D-121-W4-7.) Under
+    // Nocturne the shipped screen below renders byte-identically.
+    if (isM3Design()) {
+        Column(Modifier.fillMaxSize()) {
+            TopAppBar(
+                title = {
+                    Text(
+                        state.feed?.title?.ifBlank { serverName }
+                            ?: serverName,
+                        maxLines = 1
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = {
+                        if (!viewModel.goBack()) onBack()
+                    }) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                }
+            )
+            when {
+                state.loading -> M3OpdsLoading()
+                state.errorMessage != null -> Column(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        "The catalog didn't load — " +
+                            (state.errorMessage ?: ""),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    TextButton(onClick = onBack) { Text("Back") }
+                }
+                state.feed != null -> {
+                    val feed = state.feed!!
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement =
+                            Arrangement.spacedBy(12.dp),
+                        verticalArrangement =
+                            Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(
+                            top = 8.dp, bottom = 24.dp
+                        )
+                    ) {
+                        items(
+                            feed.entries.filter { !it.isBook },
+                            key = { "m3-cat-${it.id}" },
+                            span = { GridItemSpan(maxLineSpan) }
+                        ) { entry ->
+                            ListItem(
+                                headlineContent = {
+                                    Text(
+                                        entry.title,
+                                        style = MaterialTheme
+                                            .typography.titleMedium,
+                                        maxLines = 2
+                                    )
+                                },
+                                supportingContent = {
+                                    entry.summary?.let { summary ->
+                                        Text(
+                                            summary,
+                                            maxLines = 2
+                                        )
+                                    }
+                                },
+                                leadingContent = {
+                                    Icon(
+                                        Icons.Filled.FolderOpen,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                },
+                                trailingContent = {
+                                    Icon(
+                                        Icons.Filled.ChevronRight,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                },
+                                modifier = Modifier.clickable {
+                                    viewModel.openEntry(entry)
+                                }
+                            )
+                        }
+                        items(
+                            feed.entries.filter { it.isBook },
+                            key = { "m3-book-${it.id}" }
+                        ) { entry ->
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme
+                                        .colorScheme.surfaceContainerLow
+                                ),
+                                shape = MaterialTheme.shapes.medium,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val cover = entry.coverUrl
+                                    ?: entry.thumbnailUrl
+                                if (cover != null) {
+                                    AsyncImage(
+                                        model = cover,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(2f / 3f)
+                                            .background(
+                                                MaterialTheme.colorScheme
+                                                    .surfaceContainerHigh
+                                            )
+                                    )
+                                } else {
+                                    Box(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(2f / 3f)
+                                            .background(
+                                                MaterialTheme.colorScheme
+                                                    .surfaceContainerHigh
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            entry.title,
+                                            style = MaterialTheme
+                                                .typography.titleSmall,
+                                            color = MaterialTheme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                            modifier = Modifier
+                                                .padding(12.dp),
+                                            maxLines = 4
+                                        )
+                                    }
+                                }
+                                Column(Modifier.padding(12.dp)) {
+                                    Text(
+                                        entry.title,
+                                        style = MaterialTheme
+                                            .typography.titleSmall,
+                                        maxLines = 2
+                                    )
+                                    entry.author?.let { author ->
+                                        Text(
+                                            author,
+                                            style = MaterialTheme
+                                                .typography.bodySmall,
+                                            color = MaterialTheme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                            maxLines = 1
+                                        )
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            viewModel.downloadBook(entry)
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 8.dp)
+                                    ) { Text("Download") }
+                                }
+                            }
+                        }
+                        if (feed.nextPageUrl != null) {
+                            item(
+                                key = "m3-next-page",
+                                span = { GridItemSpan(maxLineSpan) }
+                            ) {
+                                FilledTonalButton(
+                                    onClick = { viewModel.openNextPage() },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("More…") }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
+
     Column(
         Modifier
             .fillMaxSize()
