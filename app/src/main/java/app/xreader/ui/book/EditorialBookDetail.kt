@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -90,7 +91,6 @@ import app.xreader.data.db.SourceType
 import app.xreader.data.library.ReadingStatus
 import app.xreader.domain.reader.ChapterDisplayOrder
 import app.xreader.ui.theme.FrauncesSerif
-import coil.compose.AsyncImage
 import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
@@ -448,15 +448,101 @@ fun EditorialBookDetail(
                                         )
                                         .clickable { coverViewerOpen = true }
                                 ) {
-                                    if (cover != null) {
-                                        AsyncImage(
-                                            model = cover,
-                                            contentDescription =
-                                                book.title,
-                                            contentScale =
-                                                ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
+                                    // Code 130: the shipped hero's
+                                    // fallback order (M3BookCover's,
+                                    // mirrored) — local file, else
+                                    // the cover URL, else the
+                                    // designed title placeholder;
+                                    // the placeholder is also the
+                                    // loading and error content. A
+                                    // missing or failed cover is
+                                    // never the empty dark box the
+                                    // code-129 proof showed.
+                                    when {
+                                        cover != null &&
+                                            cover.exists() ->
+                                            coil.compose
+                                                .SubcomposeAsyncImage(
+                                                    model = cover,
+                                                    contentDescription =
+                                                        book.title,
+                                                    contentScale =
+                                                        ContentScale.Crop,
+                                                    modifier = Modifier
+                                                        .fillMaxSize(),
+                                                    loading = {
+                                                        app.xreader.ui
+                                                            .library
+                                                            .PlaceholderCover(
+                                                                title =
+                                                                    book.title,
+                                                                author =
+                                                                    book.author,
+                                                                modifier =
+                                                                    Modifier
+                                                                        .fillMaxSize()
+                                                            )
+                                                    },
+                                                    error = {
+                                                        app.xreader.ui
+                                                            .library
+                                                            .PlaceholderCover(
+                                                                title =
+                                                                    book.title,
+                                                                author =
+                                                                    book.author,
+                                                                modifier =
+                                                                    Modifier
+                                                                        .fillMaxSize()
+                                                            )
+                                                    }
+                                                )
+                                        !book.coverUrl
+                                            .isNullOrBlank() ->
+                                            coil.compose
+                                                .SubcomposeAsyncImage(
+                                                    model = book.coverUrl,
+                                                    contentDescription =
+                                                        book.title,
+                                                    contentScale =
+                                                        ContentScale.Crop,
+                                                    modifier = Modifier
+                                                        .fillMaxSize(),
+                                                    loading = {
+                                                        app.xreader.ui
+                                                            .library
+                                                            .PlaceholderCover(
+                                                                title =
+                                                                    book.title,
+                                                                author =
+                                                                    book.author,
+                                                                modifier =
+                                                                    Modifier
+                                                                        .fillMaxSize()
+                                                            )
+                                                    },
+                                                    error = {
+                                                        app.xreader.ui
+                                                            .library
+                                                            .PlaceholderCover(
+                                                                title =
+                                                                    book.title,
+                                                                author =
+                                                                    book.author,
+                                                                modifier =
+                                                                    Modifier
+                                                                        .fillMaxSize()
+                                                            )
+                                                    }
+                                                )
+                                        else ->
+                                            app.xreader.ui.library
+                                                .PlaceholderCover(
+                                                    title = book.title,
+                                                    author = book.author,
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                )
                                     }
                                 }
                                 Column(
@@ -2051,50 +2137,142 @@ fun EditorialBookDetail(
                     .clickable { coverViewerOpen = false },
                 contentAlignment = Alignment.Center
             ) {
-                if (cover != null) {
-                    AsyncImage(
-                        model = cover,
-                        contentDescription = book.title,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp)
-                            .offset {
-                                IntOffset(0, drag.value.roundToInt())
+                // Code 130: one drag-carrying modifier for
+                // whichever cover form renders — the real
+                // image (file, else URL) or, when there is no
+                // cover to show, the designed title
+                // placeholder at poster size. A missing cover
+                // never leaves this viewer a black screen.
+                val coverModifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp)
+                    .offset {
+                        IntOffset(0, drag.value.roundToInt())
+                    }
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onDragEnd = {
+                                if (kotlin.math.abs(drag.value) >
+                                    140f
+                                ) {
+                                    coverViewerOpen = false
+                                } else {
+                                    scope.launch {
+                                        drag.animateTo(
+                                            0f,
+                                            // Code-129 motion
+                                            // pass: the rebound
+                                            // rides the engine's
+                                            // Spatial spring, not
+                                            // an ad-hoc Compose
+                                            // stiffness constant.
+                                            app.xreader.core.motion
+                                                .SpringMotionEngine
+                                                .Spatial.toSpec()
+                                        )
+                                    }
+                                }
+                            },
+                            onVerticalDrag = { change, amount ->
+                                change.consume()
+                                scope.launch {
+                                    drag.snapTo(drag.value + amount)
+                                }
                             }
-                            .pointerInput(Unit) {
-                                detectVerticalDragGestures(
-                                    onDragEnd = {
-                                        if (kotlin.math.abs(drag.value) >
-                                            140f
-                                        ) {
-                                            coverViewerOpen = false
-                                        } else {
+                        )
+                    }
+                when {
+                    cover != null && cover.exists() ->
+                        coil.compose.SubcomposeAsyncImage(
+                            model = cover,
+                            contentDescription = book.title,
+                            contentScale = ContentScale.Fit,
+                            modifier = coverModifier,
+                            loading = {
+                                app.xreader.ui.library
+                                    .PlaceholderCover(
+                                        title = book.title,
+                                        author = book.author,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                            },
+                            error = {
+                                app.xreader.ui.library
+                                    .PlaceholderCover(
+                                        title = book.title,
+                                        author = book.author,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                            }
+                        )
+                    !book.coverUrl.isNullOrBlank() ->
+                        coil.compose.SubcomposeAsyncImage(
+                            model = book.coverUrl,
+                            contentDescription = book.title,
+                            contentScale = ContentScale.Fit,
+                            modifier = coverModifier,
+                            loading = {
+                                app.xreader.ui.library
+                                    .PlaceholderCover(
+                                        title = book.title,
+                                        author = book.author,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                            },
+                            error = {
+                                app.xreader.ui.library
+                                    .PlaceholderCover(
+                                        title = book.title,
+                                        author = book.author,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                            }
+                        )
+                    else ->
+                        app.xreader.ui.library.PlaceholderCover(
+                            title = book.title,
+                            author = book.author,
+                            modifier = Modifier
+                                .fillMaxWidth(0.8f)
+                                .aspectRatio(124f / 180f)
+                                .offset {
+                                    IntOffset(
+                                        0, drag.value.roundToInt()
+                                    )
+                                }
+                                .pointerInput(Unit) {
+                                    detectVerticalDragGestures(
+                                        onDragEnd = {
+                                            if (kotlin.math.abs(
+                                                    drag.value
+                                                ) > 140f
+                                            ) {
+                                                coverViewerOpen = false
+                                            } else {
+                                                scope.launch {
+                                                    drag.animateTo(
+                                                        0f,
+                                                        app.xreader.core
+                                                            .motion
+                                                            .SpringMotionEngine
+                                                            .Spatial
+                                                            .toSpec()
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onVerticalDrag = {
+                                                change, amount ->
+                                            change.consume()
                                             scope.launch {
-                                                drag.animateTo(
-                                                    0f,
-                                                    // Code-129 motion
-                                                    // pass: the rebound
-                                                    // rides the engine's
-                                                    // Spatial spring, not
-                                                    // an ad-hoc Compose
-                                                    // stiffness constant.
-                                                    app.xreader.core.motion
-                                                        .SpringMotionEngine
-                                                        .Spatial.toSpec()
+                                                drag.snapTo(
+                                                    drag.value + amount
                                                 )
                                             }
                                         }
-                                    },
-                                    onVerticalDrag = { change, amount ->
-                                        change.consume()
-                                        scope.launch {
-                                            drag.snapTo(drag.value + amount)
-                                        }
-                                    }
-                                )
-                            }
-                    )
+                                    )
+                                }
+                        )
                 }
                 IconButton(
                     onClick = { coverViewerOpen = false },

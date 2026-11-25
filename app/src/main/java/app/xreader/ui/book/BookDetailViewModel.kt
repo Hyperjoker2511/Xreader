@@ -303,8 +303,10 @@ object ChapterReadGuard {
                 } else if (detail != null) {
                     "The chapter list couldn't be loaded — $detail $door"
                 } else {
-                    "The chapter list couldn't be loaded — " +
-                        "the source didn't answer. $door"
+                    // Code 130: no recorded error, no invented
+                    // attribution — the plain state and the
+                    // door, nothing claimed about the source.
+                    "The chapter list couldn't be loaded. $door"
                 }
             }
             ChaptersVerdict.EMPTY_SOURCE ->
@@ -1153,8 +1155,14 @@ class BookDetailViewModel(
             } catch (e: Exception) {
                 app.xreader.core.error.AppResult.Err(
                     app.xreader.core.error.AppError.ExtensionFailed(
-                        "the source",
-                        "the chapter list couldn't be loaded — try again"
+                        // Code 130: the REAL source's name —
+                        // never the placeholder this catch-all
+                        // used to stamp. Guarded: a name
+                        // lookup must never become the throw
+                        // this containment exists to absorb.
+                        runCatching { sourceNameFor(book) }
+                            .getOrElse { "" },
+                        "the chapter list couldn't be loaded"
                     )
                 )
             }
@@ -1757,8 +1765,14 @@ class BookDetailViewModel(
             } catch (e: Exception) {
                 app.xreader.core.error.AppResult.Err(
                     app.xreader.core.error.AppError.ExtensionFailed(
-                        "the source",
-                        "the chapter list couldn't be loaded — try again"
+                        // Code 130: the REAL source's name —
+                        // never the placeholder this catch-all
+                        // used to stamp. Guarded: a name
+                        // lookup must never become the throw
+                        // this containment exists to absorb.
+                        runCatching { sourceNameFor(book) }
+                            .getOrElse { "" },
+                        "the chapter list couldn't be loaded"
                     )
                 )
             }
@@ -1784,10 +1798,13 @@ class BookDetailViewModel(
                     )
                 }
                 is app.xreader.core.error.AppResult.Err -> {
-                    noteChaptersError(result.error)
-                    _messages.tryEmit(
-                        app.xreader.core.error.ErrorText.displayText(result.error)
-                    )
+                    // Code 130: the toast carries the SAME
+                    // words the page's error card shows — the
+                    // string noteChaptersError just stored,
+                    // never a second rendering of the error
+                    // (the code-129 proof's toast repeated the
+                    // card's garbled text verbatim).
+                    _messages.tryEmit(noteChaptersError(result.error))
                 }
             }
         }
@@ -1798,7 +1815,9 @@ class BookDetailViewModel(
      * hand-off it calls for, classified against this book's
      * source config (cached at init; user-added lanes and
      * bundled defaults alike). */
-    private fun noteChaptersError(error: app.xreader.core.error.AppError) {
+    private fun noteChaptersError(
+        error: app.xreader.core.error.AppError
+    ): String {
         // v1.3.4 (U4-style honesty, minimal): an availability
         // (503/429) or DNS chapters failure shows its honest
         // words — never the raw detail, and never a session
@@ -1816,15 +1835,23 @@ class BookDetailViewModel(
                     .failureMessage(classification)
             else -> null
         }
+        // Code 130: the generic path stores ErrorText's one
+        // message — the attributed sentence naming the real
+        // source — NOT displayText: its appended "Details:"
+        // line repeated the headline inside the card and the
+        // Read guard's reason (the code-129 proof's doubled
+        // copy). Returns the stored words so a caller can
+        // show the identical string (the refresh toast).
+        val shown = honestChaptersError
+            ?: app.xreader.core.error.ErrorText.of(error).message
         storyLocal.value = storyLocal.value.copy(
             chaptersLoading = false,
-            chaptersError = honestChaptersError
-                ?: app.xreader.core.error.ErrorText
-                    .displayText(error),
+            chaptersError = shown,
             sessionNeed = app.xreader.data.extension.SessionNeed
                 .classify(bookConfig, error),
             sourceOff = error.detail?.contains("switched off") == true
         )
+        return shown
     }
 
     /** v1.3.2 (item 77): one tap — turn this book's source back

@@ -16,7 +16,10 @@ import org.junit.Test
  *  - force-dismisses at the hard cap when ready never fires
  *    (fake clock — time is injected into the controller);
  *  - never shows under reduced motion;
- *  - never flashes when the Library beat the intro to screen.
+ *  - the Library-ready signal only ever dismisses — it never
+ *    refuses the show (code 129: readiness reaching
+ *    `shouldShow` before any frame was the splash that never
+ *    appeared on a fast install).
  */
 class LaunchIntroControllerTest {
 
@@ -139,19 +142,31 @@ class LaunchIntroControllerTest {
     }
 
     @Test
-    fun `does not flash when the library is already ready`() {
+    fun `library ready never refuses the show - it dismisses it`() {
+        // Code 130 re-pin (was: `does not flash when the
+        // library is already ready`, written against the
+        // pre-129 signature that took libraryReady). Code
+        // 129 removed readiness from the show decision
+        // entirely — a true cold start always shows the
+        // intro, and readiness reaches the controller only
+        // as the dismissal signal. The pin keeps its
+        // strength: the show is offered and begins even with
+        // the Library ready, and the ready signal then
+        // dismisses it.
         var now = 0L
         val controller = LaunchIntroController(nowMillis = { now })
-        assertFalse(
+        assertTrue(
             controller.shouldShow(
-                alreadyShown = false, reducedMotion = false, libraryReady = true
+                alreadyShown = false, reducedMotion = false
             )
         )
-        assertFalse(
+        assertTrue(
             controller.begin(
-                alreadyShown = false, reducedMotion = false, libraryReady = true
+                alreadyShown = false, reducedMotion = false
             )
         )
+        assertTrue(controller.isShowing)
+        assertTrue(controller.onLibraryReady())
         assertFalse(controller.isShowing)
     }
 

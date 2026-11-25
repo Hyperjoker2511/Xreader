@@ -81,7 +81,18 @@ enum class ReaderSelectionAction {
  * translation between them — the host seeds the row's
  * active tint from a stored token, and the screen's
  * fulfilment writes a picked tint back as its token. An
- * unknown token reads as amber, the store's own default. */
+ * unknown token reads as amber, the store's own default.
+ *
+ * Code 130: a tint outside the five-name vocabulary is
+ * stored as its own ARGB hex ("#AARRGGBB") and parses back
+ * to exactly itself. The Material 3 colour row IS the
+ * shared ColourBar, whose swatches are the design's seed
+ * colours — none of them is a vocabulary tint, so every
+ * seed pick used to fall into the else and re-store
+ * "amber": under Material 3 a highlight's colour could
+ * never actually change (the code-129 proof). The five
+ * named tokens are untouched, so every stored highlight
+ * from before reads exactly as it did. */
 fun highlightTokenForTint(tintArgb: Int): String =
     when (tintArgb) {
         HIGHLIGHT_TINT_ARGB -> "violet"
@@ -89,7 +100,8 @@ fun highlightTokenForTint(tintArgb: Int): String =
         0xFF99AA77.toInt() -> "sage"
         0xFFFF9200.toInt() -> "orange"
         0xFFCC99C0.toInt() -> "pink"
-        else -> "amber"
+        else -> "#" + (tintArgb.toLong() and 0xFFFFFFFFL)
+            .toString(16).uppercase().padStart(8, '0')
     }
 
 /** The stored token's bar tint (see [highlightTokenForTint]).
@@ -108,8 +120,21 @@ fun highlightTintForToken(token: String): Int =
         "sage" -> 0xFF99AA77.toInt()
         "orange" -> 0xFFFF9200.toInt()
         "pink" -> 0xFFCC99C0.toInt()
-        else -> 0xFFFFB020.toInt()
+        // Code 130: an ARGB hex token (see
+        // highlightTokenForTint) resolves to the exact
+        // picked tint; anything else unknown keeps the
+        // store's own default, amber.
+        else -> parseHexTintToken(token) ?: 0xFFFFB020.toInt()
     }
+
+/** Code 130: "#AARRGGBB" → its ARGB int, or null when
+ * [token] is not a hex tint token. */
+private fun parseHexTintToken(token: String): Int? {
+    if (!token.startsWith("#")) return null
+    val hex = token.substring(1)
+    if (hex.length != 8) return null
+    return hex.toLongOrNull(16)?.toInt()
+}
 
 /** Positions the menu above the selection rect (below it when
  * the top has no room), clamped inside the window. The rect

@@ -25,6 +25,12 @@ object ErrorText {
      */
     const val NO_ALLOWANCE_MARKER = "quota limit: 0"
 
+    /** An HTTP 5xx status as the fetch layers stamp it in a
+     * detail ("the site answered HTTP 503", "(HTTP 503)") —
+     * the same pattern FetchClassification reads; the space
+     * after "http" keeps a URL in a detail from matching. */
+    private val HTTP_5XX = Regex("""http (5\d\d)\b""")
+
     fun of(error: AppError): ErrorUi = when (error) {
         AppError.NoNetwork ->
             ErrorUi("No internet connection.", "Try again")
@@ -84,8 +90,57 @@ object ErrorText {
                 "Choose another file"
             )
 
-        is AppError.ExtensionFailed ->
-            ErrorUi("The source “${error.sourceName}” ran into a problem.", "Try again")
+        is AppError.ExtensionFailed -> {
+            // Code 130: the failure is attributed in plain
+            // words, as far as the detail honestly goes — the
+            // same evidence families FetchClassification reads
+            // (data.extension), mirrored here because core
+            // cannot import the data layer: the address didn't
+            // resolve / the source didn't answer (timeout,
+            // 5xx, refused or reset connection, the
+            // transport's not-answering phrases) / the source
+            // answered but its answer couldn't be read (the
+            // parse and page-shape family). Anything else
+            // keeps the neutral sentence. The name is the
+            // REAL source's, stamped by the caller — never a
+            // placeholder (the code-129 proof showed the
+            // literal words “the source” inside these quotes,
+            // with the recovery words doubled into the detail
+            // behind it).
+            val name = error.sourceName.trim()
+            val named = if (name.isEmpty()) {
+                "The source"
+            } else {
+                "The source “$name”"
+            }
+            val detail = error.detail?.lowercase().orEmpty()
+            ErrorUi(
+                when {
+                    "couldn't find the site's address" in detail ||
+                        "unknownhostexception" in detail ->
+                        "$named couldn't be reached — " +
+                            "couldn't find the site's address."
+                    "took too long" in detail ||
+                        "connectexception" in detail ||
+                        "socketexception" in detail ||
+                        "couldn't be reached" in detail ||
+                        "temporarily unavailable" in detail ||
+                        "the request couldn't be made" in detail ||
+                        HTTP_5XX.containsMatchIn(detail) ->
+                        "$named didn't answer."
+                    "couldn't be read" in detail ||
+                        "page-shape-not-understood" in detail ||
+                        "not-understood" in detail ||
+                        "isn't understood" in detail ||
+                        "couldn't be understood" in detail ||
+                        "unparseable" in detail ->
+                        "$named answered, but its answer " +
+                            "couldn't be read."
+                    else -> "$named ran into a problem."
+                },
+                "Try again"
+            )
+        }
 
         is AppError.SyncConflict ->
             ErrorUi(

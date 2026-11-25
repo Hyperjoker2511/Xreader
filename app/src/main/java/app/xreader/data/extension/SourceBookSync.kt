@@ -399,6 +399,31 @@ class SourceBookSync(
     }
 
     /**
+     * Code 130: the name a refresh failure is reported under
+     * — the resolved source's own name, else its extension's
+     * display name (the resolved handle's row, then the
+     * book's stored extension row), else the source id the
+     * book's remote id decodes to. Never a placeholder:
+     * ErrorText quotes the name it is given, and the
+     * code-129 proof showed the literal words “the source”
+     * standing in those quotes. An empty result is honest —
+     * ErrorText then renders the unquoted sentence.
+     */
+    private suspend fun sourceDisplayName(
+        handle: SourceHandle?,
+        book: Book
+    ): String {
+        handle?.source?.name?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+        handle?.extension?.displayName?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+        book.extensionId?.let { extensionDao.getById(it) }
+            ?.displayName?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+        return SourceBookIds.decode(book.remoteId)?.first ?: ""
+    }
+
+    /**
      * Re-pull details + chapter list for an EXTENSION book.
      *
      * v1.5.4 (WS-1 item 3): the whole load runs under the ONE
@@ -470,9 +495,9 @@ class SourceBookSync(
                     refreshWithinBound(book, handle)
                 } ?: AppResult.Err(
                     AppError.ExtensionFailed(
-                        "the source",
-                        "the book page took too long to load, so the load " +
-                            "was stopped — try again"
+                        sourceDisplayName(resolvedHandle, book),
+                        "the book page took too long to load, so " +
+                            "the load was stopped"
                     )
                 )
             }
@@ -494,8 +519,8 @@ class SourceBookSync(
             )
             AppResult.Err(
                 AppError.ExtensionFailed(
-                    "the source",
-                    "the chapter list couldn't be loaded — try again"
+                    sourceDisplayName(resolvedHandle, book),
+                    "the chapter list couldn't be loaded"
                 )
             )
         }
@@ -713,14 +738,23 @@ class SourceBookSync(
         val extensionId = book.extensionId
             ?: return AppResult.Err(
                 AppError.ExtensionFailed(
-                    SourceBookIds.decode(book.remoteId)?.first ?: "extension",
+                    // Code 130: the decoded source id when
+                    // there is one; an empty name (ErrorText
+                    // renders it unquoted) when there is
+                    // honestly nothing to name — never the
+                    // bare placeholder word "extension".
+                    SourceBookIds.decode(book.remoteId)?.first ?: "",
                     "this book didn't come from a source"
                 )
             )
         val (sourceId, remoteId) = SourceBookIds.decode(book.remoteId)
             ?: return AppResult.Err(
                 AppError.ExtensionFailed(
-                    "extension #$extensionId", "the book's source link is damaged"
+                    // Code 130: the extension's real display
+                    // name, as at every other site.
+                    extensionDao.getById(extensionId)
+                        ?.displayName ?: "",
+                    "the book's source link is damaged"
                 )
             )
         // v1.5.10 (B5): book-aware resolution (stable identity
@@ -1856,7 +1890,14 @@ class SourceBookSync(
         val (_, remoteId) = SourceBookIds.decode(fresh.remoteId)
             ?: return AppResult.Err(
                 AppError.ExtensionFailed(
-                    "extension", "the book's source link is damaged"
+                    // Code 130: name the book's extension
+                    // when its row survives — the bare word
+                    // "extension" was a placeholder of the
+                    // same family as "the source".
+                    fresh.extensionId
+                        ?.let { extensionDao.getById(it) }
+                        ?.displayName ?: "",
+                    "the book's source link is damaged"
                 )
             )
         // v1.5.10 (B5): book-aware resolution, as in refresh().

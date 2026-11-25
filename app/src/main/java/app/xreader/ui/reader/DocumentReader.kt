@@ -1702,6 +1702,20 @@ fun DocumentReader(
             // into the bar's existing state so a selection
             // over a highlight offers Remove + re-tint, not
             // just a second highlight stacked on top.
+            // Code 130: the test is OVERLAP, not A9's strict
+            // containment. Containment demanded the selection
+            // sit wholly inside the stored range; a selection
+            // crossing the highlight's edge — or a stored
+            // range shifted a hair when the chapter's text
+            // was re-fetched — fell through to the plain live
+            // episode: no Remove offered, and the colour row
+            // stacked a second highlight instead of
+            // re-tinting (the owner's code-129 proof, where
+            // the wash sat on the selected word yet the bar
+            // stayed live). Any shared length now merges;
+            // the highlight sharing the most of the selection
+            // wins, the most recently created breaking a tie
+            // (the PDF overlay's overlap rule).
             selectionHighlight = run {
                 val sel = selectionController.selectionState.value
                 if (sel == null || sel.startChapter != sel.endChapter) {
@@ -1709,11 +1723,26 @@ fun DocumentReader(
                 } else {
                     val chapterId = chapters
                         .getOrNull(sel.startChapter)?.id
-                    highlights.firstOrNull { stored ->
-                        stored.chapterId == chapterId &&
-                            sel.start >= stored.startOffset &&
-                            sel.end <= stored.endOffset
-                    }
+                    highlights
+                        .mapNotNull { stored ->
+                            if (stored.chapterId != chapterId) {
+                                return@mapNotNull null
+                            }
+                            val overlap = minOf(
+                                sel.end, stored.endOffset
+                            ) - maxOf(sel.start, stored.startOffset)
+                            if (overlap > 0) {
+                                stored to overlap
+                            } else {
+                                null
+                            }
+                        }
+                        .maxWithOrNull(
+                            compareBy<Pair<Highlight, Int>> {
+                                it.second
+                            }.thenBy { it.first.createdAt }
+                        )
+                        ?.first
                 }
             },
             selectionText = selectionText,

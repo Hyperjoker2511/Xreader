@@ -593,6 +593,34 @@ class ChapterLoader(
             }
 
             chapter.state = ReaderChapter.State.Loaded(pages)
+
+            // Code 130 (manga first-open warm-up): arm the
+            // loader NOW — the requested page at the head of
+            // its queue and the preload window behind it —
+            // instead of waiting for the viewer's first
+            // holder binds. On a cold chapter every page is a
+            // network fetch, and the bind chain (state →
+            // composition → RecyclerView layout → bind) left
+            // those fetches unstarted for the whole UI
+            // bring-up; the same gap left the E-10
+            // next-chapter preload holding a page LIST whose
+            // images were never queued, so a chapter crossing
+            // cold-fetched exactly like a first open (the
+            // owner's code-129 proof: a chapter's first open
+            // lagged badly, its reopen — page cache warm —
+            // was smooth). loadPage only arms: a Queue page
+            // is offered at the requested priority and the
+            // preload window follows it, and the viewer's
+            // later bind calls re-enter harmlessly (the
+            // loaders' own status and queue-dedupe rules).
+            // Best-effort by construction — a warm-up failure
+            // never fails the load it rides on; the viewer's
+            // binds retry honestly.
+            pages.getOrNull(chapter.requestedPage)?.let { start ->
+                scope.launch {
+                    runCatching { loader.loadPage(start) }
+                }
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             // v1.5.6 (§5.1, M1): cancellation is NOT an error
             // state — a load the caller abandoned (quick
