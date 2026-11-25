@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
@@ -156,15 +157,29 @@ private fun RollingDigitCell(
             // the full 30-digit strip rides its own layer — the
             // layer is strip-sized, so no digit is layer-clipped;
             // the window does the clipping.
+            //
+            // Code 125 (F2): the strip Column is a REAL
+            // 30-cell layout (requiredHeight), not the
+            // window's 1-cell max. The shipped code measured
+            // the Column at one cell — the window Box caps
+            // its children at its own size — so 29 digits sat
+            // outside the graphics layer's bounds and the
+            // phone drew none of them: the History pulse
+            // showed labels and a stray "min" while the fixed
+            // glyphs (plain Texts) rendered. The layer is
+            // strip-sized now, as the design note always
+            // required; the window still clips to one cell.
             Box(
                 Modifier
                     .matchParentSize()
                     .clipToBounds()
             ) {
                 Column(
-                    Modifier.graphicsLayer {
-                        translationY = -wheel.value * cellHeightPx
-                    }
+                    Modifier
+                        .requiredHeight(cellHeight * WheelStripCount)
+                        .graphicsLayer {
+                            translationY = -wheel.value * cellHeightPx
+                        }
                 ) {
                     for (i in 0 until WheelStripCount) {
                         Text(

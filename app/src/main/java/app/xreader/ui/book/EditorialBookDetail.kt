@@ -114,7 +114,8 @@ import kotlinx.coroutines.launch
 @Composable
 @OptIn(
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,
-    androidx.compose.material3.ExperimentalMaterial3Api::class
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
 )
 fun EditorialBookDetail(
     state: BookDetailUiState,
@@ -126,6 +127,13 @@ fun EditorialBookDetail(
     onReadChapter: (chapterIndex: Int) -> Unit,
     onReadLocalTarget: ((bookId: Long, targetJson: String) -> Unit)?,
     onOpenLore: () -> Unit,
+    /** Code 125 (F9): Ask AI is a full page now — the AI
+     * doors navigate to it (continue chapter + chapter id;
+     * illustrate starts the paint) instead of opening the
+     * sheet. Back returns here. */
+    onOpenAiPage: (
+        chapterIndex: Int, chapterId: Long?, illustrate: Boolean
+    ) -> Unit = { _, _, _ -> },
     onExportEpub: () -> Unit,
     onExportCbz: () -> Unit,
     onOpenTag: (String) -> Unit = {},
@@ -139,14 +147,15 @@ fun EditorialBookDetail(
 ) {
     val book = state.book
     val colors = MaterialTheme.colorScheme
+    // Code 125 (F9): the Ask AI page's bind target — the
+    // continue chapter and its id (the sheet host's
+    // arguments, now the page route's).
+    val aiChapterId = state.chapters.firstOrNull {
+        it.index == state.continueChapterIndex
+    }?.id
     val context = LocalContext.current
     var coverViewerOpen by remember { mutableStateOf(false) }
     var removeDialogOpen by remember { mutableStateOf(false) }
-    // Code 124 (A7): the Ask AI sheet's open state + the
-    // Illustrate tile's request counter (the sheet host
-    // below runs the paint once it is bound + open).
-    var aiSheetOpen by remember { mutableStateOf(false) }
-    var illustrateRequests by remember { mutableStateOf(0) }
     var exportMenuOpen by remember { mutableStateOf(false) }
     // Code 124 (D1): the chapter tools' state — the same
     // ChapterListFilter / ChapterDisplayOrder pure logic the
@@ -327,6 +336,18 @@ fun EditorialBookDetail(
     )
 
     Box(Modifier.fillMaxSize().background(colors.surface)) {
+        // Code 125 (F10): pull to refresh at the top, the
+        // Library's own behaviour — the same refresh seam
+        // the Contents Refresh pill calls, so a pull runs
+        // exactly what the pill runs. No scroll behaviour
+        // is attached anywhere on this page (the code-122
+        // orphaned-behavior lesson), so the pull gesture
+        // reaches the list.
+        androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+            isRefreshing = state.chaptersLoading,
+            onRefresh = { viewModel.refreshChapters() },
+            modifier = Modifier.fillMaxSize()
+        ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 108.dp)
@@ -582,12 +603,12 @@ fun EditorialBookDetail(
                     )
                 }
             }
-            // Code 124 (A7): the AI doors, beside Catch me up
+            // Code 125 (F9): the AI doors, beside Catch me up
             // + Lore as the owner ordered — Ask AI opens the
-            // AI sheet (chat, summary, illustrate — the same
-            // AiSheetContent the reader's AI page hosts);
-            // Illustrate opens it and starts the paint of
-            // this chapter's moment.
+            // full Ask AI page (chat, summary, illustrate —
+            // the same AiSheetContent the reader's AI page
+            // hosts); Illustrate opens it and starts the
+            // paint of this chapter's moment.
             item(key = "ai-tiles") {
                 Row(
                     Modifier
@@ -602,7 +623,12 @@ fun EditorialBookDetail(
                         container = colors.secondaryContainer,
                         onContainer = colors.onSecondaryContainer,
                         modifier = Modifier.weight(1f),
-                        onClick = { aiSheetOpen = true }
+                        onClick = {
+                            onOpenAiPage(
+                                state.continueChapterIndex,
+                                aiChapterId, false
+                            )
+                        }
                     )
                     EditorialDetailTile(
                         title = "Illustrate",
@@ -612,8 +638,10 @@ fun EditorialBookDetail(
                         onContainer = colors.onPrimaryContainer,
                         modifier = Modifier.weight(1f),
                         onClick = {
-                            illustrateRequests++
-                            aiSheetOpen = true
+                            onOpenAiPage(
+                                state.continueChapterIndex,
+                                aiChapterId, true
+                            )
                         }
                     )
                 }
@@ -854,9 +882,22 @@ fun EditorialBookDetail(
                     // row — Refresh · Download all · Save as
                     // EPUB — nothing primary lives in a menu
                     // on this page any more.
-                    Row(
-                        Modifier.padding(top = 12.dp),
+                    // Code 125 (F11): a FlowRow, not a Row —
+                    // the three pills at shipped padding need
+                    // ~375 dp against ~371 dp available at
+                    // 411 dp width, so the Row starved "Save
+                    // as EPUB" into an ellipsis. The pills run
+                    // at 10 dp side padding here (24 dp saved
+                    // across the three) and wrap WHOLE to a
+                    // second line if a device's font metrics
+                    // still overflow — no label ever truncates.
+                    androidx.compose.foundation.layout.FlowRow(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
                         horizontalArrangement =
+                            Arrangement.spacedBy(8.dp),
+                        verticalArrangement =
                             Arrangement.spacedBy(8.dp)
                     ) {
                         EditorialActionPill(
@@ -867,6 +908,7 @@ fun EditorialBookDetail(
                                 "Refresh"
                             },
                             enabled = !state.chaptersLoading,
+                            horizontalPadding = 10.dp,
                             onClick = { viewModel.refreshChapters() }
                         )
                         if (book.sourceType == SourceType.EXTENSION &&
@@ -882,6 +924,7 @@ fun EditorialBookDetail(
                                     "Downloaded"
                                 },
                                 enabled = state.hasUndownloadedChapters,
+                                horizontalPadding = 10.dp,
                                 onClick = {
                                     viewModel.downloadAllChapters()
                                 }
@@ -892,6 +935,7 @@ fun EditorialBookDetail(
                                 icon = Icons.Filled.Download,
                                 label = "Save as EPUB",
                                 enabled = true,
+                                horizontalPadding = 10.dp,
                                 onClick = onExportEpub
                             )
                         }
@@ -1170,6 +1214,7 @@ fun EditorialBookDetail(
                             state.progress != null,
                         downloadState = chapter.downloadState,
                         canDownload = !chapter.remoteId.isNullOrBlank(),
+                        dateText = chapter.dateText,
                         onDownload = { viewModel.downloadChapter(chapter) },
                         onClick = { onReadChapter(chapter.index) }
                     )
@@ -1822,9 +1867,8 @@ fun EditorialBookDetail(
         )
     }
 
-    // Code 124 (A7): the Ask AI sheet host — its own
-    // composable so the sheet brain's viewModel() sits at a
-    // stable slot in the loaded-book composition.
+    // Code 125 (F9): the Ask AI sheet host is gone — the AI
+    // doors navigate to the full Ask AI page now.
     // D1 (re-check fix): the chapter-settings sheet — the
     // shared page's own controls (BookDetailScreen's J2/E3
     // sheet) bound to THIS page's list state: order ->
@@ -1972,18 +2016,8 @@ fun EditorialBookDetail(
                 Spacer(Modifier.height(24.dp))
             }
         }
+        }
     }
-    BookPageAiSheetHost(
-        container = container,
-        bookId = book.id,
-        chapterIndex = state.continueChapterIndex,
-        chapterId = state.chapters
-            .firstOrNull { it.index == state.continueChapterIndex }?.id,
-        open = aiSheetOpen,
-        illustrateRequests = illustrateRequests,
-        onDismiss = { aiSheetOpen = false }
-    )
-
     // The full-screen cover viewer (K14): tap the cover, view
     // it large; drag down or tap to dismiss.
     if (coverViewerOpen) {
@@ -2137,7 +2171,14 @@ private fun EditorialContentsRow(
      * which carries no download door. */
     downloadState: app.xreader.data.db.DownloadState? = null,
     canDownload: Boolean = false,
-    onDownload: () -> Unit = {}
+    onDownload: () -> Unit = {},
+    /** Code 125 (F5): the release date the source printed
+     * for this chapter ([Chapter.dateText]) — null when the
+     * source prints none, and then no date line renders at
+     * all (never an invented date). The shared page's
+     * ChapterRow and M3ChapterRow already carried it; this
+     * row is the one that didn't. */
+    dateText: String? = null
 ) {
     val colors = MaterialTheme.colorScheme
     Row(
@@ -2171,23 +2212,41 @@ private fun EditorialContentsRow(
                 )
             }
         }
-        Text(
-            title,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (current) {
-                FontWeight.SemiBold
-            } else {
-                FontWeight.Normal
-            },
-            color = if (read && !current) {
-                colors.onSurfaceVariant
-            } else {
-                colors.onSurface
-            },
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
+        // Code 125 (F5): the release date, small under the
+        // title — the source's own date, relatively worded
+        // by the same ChapterDateText the other rows use
+        // (null when the source prints none: no line at all).
+        val dateLine = remember(dateText) {
+            app.xreader.domain.reader.ChapterDateText
+                .relative(dateText)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (current) {
+                    FontWeight.SemiBold
+                } else {
+                    FontWeight.Normal
+                },
+                color = if (read && !current) {
+                    colors.onSurfaceVariant
+                } else {
+                    colors.onSurface
+                },
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            dateLine?.let { date ->
+                Text(
+                    date,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
         if (read) {
             Icon(
                 Icons.Filled.Check,
@@ -2275,7 +2334,13 @@ private fun EditorialActionPill(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     enabled: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    /** Code 125 (F11): the pill's side padding — 14 dp
+     * everywhere except the Contents actions row, where
+     * 10 dp buys the three pills the room to sit whole on
+     * one 411 dp line (see that row). Every other caller
+     * keeps the shipped 14 dp. */
+    horizontalPadding: androidx.compose.ui.unit.Dp = 14.dp
 ) {
     val colors = MaterialTheme.colorScheme
     Surface(
@@ -2290,7 +2355,10 @@ private fun EditorialActionPill(
             .clickable(enabled = enabled, onClick = onClick)
     ) {
         Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+            Modifier.padding(
+                horizontal = horizontalPadding,
+                vertical = 9.dp
+            ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -2315,61 +2383,6 @@ private fun EditorialActionPill(
                 },
                 maxLines = 1,
                 softWrap = false
-            )
-        }
-    }
-}
-
-/** Code 124 (A7): the Ask AI sheet host for the book page.
- * The brain is the reader's own AiSheetViewModel (bound to
- * the book's continue chapter, char offset 0); the body is
- * AiSheetContent — chat, summary, catch-up, translate and
- * Illustrate, exactly as the reader's AI page renders it.
- * The Illustrate tile's taps arrive as [illustrateRequests]
- * increments and run once the sheet is open + bound.
- * Shared by BOTH book pages (the feature-parity rule: the
- * Material 3 page and the Nocturne page carry the same AI
- * doors; only the tiles' dress differs). */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@Composable
-internal fun BookPageAiSheetHost(
-    container: app.xreader.di.AppContainer,
-    bookId: Long,
-    chapterIndex: Int,
-    chapterId: Long?,
-    open: Boolean,
-    illustrateRequests: Int,
-    onDismiss: () -> Unit
-) {
-    val aiViewModel: app.xreader.ui.ai.AiSheetViewModel =
-        androidx.lifecycle.viewmodel.compose.viewModel(
-            key = "ai-$bookId",
-            factory = app.xreader.ui.ai.AiSheetViewModel
-                .factory(container, bookId)
-        )
-    androidx.compose.runtime.LaunchedEffect(chapterIndex, chapterId) {
-        if (chapterId != null) {
-            aiViewModel.bind(chapterIndex, chapterId, 0)
-        }
-    }
-    androidx.compose.runtime.LaunchedEffect(illustrateRequests, open) {
-        if (illustrateRequests > 0 && open) {
-            aiViewModel.illustrateMoment()
-        }
-    }
-    if (open) {
-        androidx.compose.material3.ModalBottomSheet(
-            onDismissRequest = onDismiss,
-            sheetState = androidx.compose.material3
-                .rememberModalBottomSheetState(
-                    skipPartiallyExpanded = true
-                )
-        ) {
-            app.xreader.ui.ai.AiSheetContent(
-                viewModel = aiViewModel,
-                showingTranslation = false,
-                onShowOriginal = {},
-                onShowTranslation = {}
             )
         }
     }

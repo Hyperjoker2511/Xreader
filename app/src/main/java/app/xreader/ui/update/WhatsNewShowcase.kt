@@ -1,17 +1,18 @@
 package app.xreader.ui.update
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,6 +26,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Menu
@@ -51,22 +54,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.xreader.data.prefs.DesignState
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -88,8 +87,9 @@ import kotlinx.coroutines.launch
  *
  * 2. [WhatsNewShowcase] — the legacy showcase for updates
  *    that carry NO new design. It wears the ACTIVE design, as
- *    before, and keeps the GamePrefs seen-store it has always
- *    shared with the Me note. It is gated separately in
+ *    before, and keeps its OWN seen-store ([ShowcasePrefs];
+ *    code 125 split it off the GamePrefs store it used to
+ *    share with the Me note). It is gated separately in
  *    MainActivity and never touches the reveal's record.
  */
 
@@ -520,29 +520,70 @@ private fun EditorialBookDemo() {
 
 /**
  * The showcase for an update that brings NO new design: it
- * wears the ACTIVE design, as it always has, and finishing
- * or skipping records the version in the GamePrefs store it
- * shares with the Me note (MainActivity's legacy gate). It
- * never reads or writes the reveal's [RevealPrefs] record.
+ * wears the ACTIVE design, as it always has. Code 125 (F4):
+ * finishing or skipping records the version in the
+ * showcase's OWN store ([ShowcasePrefs]) — never the Me
+ * note's GamePrefs record any more — and Back counts as a
+ * dismissal too (the BackHandler below routes it through
+ * the same [onFinish]). It never reads or writes the
+ * reveal's [RevealPrefs] record.
+ *
+ * Code 125's cards present THIS update's fixes (History,
+ * the book page, the PDF wash + scrubber, Ask AI as a
+ * page), each with a REAL picture of its feature — real
+ * words, real numbers, the feature's own atoms — never the
+ * grey placeholder lines the code-124 cards drew.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun WhatsNewShowcase(onFinish: () -> Unit) {
+    // Code 125 (F4): Back dismisses the showcase AND writes
+    // the seen record through onFinish. Before this, Back
+    // left the showcase (the app exited) without any write,
+    // so the showcase returned on the next launch — the
+    // repeat the owner saw.
+    androidx.activity.compose.BackHandler { onFinish() }
     val features = remember {
         listOf(
             ShowcaseFeature(
-                title = "PDF selection, fixed",
-                body = "You can select and copy words in a PDF " +
-                    "again — even zoomed right in, the way you " +
-                    "actually read.",
-                demo = ShowcaseDemo.PDF_SELECTION
+                title = "Highlights you can read through",
+                body = "A PDF highlight is a see-through wash " +
+                    "now — the words stay readable through " +
+                    "the colour, never covered by a solid " +
+                    "block, at any zoom.",
+                demo = ShowcaseDemo.PDF_WASH
             ),
             ShowcaseFeature(
-                title = "Selection follows your colours",
-                body = "The highlight colour now comes from " +
-                    "your design's colours, and the colour row " +
-                    "on the selection bar tints with it.",
-                demo = ShowcaseDemo.SELECTION_COLOURS
+                title = "Every page in the scrubber",
+                body = "The filmstrip shows the real page on " +
+                    "every thumbnail now, even on stretches " +
+                    "you haven't read yet — not a dark card " +
+                    "with a number.",
+                demo = ShowcaseDemo.FILMSTRIP
+            ),
+            ShowcaseFeature(
+                title = "Ask AI is a page now",
+                body = "Ask AI opens as its own full page, " +
+                    "with Back taking you exactly where you " +
+                    "were — from the reader and from the " +
+                    "book page.",
+                demo = ShowcaseDemo.AI_PAGE
+            ),
+            ShowcaseFeature(
+                title = "History, fixed",
+                body = "No more red behind the cards, the " +
+                    "reading pulse shows its numbers again, " +
+                    "and every card carries its progress bar " +
+                    "and its actions whole.",
+                demo = ShowcaseDemo.HISTORY
+            ),
+            ShowcaseFeature(
+                title = "The book page, tidied",
+                body = "Chapters show their release dates, a " +
+                    "pull down from the top refreshes the " +
+                    "list, and Refresh, Download all and " +
+                    "Save as EPUB all fit on one row.",
+                demo = ShowcaseDemo.BOOK_PAGE
             )
         )
     }
@@ -595,10 +636,16 @@ fun WhatsNewShowcase(onFinish: () -> Unit) {
                             contentAlignment = Alignment.Center
                         ) {
                             when (feature.demo) {
-                                ShowcaseDemo.PDF_SELECTION ->
-                                    PdfSelectionDemo()
-                                ShowcaseDemo.SELECTION_COLOURS ->
-                                    SelectionColoursDemo()
+                                ShowcaseDemo.PDF_WASH ->
+                                    PdfHighlightWashDemo()
+                                ShowcaseDemo.FILMSTRIP ->
+                                    FilmstripDemo()
+                                ShowcaseDemo.AI_PAGE ->
+                                    AskAiPageDemo()
+                                ShowcaseDemo.HISTORY ->
+                                    HistoryFixedDemo()
+                                ShowcaseDemo.BOOK_PAGE ->
+                                    BookPageDemo()
                             }
                         }
                         Column(
@@ -685,15 +732,18 @@ private data class ShowcaseFeature(
 )
 
 private enum class ShowcaseDemo {
-    PDF_SELECTION, SELECTION_COLOURS
+    PDF_WASH, FILMSTRIP, AI_PAGE, HISTORY, BOOK_PAGE
 }
 
-/** Demo: PDF selection while zoomed — a page at reading zoom,
- * a selection wash growing across one word with a handle at
- * each end, on a loop. The wash is the scheme's primary at
- * the selection spec alpha. */
+/**
+ * Demo: a PDF highlight as a wash — a real page of real
+ * words, with the translucent wash growing across one
+ * phrase and a handle at each end, on a loop. The wash is
+ * the scheme's primary at the highlight alpha (40%): the
+ * words read straight through it.
+ */
 @Composable
-private fun PdfSelectionDemo() {
+private fun PdfHighlightWashDemo() {
     val transition = rememberInfiniteTransition(label = "pdfDemo")
     val grow by transition.animateFloat(
         initialValue = 0f,
@@ -704,185 +754,403 @@ private fun PdfSelectionDemo() {
         ),
         label = "pdfDemoGrow"
     )
-    val wash = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f)
-    val line = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f)
-    Box(
+    val wash = MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
+    Column(
         Modifier
-            .size(width = 250.dp, height = 210.dp)
+            .width(260.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface),
-        contentAlignment = Alignment.Center
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(
-            Modifier
-                .scale(1.6f)
-                .width(210.dp),
-            verticalArrangement = Arrangement.spacedBy(9.dp)
-        ) {
-            listOf(150, 168, 132).forEach { widthDp ->
+        Text(
+            "The sword master stepped into the rain and did not look back.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "He carried ",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            // The highlighted phrase: real words, the wash
+            // over them, handles at the wash's ends. The
+            // wash is drawn over the words at 40% — they
+            // read through it, which is the whole point.
+            Box {
+                Text(
+                    "the rain",
+                    style = MaterialTheme.typography.bodyMedium
+                )
                 Box(
                     Modifier
-                        .width(widthDp.dp)
-                        .height(7.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(line)
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(
-                    Modifier
-                        .width(38.dp)
-                        .height(7.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(line)
-                )
-                Box {
+                        .fillMaxWidth(grow.coerceAtLeast(0.02f))
+                        .fillMaxHeight()
+                        .background(wash, RoundedCornerShape(3.dp))
+                ) {
                     Box(
                         Modifier
-                            .width(64.dp)
-                            .height(7.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(line)
+                            .align(Alignment.BottomEnd)
+                            .offset(x = 3.dp, y = 7.dp)
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(
+                                MaterialTheme.colorScheme.primary
+                            )
                     )
-                    Box(
-                        Modifier
-                            .width((64 * grow).dp)
-                            .height(13.dp)
-                            .offset(y = (-3).dp)
-                            .background(wash)
-                    )
-                    if (grow > 0.05f) {
-                        Box(
-                            Modifier
-                                .offset(x = (-4).dp, y = 8.dp)
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    MaterialTheme.colorScheme.primary
-                                )
-                        )
-                        Box(
-                            Modifier
-                                .offset(
-                                    x = (64 * grow - 3).dp,
-                                    y = 8.dp
-                                )
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    MaterialTheme.colorScheme.primary
-                                )
-                        )
-                    }
                 }
                 Box(
                     Modifier
-                        .width(46.dp)
-                        .height(7.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(line)
+                        .align(Alignment.BottomStart)
+                        .offset(x = (-4).dp, y = 7.dp)
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(
+                            MaterialTheme.colorScheme.primary
+                        )
                 )
             }
-            listOf(160, 140, 166).forEach { widthDp ->
+            Text(
+                " on his shoulders.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        Text(
+            "Behind him the town kept its lights on, waiting for a name it would never hear again.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * Demo: the scrubber filmstrip — five real thumbnails, each
+ * a tiny page of real words with its page number, the
+ * current one outlined in the accent. No dark number-only
+ * cards.
+ */
+@Composable
+private fun FilmstripDemo() {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        listOf(
+            212 to "The night was cold.",
+            213 to "He lit the last lamp.",
+            214 to "Rain on the roof.",
+            215 to "A knock, then silence.",
+            216 to "Morning came grey."
+        ).forEachIndexed { index, (number, line) ->
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 Box(
                     Modifier
-                        .width(widthDp.dp)
-                        .height(7.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(line)
+                        .size(width = 46.dp, height = 64.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(scheme.surface)
+                        .then(
+                            if (index == 2) {
+                                Modifier.border(
+                                    2.dp, scheme.primary,
+                                    RoundedCornerShape(4.dp)
+                                )
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .padding(5.dp)
+                ) {
+                    Column(
+                        verticalArrangement =
+                            Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text(
+                            "Ch. $number",
+                            fontSize = 7.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = scheme.onSurface,
+                            maxLines = 1
+                        )
+                        Text(
+                            line,
+                            fontSize = 6.sp,
+                            lineHeight = 8.sp,
+                            color = scheme.onSurfaceVariant,
+                            maxLines = 3
+                        )
+                    }
+                }
+                Text(
+                    "$number",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = scheme.onSurfaceVariant
                 )
             }
         }
     }
 }
 
-/** Demo: selection colours follow the theme — a line of
- * "selected" text whose wash cycles through three colours,
- * and a mock selection bar whose colour row tints to match. */
+/**
+ * Demo: Ask AI as a page — the real page furniture in
+ * miniature: back arrow, title, the five feature tiles by
+ * their real names, and the ask field with its send.
+ */
 @Composable
-private fun SelectionColoursDemo() {
+private fun AskAiPageDemo() {
     val scheme = MaterialTheme.colorScheme
-    val colours = remember(scheme) {
-        listOf(scheme.primary, scheme.tertiary, scheme.secondary)
-    }
-    var step by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(1400)
-            step = (step + 1) % colours.size
-        }
-    }
-    val tint by animateColorAsState(
-        targetValue = colours[step],
-        animationSpec = tween(durationMillis = 500),
-        label = "selectionTint"
-    )
     Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        Modifier
+            .width(250.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(scheme.surface)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Row(
-            Modifier
-                .clip(RoundedCornerShape(50))
-                .background(tint.copy(alpha = 0.18f))
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            colours.forEachIndexed { index, colour ->
-                Box(
-                    Modifier
-                        .size(if (index == step) 24.dp else 18.dp)
-                        .clip(CircleShape)
-                        .background(colour)
-                )
-            }
-            Spacer(Modifier.width(2.dp))
-            Box(
-                Modifier
-                    .size(width = 30.dp, height = 8.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(
-                        MaterialTheme.colorScheme.onSurface
-                            .copy(alpha = 0.4f)
-                    )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = null,
+                tint = scheme.onSurface,
+                modifier = Modifier.size(18.dp)
             )
-            Box(
-                Modifier
-                    .size(width = 22.dp, height = 8.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(
-                        MaterialTheme.colorScheme.onSurface
-                            .copy(alpha = 0.4f)
-                    )
+            Text(
+                "Ask AI",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(start = 8.dp)
             )
         }
-        Box(contentAlignment = Alignment.Center) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(52, 74, 44, 62).forEach { widthDp ->
-                    Box(
-                        Modifier
-                            .width(widthDp.dp)
-                            .height(10.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(
-                                MaterialTheme.colorScheme.onSurface
-                                    .copy(alpha = 0.28f)
-                            )
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(
+                "Summarize", "Catch me up", "Translate",
+                "Illustrate", "Lore chat"
+            ).forEach { label ->
+                Surface(
+                    color = scheme.secondaryContainer,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = scheme.onSecondaryContainer,
+                        modifier = Modifier.padding(
+                            horizontal = 10.dp, vertical = 6.dp
+                        )
                     )
                 }
             }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Surface(
+                color = scheme.surfaceContainer,
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    "Ask about the story…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(
+                        horizontal = 12.dp, vertical = 9.dp
+                    )
+                )
+            }
+            Spacer(Modifier.width(8.dp))
             Box(
                 Modifier
-                    .fillMaxWidth()
-                    .height(18.dp)
-                    .background(tint.copy(alpha = 0.38f))
-            )
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(scheme.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.Send,
+                    contentDescription = null,
+                    tint = scheme.onPrimary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
-        Text(
-            "One tap recolours the highlight",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+    }
+}
+
+/**
+ * Demo: the History card fixed — the pulse with its real
+ * numbers above the labels, and one card with its progress
+ * bar, its Continue pill and its Remove, whole.
+ */
+@Composable
+private fun HistoryFixedDemo() {
+    val scheme = MaterialTheme.colorScheme
+    Column(
+        Modifier
+            .width(280.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(scheme.surface)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(Modifier.fillMaxWidth()) {
+            listOf(
+                "42 min" to "read today",
+                "3" to "books today",
+                "12" to "chapters",
+                "180" to "EXP today"
+            ).forEach { (value, label) ->
+                Column(
+                    Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        value,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = scheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+        Surface(
+            color = scheme.surfaceContainerLow,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "Nano Machine",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "Chapter 214 · 0% through the book",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant
+                )
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { 0f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp)),
+                    color = scheme.primary,
+                    trackColor = scheme.surfaceContainerHighest
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        color = scheme.primary,
+                        shape = RoundedCornerShape(18.dp)
+                    ) {
+                        Text(
+                            "Continue · Ch. 214",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = scheme.onPrimary,
+                            modifier = Modifier.padding(
+                                horizontal = 12.dp, vertical = 7.dp
+                            )
+                        )
+                    }
+                    Text(
+                        "Remove",
+                        fontSize = 13.sp,
+                        color = scheme.onSurface
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Demo: the book page tidied — Contents rows with their
+ * real release dates under the titles, and the three
+ * actions whole on one row.
+ */
+@Composable
+private fun BookPageDemo() {
+    val scheme = MaterialTheme.colorScheme
+    Column(
+        Modifier
+            .width(280.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(scheme.surface)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        listOf(
+            "Chapter 214" to "3 days ago",
+            "Chapter 215" to "Yesterday",
+            "Chapter 216" to "12 Nov 2026"
+        ).forEach { (title, date) ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(scheme.surfaceContainerHigh),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        title.takeLast(3),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = scheme.onSurfaceVariant
+                    )
+                }
+                Column {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        date,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("Refresh", "Download all", "Save as EPUB")
+                .forEach { label ->
+                    Surface(
+                        color = scheme.secondaryContainer,
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = scheme.onSecondaryContainer,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(
+                                horizontal = 10.dp, vertical = 7.dp
+                            )
+                        )
+                    }
+                }
+        }
     }
 }

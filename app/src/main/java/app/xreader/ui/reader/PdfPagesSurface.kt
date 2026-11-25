@@ -567,11 +567,13 @@ internal fun pdfEntryDragRange(
  * mapped through whatever transform carries the frame).
  *
  * Draws, back to front: the page's stored highlights (each
- * in its own record tint — today always the one violet,
- * Q5), the search mark (amber, the Reflow precedent), the
- * live selection (the Reflow live-selection tint), and the
- * selection's two handle dots at its first char's
- * bottom-left and its last char's bottom-right.
+ * in its own record tint, painted as a translucent wash at
+ * the highlight alpha — code 125 F7 — so the words read
+ * through it), the search mark (amber, the Reflow
+ * precedent), the live selection (the Reflow live-selection
+ * tint, already a 0.33 wash), and the selection's two
+ * handle dots at its first char's bottom-left and its last
+ * char's bottom-right.
  *
  * Gestures (its own pointerInput, Main pass): a press
  * inside a handle's grab radius drags that edge — changes
@@ -694,8 +696,24 @@ private fun PdfPageGeometryOverlay(
                     )
                 }
             }
+            // Code 125 (F7): the wash — every stored
+            // highlight paints at the highlight alpha (40%,
+            // the shipped default tint's own 0x66), whatever
+            // the picked colour. The palette stores the
+            // picked colours OPAQUE (orange 0xFFFF9200 et
+            // al), so the shipped draw painted them as solid
+            // blocks over the words — a redaction bar. The
+            // words read through the wash at any zoom; the
+            // default violet is byte-identical (its alpha IS
+            // 0x66). The Pages surface renders pages as flat
+            // bitmaps — there is no text layer to draw under
+            // — so the translucent wash over the bitmap is
+            // the see-through wash the proof bar names.
             for ((highlight, rects) in heldHighlightRects) {
-                drawRects(rects, Color(highlight.tintArgb))
+                drawRects(
+                    rects,
+                    Color(highlight.tintArgb).copy(alpha = 0.40f)
+                )
             }
             if (heldMarkRects.isNotEmpty()) {
                 drawRects(heldMarkRects, Color(0x99FFB020))
@@ -1159,12 +1177,18 @@ private const val FILMSTRIP_PREVIEW_BASE_WIDTH_PX = 384
  * `goToPdfPage`); when the page changes by any other
  * door, the strip follows and re-centres on it.
  *
- * Render-slot discipline (the P4 checkpoint): thumbs are
- * the session's PREVIEW pass requested at
- * [PdfRenderSlot.P2] — the speculative class. A strip
- * full of thumbs can therefore never delay the visible
- * page's P0 render or a landing's P1; the scheduler
- * serves them only with otherwise-idle capacity.
+ * Render-slot discipline (the P4 checkpoint, code 125
+ * F8): thumbs are the session's PREVIEW pass requested at
+ * [PdfRenderSlot.P3] — the filmstrip's own speculative
+ * class, below prefetch. The shipped P2 was the defect:
+ * P2 tickets are distance-judged against the prefetch
+ * window, so every thumb beyond ~6 pages of the settled
+ * page was dropped terminally and stayed a dark
+ * number-only card. P3 is never distance-judged, so a
+ * thumb renders wherever the strip shows it; a strip full
+ * of thumbs still never delays the visible page's P0
+ * render or a landing's P1 — the scheduler serves P3
+ * only with otherwise-idle capacity.
  */
 @Composable
 internal fun PdfFilmstripRow(
@@ -1204,7 +1228,7 @@ internal fun PdfFilmstripRow(
                 thumb = session.renderPreview(
                     page,
                     FILMSTRIP_PREVIEW_BASE_WIDTH_PX,
-                    slot = PdfRenderSlot.P2
+                    slot = PdfRenderSlot.P3
                 )
             }
             val aspect = pdfPlaceholderSpec(

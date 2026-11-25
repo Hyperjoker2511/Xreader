@@ -768,11 +768,13 @@ private fun HistoryEntryRow(
                     // (two), never shrink the text.
                     maxLines = 2
                 )
-                if (entry.fraction > 0f) {
-                    HistorySlimProgressBar(
-                        fraction = entry.fraction.coerceIn(0f, 1f)
-                    )
-                }
+                // Code 125 (F3, parity): the bar renders at 0%
+                // too — the track alone — so a card whose
+                // progress is zero shares its siblings'
+                // anatomy instead of a void.
+                HistorySlimProgressBar(
+                    fraction = entry.fraction.coerceIn(0f, 1f)
+                )
             }
             // The action rail: Continue is the row's ONE accent
             // (primary pill + glow — slop tell 2: glow means the
@@ -1328,7 +1330,10 @@ private fun EditorialHistoryContent(
     )
 }
 
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
+)
 @Composable
 private fun EditorialHistoryRow(
     entry: HistoryEntryUi,
@@ -1359,6 +1364,19 @@ private fun EditorialHistoryRow(
                 }
             }
         )
+    // Code 125 (F1): the dismiss background paints ONLY
+    // while a swipe is actually in flight. The shipped code
+    // painted errorContainer behind EVERY row, always — and
+    // the row card sits 16 dp inside the box with a 1 dp
+    // vertical gap, so the red showed through around every
+    // card as a saturated red field behind the list. Settled
+    // (no swipe): transparent, no icon; the swipe affordance
+    // is unchanged once the gesture starts.
+    val dismissing =
+        dismissState.targetValue != androidx.compose.material3
+            .SwipeToDismissBoxValue.Settled ||
+            dismissState.currentValue != androidx.compose.material3
+                .SwipeToDismissBoxValue.Settled
     androidx.compose.material3.SwipeToDismissBox(
         state = dismissState,
         enableDismissFromStartToEnd = false,
@@ -1366,15 +1384,23 @@ private fun EditorialHistoryRow(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(colors.errorContainer)
+                    .background(
+                        if (dismissing) {
+                            colors.errorContainer
+                        } else {
+                            Color.Transparent
+                        }
+                    )
                     .padding(horizontal = 20.dp),
                 contentAlignment = Alignment.CenterEnd
             ) {
-                Icon(
-                    Icons.Filled.Delete,
-                    contentDescription = "Remove from history",
-                    tint = colors.onErrorContainer
-                )
+                if (dismissing) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = "Remove from history",
+                        tint = colors.onErrorContainer
+                    )
+                }
             }
         }
     ) {
@@ -1432,30 +1458,40 @@ private fun EditorialHistoryRow(
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.onSurfaceVariant
                     )
-                    if (entry.fraction > 0f) {
-                        Spacer(Modifier.height(6.dp))
-                        androidx.compose.material3
-                            .LinearProgressIndicator(
-                                progress = {
-                                    entry.fraction.coerceIn(0f, 1f)
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(4.dp)
-                                    .clip(RoundedCornerShape(2.dp)),
-                                color = colors.primary,
-                                trackColor = colors.surfaceContainerHighest
-                            )
-                    }
+                    // Code 125 (F3): the progress row renders
+                    // ALWAYS — at 0% the track alone, like its
+                    // siblings. The shipped `fraction > 0f`
+                    // gate left a not-in-library card with no
+                    // bar at all, one of the tall-void symptoms
+                    // on the Nano Machine card.
+                    Spacer(Modifier.height(6.dp))
+                    androidx.compose.material3
+                        .LinearProgressIndicator(
+                            progress = {
+                                entry.fraction.coerceIn(0f, 1f)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp)),
+                            color = colors.primary,
+                            trackColor = colors.surfaceContainerHighest
+                        )
                 }
             }
             // The action rail — every door visible (F-H2/F-H6).
-            Row(
+            // Code 125 (F3): a FlowRow, not a Row — the four
+            // doors (Continue + Add back + Remove + Delete)
+            // cannot fit one 411 dp line, and the shipped Row
+            // starved the last button until "Remove" wrapped
+            // mid-word. Whole buttons wrap to a second line
+            // now; no label ever wraps.
+            androidx.compose.foundation.layout.FlowRow(
                 Modifier
                     .fillMaxWidth()
                     .padding(top = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (entry.bookExists) {
                     Surface(
@@ -1468,6 +1504,8 @@ private fun EditorialHistoryRow(
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = colors.onPrimary,
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(
                                 horizontal = 12.dp, vertical = 7.dp
                             )
@@ -1485,22 +1523,30 @@ private fun EditorialHistoryRow(
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = colors.onSecondaryContainer,
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(
                                 horizontal = 12.dp, vertical = 7.dp
                             )
                         )
                     }
                 }
-                Spacer(Modifier.weight(1f))
                 TextButton(onClick = onRemoveAsk) {
-                    Text("Remove", fontSize = 13.sp)
+                    Text(
+                        "Remove",
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        softWrap = false
+                    )
                 }
                 if (entry.bookExists) {
                     TextButton(onClick = onDeleteBook) {
                         Text(
                             "Delete book…",
                             fontSize = 13.sp,
-                            color = colors.error
+                            color = colors.error,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }

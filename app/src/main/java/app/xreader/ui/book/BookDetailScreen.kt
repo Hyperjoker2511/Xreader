@@ -179,9 +179,10 @@ import java.io.File
 @Composable
 fun BookDetailScreen(
     viewModel: BookDetailViewModel,
-    /** Code 124: the container, for the book pages' Ask AI
-     * sheet brain (AiSheetViewModel's factory) — both faces
-     * host the same sheet (the parity rule). */
+    /** Code 125 (F9): the container passes through to the
+     * Editorial page (it carried the retired Ask AI sheet's
+     * brain before this build; the full Ask AI page builds
+     * its own view model on its own route). */
     container: app.xreader.di.AppContainer,
     coverFile: (String?) -> File?,
     assetFile: (bookId: Long, fileName: String) -> File,
@@ -197,6 +198,13 @@ fun BookDetailScreen(
     onOpenLore: () -> Unit = {},
     onOpenRelated: (Long) -> Unit = {},
     onOpenTag: (String) -> Unit = {},
+    /** Code 125 (F9): Ask AI is a full page now — the book
+     * page's AI doors navigate to it (continue chapter +
+     * chapter id; illustrate starts the paint) instead of
+     * opening the sheet. Back returns here. */
+    onOpenAiPage: (
+        chapterIndex: Int, chapterId: Long?, illustrate: Boolean
+    ) -> Unit = { _, _, _ -> },
     /** v1.0.2 (R26): find an AI-suggested title across sources. */
     onFindTitle: (String) -> Unit = {},
     /** v1.0.5 (B1): the Chapters section's "Go to Repair" door —
@@ -255,6 +263,7 @@ fun BookDetailScreen(
             onReadChapter = onReadChapter,
             onReadLocalTarget = onReadLocalTarget,
             onOpenLore = onOpenLore,
+            onOpenAiPage = onOpenAiPage,
             onExportEpub = onExportEpub,
             onExportCbz = onExportCbz
         )
@@ -283,11 +292,6 @@ fun BookDetailScreen(
     /** v1.5.8 (J2/E3): the chapter-settings sheet's open state —
      * sort/display choices + the scanlator filter live there. */
     var chapterSettingsOpen by remember { mutableStateOf(false) }
-    // Code 124 (A7, parity fix): the Ask AI sheet's open
-    // state + the Illustrate door's request counter — the
-    // Material 3 page's AI doors, on this page too.
-    var aiSheetOpen by remember { mutableStateOf(false) }
-    var illustrateRequests by remember { mutableStateOf(0) }
     // v1.0.7 (draw-check ask): chapter search + filters — a
     // 1,692-chapter list can't be scrolled by hand, and a
     // novel split into parts buries Part 1 under Part 2.
@@ -752,6 +756,17 @@ fun BookDetailScreen(
         // Nocturne (and the button-group form) it is layout-
         // identical to the list taking the weight itself.
         Box(Modifier.weight(1f)) {
+        // Code 125 (F10): pull to refresh at the top, the
+        // Library's own behaviour — the same refresh seam
+        // the Refresh tile calls. No scroll behaviour is
+        // attached anywhere on this page (the code-122
+        // orphaned-behavior lesson), so the pull gesture
+        // reaches the list.
+        androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+            isRefreshing = state.chaptersLoading,
+            onRefresh = { viewModel.refreshChapters() },
+            modifier = Modifier.fillMaxSize()
+        ) {
         LazyColumn(
             Modifier.fillMaxSize(),
             // v1.5.7 (Finding 5): the list state the chapter
@@ -1371,19 +1386,30 @@ fun BookDetailScreen(
                             modifier = Modifier.weight(1f)
                         )
                     }
-                    // Code 124 (A7, parity fix): the AI door
-                    // pair — Ask AI + Illustrate — in a second
-                    // tile row under the shipped four (the
-                    // Material 3 page carries the same doors;
-                    // one app, one feature set). Illustrate
-                    // opens the sheet and paints the continue
-                    // chapter's moment through it.
+                    // Code 125 (F9): the AI door pair — Ask AI
+                    // + Illustrate — in a second tile row under
+                    // the shipped four (the Material 3 page
+                    // carries the same doors; one app, one
+                    // feature set). Both navigate to the full
+                    // Ask AI page now; Illustrate starts the
+                    // paint of the continue chapter's moment
+                    // once the page binds.
+                    // The Ask AI page's bind target — the
+                    // continue chapter and its id.
+                    val aiChapterId = state.chapters.firstOrNull {
+                        it.index == state.continueChapterIndex
+                    }?.id
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         QuickActionTile(
                             icon = Icons.Filled.AutoAwesome,
                             label = "Ask AI",
                             active = false,
-                            onClick = { aiSheetOpen = true },
+                            onClick = {
+                                onOpenAiPage(
+                                    state.continueChapterIndex,
+                                    aiChapterId, false
+                                )
+                            },
                             modifier = Modifier.weight(1f)
                         )
                         QuickActionTile(
@@ -1391,8 +1417,10 @@ fun BookDetailScreen(
                             label = "Illustrate",
                             active = false,
                             onClick = {
-                                illustrateRequests++
-                                aiSheetOpen = true
+                                onOpenAiPage(
+                                    state.continueChapterIndex,
+                                    aiChapterId, true
+                                )
                             },
                             modifier = Modifier.weight(1f)
                         )
@@ -2942,6 +2970,7 @@ fun BookDetailScreen(
             }
         }
         }
+        }
     }
 
     // Phase 5: the story-so-far recap dialog.
@@ -3058,23 +3087,6 @@ fun BookDetailScreen(
                     Text("Stay here")
                 }
             }
-        )
-    }
-
-    // Code 124 (A7, parity fix): the Ask AI sheet host —
-    // the same BookPageAiSheetHost the Material 3 page
-    // hosts, bound to this book's continue chapter.
-    book?.id?.let { aiBookId ->
-        BookPageAiSheetHost(
-            container = container,
-            bookId = aiBookId,
-            chapterIndex = state.continueChapterIndex,
-            chapterId = state.chapters.firstOrNull {
-                it.index == state.continueChapterIndex
-            }?.id,
-            open = aiSheetOpen,
-            illustrateRequests = illustrateRequests,
-            onDismiss = { aiSheetOpen = false }
         )
     }
 

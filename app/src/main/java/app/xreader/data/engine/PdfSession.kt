@@ -604,8 +604,19 @@ internal class PdfBoxPageProvider private constructor(
  * slot. P0 = the settled page (both pages of a dual-page
  * landscape spread), P1 = the pager's `targetPage` while a
  * turn is in flight, P2 = the prefetch window.
+ *
+ * Code 125 (F8): P3 = the scrubber filmstrip's thumbnails.
+ * A thumb is wanted wherever the strip shows it — the
+ * strip scrolls the whole book, far beyond the prefetch
+ * window — so P3 is NEVER distance-judged (always valid),
+ * and it is granted only after P0/P1/P2, so a strip full of
+ * thumbs can never delay the visible page or a landing.
+ * Like P2 it is speculative: it never counts toward the
+ * high-priority busy signal, and a jump's prefetch flush
+ * never drops it (the strip re-asks only when an item
+ * recomposes — a dropped thumb would stay blank).
  */
-enum class PdfRenderSlot { P0, P1, P2 }
+enum class PdfRenderSlot { P0, P1, P2, P3 }
 
 /** v1.5.9 (A-2 amended): which render pass a ticket belongs
  * to — the 1.0× BASE, the 0.35× PREVIEW (non-sequential
@@ -662,11 +673,13 @@ data class PdfPageClip(
 /**
  * v1.5.9 (F-3 as amended by sift A-1): the render scheduler.
  * One render runs at a time (the providers are not
- * thread-safe), and the queue is an explicit 3-slot contract:
- * P0 (settled) before P1 (`targetPage`) before P2 (prefetch),
- * FIFO within P0/P1, and the pending P2 set ordered LIFO —
+ * thread-safe), and the queue is an explicit 4-slot contract
+ * (code 125 adds P3): P0 (settled) before P1 (`targetPage`)
+ * before P2 (prefetch) before P3 (filmstrip thumbs), FIFO
+ * within P0/P1, and the pending P2/P3 sets ordered LIFO —
  * most recent direction first, so a reversed flip kills the
- * oldest prefetch hopes first.
+ * oldest prefetch hopes first (and a fast strip scroll
+ * renders the thumbs on screen, not the ones it passed).
  *
  * Staleness is re-checked IMMEDIATELY BEFORE the provider
  * render (the `openPage` seam) against the LIVE published
@@ -802,6 +815,13 @@ internal class PdfRenderScheduler {
                     (targetPage >= 0 && targetPage != settledPage &&
                         inWindow(ticket.page, targetPage))
             }
+            // Code 125 (F8): a filmstrip thumb is wanted
+            // wherever the strip shows it — the strip scrolls
+            // the whole book, far beyond the prefetch window,
+            // so P3 is never distance-judged. A thumb the
+            // strip no longer shows is cancelled by the
+            // strip's own composition lifecycle instead.
+            PdfRenderSlot.P3 -> true
         }
     }
 
@@ -840,16 +860,21 @@ internal class PdfRenderScheduler {
             if (!isStillValid(waiter.ticket)) {
                 iterator.remove()
                 pending--
-                if (waiter.ticket.slot != PdfRenderSlot.P2) {
+                if (!isSpeculative(waiter.ticket.slot)) {
                     highPriorityOutstanding--
                 }
                 waiter.gate.complete(null)
             }
         }
         refreshBusyLocked()
+        // Code 125 (F8): P3 (filmstrip thumbs) grants last,
+        // most-recent first like P2 — a strip scrolled fast
+        // renders the thumbs on screen, not the ones it
+        // passed.
         val next = queue.firstOrNull { it.ticket.slot == PdfRenderSlot.P0 }
             ?: queue.firstOrNull { it.ticket.slot == PdfRenderSlot.P1 }
             ?: queue.lastOrNull { it.ticket.slot == PdfRenderSlot.P2 }
+            ?: queue.lastOrNull { it.ticket.slot == PdfRenderSlot.P3 }
             ?: return
         queue.remove(next)
         pending--
@@ -870,7 +895,7 @@ internal class PdfRenderScheduler {
         if (!isStillValid(ticket)) return null
         val waiter = Waiter(ticket)
         mutex.withLock {
-            if (ticket.slot != PdfRenderSlot.P2) highPriorityOutstanding++
+            if (!isSpeculative(ticket.slot)) highPriorityOutstanding++
             queue.addLast(waiter)
             pending++
             pumpLocked()
@@ -881,7 +906,7 @@ internal class PdfRenderScheduler {
             mutex.withLock {
                 if (queue.remove(waiter)) {
                     pending--
-                    if (ticket.slot != PdfRenderSlot.P2) {
+                    if (!isSpeculative(ticket.slot)) {
                         highPriorityOutstanding--
                     }
                     refreshBusyLocked()
@@ -891,7 +916,7 @@ internal class PdfRenderScheduler {
                     // strand it (the render never started —
                     // this is still before openPage).
                     holder = null
-                    if (ticket.slot != PdfRenderSlot.P2) {
+                    if (!isSpeculative(ticket.slot)) {
                         highPriorityOutstanding--
                     }
                     pumpLocked()
@@ -905,13 +930,20 @@ internal class PdfRenderScheduler {
     suspend fun release(waiter: Waiter) {
         mutex.withLock {
             if (holder === waiter) holder = null
-            if (waiter.ticket.slot != PdfRenderSlot.P2) {
+            if (!isSpeculative(waiter.ticket.slot)) {
                 highPriorityOutstanding--
             }
             pumpLocked()
             refreshBusyLocked()
         }
     }
+
+    /** Code 125 (F8): the speculative slots — prefetch (P2)
+     * and filmstrip thumbs (P3). Neither ever counts toward
+     * the high-priority busy signal (that signal is the
+     * P0/P1 strip gate). */
+    private fun isSpeculative(slot: PdfRenderSlot): Boolean =
+        slot == PdfRenderSlot.P2 || slot == PdfRenderSlot.P3
 }
 
 /**

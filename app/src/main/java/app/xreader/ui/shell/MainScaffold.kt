@@ -2196,6 +2196,18 @@ internal fun XreaderNavHost(
                 assetFile = assetFile,
                 onBack = { navController.popBackStack() },
                 onOpenLore = { navController.navigate("lore/$bookId") },
+                // Code 125 (F9, re-check C1): Ask AI is a full
+                // page — the book page's AI doors land on the
+                // aiBook route, whose brain lives on THIS book
+                // entry (key "ai-$bookId") so the chat survives
+                // leaving and coming back; Back returns here.
+                onOpenAiPage = { chapterIndex, chapterId, illustrate ->
+                    navController.navigate(
+                        "aiBook/$bookId/$chapterIndex/" +
+                            "${chapterId ?: -1L}" +
+                            "?illustrate=$illustrate"
+                    )
+                },
                 onOpenRelated = { relatedId -> navigateContent("book/$relatedId") },
                 // v1.5.6 (§2.2 entry point 1): the book page's
                 // chapter tap / Read button resolves through the
@@ -2595,6 +2607,78 @@ internal fun XreaderNavHost(
                 showingTranslation = readerState.showingTranslation,
                 onShowOriginal = { readerViewModel.showOriginalChapter() },
                 onShowTranslation = { readerViewModel.showTranslatedChapter() },
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(
+            "aiBook/{bookId}/{chapterIndex}/{chapterId}?illustrate={illustrate}",
+            arguments = listOf(
+                androidx.navigation.navArgument("bookId") {
+                    type = androidx.navigation.NavType.LongType
+                },
+                androidx.navigation.navArgument("chapterIndex") {
+                    type = androidx.navigation.NavType.IntType
+                },
+                androidx.navigation.navArgument("chapterId") {
+                    type = androidx.navigation.NavType.LongType
+                },
+                androidx.navigation.navArgument("illustrate") {
+                    type = androidx.navigation.NavType.BoolType
+                    defaultValue = false
+                }
+            )
+        ) { entry ->
+            // Code 125 (F9): Ask AI as a full page from the
+            // BOOK page — the reader's `ai/` route cannot
+            // serve it (it shares the reader back-stack
+            // entry's view models, and no reader is open
+            // here). The brain is scoped to the BOOK entry
+            // (key "ai-$bookId"), bound to the book's
+            // continue chapter exactly as the retired sheet
+            // host bound it; the Illustrate door's paint
+            // starts once bound. Translation toggles are
+            // no-ops here — the book page has no chapter on
+            // screen to translate — as the sheet passed
+            // them. Back pops to the book page.
+            val bookId = entry.arguments?.getLong("bookId") ?: 0L
+            val chapterIndex = entry.arguments?.getInt("chapterIndex") ?: 0
+            val chapterId = entry.arguments?.getLong("chapterId") ?: -1L
+            val illustrate = entry.arguments?.getBoolean("illustrate") ?: false
+            // Code 125 (F9, re-check C1): the brain lives on
+            // the BOOK entry, not this route's entry — the
+            // retired sheet host's view model lived on the
+            // book page, so a chat survived leaving the sheet
+            // and coming back; a route-scoped model would
+            // forget the conversation on every Back. The
+            // reader's ai/ route shares its reader entry the
+            // same way. A missing book entry (a deep link
+            // straight here) falls back to this entry.
+            val bookEntry = runCatching {
+                navController.getBackStackEntry("book/{bookId}")
+            }.getOrNull()
+            val aiViewModel =
+                androidx.lifecycle.viewmodel.compose.viewModel<
+                    app.xreader.ui.ai.AiSheetViewModel>(
+                    viewModelStoreOwner = bookEntry ?: entry,
+                    key = "ai-$bookId",
+                    factory = app.xreader.ui.ai.AiSheetViewModel
+                        .factory(container, bookId)
+                )
+            androidx.compose.runtime.LaunchedEffect(
+                chapterIndex, chapterId, illustrate
+            ) {
+                if (chapterId >= 0L) {
+                    aiViewModel.bind(chapterIndex, chapterId, 0)
+                    if (illustrate) {
+                        aiViewModel.illustrateMoment()
+                    }
+                }
+            }
+            app.xreader.ui.ai.AiPage(
+                viewModel = aiViewModel,
+                showingTranslation = false,
+                onShowOriginal = {},
+                onShowTranslation = {},
                 onBack = { navController.popBackStack() }
             )
         }

@@ -462,13 +462,21 @@ class MainActivity : FragmentActivity() {
                         // Customise that may, and only on tap.
                         //
                         // (B) THE LEGACY SHOWCASE — for updates
-                        // carrying no new design. Unchanged from
-                        // code 120: wears the active design, gated
-                        // on the GamePrefs store it shares with
-                        // the Me note. It is suppressed while the
-                        // reveal is pending or showing, so the
-                        // two never stack; finishing it writes
-                        // only its own store.
+                        // carrying no new design. Wears the
+                        // active design; its record is
+                        // ShowcasePrefs (sole reader: this gate;
+                        // sole writer: the showcase's own
+                        // terminal actions below — Skip / Done /
+                        // Back). Code 125 (F4): it NO LONGER
+                        // shares the GamePrefs store with the Me
+                        // note — that sharing let a Me-note
+                        // dismissal write the showcase's seen
+                        // record and suppress it (the code-120
+                        // conviction, still live for this gate
+                        // until this build). It is suppressed
+                        // while the reveal is pending or showing,
+                        // so the two never stack; finishing it
+                        // writes only its own store.
                         val revealPrefs = remember {
                             app.xreader.ui.update.RevealPrefs(
                                 container.applicationContext
@@ -479,8 +487,19 @@ class MainActivity : FragmentActivity() {
                             .collectAsStateWithLifecycle(
                                 initialValue = Int.MAX_VALUE
                             )
-                        val whatsNewSeen by container.gamePrefs
-                            .whatsNewSeenCode
+                        // Code 125 (F4): the showcase's own
+                        // record — see ShowcasePrefs. The Me
+                        // note keeps GamePrefs.whatsNewSeenCode
+                        // for itself (read in MainScaffold);
+                        // this gate never reads it any more.
+                        val showcasePrefs = remember {
+                            app.xreader.ui.update.ShowcasePrefs(
+                                container.applicationContext
+                                    .settingsDataStore
+                            )
+                        }
+                        val showcaseSeen by showcasePrefs
+                            .showcaseSeenCode
                             .collectAsStateWithLifecycle(
                                 initialValue = Int.MAX_VALUE
                             )
@@ -546,16 +565,16 @@ class MainActivity : FragmentActivity() {
                             )
                         } else if (!showcaseDismissed &&
                             installedCode > 0 &&
-                            whatsNewSeen < installedCode &&
-                            (whatsNewSeen > 0 ||
+                            showcaseSeen < installedCode &&
+                            (showcaseSeen > 0 ||
                                 container.databaseFileExisted)
                         ) {
                             app.xreader.ui.update.WhatsNewShowcase(
                                 onFinish = {
                                     showcaseDismissed = true
                                     activityScope.launch {
-                                        container.gamePrefs
-                                            .setWhatsNewSeen(
+                                        showcasePrefs
+                                            .setShowcaseSeen(
                                                 installedCode
                                             )
                                     }
